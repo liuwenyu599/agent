@@ -1,0 +1,158 @@
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+
+node_modules/
+dist/
+.vite/
+
+*.db
+*.sqlite
+*.sqlite3
+
+uploads/
+storage/
+logs/
+*.log
+
+.DS_Store
+.vscode/
+
+*.pem
+*.key
+
+# 本地模型
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+
+# Project local/generated files
+backups/
+logs/
+run/
+vector_index/
+
+ai_code.txt
+temp.log
+temp.py
+
+# Accidental shell artifact files
+=0.46.1
+:4:
+except
+from
+import
+try:
+
+# Database - never commit runtime data
+backend/database/*.db
+backend/*.db
+*.sqlite
+*.sqlite3
+
+# Frontend dependencies
+node_modules/
+**/node_modules/
+
+# Runtime/generated data
+backups/
+logs/
+run/
+vector_index/
+
+# Temporary files
+ai_code.txt
+temp.log
+temp.py
+
+# Accidental shell artifacts
+=0.46.1
+:4:
+except
+from
+import
+try:
+
+# Database - never commit runtime data
+backend/database/*.db
+backend/*.db
+*.sqlite
+*.sqlite3
+
+# Frontend dependencies
+node_modules/
+**/node_modules/
+
+# Runtime/generated data
+backups/
+logs/
+run/
+vector_index/
+
+# Temporary files
+ai_code.txt
+temp.log
+temp.py
+
+# Accidental shell artifacts
+=0.46.1
+:4:
+except
+from
+import
+try:
+
+# Runtime data
+tasks/
+run/
+logs/
+backups/
+vector_index/
+
+# Database and database backups
+*.db
+*.sqlite
+*.sqlite3
+*.db.bak.*
+backend/*.db*
+backend/database/*.db*
+
+# Development backup files
+*.bak
+*.bak.*
+**/*.bak
+**/*.bak.*
+
+# Temporary files
+ai_code.txt
+temp.log
+temp.py
+
+# Accidental shell artifact files
+=0.46.1
+:4:
+except
+from
+import
+try:
+
+# Frontend dependencies
+node_modules/
+**/node_modules/
+/TemplatesView.vue
+
+# Backup files with suffixes such as .bak2
+**/*.bak*
+
+# Backup files with suffixes such as .bak2
+**/*.bak*
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
