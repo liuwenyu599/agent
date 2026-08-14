@@ -9,6 +9,7 @@ const routes = [
   { path: '/knowledge/:id', name: 'knowledge-detail', component: () => import('@/views/KnowledgeDetailView.vue'), meta: { requiresAuth: true } },
   { path: '/templates', name: 'templates', component: () => import('@/views/TemplatesView.vue'), meta: { requiresAuth: true } },
   { path: '/template/:id', name: 'template-use', component: () => import('@/views/TemplateView.vue'), meta: { requiresAuth: true } },
+  { path: '/format-check', name: 'format-check', component: () => import('@/views/FormatCheckView.vue'), meta: { requiresAuth: true } },
   { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue'), meta: { requiresAuth: true, requiresAdmin: true } }
 ]
 

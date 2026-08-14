@@ -55,7 +55,7 @@
               <el-card shadow="hover" class="action-card" @click="focusInput">
                 <el-icon :size="32" color="#67C23A"><ChatDotRound /></el-icon>
                 <h4>自由写作</h4>
-                <p>输入需求，AI 辅助写作</p>
+                <p>输入需求或上传材料，AI 辅助写作</p>
               </el-card>
             </el-col>
             <el-col :span="8">
@@ -100,6 +100,19 @@
                 <span class="msg-time" v-if="msg.created_at">{{ formatTime(msg.created_at) }}</span>
               </div>
               <div class="msg-text">
+                <!-- 用户消息携带的附件 -->
+                <div v-if="msg.attachments?.length" class="msg-attachments">
+                  <el-tag
+                    v-for="att in msg.attachments" :key="att.id"
+                    size="small" effect="plain" class="attachment-tag"
+                    :type="att.parse_status === 'failed' ? 'danger' : (att.kind === 'image' ? 'warning' : 'info')"
+                  >
+                    <el-icon><component :is="att.kind === 'image' ? 'Picture' : 'Document'" /></el-icon>
+                    {{ att.filename }}
+                    <span v-if="att.parse_status === 'failed'">（解析失败）</span>
+                    <span v-else-if="att.kind === 'image'">（OCR）</span>
+                  </el-tag>
+                </div>
                 <div v-if="msg.role === 'assistant'" class="md-body" v-html="renderMd(msg.content)"></div>
                 <span v-else>{{ msg.content }}</span>
 
@@ -136,22 +149,50 @@
 
         <!-- 输入区域 -->
         <div class="input-area">
+          <!-- 待发送附件 -->
+          <div v-if="pendingAttachments.length > 0" class="pending-attachments">
+            <el-tag
+              v-for="(att, idx) in pendingAttachments" :key="att.localId"
+              closable
+              :type="att.status === 'error' ? 'danger' : (att.status === 'ready' ? 'success' : 'info')"
+              effect="plain"
+              class="attachment-tag"
+              @close="removePendingAttachment(idx)"
+            >
+              <el-icon v-if="att.status === 'uploading'" class="is-loading"><Loading /></el-icon>
+              <el-icon v-else><component :is="att.kind === 'image' ? 'Picture' : 'Document'" /></el-icon>
+              {{ att.filename }}
+              <span v-if="att.status === 'error'" class="att-note">（{{ att.note || '解析失败' }}）</span>
+              <span v-else-if="att.status === 'ready' && att.kind === 'image'" class="att-note">（OCR 已识别）</span>
+            </el-tag>
+          </div>
           <el-input
             v-model="input"
             type="textarea"
             :rows="3"
-            placeholder="请输入写作需求，例如：帮我写一份社区矫正年度工作总结..."
+            placeholder="请输入写作需求，可点击下方回形针上传 Word/PDF/TXT/图片材料，例如：请把这份材料整理成一份汇报..."
             @keydown.enter.prevent="send"
             ref="inputRef"
           />
           <div class="input-actions">
             <div class="input-left">
               <el-switch v-model="useRag" active-text="使用知识库" />
+              <el-upload
+                :show-file-list="false"
+                :auto-upload="false"
+                :on-change="handleAttachmentSelect"
+                multiple
+                accept=".docx,.doc,.pdf,.txt,.md,.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff"
+              >
+                <el-button size="small" text :disabled="uploadingAttachment">
+                  <el-icon><Paperclip /></el-icon> 上传材料
+                </el-button>
+              </el-upload>
               <el-button size="small" text @click="goToTemplates">
                 <el-icon><DocumentCopy /></el-icon> 模板
               </el-button>
             </div>
-            <el-button type="primary" @click="send" :loading="loading" :disabled="!input.trim()">
+            <el-button type="primary" @click="send" :loading="loading" :disabled="!canSend">
               <el-icon><Promotion /></el-icon> 发送
             </el-button>
           </div>
@@ -195,15 +236,16 @@
 </template>
 
 <script setup>
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  ChatLineRound, Document, DocumentCopy,
+  ChatLineRound, Document, DocumentCopy, Picture, Loading, Paperclip,
   CopyDocument, Link, Promotion, Plus, Delete
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { sendChat, exportDocx, exportOfficial, listSessions, getMessages } from '@/api/knowledge.js'
+import { uploadChatAttachments } from '@/api/format_check.js'
 import axios from 'axios'
 
 const router = useRouter()
@@ -221,6 +263,17 @@ const popularTemplates = ref([])
 // 会话列表
 const sessions = ref([])
 const sessionLoading = ref(false)
+
+// 附件
+const pendingAttachments = ref([])  // [{localId, id, filename, kind, status, note}]
+const uploadingAttachment = ref(false)
+const MAX_ATTACHMENTS = 5
+const ALLOWED_EXTS = ['.docx', '.doc', '.pdf', '.txt', '.md', '.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff']
+
+const canSend = computed(() =>
+  (input.value.trim() || pendingAttachments.value.some(a => a.status === 'ready'))
+  && !pendingAttachments.value.some(a => a.status === 'uploading')
+)
 
 // 导出相关
 const exportDialogVisible = ref(false)
@@ -246,7 +299,6 @@ async function loadSessions() {
   try {
     const res = await listSessions()
     sessions.value = res.data || []
-    // 如果有会话且当前没有选中，自动选中第一个
     if (sessions.value.length > 0 && !sessionId.value) {
       await selectSession(sessions.value[0])
     }
@@ -260,6 +312,7 @@ async function loadSessions() {
 async function selectSession(s) {
   sessionId.value = s.id
   messages.value = []
+  pendingAttachments.value = []
   loading.value = true
   try {
     const res = await getMessages(s.id)
@@ -268,6 +321,7 @@ async function selectSession(s) {
       role: m.role,
       content: m.content,
       sources: m.sources || [],
+      attachments: m.attachments || [],
       created_at: m.created_at
     }))
   } catch (e) {
@@ -281,6 +335,7 @@ async function selectSession(s) {
 function createNewSession() {
   sessionId.value = null
   messages.value = []
+  pendingAttachments.value = []
   nextTick(() => inputRef.value?.focus())
 }
 
@@ -300,6 +355,57 @@ async function deleteSession(s) {
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('删除失败')
   }
+}
+
+// ========== 附件上传 ==========
+async function handleAttachmentSelect(file) {
+  const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  if (!ALLOWED_EXTS.includes(ext)) {
+    ElMessage.error(`不支持的文件类型 ${ext}`)
+    return
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.error('文件大小不能超过 50MB')
+    return
+  }
+  if (pendingAttachments.value.length >= MAX_ATTACHMENTS) {
+    ElMessage.warning(`最多同时上传 ${MAX_ATTACHMENTS} 个附件`)
+    return
+  }
+
+  const localId = Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+  const isImage = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff'].includes(ext)
+  pendingAttachments.value.push({
+    localId, id: null, filename: file.name, kind: isImage ? 'image' : 'doc',
+    status: 'uploading', note: ''
+  })
+  uploadingAttachment.value = true
+  try {
+    const res = await uploadChatAttachments([file.raw])
+    const att = res.data.attachments[0]
+    const item = pendingAttachments.value.find(a => a.localId === localId)
+    if (item) {
+      item.id = att.id
+      item.kind = att.kind
+      item.note = att.parse_note || ''
+      item.status = att.parse_status === 'failed' ? 'error' : 'ready'
+    }
+    if (att.parse_status === 'failed') {
+      ElMessage.warning(`${att.filename} ${att.parse_note || '解析失败'}，发送后 AI 将无法读取该附件内容`)
+    } else {
+      ElMessage.success(`${att.filename} 已解析${att.kind === 'image' ? '（OCR）' : ''}`)
+    }
+  } catch (e) {
+    const item = pendingAttachments.value.find(a => a.localId === localId)
+    if (item) { item.status = 'error'; item.note = e.response?.data?.detail || '上传失败' }
+    ElMessage.error(e.response?.data?.detail || '附件上传失败')
+  } finally {
+    uploadingAttachment.value = false
+  }
+}
+
+function removePendingAttachment(idx) {
+  pendingAttachments.value.splice(idx, 1)
 }
 
 // ========== 原有功能 ==========
@@ -402,17 +508,22 @@ async function exportWord() {
 }
 
 function send() {
-  if (!input.value.trim() || loading.value) return
-  const message = input.value.trim()
+  if (!canSend.value || loading.value) return
+  const message = input.value.trim() || '请阅读并理解我上传的材料。'
+  const attachmentIds = pendingAttachments.value
+    .filter(a => a.status === 'ready' && a.id)
+    .map(a => a.id)
   input.value = ''
   loading.value = true
 
   sendChat({
     message,
     session_id: sessionId.value,
-    use_rag: useRag.value
+    use_rag: useRag.value,
+    attachment_ids: attachmentIds.length ? attachmentIds : undefined
   }).then(async res => {
     sessionId.value = res.data.session_id
+    pendingAttachments.value = []
     // 重新拉取该会话的完整历史，确保时间戳是后端真实时间
     await loadSessionMessages(sessionId.value)
     // 刷新会话列表（更新标题）
@@ -436,6 +547,7 @@ async function loadSessionMessages(sid) {
       role: m.role,
       content: m.content,
       sources: m.sources || [],
+      attachments: m.attachments || [],
       created_at: m.created_at
     }))
   } catch (e) {
@@ -642,6 +754,14 @@ watch(() => messages.value.length, () => {
 .msg.user .msg-meta { color: rgba(255,255,255,0.8); }
 .msg-time { color: #c0c4cc; }
 .msg-text { word-break: break-all; }
+.msg-attachments {
+  margin-bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attachment-tag { display: inline-flex; align-items: center; gap: 4px; }
+.att-note { font-size: 11px; opacity: 0.8; }
 .msg-sources-detailed {
   margin-top: 16px;
   padding-top: 8px;
@@ -677,6 +797,12 @@ watch(() => messages.value.length, () => {
   padding: 20px;
   background: white;
   border-top: 1px solid #e0e0e0;
+}
+.pending-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 .input-actions {
   display: flex;

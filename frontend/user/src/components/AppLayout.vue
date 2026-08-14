@@ -19,6 +19,9 @@
         <el-menu-item index="/knowledge">
           <el-icon><Collection /></el-icon><span>知识库</span>
         </el-menu-item>
+        <el-menu-item index="/format-check">
+          <el-icon><CircleCheck /></el-icon><span>格式校验</span>
+        </el-menu-item>
         <el-menu-item index="/admin" v-if="isAdmin">
           <el-icon><Setting /></el-icon><span>管理后台</span>
         </el-menu-item>

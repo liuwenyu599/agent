@@ -37,9 +37,14 @@ BUILTIN_TEMPLATES = [
         "system_prompt": "你是一位资深的司法行政公文写作专家，擅长撰写各类政务通知。请根据用户提供的要素生成规范的工作通知。要求：1.语言正式、严谨，符合党政机关公文规范；2.目的明确、内容具体、要求清晰；3.包含完整的标题、主送机关、正文、落款和成文日期；4.不要简单填空，要根据要素展开成完整的公文正文。"
     },
     {
-        "name": "年度工作总结",
-        "category": "工作总结",
-        "base_type": "总结",
+        # ===== 合并后的"工作计划与总结"模板 =====
+        # 由原来的"年度工作总结"和"工作计划"两个内置模板合并而来。
+        # 字段覆盖计划与总结两类要素，用户只需填写实际涉及的部分，
+        # 由 AI 根据已填写的要素判断：偏计划（目标/措施为主）还是偏总结（完成情况/成效为主），
+        # 或两者兼有（如"上半年总结暨下半年计划"），并组织成合适的公文结构。
+        "name": "工作计划与总结",
+        "category": "计划总结",
+        "base_type": "计划与总结",
         "icon": "DocumentChecked",
         "writing_style": "正式公文",
         "word_count": 1500,
@@ -48,16 +53,20 @@ BUILTIN_TEMPLATES = [
         "need_date": True,
         "need_doc_number": False,
         "params_schema": [
-            {"name": "year", "label": "年份", "type": "input", "required": True, "placeholder": "如：2026"},
+            {"name": "title", "label": "标题", "type": "input", "required": True, "placeholder": "如：社区矫正科2026年上半年工作总结暨下半年工作计划"},
             {"name": "department", "label": "部门/单位", "type": "input", "required": True, "placeholder": "如：社区矫正科"},
-            {"name": "scope", "label": "工作范围", "type": "textarea", "required": True, "placeholder": "请简述本年度工作范围和职责", "rows": 3},
-            {"name": "key_work", "label": "重点工作", "type": "textarea", "required": True, "placeholder": "请列出本年度重点工作和主要举措", "rows": 4},
-            {"name": "achievements", "label": "取得成效", "type": "textarea", "required": True, "placeholder": "请简述工作成效、数据和亮点", "rows": 4},
-            {"name": "problems", "label": "存在问题", "type": "textarea", "required": True, "placeholder": "请简述工作中存在的问题和不足", "rows": 3},
-            {"name": "next_plan", "label": "下一步计划", "type": "textarea", "required": True, "placeholder": "请简述下一步工作计划和目标", "rows": 3}
+            {"name": "period", "label": "时间范围", "type": "input", "required": True, "placeholder": "如：2026年全年 / 2026年上半年"},
+            {"name": "background", "label": "工作背景", "type": "textarea", "required": False, "placeholder": "请简述工作背景、上级要求和政策依据", "rows": 3},
+            {"name": "goals", "label": "工作目标", "type": "textarea", "required": False, "placeholder": "请简述年度/阶段工作目标和总体思路", "rows": 3},
+            {"name": "key_work", "label": "重点工作", "type": "textarea", "required": False, "placeholder": "请列出重点工作任务和主要举措", "rows": 4},
+            {"name": "measures", "label": "具体措施", "type": "textarea", "required": False, "placeholder": "请简述落实工作的具体措施、步骤和时间安排", "rows": 4},
+            {"name": "completion", "label": "完成情况", "type": "textarea", "required": False, "placeholder": "请简述各项工作完成情况（写总结时填写）", "rows": 4},
+            {"name": "achievements", "label": "取得成效", "type": "textarea", "required": False, "placeholder": "请简述工作成效、亮点和相关数据（写总结时填写）", "rows": 4},
+            {"name": "problems", "label": "存在问题", "type": "textarea", "required": False, "placeholder": "请简述工作中存在的问题和不足", "rows": 3},
+            {"name": "next_plan", "label": "下一步工作", "type": "textarea", "required": False, "placeholder": "请简述下一步工作计划、目标和安排", "rows": 3}
         ],
-        "content_template": "年度工作总结通常包含：标题、工作概述、重点工作开展情况、取得成效、存在问题、下一步工作计划、落款和成文日期。请根据用户提供的要素生成规范的年度工作总结。",
-        "system_prompt": "你是一位资深的司法行政公文写作专家，擅长撰写年度工作总结。请根据用户提供的要素生成规范的工作总结。要求：1.语言正式、严谨，符合党政机关公文规范；2.结构清晰，层次分明；3.数据准确，成效具体；4.问题分析客观，计划切实可行；5.不要简单填空，要根据要素展开成完整的公文正文。"
+        "content_template": "工作计划与总结类公文，可包含：标题、工作背景、工作目标、重点工作、具体措施、完成情况、取得成效、存在问题、下一步工作、落款和成文日期。用户可能只写计划、只写总结、或两者兼有，请根据用户实际填写的要素判断并组织成合适的公文结构，未填写的要素不要凭空编造。",
+        "system_prompt": "你是一位资深的司法行政公文写作专家，擅长撰写工作计划与工作总结。请根据用户提供的要素生成规范的公文。要求：1.先判断用户意图：以目标、措施为主的按工作计划写；以完成情况、成效为主的按工作总结写；两者都有的按「总结暨计划」的复合结构写；2.语言正式、严谨，符合党政机关公文规范；3.结构清晰，层次分明，数据和成效要具体；4.问题分析客观，计划切实可行；5.用户未填写的要素不要虚构内容；6.不要简单填空，要根据要素展开成完整的公文正文。"
     },
     {
         "name": "请示报告",
@@ -148,28 +157,6 @@ BUILTIN_TEMPLATES = [
         "system_prompt": "你是一位资深的司法行政公文写作专家，擅长撰写情况汇报。请根据用户提供的要素生成规范的情况汇报。要求：1.情况清楚、数据准确；2.措施具体、成效明显；3.建议可行；4.符合党政机关公文写作规范；5.不要简单填空，要根据要素展开成完整的公文正文。"
     },
     {
-        "name": "工作计划",
-        "category": "工作计划",
-        "base_type": "计划",
-        "icon": "Calendar",
-        "writing_style": "正式公文",
-        "word_count": 1200,
-        "need_red_header": False,
-        "need_signature": True,
-        "need_date": True,
-        "need_doc_number": False,
-        "params_schema": [
-            {"name": "year", "label": "年份", "type": "input", "required": True, "placeholder": "如：2026"},
-            {"name": "department", "label": "部门/单位", "type": "input", "required": True, "placeholder": "如：社区矫正科"},
-            {"name": "background", "label": "工作背景", "type": "textarea", "required": True, "placeholder": "请简述工作背景和依据", "rows": 3},
-            {"name": "goals", "label": "工作目标", "type": "textarea", "required": True, "placeholder": "请简述年度工作目标和重点任务", "rows": 3},
-            {"name": "measures", "label": "具体措施", "type": "textarea", "required": True, "placeholder": "请简述具体工作措施和步骤", "rows": 4},
-            {"name": "timeline", "label": "时间安排", "type": "textarea", "required": False, "placeholder": "请简述各阶段时间安排", "rows": 3}
-        ],
-        "content_template": "工作计划通常包含：标题、工作背景、工作目标、具体措施、时间安排、保障措施、落款和成文日期。请根据用户提供的要素生成规范的工作计划。",
-        "system_prompt": "你是一位资深的司法行政公文写作专家，擅长撰写工作计划。请根据用户提供的要素生成规范的工作计划。要求：1.目标明确、可量化；2.措施具体、可操作；3.时间安排合理；4.符合党政机关公文写作规范；5.不要简单填空，要根据要素展开成完整的公文正文。"
-    },
-    {
         "name": "执法文书",
         "category": "执法文书",
         "base_type": "执法文书",
@@ -199,8 +186,7 @@ BUILTIN_TEMPLATES = [
 ]
 
 BUILTIN_CATEGORIES = [
-    {"name": "工作总结", "code": "work_summary", "icon": "DocumentChecked", "sort_order": 1},
-    {"name": "工作计划", "code": "work_plan", "icon": "Calendar", "sort_order": 2},
+    {"name": "计划总结", "code": "plan_summary", "icon": "DocumentChecked", "sort_order": 1},
     {"name": "请示报告", "code": "request_report", "icon": "MessageBox", "sort_order": 3},
     {"name": "通知公告", "code": "notice", "icon": "Bell", "sort_order": 4},
     {"name": "调研报告", "code": "research", "icon": "DataAnalysis", "sort_order": 5},
@@ -208,6 +194,11 @@ BUILTIN_CATEGORIES = [
     {"name": "情况汇报", "code": "report", "icon": "InfoFilled", "sort_order": 7},
     {"name": "执法文书", "code": "legal_doc", "icon": "DocumentCopy", "sort_order": 8}
 ]
+
+# 计划/总结合并前的旧内置模板名（用于 /init 时自动停用）
+_DEPRECATED_BUILTIN_NAMES = ["年度工作总结", "工作计划"]
+# 合并前的旧分类 code（用于 /init 时自动停用）
+_DEPRECATED_CATEGORY_CODES = ["work_summary", "work_plan"]
 
 # ========== Pydantic 模型 ==========
 
@@ -235,6 +226,7 @@ class TemplateCreateRequest(BaseModel):
     need_signature: Optional[bool] = True
     need_date: Optional[bool] = True
     need_doc_number: Optional[bool] = False
+    keywords: Optional[str] = None
     sort_order: int = 0
 
 class TemplateUpdateRequest(BaseModel):
@@ -267,13 +259,32 @@ async def init_builtin_templates(
     admin: User = Depends(require_admin_or_above),
     db: Session = Depends(get_db)
 ):
-    """初始化内置模板（仅管理员）"""
+    """初始化内置模板（仅管理员）
+
+    幂等：可重复调用。
+    - 新内置模板不存在则创建；
+    - 计划/总结合并前的旧内置模板（年度工作总结、工作计划）自动停用（is_active=False），
+      不删除，保留使用统计和历史数据；
+    - 旧分类（work_summary、work_plan）自动停用。
+    """
     # 初始化分类
     for cat in BUILTIN_CATEGORIES:
         existing = db.query(TemplateCategory).filter(TemplateCategory.code == cat["code"]).first()
         if not existing:
             new_cat = TemplateCategory(**cat)
             db.add(new_cat)
+    db.commit()
+
+    # 停用旧分类
+    db.query(TemplateCategory).filter(
+        TemplateCategory.code.in_(_DEPRECATED_CATEGORY_CODES)
+    ).update({"is_active": False}, synchronize_session=False)
+
+    # 停用合并前的旧内置模板（只影响 is_builtin=True 的，不动用户自建模板）
+    db.query(WritingTemplate).filter(
+        WritingTemplate.name.in_(_DEPRECATED_BUILTIN_NAMES),
+        WritingTemplate.is_builtin == True
+    ).update({"is_active": False}, synchronize_session=False)
     db.commit()
 
     # 初始化模板
@@ -307,6 +318,10 @@ async def init_builtin_templates(
             )
             db.add(new_tmpl)
             count += 1
+        elif not existing.is_active:
+            # 合并后的新模板若曾被误停用，重新启用
+            existing.is_active = True
+            db.commit()
     db.commit()
 
     return {"message": f"Initialized {count} builtin templates"}
@@ -425,19 +440,19 @@ async def create_template(
         id=str(uuid.uuid4()),
         name=req.name,
         category=req.category,
-        base_type=req.base_type if hasattr(req, 'base_type') else "公文",
+        base_type=req.base_type or "公文",
         description=req.description,
         icon=req.icon,
         params_schema=[p.dict() for p in req.params_schema],
         content_template=req.content_template,
         system_prompt=req.system_prompt,
-        writing_style=req.writing_style if hasattr(req, 'writing_style') else "正式公文",
-        word_count=req.word_count if hasattr(req, 'word_count') else 1000,
-        need_red_header=req.need_red_header if hasattr(req, 'need_red_header') else False,
-        need_signature=req.need_signature if hasattr(req, 'need_signature') else True,
-        need_date=req.need_date if hasattr(req, 'need_date') else True,
-        need_doc_number=req.need_doc_number if hasattr(req, 'need_doc_number') else False,
-        keywords=req.keywords if hasattr(req, "keywords") else None,
+        writing_style=req.writing_style or "正式公文",
+        word_count=req.word_count or 1000,
+        need_red_header=req.need_red_header if req.need_red_header is not None else False,
+        need_signature=req.need_signature if req.need_signature is not None else True,
+        need_date=req.need_date if req.need_date is not None else True,
+        need_doc_number=req.need_doc_number if req.need_doc_number is not None else False,
+        keywords=req.keywords,
         is_builtin=False,
         is_active=True,
         created_by=admin.id,

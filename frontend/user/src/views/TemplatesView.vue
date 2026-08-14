@@ -231,14 +231,18 @@ const baseTypes = [
     {name:'contact',label:'联系人',type:'input',required:false,placeholder:'如：张三'},
     {name:'phone',label:'联系电话',type:'input',required:false,placeholder:'如：0531-12345678'}
   ]},
-  { label: '总结', value: '总结', fields: [
-    {name:'year',label:'年份',type:'input',required:true,placeholder:'如：2026'},
+  { label: '计划与总结', value: '计划与总结', fields: [
+    {name:'title',label:'标题',type:'input',required:true,placeholder:'如：社区矫正科2026年上半年工作总结暨下半年工作计划'},
     {name:'department',label:'部门/单位',type:'input',required:true,placeholder:'如：社区矫正科'},
-    {name:'scope',label:'工作范围',type:'textarea',required:true,placeholder:'请简述工作范围',rows:3},
-    {name:'key_work',label:'重点工作',type:'textarea',required:true,placeholder:'请列出重点工作',rows:4},
-    {name:'achievements',label:'取得成效',type:'textarea',required:true,placeholder:'请简述成效和数据',rows:4},
-    {name:'problems',label:'存在问题',type:'textarea',required:true,placeholder:'请简述问题',rows:3},
-    {name:'next_plan',label:'下一步计划',type:'textarea',required:true,placeholder:'请简述计划',rows:3}
+    {name:'period',label:'时间范围',type:'input',required:true,placeholder:'如：2026年全年 / 2026年上半年'},
+    {name:'background',label:'工作背景',type:'textarea',required:false,placeholder:'请简述工作背景、上级要求和政策依据',rows:3},
+    {name:'goals',label:'工作目标',type:'textarea',required:false,placeholder:'请简述年度/阶段工作目标和总体思路',rows:3},
+    {name:'key_work',label:'重点工作',type:'textarea',required:false,placeholder:'请列出重点工作任务和主要举措',rows:4},
+    {name:'measures',label:'具体措施',type:'textarea',required:false,placeholder:'请简述落实工作的具体措施、步骤和时间安排',rows:4},
+    {name:'completion',label:'完成情况',type:'textarea',required:false,placeholder:'请简述各项工作完成情况（写总结时填写）',rows:4},
+    {name:'achievements',label:'取得成效',type:'textarea',required:false,placeholder:'请简述工作成效、亮点和相关数据（写总结时填写）',rows:4},
+    {name:'problems',label:'存在问题',type:'textarea',required:false,placeholder:'请简述工作中存在的问题和不足',rows:3},
+    {name:'next_plan',label:'下一步工作',type:'textarea',required:false,placeholder:'请简述下一步工作计划、目标和安排',rows:3}
   ]},
   { label: '请示', value: '请示', fields: [
     {name:'title',label:'请示事项',type:'input',required:true,placeholder:'如：关于申请经费的请示'},
@@ -469,7 +473,7 @@ async function deleteTemplate(tmpl) {
 
 function iconColor(category) {
   const map = {
-    '工作总结': 'blue', '工作计划': 'green', '请示报告': 'orange',
+    '计划总结': 'blue', '请示报告': 'orange',
     '通知公告': 'red', '调研报告': 'purple', '会议纪要': 'cyan',
     '情况汇报': 'pink', '执法文书': 'gray'
   }
