@@ -5,7 +5,7 @@
       <div class="sidebar-header">
         <div class="sidebar-title">
           <el-icon :size="20"><ChatLineRound /></el-icon>
-          <span>智能写作</span>
+          <span>信息写作</span>
         </div>
         <el-button type="primary" size="small" @click="createNewSession">
           <el-icon><Plus /></el-icon> 新对话
@@ -41,34 +41,41 @@
       <div class="chat-area">
         <!-- 欢迎页 -->
         <div class="quick-actions" v-if="messages.length === 0">
-          <h3>欢迎使用白云司法智能写作助手</h3>
-          <p class="subtitle">请选择写作方式：</p>
+          <h3>信息写作</h3>
+          <p class="subtitle">直接说出您的需求，或上传材料，AI 会判断信息是否足够并协助完成写作</p>
           <el-row :gutter="16" class="action-cards">
-            <el-col :span="8">
-              <el-card shadow="hover" class="action-card" @click="goToTemplates">
-                <el-icon :size="32" color="#409EFF"><DocumentCopy /></el-icon>
-                <h4>写作模板</h4>
-                <p>使用预设模板快速生成公文</p>
-              </el-card>
-            </el-col>
-            <el-col :span="8">
+            <el-col :span="6">
               <el-card shadow="hover" class="action-card" @click="focusInput">
                 <el-icon :size="32" color="#67C23A"><ChatDotRound /></el-icon>
                 <h4>自由写作</h4>
-                <p>输入需求或上传材料，AI 辅助写作</p>
+                <p>如：帮我写一篇新闻稿 / 把这个材料整理成简报</p>
               </el-card>
             </el-col>
-            <el-col :span="8">
+            <el-col :span="6">
+              <el-card shadow="hover" class="action-card" @click="goToTemplates">
+                <el-icon :size="32" color="#409EFF"><DocumentCopy /></el-icon>
+                <h4>公文助手</h4>
+                <p>通知、请示、报告等结构化公文写作</p>
+              </el-card>
+            </el-col>
+            <el-col :span="6">
+              <el-card shadow="hover" class="action-card" @click="triggerUpload">
+                <el-icon :size="32" color="#E6A23C"><Paperclip /></el-icon>
+                <h4>根据材料写</h4>
+                <p>上传 Word/PDF/图片，AI 基于材料起草</p>
+              </el-card>
+            </el-col>
+            <el-col :span="6">
               <el-card shadow="hover" class="action-card" @click="goToKnowledge">
-                <el-icon :size="32" color="#E6A23C"><Document /></el-icon>
+                <el-icon :size="32" color="#909399"><Document /></el-icon>
                 <h4>知识库</h4>
-                <p>管理文档，增强检索能力</p>
+                <p>管理单位文档，写作时自动检索引用</p>
               </el-card>
             </el-col>
           </el-row>
 
           <div class="quick-templates" v-if="popularTemplates.length > 0">
-            <p class="subtitle">常用模板：</p>
+            <p class="subtitle">常用参考模板（点击后在对话中作为写作参考）：</p>
             <el-space wrap>
               <el-tag
                 v-for="tmpl in popularTemplates"
@@ -77,7 +84,7 @@
                 effect="plain"
                 size="large"
                 class="template-tag"
-                @click="quickUseTemplate(tmpl)"
+                @click="selectReferenceTemplate(tmpl)"
               >
                 <el-icon><component :is="tmpl.icon || 'Document'" /></el-icon>
                 {{ tmpl.name }}
@@ -149,6 +156,14 @@
 
         <!-- 输入区域 -->
         <div class="input-area">
+          <!-- 当前参考模板提示 -->
+          <div v-if="currentReferenceTemplate" class="reference-template-bar">
+            <el-tag type="success" effect="plain" closable @close="clearReferenceTemplate">
+              <el-icon><DocumentCopy /></el-icon>
+              参考模板：{{ currentReferenceTemplate.name }}
+            </el-tag>
+            <span class="reference-hint">仅作为写作参考，您仍可直接对话</span>
+          </div>
           <!-- 待发送附件 -->
           <div v-if="pendingAttachments.length > 0" class="pending-attachments">
             <el-tag
@@ -177,7 +192,29 @@
           <div class="input-actions">
             <div class="input-left">
               <el-switch v-model="useRag" active-text="使用知识库" />
+              <el-select
+                v-model="referenceTemplateId"
+                placeholder="选择模板（可选）"
+                size="small"
+                clearable
+                style="width: 190px"
+              >
+                <el-option label="不使用模板" value="" />
+                <el-option-group
+                  v-for="g in groupedTemplates"
+                  :key="g.name"
+                  :label="g.name"
+                >
+                  <el-option
+                    v-for="t in g.items"
+                    :key="t.id"
+                    :label="t.name"
+                    :value="t.id"
+                  />
+                </el-option-group>
+              </el-select>
               <el-upload
+                ref="uploadRef"
                 :show-file-list="false"
                 :auto-upload="false"
                 :on-change="handleAttachmentSelect"
@@ -189,7 +226,7 @@
                 </el-button>
               </el-upload>
               <el-button size="small" text @click="goToTemplates">
-                <el-icon><DocumentCopy /></el-icon> 模板
+                <el-icon><DocumentCopy /></el-icon> 公文助手
               </el-button>
             </div>
             <el-button type="primary" @click="send" :loading="loading" :disabled="!canSend">
@@ -237,7 +274,7 @@
 
 <script setup>
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ChatLineRound, Document, DocumentCopy, Picture, Loading, Paperclip,
@@ -249,6 +286,7 @@ import { uploadChatAttachments } from '@/api/format_check.js'
 import axios from 'axios'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const input = ref('')
@@ -257,8 +295,27 @@ const loading = ref(false)
 const useRag = ref(true)
 const msgRef = ref(null)
 const inputRef = ref(null)
+const uploadRef = ref(null)
 const sessionId = ref(null)
 const popularTemplates = ref([])
+
+// 参考模板（信息写作：模板作为写作参考，不是表单）
+const allTemplates = ref([])
+const referenceTemplateId = ref('')
+const currentReferenceTemplate = computed(() =>
+  allTemplates.value.find(t => t.id === referenceTemplateId.value) || null
+)
+
+// 模板按一级分类分组（法定公文/工作材料/宣传材料/其他材料），用于"选择模板"下拉
+const TEMPLATE_GROUP_ORDER = ['法定公文', '工作材料', '宣传材料', '其他材料']
+const groupedTemplates = computed(() => {
+  const groups = {}
+  for (const t of allTemplates.value) {
+    const g = TEMPLATE_GROUP_ORDER.includes(t.category) ? t.category : '其他材料'
+    ;(groups[g] = groups[g] || []).push(t)
+  }
+  return TEMPLATE_GROUP_ORDER.filter(g => groups[g]?.length).map(g => ({ name: g, items: groups[g] }))
+})
 
 // 会话列表
 const sessions = ref([])
@@ -408,14 +465,38 @@ function removePendingAttachment(idx) {
   pendingAttachments.value.splice(idx, 1)
 }
 
+// ========== 参考模板 ==========
+function selectReferenceTemplate(tmpl) {
+  referenceTemplateId.value = tmpl.id
+  ElMessage.success(`已选择参考模板「${tmpl.name}」，请继续描述您的需求`)
+  focusInput()
+}
+
+function clearReferenceTemplate() {
+  referenceTemplateId.value = ''
+}
+
+function triggerUpload() {
+  const el = uploadRef.value?.$el?.querySelector('input[type=file]')
+  el?.click()
+}
+
 // ========== 原有功能 ==========
 async function loadPopularTemplates() {
   try {
     const res = await axios.get('/api/v1/templates/', {
-      params: { limit: 6 },
       headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     })
-    popularTemplates.value = (res.data || []).slice(0, 6)
+    allTemplates.value = res.data || []
+    popularTemplates.value = allTemplates.value.slice(0, 6)
+    // 从模板中心「用于写作」跳入时，自动选中参考模板
+    const qid = route.query.template_id
+    if (qid && qid !== 'undefined' && allTemplates.value.some(t => t.id === qid)) {
+      referenceTemplateId.value = qid
+      const qname = route.query.template_name
+      const found = allTemplates.value.find(t => t.id === qid)
+      ElMessage.success(`已选用写作参考模板：${qname || found?.name}`)
+    }
   } catch (e) {
     console.error('加载模板失败', e)
   }
@@ -520,7 +601,8 @@ function send() {
     message,
     session_id: sessionId.value,
     use_rag: useRag.value,
-    attachment_ids: attachmentIds.length ? attachmentIds : undefined
+    attachment_ids: attachmentIds.length ? attachmentIds : undefined,
+    reference_template_id: referenceTemplateId.value || undefined
   }).then(async res => {
     sessionId.value = res.data.session_id
     pendingAttachments.value = []
@@ -691,7 +773,7 @@ watch(() => messages.value.length, () => {
 }
 .action-cards {
   width: 100%;
-  max-width: 800px;
+  max-width: 1000px;
   margin-bottom: 30px;
 }
 .action-card {
@@ -797,6 +879,16 @@ watch(() => messages.value.length, () => {
   padding: 20px;
   background: white;
   border-top: 1px solid #e0e0e0;
+}
+.reference-template-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.reference-hint {
+  font-size: 12px;
+  color: #909399;
 }
 .pending-attachments {
   display: flex;

@@ -1,194 +1,139 @@
- <template>
-  <div class="templates-page">
+<template>
+  <div class="tpl-center">
     <div class="page-header">
       <div class="header-left">
-        <h2>写作模板</h2>
-        <p class="subtitle">选择模板，快速生成规范公文</p>
+        <h2>模板中心</h2>
+        <p class="subtitle">选择合适的模板，作为智能写作和公文起草的格式参考。</p>
       </div>
       <div class="header-right">
-        <el-button type="primary" @click="openCreateDialog" v-if="isAdmin">
-          <el-icon><Plus /></el-icon> 新建模板
-        </el-button>
-        <el-button type="primary" @click="initTemplates" :loading="initing" v-if="isAdmin" plain>
+        <el-button v-if="isAdmin" text type="primary" @click="initTemplates" :loading="initing">
           <el-icon><Refresh /></el-icon> 初始化内置模板
         </el-button>
+        <el-button :type="onlyMine ? 'primary' : 'default'" :plain="!onlyMine" @click="onlyMine = !onlyMine">我的模板</el-button>
+        <el-button v-if="isAdmin" type="primary" @click="openCreateDialog">
+          <el-icon><Plus /></el-icon> 新建模板
+        </el-button>
       </div>
     </div>
 
-    <!-- 圆角 pill 分类导航 -->
+    <!-- 搜索 -->
+    <div class="search-bar">
+      <el-input v-model="searchQuery" size="large" clearable
+        placeholder="搜索模板名称或关键词，例如：请示、工作总结、会议通知…">
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+    </div>
+
+    <!-- 一级分类 -->
     <div class="category-bar">
-      <div class="category-nav">
-        <div class="category-item" :class="{ active: activeCategory === '' }" @click="activeCategory = ''">全部</div>
-        <div v-for="cat in categories" :key="cat.code" class="category-item" :class="{ active: activeCategory === cat.name }" @click="activeCategory = cat.name">{{ cat.name }}</div>
+      <div class="category-item" :class="{ active: activeCategory === '' }" @click="activeCategory = ''">全部</div>
+      <div v-for="cat in categories" :key="cat.code" class="category-item"
+        :class="{ active: activeCategory === cat.name }" @click="activeCategory = cat.name">{{ cat.name }}</div>
+    </div>
+
+    <div class="main-row" v-loading="loading">
+      <!-- 左：模板列表 -->
+      <div class="list-panel">
+        <div class="list-head">
+          <span>模板列表（共 {{ filteredList.length }} 个）</span>
+          <el-select v-model="sortBy" size="small" style="width: 130px">
+            <el-option label="按使用频率" value="freq" />
+            <el-option label="按名称" value="name" />
+          </el-select>
+        </div>
+        <div class="list-body">
+          <div v-for="t in filteredList" :key="t.id" class="tpl-row" :class="{ active: selectedId === t.id }"
+            @click="selectedId = t.id">
+            <div class="tpl-icon" :class="'ic-' + iconColor(t.category)">
+              <el-icon :size="22"><component :is="t.icon || 'Document'" /></el-icon>
+            </div>
+            <div class="tpl-info">
+              <div class="tpl-name-row">
+                <span class="tpl-name">{{ t.name }}</span>
+                <span class="tpl-cat-tag" :class="'tag-' + iconColor(t.category)">{{ t.category }}</span>
+                <el-tag v-if="!t.is_builtin" size="small" type="info" effect="plain">我的</el-tag>
+              </div>
+              <div class="tpl-desc">{{ t.description || (t.base_type + '类材料') }}</div>
+            </div>
+            <div class="tpl-row-right">
+              <el-button size="small" type="primary" plain @click.stop="useTemplate(t)">使用模板</el-button>
+              <div v-if="isAdmin" class="tpl-admin">
+                <el-icon title="编辑" @click.stop="editTemplate(t)"><Edit /></el-icon>
+                <el-icon title="删除" class="del" @click.stop="deleteTemplate(t)"><Delete /></el-icon>
+              </div>
+            </div>
+          </div>
+          <el-empty v-if="!loading && !filteredList.length" description="没有符合条件的模板" :image-size="100" />
+        </div>
+      </div>
+
+      <!-- 右：模板预览 -->
+      <div class="preview-panel" v-if="selectedTemplate">
+        <div class="pv-head">
+          <span class="pv-title">模板预览</span>
+          <span class="pv-fav" @click="toggleFav(selectedTemplate.id)">
+            <el-icon :color="isFav(selectedTemplate.id) ? '#e6a23c' : '#c0c4cc'">
+              <StarFilled v-if="isFav(selectedTemplate.id)" /><Star v-else />
+            </el-icon> 收藏模板
+          </span>
+        </div>
+        <div class="pv-name-row">
+          <div class="tpl-icon big" :class="'ic-' + iconColor(selectedTemplate.category)">
+            <el-icon :size="26"><component :is="selectedTemplate.icon || 'Document'" /></el-icon>
+          </div>
+          <div>
+            <div class="pv-name">{{ selectedTemplate.name }}</div>
+            <div class="pv-tags">
+              <el-tag size="small" effect="plain" type="primary">{{ selectedTemplate.base_type || '公文' }}</el-tag>
+              <el-tag size="small" effect="plain">{{ selectedTemplate.category }}</el-tag>
+              <el-tag v-if="selectedTemplate.is_builtin" size="small" type="success" effect="light">官方</el-tag>
+            </div>
+          </div>
+        </div>
+
+        <div class="pv-sec-title">适用场景</div>
+        <p class="pv-desc">{{ selectedTemplate.description || '暂无描述' }}</p>
+
+        <div class="pv-sec-title">模板结构</div>
+        <div class="pv-struct" v-for="(item, i) in structureItems" :key="i">
+          <div class="pv-struct-name">{{ cnNums[i] }}、{{ item }}</div>
+        </div>
+
+        <div class="pv-sec-title">格式预览</div>
+        <div class="pv-skeleton">
+          <div class="sk-title">关于××××的{{ selectedTemplate.base_type || '公文' }}</div>
+          <div class="sk-body">
+            <div v-for="(item, i) in structureItems.slice(0, 5)" :key="i" class="sk-line">
+              <b>{{ cnNums[i] }}、{{ item }}</b>
+              <span class="sk-dots">……</span>
+            </div>
+          </div>
+          <div class="sk-foot">
+            <div v-if="selectedTemplate.need_signature">（单位落款）</div>
+            <div v-if="selectedTemplate.need_date">××××年××月××日</div>
+          </div>
+        </div>
+
+        <el-button type="primary" size="large" class="pv-use-btn" @click="useTemplate(selectedTemplate)">
+          使用此模板
+        </el-button>
+      </div>
+      <div class="preview-panel pv-empty" v-else>
+        <el-empty description="选择左侧模板查看预览" />
       </div>
     </div>
 
-    <!-- 官方模板 -->
-    <div class="section-title" v-if="filteredBuiltin.length > 0">
-      <span class="section-icon">📌</span>
-      <span>官方模板</span>
-      <span class="section-badge">{{ filteredBuiltin.length }} 个</span>
-    </div>
-    <el-row :gutter="20" v-if="filteredBuiltin.length > 0">
-      <el-col :xs="24" :sm="12" :md="8" v-for="tmpl in filteredBuiltin" :key="tmpl.id">
-        <div class="template-card" :class="'cat-' + iconColor(tmpl.category)" @click="useTemplate(tmpl)">
-          <div class="card-accent"></div>
-          <div class="card-main">
-            <div class="card-header">
-              <h3 class="card-name">{{ tmpl.name }}</h3>
-              <el-tag size="small" type="success" effect="light" class="card-badge">官方</el-tag>
-            </div>
-            <div class="card-meta">
-              <span>{{ tmpl.base_type || tmpl.category }}</span>
-              <span class="dot">·</span>
-              <span>{{ tmpl.writing_style || '正式公文' }}</span>
-            </div>
-            <p class="card-desc">{{ tmpl.description || '点击添加描述' }}</p>
-            <div class="card-footer">
-              <div class="card-stats">
-                <span class="stat-item">
-                  <el-icon><View /></el-icon> 使用 {{ tmpl.use_count || 0 }} 次
-                </span>
-                <span class="hot-badge" v-if="(tmpl.use_count || 0) > 10">⭐ 常用</span>
-              </div>
-              <div class="card-actions" v-if="isAdmin">
-                <el-button link size="small" type="primary" @click.stop="editTemplate(tmpl)" title="编辑">
-                  <el-icon><Edit /></el-icon>
-                </el-button>
-                <el-button link size="small" type="danger" @click.stop="deleteTemplate(tmpl)" title="删除">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </el-col>
-    </el-row>
-
-    <!-- 自定义模板 -->
-    <div class="section-title" v-if="filteredCustom.length > 0">
-      <span class="section-icon">✏️</span>
-      <span>自定义模板</span>
-      <span class="section-badge">{{ filteredCustom.length }} 个</span>
-    </div>
-    <el-row :gutter="20" v-if="filteredCustom.length > 0">
-      <el-col :xs="24" :sm="12" :md="8" v-for="tmpl in filteredCustom" :key="tmpl.id">
-        <div class="template-card" :class="'cat-' + iconColor(tmpl.category)" @click="useTemplate(tmpl)">
-          <div class="card-accent"></div>
-          <div class="card-main">
-            <div class="card-header">
-              <h3 class="card-name">{{ tmpl.name }}</h3>
-              <el-tag size="small" type="info" effect="light" class="card-badge">自定义</el-tag>
-            </div>
-            <div class="card-meta">
-              <span>{{ tmpl.base_type || tmpl.category }}</span>
-              <span class="dot">·</span>
-              <span>{{ tmpl.writing_style || '正式公文' }}</span>
-            </div>
-            <p class="card-desc">{{ tmpl.description || '点击添加描述' }}</p>
-            <div class="card-footer">
-              <div class="card-stats">
-                <span class="stat-item">
-                  <el-icon><View /></el-icon> 使用 {{ tmpl.use_count || 0 }} 次
-                </span>
-                <span class="hot-badge" v-if="(tmpl.use_count || 0) > 10">⭐ 常用</span>
-              </div>
-              <div class="card-actions" v-if="isAdmin">
-                <el-button link size="small" type="primary" @click.stop="editTemplate(tmpl)" title="编辑">
-                  <el-icon><Edit /></el-icon>
-                </el-button>
-                <el-button link size="small" type="danger" @click.stop="deleteTemplate(tmpl)" title="删除">
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </el-col>
-    </el-row>
-
-    <el-empty v-if="!loading && filteredBuiltin.length === 0 && filteredCustom.length === 0" description="暂无模板" :image-size="120" />
-
-    <!-- 新建/编辑对话框 -->
-    <el-dialog v-model="createDialogVisible" :title="editingTemplateId ? '修改写作模板' : '新建写作模板'" width="700px" destroy-on-close>
-      <el-form :model="createForm" :rules="createRules" ref="createFormRef" label-width="100px">
-        <el-form-item label="模板名称" prop="name">
-          <el-input v-model="createForm.name" placeholder="如：年度工作总结" />
-        </el-form-item>
-        <el-form-item label="基础类型">
-          <el-select v-model="createForm.base_type" @change="onBaseTypeChange" style="width:100%">
-            <el-option v-for="t in baseTypeOptions" :key="t" :label="t" :value="t" />
-          </el-select>
-          <div class="form-hint">选择基础类型后，系统会自动加载常用字段</div>
-        </el-form-item>
-        <el-form-item label="分类" prop="category">
-          <el-select v-model="createForm.category" placeholder="选择分类" style="width:100%">
-            <el-option v-for="cat in categories" :key="cat.code" :label="cat.name" :value="cat.name" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="createForm.description" type="textarea" :rows="2" placeholder="模板用途说明" />
-        </el-form-item>
-        <el-form-item label="图标">
-          <el-input v-model="createForm.icon" placeholder="如：DocumentChecked" />
-        </el-form-item>
-        <el-divider content-position="left">写作偏好</el-divider>
-        <el-form-item label="写作风格">
-          <el-radio-group v-model="createForm.writing_style">
-            <el-radio-button label="正式公文">正式公文</el-radio-button>
-            <el-radio-button label="简洁明了">简洁明了</el-radio-button>
-            <el-radio-button label="领导讲话">领导讲话</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="字数要求">
-          <el-slider v-model="createForm.word_count" :min="500" :max="5000" :step="500" show-stops />
-          <span>{{ createForm.word_count }} 字</span>
-        </el-form-item>
-        <el-form-item label="格式要求">
-          <el-checkbox v-model="createForm.need_red_header">需要红头</el-checkbox>
-          <el-checkbox v-model="createForm.need_signature">需要落款</el-checkbox>
-          <el-checkbox v-model="createForm.need_date">需要日期</el-checkbox>
-          <el-checkbox v-model="createForm.need_doc_number">需要文号</el-checkbox>
-        </el-form-item>
-        <el-divider content-position="left">关键词 / 补充说明</el-divider>
-        <el-form-item label="补充说明">
-          <el-input v-model="createForm.keywords" type="textarea" :rows="3" placeholder="给AI的额外指令，如：通知时间统一用2026年8月1日；通知对象是各区县司法局。非必填。" />
-          <div class="form-hint">这些关键词会在生成时直接告诉AI，帮助控制输出细节</div>
-        </el-form-item>
-        <el-divider content-position="left">字段配置（可增删改）</el-divider>
-        <div v-for="(field, idx) in createForm.params_schema" :key="idx" class="param-field-row">
-          <el-input v-model="field.name" placeholder="字段名（英文）" style="width:120px" />
-          <el-input v-model="field.label" placeholder="显示名称" style="width:140px" />
-          <el-select v-model="field.type" style="width:100px">
-            <el-option label="输入框" value="input" />
-            <el-option label="多行文本" value="textarea" />
-            <el-option label="下拉选择" value="select" />
-          </el-select>
-          <el-checkbox v-model="field.required">必填</el-checkbox>
-          <el-button link type="danger" @click="removeParam(idx)">删除</el-button>
-        </div>
-        <el-button link type="primary" @click="addParam"><el-icon><Plus /></el-icon> 添加字段</el-button>
-        <el-divider content-position="left">生成配置（高级）</el-divider>
-        <el-form-item label="内容模板（可选）">
-          <el-input v-model="createForm.content_template" type="textarea" :rows="4" placeholder="AI生成时的结构参考，不填则由AI自由发挥" />
-        </el-form-item>
-        <el-form-item label="系统提示词">
-          <el-input v-model="createForm.system_prompt" type="textarea" :rows="4" placeholder="AI角色设定，通常由基础类型自动生成" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitCreateTemplate" :loading="createLoading">确定</el-button>
-      </template>
-    </el-dialog>
+    <!-- 新建/编辑对话框（新版设计：基础信息/写作指引/结构/参考材料/知识库/权限/图标） -->
+    <TemplateCreateDialog ref="tplDialogRef" @saved="loadData" />
   </div>
 </template>
-
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { View, Refresh, Plus, Edit, Delete } from '@element-plus/icons-vue'
+import { ElMessageBox } from 'element-plus'
+import { View, Refresh, Plus, Edit, Delete, Search, Star, StarFilled } from '@element-plus/icons-vue'
+import TemplateCreateDialog from '../components/TemplateCreateDialog.vue'
 import axios from 'axios'
 
 const router = useRouter()
@@ -199,6 +144,13 @@ const templates = ref([])
 const loading = ref(false)
 const initing = ref(false)
 const activeCategory = ref('')
+const searchQuery = ref('')
+const sortBy = ref('freq')
+const selectedId = ref('')
+const onlyMine = ref(false)
+const favs = ref(JSON.parse(localStorage.getItem('fav_templates') || '[]'))
+const cnNums = ['一','二','三','四','五','六','七','八','九','十']
+const tplDialogRef = ref(null)
 
 const isAdmin = computed(() => {
   try {
@@ -207,19 +159,41 @@ const isAdmin = computed(() => {
   } catch { return false }
 })
 
-// 官方模板
-const filteredBuiltin = computed(() => {
-  const list = templates.value.filter(t => t.is_builtin)
-  if (!activeCategory.value) return list
-  return list.filter(t => t.category === activeCategory.value)
+// 统一过滤：分类 + 我的模板 + 搜索 + 排序
+const filteredList = computed(() => {
+  let list = templates.value
+  if (onlyMine.value) list = list.filter(t => !t.is_builtin)
+  if (activeCategory.value) list = list.filter(t => t.category === activeCategory.value)
+  const q = searchQuery.value.trim()
+  if (q) {
+    list = list.filter(t =>
+      (t.name || '').includes(q) || (t.description || '').includes(q) ||
+      (t.base_type || '').includes(q) || (t.category || '').includes(q))
+  }
+  list = list.slice()
+  if (sortBy.value === 'freq') list.sort((a, b) => (b.use_count || 0) - (a.use_count || 0))
+  else list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh'))
+  return list
 })
 
-// 自定义模板
-const filteredCustom = computed(() => {
-  const list = templates.value.filter(t => !t.is_builtin)
-  if (!activeCategory.value) return list
-  return list.filter(t => t.category === activeCategory.value)
+const selectedTemplate = computed(() =>
+  templates.value.find(t => t.id === selectedId.value) || filteredList.value[0] || null
+)
+
+// 模板结构：从 content_template 的"包含：××、××"解析
+const structureItems = computed(() => {
+  const t = selectedTemplate.value
+  if (!t) return []
+  const m = (t.content_template || '').match(/包含：(.+?)。/)
+  if (m) return m[1].split(/[、，；,]/).map(s => s.trim()).filter(s => s && !/^(落款|成文日期|签名栏)/.test(s)).slice(0, 8)
+  return (t.params_schema || []).map(p => p.label).slice(0, 8)
 })
+
+function isFav(id) { return favs.value.includes(id) }
+function toggleFav(id) {
+  favs.value = isFav(id) ? favs.value.filter(x => x !== id) : [...favs.value, id]
+  localStorage.setItem('fav_templates', JSON.stringify(favs.value))
+}
 
 const baseTypes = [
   { label: '通知', value: '通知', fields: [
@@ -245,11 +219,12 @@ const baseTypes = [
     {name:'next_plan',label:'下一步工作',type:'textarea',required:false,placeholder:'请简述下一步工作计划、目标和安排',rows:3}
   ]},
   { label: '请示', value: '请示', fields: [
-    {name:'title',label:'请示事项',type:'input',required:true,placeholder:'如：关于申请经费的请示'},
-    {name:'reason',label:'请示理由',type:'textarea',required:true,placeholder:'请简述背景和原因',rows:4},
-    {name:'content',label:'申请内容',type:'textarea',required:true,placeholder:'请详细说明申请内容',rows:4},
-    {name:'basis',label:'政策依据',type:'textarea',required:true,placeholder:'请列出政策依据',rows:3},
-    {name:'suggestion',label:'拟办意见',type:'textarea',required:true,placeholder:'请简述拟办意见',rows:3}
+    {name:'title',label:'请示标题',type:'input',required:true,placeholder:'如：关于申请社区矫正专项工作经费的请示'},
+    {name:'recipient',label:'主送机关',type:'input',required:true,placeholder:'如：市司法局'},
+    {name:'reason',label:'请示理由',type:'textarea',required:true,placeholder:'请简述请示的背景、原因和必要性',rows:4},
+    {name:'basis',label:'请示依据',type:'textarea',required:false,placeholder:'相关政策文件或法律依据（如有）',rows:3},
+    {name:'matter',label:'请求批准事项',type:'textarea',required:true,placeholder:'请详细说明需要上级批准或解决的具体事项、金额、时间等',rows:4},
+    {name:'suggestion',label:'拟办意见',type:'textarea',required:false,placeholder:'拟采取的方案或建议（如有）',rows:3}
   ]},
   { label: '报告', value: '报告', fields: [
     {name:'title',label:'报告标题',type:'input',required:true,placeholder:'如：关于XX工作的报告'},
@@ -319,16 +294,7 @@ const createRules = {
 }
 
 function openCreateDialog() {
-  editingTemplateId.value = null
-  createForm.value = {
-    name: '', category: categories.value[0]?.name || '', base_type: '通知',
-    description: '', icon: 'Document', content_template: '', system_prompt: '',
-    writing_style: '正式公文', word_count: 1000,
-    need_red_header: false, need_signature: true, need_date: true, need_doc_number: false,
-    keywords: '', params_schema: []
-  }
-  onBaseTypeChange('通知')
-  createDialogVisible.value = true
+  tplDialogRef.value?.open(null)
 }
 
 function onBaseTypeChange(type) {
@@ -404,6 +370,7 @@ async function loadData() {
     ])
     categories.value = catRes.data || []
     templates.value = tmplRes.data || []
+    if (!selectedId.value && templates.value.length) selectedId.value = templates.value[0].id
   } catch (e) {
     ElMessage.error('加载模板失败')
   } finally {
@@ -430,26 +397,8 @@ function useTemplate(tmpl) {
   router.push(`/template/${tmpl.id}`)
 }
 
-async function editTemplate(tmpl) {
-  createForm.value = {
-    name: tmpl.name,
-    category: tmpl.category,
-    base_type: tmpl.base_type || '其他',
-    description: tmpl.description || '',
-    icon: tmpl.icon || 'Document',
-    content_template: tmpl.content_template || '',
-    system_prompt: tmpl.system_prompt || '',
-    writing_style: tmpl.writing_style || '正式公文',
-    word_count: tmpl.word_count || 1000,
-    need_red_header: tmpl.need_red_header || false,
-    need_signature: tmpl.need_signature !== false,
-    need_date: tmpl.need_date !== false,
-    need_doc_number: tmpl.need_doc_number || false,
-    keywords: tmpl.keywords || '',
-    params_schema: tmpl.params_schema ? JSON.parse(JSON.stringify(tmpl.params_schema)) : []
-  }
-  editingTemplateId.value = tmpl.id
-  createDialogVisible.value = true
+function editTemplate(tmpl) {
+  tplDialogRef.value?.open(tmpl)
 }
 
 async function deleteTemplate(tmpl) {
@@ -472,94 +421,80 @@ async function deleteTemplate(tmpl) {
 }
 
 function iconColor(category) {
-  const map = {
-    '计划总结': 'blue', '请示报告': 'orange',
-    '通知公告': 'red', '调研报告': 'purple', '会议纪要': 'cyan',
-    '情况汇报': 'pink', '执法文书': 'gray'
-  }
+  const map = { '法定公文': 'blue', '工作材料': 'green', '宣传材料': 'orange', '其他材料': 'purple' }
   return map[category] || 'blue'
 }
+
 </script>
 
 <style scoped>
-.templates-page { padding: 24px; background: #f0f2f5; min-height: 100vh; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.page-header h2 { margin: 0; font-size: 22px; color: #303133; }
-.subtitle { margin: 8px 0 0; font-size: 13px; color: #909399; }
+.tpl-center { padding: 20px 24px; background: #f5f6f8; min-height: 100%; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.page-header h2 { margin: 0; font-size: 22px; }
+.subtitle { color: #909399; font-size: 13px; margin: 4px 0 0; }
+.header-right { display: flex; gap: 10px; align-items: center; }
 
-/* 圆角 pill 分类导航 */
-.category-nav { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
-.category-nav::-webkit-scrollbar { height: 4px; }
-.category-nav::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 2px; }
-.category-item { padding: 6px 14px; font-size: 13px; color: #606266; cursor: pointer; border-radius: 16px; transition: all 0.2s ease; white-space: nowrap; user-select: none; background: #f5f7fa; border: 1px solid transparent; }
-.category-item:hover { color: #409EFF; background: #ecf5ff; border-color: #b3d8ff; }
-.category-item.active { font-size: 13px; font-weight: 600; color: #fff; background: #409EFF; border-color: #409EFF; box-shadow: 0 2px 6px rgba(64,158,255,0.3); }
+.search-bar { margin-bottom: 14px; }
+.search-bar :deep(.el-input__wrapper) { border-radius: 8px; }
 
-/* 分组标题 */
-.section-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: #303133; padding: 20px 0 12px; margin-top: 8px; }
-.section-icon { font-size: 16px; }
-.section-badge { font-size: 12px; color: #909399; background: #f0f2f5; padding: 2px 10px; border-radius: 12px; font-weight: 400; }
-
-/* 卡片 */
-.template-card {
-  position: relative;
-  background: white;
-  border-radius: 12px;
-  border: 1px solid #ebeef5;
-  display: flex;
-  margin-bottom: 16px;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-  overflow: hidden;
+.category-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+.category-item {
+  padding: 6px 18px; border-radius: 6px; font-size: 14px; cursor: pointer;
+  color: #606266; background: #fff; border: 1px solid #e4e7ed; transition: all .15s;
 }
-.template-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.10);
-  border-color: #c0c4cc;
+.category-item.active { background: #2f5cff; border-color: #2f5cff; color: #fff; }
+
+.main-row { display: flex; gap: 16px; align-items: flex-start; }
+.list-panel { flex: 0 0 46%; background: #fff; border-radius: 10px; padding: 14px 16px; }
+.list-head { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.list-body { max-height: calc(100vh - 260px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.tpl-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1.5px solid #ebeef5; border-radius: 10px; cursor: pointer; transition: all .15s;
 }
-
-/* 左边缘色条 */
-.card-accent {
-  width: 4px;
-  flex-shrink: 0;
-  border-radius: 12px 0 0 12px;
+.tpl-row:hover { border-color: #c6d4ff; }
+.tpl-row.active { border-color: #2f5cff; background: #f5f8ff; }
+.tpl-icon {
+  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; color: #fff;
 }
-.cat-blue .card-accent { background: #409EFF; }
-.cat-green .card-accent { background: #67C23A; }
-.cat-orange .card-accent { background: #E6A23C; }
-.cat-red .card-accent { background: #F56C6C; }
-.cat-purple .card-accent { background: #9B59B6; }
-.cat-cyan .card-accent { background: #1ABC9C; }
-.cat-pink .card-accent { background: #FF6B6B; }
-.cat-gray .card-accent { background: #34495E; }
+.tpl-icon.big { width: 52px; height: 52px; }
+.ic-blue { background: #2f5cff; } .ic-green { background: #1bb580; }
+.ic-orange { background: #f08c1a; } .ic-purple { background: #8b5cf6; }
+.tpl-info { flex: 1; min-width: 0; }
+.tpl-name-row { display: flex; align-items: center; gap: 8px; }
+.tpl-name { font-weight: 700; font-size: 15px; }
+.tpl-cat-tag { font-size: 12px; border-radius: 4px; padding: 1px 8px; }
+.tag-blue { background: #e8efff; color: #2f5cff; }
+.tag-green { background: #e3f7ef; color: #1bb580; }
+.tag-orange { background: #fdf1e2; color: #f08c1a; }
+.tag-purple { background: #f1ebfd; color: #8b5cf6; }
+.tpl-desc { font-size: 12px; color: #909399; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tpl-row-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.tpl-admin { display: flex; gap: 8px; color: #909399; font-size: 14px; }
+.tpl-admin .del:hover { color: #f56c6c; }
+.tpl-admin .el-icon:hover { color: #2f5cff; }
 
-.card-main { flex: 1; padding: 16px 16px 12px 12px; min-width: 0; display: flex; flex-direction: column; }
+.preview-panel { flex: 1; background: #fff; border-radius: 10px; padding: 18px 22px; position: sticky; top: 16px; }
+.pv-empty { display: flex; align-items: center; justify-content: center; min-height: 400px; }
+.pv-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 15px; margin-bottom: 16px; }
+.pv-fav { font-size: 13px; color: #909399; font-weight: 400; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.pv-name-row { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.pv-name { font-size: 19px; font-weight: 700; }
+.pv-tags { display: flex; gap: 6px; margin-top: 6px; }
+.pv-sec-title { font-weight: 700; font-size: 14px; margin: 14px 0 8px; }
+.pv-desc { font-size: 13px; color: #606266; margin: 0; line-height: 1.8; }
+.pv-struct { margin-bottom: 4px; }
+.pv-struct-name { color: #2f5cff; font-size: 13px; font-weight: 600; }
+.pv-skeleton { border: 1px solid #ebeef5; border-radius: 8px; padding: 20px 24px; background: #fafbfc; }
+.sk-title { text-align: center; font-weight: 700; font-size: 15px; margin-bottom: 14px; }
+.sk-line { font-size: 13px; color: #606266; line-height: 2; }
+.sk-line b { color: #303133; }
+.sk-dots { color: #c0c4cc; margin-left: 8px; }
+.sk-foot { text-align: right; font-size: 13px; color: #606266; margin-top: 12px; line-height: 1.9; }
+.pv-use-btn { width: 100%; margin-top: 16px; font-size: 15px; }
 
-/* 卡片头部 */
-.card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.card-name { margin: 0; font-size: 16px; font-weight: 600; color: #303133; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-badge { flex-shrink: 0; }
-
-/* 元信息 */
-.card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #909399; margin-bottom: 8px; }
-.card-meta .dot { color: #d0d0d0; }
-
-/* 描述 */
-.card-desc { font-size: 13px; color: #606266; line-height: 1.5; margin: 0 0 10px; min-height: 20px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-
-/* 底部 */
-.card-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 10px; border-top: 1px solid #f0f2f5; margin-top: auto; }
-.card-stats { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #b0b0b0; }
-.stat-item { display: flex; align-items: center; gap: 4px; }
-.hot-badge { background: #FEF0E6; color: #E6A23C; padding: 0 8px; border-radius: 10px; font-size: 11px; line-height: 18px; }
-
-/* 操作按钮：悬停才显示 */
-.card-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 0.25s; }
-.template-card:hover .card-actions { opacity: 1; }
-.card-actions .el-button { padding: 4px 6px; height: 28px; min-width: 28px; font-size: 14px; }
-
-.header-right { display: flex; gap: 10px; }
+/* 保留对话框内样式 */
 .form-hint { font-size: 12px; color: #909399; margin-top: 4px; }
 .param-field-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 </style>

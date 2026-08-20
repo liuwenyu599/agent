@@ -6,7 +6,7 @@ OUT=ai_code.txt
 
 {
 echo "============================================================"
-echo "司法智能写作助手 - 项目代码上下文"
+echo "司法智能办公辅助平台 V1.0 - 项目代码上下文"
 echo "============================================================"
 echo
 echo "生成时间:"
@@ -43,126 +43,76 @@ echo "PROJECT TREE"
 echo "============================================================"
 
 find . \
+  -type f \
   -not -path "./.git/*" \
-  -not -path "./*/node_modules/*" \
-  -not -path "./*/__pycache__/*" \
-  -not -path "./*/dist/*" \
-  -not -path "./*/build/*" \
+  -not -path "*/node_modules/*" \
+  -not -path "*/__pycache__/*" \
+  -not -path "*/dist/*" \
+  -not -path "*/build/*" \
   -not -path "./logs/*" \
   -not -path "./run/*" \
   -not -path "./backups/*" \
   -not -path "./vector_index/*" \
   -not -path "./tasks/*" \
+  -not -path "./frontend/user/src-tauri/target/*" \
   -not -name "*.db" \
+  -not -name "*.sqlite" \
+  -not -name "*.sqlite3" \
   -not -name "*.bak*" \
+  -not -name "*.log" \
   | sort
 
 echo
 
 echo "============================================================"
-echo "CORE BACKEND FILES"
+echo "SOURCE FILES"
 echo "============================================================"
 
-BACKEND_FILES=(
-  "backend/main.py"
-  "backend/config/settings.py"
-  "backend/database/models.py"
-
-  "backend/api/chat.py"
-  "backend/api/templates.py"
-  "backend/api/knowledge.py"
-  "backend/api/document.py"
-  "backend/api/auth.py"
-  "backend/api/user.py"
-
-  "backend/llm/vllm.py"
-
-  "backend/services/llm_service.py"
-  "backend/services/document_service.py"
-  "backend/services/docx_export.py"
-  "backend/services/rag_service.py"
-  "backend/services/memory_service.py"
-
-  "backend/rag/parser/base.py"
-  "backend/rag/parser/docx_parser.py"
-
-  "backend/knowledge/manager.py"
-
-  "backend/auth/jwt.py"
-  "backend/auth/permission.py"
-)
-
-for f in "${BACKEND_FILES[@]}"
+find . \
+  -type f \
+  \( \
+    -name "*.py" -o \
+    -name "*.pyi" -o \
+    -name "*.vue" -o \
+    -name "*.js" -o \
+    -name "*.jsx" -o \
+    -name "*.ts" -o \
+    -name "*.tsx" -o \
+    -name "*.html" -o \
+    -name "*.css" -o \
+    -name "*.scss" -o \
+    -name "*.less" -o \
+    -name "*.json" -o \
+    -name "*.yaml" -o \
+    -name "*.yml" -o \
+    -name "*.toml" -o \
+    -name "*.sh" -o \
+    -name "*.sql" \
+  \) \
+  -not -path "./.git/*" \
+  -not -path "*/node_modules/*" \
+  -not -path "*/__pycache__/*" \
+  -not -path "*/dist/*" \
+  -not -path "*/build/*" \
+  -not -path "./logs/*" \
+  -not -path "./run/*" \
+  -not -path "./backups/*" \
+  -not -path "./vector_index/*" \
+  -not -path "./tasks/*" \
+  -not -path "./frontend/user/src-tauri/target/*" \
+  -not -name "*.db" \
+  -not -name "*.sqlite" \
+  -not -name "*.sqlite3" \
+  -not -name "*.bak*" \
+  -not -name "*.log" \
+  | sort |
+while IFS= read -r f
 do
-    if [ -f "$f" ]; then
-        echo
-        echo "============================================================"
-        echo "FILE: $f"
-        echo "============================================================"
-        cat "$f"
-    fi
-done
-
-echo
-
-echo "============================================================"
-echo "CORE FRONTEND FILES"
-echo "============================================================"
-
-FRONTEND_FILES=(
-  "frontend/user/src/App.vue"
-
-  "frontend/user/src/views/ChatView.vue"
-  "frontend/user/src/views/TemplateView.vue"
-  "frontend/user/src/views/TemplatesView.vue"
-  "frontend/user/src/views/KnowledgeView.vue"
-  "frontend/user/src/views/KnowledgeDetailView.vue"
-  "frontend/user/src/views/AdminView.vue"
-  "frontend/user/src/views/DashboardView.vue"
-  "frontend/user/src/views/LoginView.vue"
-
-  "frontend/user/src/api/config.js"
-  "frontend/user/src/api/auth.js"
-  "frontend/user/src/api/knowledge.js"
-
-  "frontend/user/src/router/index.js"
-
-  "frontend/user/src/stores/auth.js"
-  "frontend/user/src/stores/server.js"
-
-  "frontend/user/src/utils/file.js"
-  "frontend/user/src/utils/storage.js"
-)
-
-for f in "${FRONTEND_FILES[@]}"
-do
-    if [ -f "$f" ]; then
-        echo
-        echo "============================================================"
-        echo "FILE: $f"
-        echo "============================================================"
-        cat "$f"
-    fi
-done
-
-echo
-
-echo "============================================================"
-echo "PROJECT CONFIGURATION"
-echo "============================================================"
-
-for f in \
-  "start.sh" \
-  "frontend/user/package.json" \
-  "frontend/user/vite.config.js"
-do
-    if [ -f "$f" ]; then
-        echo
-        echo "============================================================"
-        echo "FILE: $f"
-        echo "============================================================"
-        cat "$f"
-    fi
+    echo
+    echo "============================================================"
+    echo "FILE: $f"
+    echo "============================================================"
+    cat "$f"
 done
 
 } > "$OUT"
@@ -170,4 +120,29 @@ done
 echo
 echo "Done."
 echo "Output: $OUT"
+echo
+
+echo "统计:"
+echo "文件数量:"
+find . \
+  -type f \
+  \( \
+    -name "*.py" -o \
+    -name "*.vue" -o \
+    -name "*.js" -o \
+    -name "*.ts" -o \
+    -name "*.json" -o \
+    -name "*.html" -o \
+    -name "*.css" -o \
+    -name "*.yaml" -o \
+    -name "*.yml" -o \
+    -name "*.sh" \
+  \) \
+  -not -path "./.git/*" \
+  -not -path "*/node_modules/*" \
+  -not -path "*/__pycache__/*" \
+  -not -name "*.bak*" \
+  | wc -l
+
+echo
 ls -lh "$OUT"

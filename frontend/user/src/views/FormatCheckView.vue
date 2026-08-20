@@ -1,425 +1,641 @@
 <template>
-  <div class="format-check-page">
-    <div class="page-header">
-      <div class="header-left">
-        <h2>格式校验</h2>
-        <p class="subtitle">上传文件，按可配置的格式规则检查公文排版规范（独立功能，与 AI 写作无关）</p>
+  <div class="fc-page">
+    <!-- 顶部 -->
+    <div class="fc-header">
+      <div>
+        <div class="fc-title"><el-icon color="#409eff"><DocumentChecked /></el-icon>格式校验</div>
+        <div class="fc-sub">依据司法局公文格式规范，检测文档格式问题并提供修改建议</div>
       </div>
-      <div class="header-right" v-if="isAdmin">
-        <el-button type="primary" plain @click="openRuleDialog()">
-          <el-icon><Plus /></el-icon> 新增规则
-        </el-button>
+      <div class="fc-header-actions">
+        <el-button @click="historyVisible = true"><el-icon><Clock /></el-icon>校验历史</el-button>
+        <el-upload :show-file-list="false" :auto-upload="false" accept=".docx,.txt,.md,.pdf" :on-change="onFileChange">
+          <el-button type="primary" :loading="checking"><el-icon><Upload /></el-icon>上传文档</el-button>
+        </el-upload>
       </div>
     </div>
 
-    <el-tabs v-model="activeTab">
-      <!-- ========== 校验 ========== -->
-      <el-tab-pane label="文件校验" name="check">
-        <el-row :gutter="20">
-          <el-col :span="10">
-            <el-card shadow="never">
-              <template #header><span>上传待检查文件</span></template>
+    <!-- 文件信息卡 -->
+    <div v-if="currentRecordId" class="file-card">
+      <div class="file-icon">W</div>
+      <div class="file-info">
+        <div class="file-name">{{ fileInfo.name }}</div>
+        <div class="file-meta">大小：{{ fileInfo.size }}　上传时间：{{ fileInfo.time }}</div>
+      </div>
+      <div class="file-status">
+        <el-icon color="#67c23a" :size="18"><CircleCheckFilled /></el-icon>
+        <span class="ok-text">校验完成</span>
+        <span class="issue-count">共发现 <b>{{ issues.length }}</b> 个问题</span>
+      </div>
+    </div>
+    <el-empty v-if="!currentRecordId && !checking" description="点击右上角「上传文档」开始格式校验（建议 .docx）" />
 
-              <el-upload
-                drag
-                :auto-upload="false"
-                :on-change="handleFileChange"
-                :limit="1"
-                accept=".docx,.txt,.md,.pdf"
-                style="width: 100%"
-              >
-                <el-icon :size="48" color="#409EFF"><Upload /></el-icon>
-                <div class="el-upload__text">拖拽文件到此处或 <em>点击选择</em></div>
-                <template #tip>
-                  <div class="el-upload__tip">
-                    支持 .docx（完整校验字体/字号/行距/页边距等）；.txt/.md 仅内容层面检查；.pdf 建议转 Word 后校验
+    <template v-if="currentRecordId">
+      <el-tabs v-model="tab" class="fc-tabs">
+        <!-- ============ 校验结果 ============ -->
+        <el-tab-pane label="校验结果" name="result">
+          <div class="result-layout">
+            <div class="result-main">
+              <!-- 统计卡 -->
+              <div class="stat-row">
+                <div class="stat-card"><div class="stat-label">问题总数</div><div class="stat-num">{{ issues.length }}</div></div>
+                <div class="stat-card"><div class="stat-label">严重问题</div><div class="stat-num red">{{ statError }}</div></div>
+                <div class="stat-card"><div class="stat-label">一般问题</div><div class="stat-num orange">{{ statWarn }}</div></div>
+                <div class="stat-card"><div class="stat-label">提示信息</div><div class="stat-num blue">{{ statInfo }}</div></div>
+                <div class="stat-card donut-card">
+                  <div class="stat-label">问题类型分布</div>
+                  <div class="donut-row">
+                    <div class="donut" :style="donutStyle"></div>
+                    <div class="donut-legend">
+                      <div v-for="(g, k) in typeGroups" :key="k">
+                        <span class="dot" :style="{ background: TYPE_COLORS[k] }"></span>
+                        {{ k }}　{{ g.length }} ({{ pct(g.length) }})
+                      </div>
+                    </div>
                   </div>
-                </template>
-              </el-upload>
-
-              <div v-if="checkFile" class="file-selected">
-                <el-icon><Document /></el-icon> {{ checkFile.name }}
+                </div>
               </div>
 
-              <el-form label-position="top" style="margin-top: 16px">
-                <el-form-item label="AI 辅助判断">
-                  <el-switch v-model="useAi" active-text="启用" inactive-text="仅规则" />
-                  <div class="form-hint">规则无法判断的复杂问题（如落款缺失、占位符残留）由 AI 辅助分析</div>
-                </el-form-item>
-                <el-form-item label="本次使用的规则">
-                  <el-select v-model="selectedRuleIds" multiple placeholder="默认使用全部默认规则" style="width: 100%">
-                    <el-option v-for="r in rules" :key="r.id" :label="`${r.name}（${targetText(r.target)}）`" :value="r.id" />
-                  </el-select>
-                </el-form-item>
-              </el-form>
+              <!-- 筛选 -->
+              <div class="filter-row">
+                <span>问题类型：</span>
+                <el-select v-model="filterType" style="width: 120px"><el-option v-for="t in ['全部', ...Object.keys(TYPE_COLORS)]" :key="t" :label="t" :value="t" /></el-select>
+                <span>严重程度：</span>
+                <el-select v-model="filterSeverity" style="width: 120px"><el-option v-for="t in ['全部', '严重', '一般', '提示']" :key="t" :label="t" :value="t" /></el-select>
+                <span>来源：</span>
+                <el-select v-model="filterSource" style="width: 120px"><el-option v-for="t in ['全部', '规则校验', 'AI辅助']" :key="t" :label="t" :value="t" /></el-select>
+                <el-input v-model="filterKeyword" placeholder="搜索问题内容" clearable style="width: 220px" />
+                <el-button>筛选</el-button>
+              </div>
 
-              <el-button type="primary" size="large" style="width: 100%" @click="runCheck" :loading="checking" :disabled="!checkFile">
-                <el-icon><CircleCheck /></el-icon> 开始校验
-              </el-button>
-            </el-card>
-
-            <!-- 校验历史 -->
-            <el-card shadow="never" style="margin-top: 16px">
-              <template #header><span>校验历史</span></template>
-              <el-table :data="records" size="small" v-loading="recordsLoading" @row-click="loadRecord" highlight-current-row style="cursor:pointer">
-                <el-table-column prop="filename" label="文件" min-width="140" show-overflow-tooltip />
-                <el-table-column prop="issue_count" label="问题数" width="70" align="center" />
-                <el-table-column label="时间" width="90">
-                  <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+              <!-- 问题表格 -->
+              <el-table :data="pagedIssues" style="width: 100%" @row-click="row => selectIssue(row._idx)">
+                <el-table-column type="index" label="序号" width="60" :index="i => (page - 1) * pageSize + i + 1" />
+                <el-table-column prop="element" label="问题内容" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="location" label="位置" width="110" show-overflow-tooltip />
+                <el-table-column prop="current" label="当前值" width="130" show-overflow-tooltip />
+                <el-table-column prop="expected" label="标准要求" width="150" show-overflow-tooltip />
+                <el-table-column label="严重程度" width="90">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="severityTag(row)" effect="plain">{{ severityText(row) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="来源" width="90">
+                  <template #default="{ row }">{{ row.source === 'ai' ? 'AI辅助' : '规则校验' }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="110">
+                  <template #default="{ row }">
+                    <el-button size="small" text type="primary" @click.stop="selectIssue(row._idx)"><el-icon><View /></el-icon></el-button>
+                    <el-button v-if="row.fix_hint" size="small" text
+                      :type="acceptedSet.has(row._idx) ? 'success' : 'info'"
+                      @click.stop="toggleAccept(row._idx)">
+                      {{ acceptedSet.has(row._idx) ? '已选' : '选择' }}
+                    </el-button>
+                  </template>
                 </el-table-column>
               </el-table>
-              <el-empty v-if="!records.length && !recordsLoading" description="暂无校验记录" :image-size="60" />
-            </el-card>
-          </el-col>
-
-          <el-col :span="14">
-            <el-card shadow="never" class="result-card" v-loading="checking">
-              <template #header>
-                <div class="result-header">
-                  <span>校验结果</span>
-                  <template v-if="result">
-                    <el-tag type="danger" size="small" v-if="result.issue_count > 0">{{ result.issue_count }} 个问题</el-tag>
-                    <el-tag type="success" size="small" v-else>未发现问题</el-tag>
-                    <el-tag size="small" type="info" v-if="result.ai_used">含 AI 辅助判断</el-tag>
-                  </template>
-                </div>
-              </template>
-
-              <el-empty v-if="!result" description="上传文件后开始校验" :image-size="100" />
-
-              <template v-else>
-                <el-alert v-if="result.file_type !== 'docx'" type="warning" :closable="false" style="margin-bottom: 12px"
-                  title="非 Word 文件只能进行有限的检查，建议上传 .docx 文件获得完整的字体/字号/行距等排版校验。" />
-                <div v-for="(issue, idx) in result.issues" :key="idx" class="issue-item">
-                  <div class="issue-head">
-                    <el-tag :type="issue.severity === 'error' ? 'danger' : 'warning'" size="small">
-                      {{ issue.severity === 'error' ? '错误' : '提醒' }}
-                    </el-tag>
-                    <el-tag size="small" effect="plain" :type="issue.source === 'rule' ? 'primary' : 'success'">
-                      {{ issue.source === 'rule' ? '规则校验' : 'AI 判断' }}
-                    </el-tag>
-                    <span class="issue-location">{{ issue.location }}</span>
-                    <span class="issue-element">{{ issue.element }}</span>
-                  </div>
-                  <div class="issue-body">
-                    <div v-if="issue.current"><span class="lb">当前：</span>{{ issue.current }}</div>
-                    <div v-if="issue.expected"><span class="lb">要求：</span>{{ issue.expected }}</div>
-                    <div v-if="issue.suggestion"><span class="lb">建议：</span>{{ issue.suggestion }}</div>
-                  </div>
-                </div>
-                <el-empty v-if="result.issues.length === 0" description="格式符合当前配置的规则" :image-size="80" />
-              </template>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-tab-pane>
-
-      <!-- ========== 规则管理 ========== -->
-      <el-tab-pane label="规则管理" name="rules">
-        <el-alert type="info" :closable="false" style="margin-bottom: 16px"
-          title="规则不写死在代码中。司法局正式格式规范确定后，在这里录入即可生效，无需修改代码。带「默认」标记的规则会在用户不选择规则时自动使用。" />
-        <el-table :data="rules" stripe v-loading="rulesLoading">
-          <el-table-column prop="name" label="规则名称" min-width="160" />
-          <el-table-column label="作用对象" width="100">
-            <template #default="{ row }">{{ targetText(row.target) }}</template>
-          </el-table-column>
-          <el-table-column label="检查项" min-width="280">
-            <template #default="{ row }">
-              <span class="checks-preview">{{ formatChecks(row.checks) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="级别" width="80" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.severity === 'error' ? 'danger' : 'warning'" size="small">{{ row.severity === 'error' ? '错误' : '提醒' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="默认" width="70" align="center">
-            <template #default="{ row }"><el-tag v-if="row.is_default" size="small" type="success">默认</el-tag></template>
-          </el-table-column>
-          <el-table-column label="操作" width="140" fixed="right" v-if="isAdmin">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="openRuleDialog(row)">编辑</el-button>
-              <el-button link type="danger" @click="removeRule(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-if="!rules.length && !rulesLoading" description="尚未配置格式规则，请联系管理员录入司法局正式规范" />
-      </el-tab-pane>
-    </el-tabs>
-
-    <!-- ========== 规则编辑对话框 ========== -->
-    <el-dialog v-model="ruleDialogVisible" :title="editingRule ? '编辑规则' : '新增规则'" width="640px" destroy-on-close>
-      <el-form :model="ruleForm" label-width="100px">
-        <el-form-item label="规则名称" required>
-          <el-input v-model="ruleForm.name" placeholder="如：标题字体字号" />
-        </el-form-item>
-        <el-form-item label="作用对象" required>
-          <el-select v-model="ruleForm.target" style="width: 100%" @change="ruleForm.checks = {}">
-            <el-option v-for="t in targetOptions" :key="t.value" :label="t.label" :value="t.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="检查项">
-          <div class="check-fields">
-            <template v-for="field in availableCheckFields" :key="field.key">
-              <div class="check-field-row">
-                <el-checkbox
-                  :model-value="ruleForm.checks[field.key] !== undefined"
-                  @change="toggleCheckField(field.key, $event)"
-                >{{ field.label }}</el-checkbox>
-                <template v-if="ruleForm.checks[field.key] !== undefined">
-                  <el-select v-if="field.type === 'alignment'" v-model="ruleForm.checks[field.key]" style="width: 130px">
-                    <el-option label="左对齐" value="left" /><el-option label="居中" value="center" />
-                    <el-option label="右对齐" value="right" /><el-option label="两端对齐" value="justify" />
-                  </el-select>
-                  <el-select v-else-if="field.type === 'bool'" v-model="ruleForm.checks[field.key]" style="width: 110px">
-                    <el-option label="是" :value="true" /><el-option label="否" :value="false" />
-                  </el-select>
-                  <el-input-number v-else-if="field.type === 'number'" v-model="ruleForm.checks[field.key]" :step="field.step || 1" :precision="field.precision ?? 0" style="width: 140px" />
-                  <el-input v-else v-model="ruleForm.checks[field.key]" :placeholder="field.placeholder" style="width: 200px" />
-                  <span class="unit">{{ field.unit }}</span>
-                </template>
+              <div class="pager">
+                <span>共 {{ filteredIssues.length }} 条</span>
+                <el-pagination layout="prev, pager, next, sizes, jumper" :total="filteredIssues.length"
+                  v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10, 20, 50]" />
               </div>
-            </template>
+              <div class="tip-row">提示：点击 <el-icon><View /></el-icon> 查看问题详情，勾选问题后可进行自动修正预览</div>
+
+              <!-- 底部操作条 -->
+              <div class="bottom-bar">
+                <span>已选 <b class="red">{{ acceptedSet.size }}</b> 项</span>
+                <el-button text type="primary" @click="rejectAll">清空选择</el-button>
+                <el-button @click="acceptAll">全选可修正项</el-button>
+                <el-button type="primary" plain @click="goPreview">预览修正</el-button>
+                <el-button type="primary" :loading="downloading" @click="onDownload">生成修正稿</el-button>
+              </div>
+            </div>
+
+            <!-- 右栏：问题详情 + 文档预览 -->
+            <div class="result-side">
+              <div class="side-box" v-if="activeIssueObj">
+                <div class="side-head">
+                  <span>问题详情</span>
+                  <span class="side-nav">
+                    {{ activeIssue + 1 }} / {{ issues.length }}
+                    <el-button size="small" text @click="stepIssue(-1)"><el-icon><ArrowLeft /></el-icon></el-button>
+                    <el-button size="small" text @click="stepIssue(1)"><el-icon><ArrowRight /></el-icon></el-button>
+                  </span>
+                </div>
+                <div class="detail-body">
+                  <div class="detail-title">
+                    {{ activeIssueObj.element || '格式问题' }}
+                    <el-tag size="small" :type="severityTag(activeIssueObj)" effect="dark">{{ severityText(activeIssueObj) }}</el-tag>
+                  </div>
+                  <div class="detail-row"><span class="lbl">位置：</span>{{ activeIssueObj.location }}</div>
+                  <div class="detail-row"><span class="lbl">当前值：</span>{{ activeIssueObj.current }}</div>
+                  <div class="detail-row"><span class="lbl">标准要求：</span>{{ activeIssueObj.expected }}</div>
+                  <div class="detail-row"><span class="lbl">建议：</span>{{ activeIssueObj.suggestion }}</div>
+                  <div class="detail-row"><span class="lbl">来源：</span>{{ activeIssueObj.source === 'ai' ? 'AI 辅助' : '规则校验' }}</div>
+                </div>
+              </div>
+
+              <div class="side-box">
+                <div class="side-head">
+                  <span>文档预览</span>
+                  <span class="side-nav">
+                    高亮问题 <el-switch v-model="highlightOn" size="small" />
+                  </span>
+                </div>
+                <div class="doc-preview">
+                  <div class="doc-page">
+                    <div v-for="p in sourceParagraphs" :key="p.index" class="doc-para"
+                      :class="{ 'doc-hl': highlightOn && activeIssueObj && activeIssueObj.paragraph_index === p.index }">
+                      {{ p.text || '　' }}
+                      <span v-if="highlightOn && paraIssueMap[p.index]" class="hl-badge">{{ paraIssueMap[p.index].length }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="form-hint">只勾选需要检查的项目；未勾选的项不参与校验</div>
-        </el-form-item>
-        <el-form-item label="问题级别">
-          <el-radio-group v-model="ruleForm.severity">
-            <el-radio-button label="error">错误</el-radio-button>
-            <el-radio-button label="warning">提醒</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="默认启用">
-          <el-switch v-model="ruleForm.is_default" />
-        </el-form-item>
-        <el-form-item label="备注/依据">
-          <el-input v-model="ruleForm.remark" type="textarea" :rows="2" placeholder="如：依据《××司法局公文处理规范》第X条（规范确定后填写）" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="ruleDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="saveRule" :loading="ruleSaving">保存</el-button>
-      </template>
-    </el-dialog>
+        </el-tab-pane>
+
+        <!-- ============ 逐段审阅（一一对应拉线） ============ -->
+        <el-tab-pane label="逐段审阅" name="review">
+          <el-alert v-if="!canReview" type="info" :closable="false" title="仅 .docx 文件支持逐段审阅" />
+          <div v-else class="review-wrap" ref="reviewWrap">
+            <div class="pane">
+              <div class="pane-title">源文档</div>
+              <div class="pane-body" @scroll="drawLines">
+                <div v-for="p in sourceParagraphs" :key="'l' + p.index" :id="'lp-' + p.index"
+                  class="para" :class="paraClass(p.index, 'left')" @click="onParaClick(p.index)">
+                  {{ p.text || '　' }}
+                </div>
+              </div>
+            </div>
+            <svg class="lines-layer" ref="linesSvg"></svg>
+            <div class="pane">
+              <div class="pane-title">修正稿（按已接受的修正实时预览）</div>
+              <div class="pane-body" v-loading="previewing" @scroll="drawLines">
+                <div v-for="p in fixedParagraphs" :key="'r' + p.index" :id="'rp-' + p.index"
+                  class="para" :class="paraClass(p.index, 'right')" @click="onParaClick(p.index)">
+                  {{ p.text || '　' }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- ============ 修正预览 ============ -->
+        <el-tab-pane label="修正预览" name="preview">
+          <el-alert v-if="!canReview" type="info" :closable="false" title="仅 .docx 文件支持修正预览" />
+          <div v-else class="preview-page" v-loading="previewing">
+            <div class="preview-head">
+              已应用 <b>{{ acceptedSet.size }}</b> 项修正
+              <el-button size="small" text type="primary" @click="refreshPreviewNow">刷新预览</el-button>
+            </div>
+            <div class="doc-page">
+              <div v-for="p in fixedParagraphs" :key="'pv' + p.index" class="doc-para"
+                :class="{ 'doc-fixed': fixedSet.has(p.index) }">
+                {{ p.text || '　' }}
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- ============ 修正结果 ============ -->
+        <el-tab-pane label="修正结果" name="fixed">
+          <div class="fixed-result">
+            <el-result icon="success" title="修正稿已就绪"
+              :sub-title="`已接受 ${acceptedSet.size} 项修正，点击下方按钮下载 Word 修正稿`">
+              <template #extra>
+                <el-button type="primary" size="large" :loading="downloading" @click="onDownload">
+                  <el-icon><Download /></el-icon>下载修正稿
+                </el-button>
+                <el-button size="large" @click="tab = 'review'">返回逐段审阅调整</el-button>
+              </template>
+            </el-result>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </template>
+
+    <!-- 校验历史抽屉 -->
+    <el-drawer v-model="historyVisible" title="校验历史" size="420px">
+      <div v-for="r in records" :key="r.id" class="history-item" @click="onRecordChange(r.id); historyVisible = false">
+        <div class="history-name">{{ r.filename }}</div>
+        <div class="history-meta">
+          {{ (r.created_at || '').slice(0, 16).replace('T', ' ') }}　{{ r.issue_count }} 个问题
+          <el-tag size="small" effect="plain">{{ r.file_type }}</el-tag>
+        </div>
+      </div>
+      <el-empty v-if="!records.length" description="暂无历史记录" />
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, Document, Plus, CircleCheck } from '@element-plus/icons-vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import {
+  DocumentChecked, Clock, Upload, Download, View,
+  CircleCheckFilled, ArrowLeft, ArrowRight,
+} from '@element-plus/icons-vue'
 import {
   checkFormat, listCheckRecords, getCheckRecord,
-  listFormatRules, createFormatRule, updateFormatRule, deleteFormatRule
+  getRecordParagraphs, previewFix, downloadFixed,
 } from '@/api/format_check.js'
 
-const activeTab = ref('check')
-const isAdmin = computed(() => {
-  try {
-    const user = JSON.parse(localStorage.getItem('user') || '{}')
-    return ['developer', 'knowledge_admin', 'admin'].includes(user.role)
-  } catch { return false }
-})
-
-// ===== 校验 =====
-const checkFile = ref(null)
-const useAi = ref(true)
-const selectedRuleIds = ref([])
+// ---------- 状态 ----------
 const checking = ref(false)
-const result = ref(null)
+const downloading = ref(false)
+const previewing = ref(false)
+const historyVisible = ref(false)
 const records = ref([])
-const recordsLoading = ref(false)
+const currentRecordId = ref(null)
+const currentFileType = ref('')
+const fileInfo = ref({ name: '', size: '', time: '' })
+const issues = ref([])
+const sourceParagraphs = ref([])
+const fixedParagraphs = ref([])
+const acceptedSet = reactive(new Set())
+const fixedSet = reactive(new Set())       // 修正预览里被改过的段落下标
+const activeIssue = ref(0)
+const paraIssueMap = reactive({})
+const tab = ref('result')
+const highlightOn = ref(true)
 
-function handleFileChange(file) {
-  checkFile.value = file.raw
+const page = ref(1)
+const pageSize = ref(10)
+const filterType = ref('全部')
+const filterSeverity = ref('全部')
+const filterSource = ref('全部')
+const filterKeyword = ref('')
+
+const TYPE_COLORS = { '字体字号': '#409eff', '段落格式': '#67c23a', '页面设置': '#e6a23c', '其他规范': '#f56c6c' }
+const TYPE_KEYS = {
+  '字体字号': ['字体', '字号', '加粗'],
+  '段落格式': ['对齐方式', '行距', '首行缩进', '段前间距', '段后间距', '多余空行', '行尾空格'],
+  '页面设置': ['上边距', '下边距', '左边距', '右边距', '页面宽度', '页面高度'],
 }
 
-async function runCheck() {
-  if (!checkFile.value) return
-  checking.value = true
-  result.value = null
+const reviewWrap = ref(null)
+const linesSvg = ref(null)
+
+// ---------- 计算 ----------
+const canReview = computed(() => currentFileType.value === 'docx' && sourceParagraphs.value.length > 0)
+const activeIssueObj = computed(() => issues.value[activeIssue.value] || null)
+
+function issueType(iss) {
+  for (const [k, names] of Object.entries(TYPE_KEYS)) {
+    if (names.includes(iss.element)) return k
+  }
+  return '其他规范'
+}
+const typeGroups = computed(() => {
+  const g = { '字体字号': [], '段落格式': [], '页面设置': [], '其他规范': [] }
+  issues.value.forEach(i => g[issueType(i)].push(i))
+  return g
+})
+const donutStyle = computed(() => {
+  const total = issues.value.length || 1
+  let acc = 0
+  const stops = []
+  for (const [k, color] of Object.entries(TYPE_COLORS)) {
+    const n = typeGroups.value[k]?.length || 0
+    const from = acc / total * 100
+    acc += n
+    const to = acc / total * 100
+    if (n) stops.push(`${color} ${from}% ${to}%`)
+  }
+  return { background: `conic-gradient(${stops.join(',') || '#e4e7ed 0 100%'})` }
+})
+function pct(n) { return issues.value.length ? Math.round(n / issues.value.length * 100) + '%' : '0%' }
+
+function severityText(iss) {
+  if (iss.source === 'ai') return '提示'
+  return iss.severity === 'error' ? '严重' : '一般'
+}
+function severityTag(iss) {
+  return { '严重': 'danger', '一般': 'warning', '提示': 'primary' }[severityText(iss)]
+}
+const statError = computed(() => issues.value.filter(i => severityText(i) === '严重').length)
+const statWarn = computed(() => issues.value.filter(i => severityText(i) === '一般').length)
+const statInfo = computed(() => issues.value.filter(i => severityText(i) === '提示').length)
+
+const filteredIssues = computed(() =>
+  issues.value
+    .map((iss, i) => ({ ...iss, _idx: i }))
+    .filter(iss =>
+      (filterType.value === '全部' || issueType(iss) === filterType.value) &&
+      (filterSeverity.value === '全部' || severityText(iss) === filterSeverity.value) &&
+      (filterSource.value === '全部' || (filterSource.value === 'AI辅助' ? iss.source === 'ai' : iss.source !== 'ai')) &&
+      (!filterKeyword.value || `${iss.element}${iss.current}${iss.expected}${iss.suggestion}`.includes(filterKeyword.value))
+    ))
+const pagedIssues = computed(() =>
+  filteredIssues.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+
+// ---------- 数据加载 ----------
+async function loadRecords() {
   try {
-    const res = await checkFormat(checkFile.value, useAi.value, selectedRuleIds.value.length ? selectedRuleIds.value : null)
-    result.value = res.data
-    if (res.data.issue_count === 0) ElMessage.success('校验完成，未发现问题')
-    else ElMessage.warning(`校验完成，发现 ${res.data.issue_count} 个问题`)
+    const { data } = await listCheckRecords({ page: 1, page_size: 50 })
+    records.value = data.data || []
+  } catch (e) { /* 静默 */ }
+}
+
+async function onFileChange(file) {
+  checking.value = true
+  try {
+    const { data } = await checkFormat(file.raw, true)
+    fileInfo.value = {
+      name: data.filename,
+      size: (file.raw.size / 1024).toFixed(0) + ' KB',
+      time: new Date().toLocaleString('zh-CN', { hour12: false }),
+    }
+    ElMessage.success(`校验完成，发现 ${data.issue_count} 个问题`)
+    await loadAfterCheck(data.record_id, data.issues || [], data.file_type)
     loadRecords()
   } catch (e) {
-    ElMessage.error('校验失败: ' + (e.response?.data?.detail || e.message))
+    ElMessage.error('校验失败：' + (e.response?.data?.detail || e.message))
   } finally {
     checking.value = false
   }
 }
 
-async function loadRecords() {
-  recordsLoading.value = true
+async function onRecordChange(id) {
   try {
-    const res = await listCheckRecords({ page: 1, page_size: 20 })
-    records.value = res.data.data || []
-  } catch (e) { console.error(e) } finally { recordsLoading.value = false }
-}
-
-async function loadRecord(row) {
-  try {
-    const res = await getCheckRecord(row.id)
-    result.value = { ...res.data, ai_used: res.data.issues?.some(i => i.source === 'ai') }
-  } catch (e) { ElMessage.error('加载记录失败') }
-}
-
-// ===== 规则 =====
-const rules = ref([])
-const rulesLoading = ref(false)
-const ruleDialogVisible = ref(false)
-const ruleSaving = ref(false)
-const editingRule = ref(null)
-const ruleForm = ref({ name: '', target: 'title', checks: {}, severity: 'error', is_default: true, remark: '' })
-
-const targetOptions = [
-  { label: '标题', value: 'title' }, { label: '正文', value: 'body' },
-  { label: '一级标题（一、）', value: 'heading1' }, { label: '二级标题（（一））', value: 'heading2' },
-  { label: '页面设置', value: 'page' }, { label: '落款', value: 'signature' },
-  { label: '成文日期', value: 'date' }, { label: '全文通用', value: 'general' }
-]
-
-// 各作用对象可配置的检查项
-const CHECK_FIELDS = {
-  paragraph: [
-    { key: 'font_name', label: '字体', type: 'text', placeholder: '如：仿宋_GB2312' },
-    { key: 'font_size_pt', label: '字号', type: 'number', step: 0.5, precision: 1, unit: '磅（二号=22，三号=16，小三=15，四号=14，小四=12）' },
-    { key: 'bold', label: '加粗', type: 'bool' },
-    { key: 'alignment', label: '对齐方式', type: 'alignment' },
-    { key: 'line_spacing_pt', label: '行距', type: 'number', step: 1, unit: '磅（固定值）' },
-    { key: 'first_line_indent_chars', label: '首行缩进', type: 'number', step: 1, unit: '字符' },
-    { key: 'space_before_pt', label: '段前间距', type: 'number', step: 1, unit: '磅' },
-    { key: 'space_after_pt', label: '段后间距', type: 'number', step: 1, unit: '磅' },
-  ],
-  page: [
-    { key: 'top_margin_cm', label: '上边距', type: 'number', step: 0.1, precision: 1, unit: '厘米' },
-    { key: 'bottom_margin_cm', label: '下边距', type: 'number', step: 0.1, precision: 1, unit: '厘米' },
-    { key: 'left_margin_cm', label: '左边距', type: 'number', step: 0.1, precision: 1, unit: '厘米' },
-    { key: 'right_margin_cm', label: '右边距', type: 'number', step: 0.1, precision: 1, unit: '厘米' },
-    { key: 'page_width_cm', label: '页面宽度', type: 'number', step: 0.1, precision: 1, unit: '厘米（A4=21）' },
-    { key: 'page_height_cm', label: '页面高度', type: 'number', step: 0.1, precision: 1, unit: '厘米（A4=29.7）' },
-  ],
-  general: [
-    { key: 'no_extra_blank_lines', label: '不允许连续空行', type: 'bool' },
-    { key: 'no_trailing_spaces', label: '不允许行尾空格', type: 'bool' },
-  ]
-}
-
-const availableCheckFields = computed(() => {
-  if (ruleForm.value.target === 'page') return CHECK_FIELDS.page
-  if (ruleForm.value.target === 'general') return CHECK_FIELDS.general
-  return CHECK_FIELDS.paragraph
-})
-
-function toggleCheckField(key, checked) {
-  if (checked) {
-    const field = availableCheckFields.value.find(f => f.key === key)
-    ruleForm.value.checks[key] = field.type === 'bool' ? true : (field.type === 'number' ? 0 : '')
-  } else {
-    delete ruleForm.value.checks[key]
-  }
-}
-
-async function loadRules() {
-  rulesLoading.value = true
-  try {
-    const res = await listFormatRules()
-    rules.value = res.data || []
-  } catch (e) { console.error(e) } finally { rulesLoading.value = false }
-}
-
-function openRuleDialog(row) {
-  if (!isAdmin.value) { ElMessage.warning('仅管理员可维护规则'); return }
-  if (row) {
-    editingRule.value = row
-    ruleForm.value = {
-      name: row.name, target: row.target, checks: { ...(row.checks || {}) },
-      severity: row.severity, is_default: row.is_default, remark: row.remark || ''
+    const { data } = await getCheckRecord(id)
+    const rec = records.value.find(r => r.id === id)
+    fileInfo.value = {
+      name: data.filename, size: '—',
+      time: (data.created_at || '').slice(0, 16).replace('T', ' '),
     }
-  } else {
-    editingRule.value = null
-    ruleForm.value = { name: '', target: 'title', checks: {}, severity: 'error', is_default: true, remark: '' }
-  }
-  ruleDialogVisible.value = true
-}
-
-async function saveRule() {
-  if (!ruleForm.value.name.trim()) { ElMessage.warning('请填写规则名称'); return }
-  if (!Object.keys(ruleForm.value.checks).length) { ElMessage.warning('请至少勾选一个检查项'); return }
-  ruleSaving.value = true
-  try {
-    if (editingRule.value) {
-      await updateFormatRule(editingRule.value.id, ruleForm.value)
-      ElMessage.success('规则已更新')
-    } else {
-      await createFormatRule(ruleForm.value)
-      ElMessage.success('规则已创建')
-    }
-    ruleDialogVisible.value = false
-    loadRules()
+    await loadAfterCheck(id, data.issues || [], data.file_type)
   } catch (e) {
-    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
-  } finally { ruleSaving.value = false }
-}
-
-async function removeRule(row) {
-  try {
-    await ElMessageBox.confirm(`确定删除规则「${row.name}」？`, '确认', { type: 'warning' })
-    await deleteFormatRule(row.id)
-    ElMessage.success('已删除')
-    loadRules()
-  } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') }
-}
-
-function targetText(t) {
-  const m = { title: '标题', body: '正文', heading1: '一级标题', heading2: '二级标题', page: '页面', signature: '落款', date: '成文日期', general: '全文通用' }
-  return m[t] || t
-}
-
-function formatChecks(checks) {
-  if (!checks) return '-'
-  const names = {
-    font_name: '字体', font_size_pt: '字号(磅)', bold: '加粗', alignment: '对齐',
-    line_spacing_pt: '行距(磅)', first_line_indent_chars: '首行缩进(字符)',
-    space_before_pt: '段前(磅)', space_after_pt: '段后(磅)',
-    top_margin_cm: '上边距(cm)', bottom_margin_cm: '下边距(cm)',
-    left_margin_cm: '左边距(cm)', right_margin_cm: '右边距(cm)',
-    page_width_cm: '页宽(cm)', page_height_cm: '页高(cm)',
-    no_extra_blank_lines: '禁连续空行', no_trailing_spaces: '禁行尾空格'
+    ElMessage.error('加载记录失败')
   }
-  return Object.entries(checks).map(([k, v]) => `${names[k] || k}=${v}`).join('，')
 }
 
-function formatTime(d) {
-  if (!d) return ''
-  const date = new Date(d)
-  return (date.getMonth() + 1) + '-' + date.getDate() + ' ' +
-    date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+async function loadAfterCheck(recordId, issueList, fileType) {
+  currentRecordId.value = recordId
+  currentFileType.value = fileType
+  issues.value = issueList
+  activeIssue.value = 0
+  sourceParagraphs.value = []
+  fixedParagraphs.value = []
+  acceptedSet.clear()
+  fixedSet.clear()
+  issueList.forEach((iss, i) => { if (iss.fix_hint) acceptedSet.add(i) })
+  rebuildMap()
+  tab.value = 'result'
+  if (fileType === 'docx') {
+    try {
+      const { data } = await getRecordParagraphs(recordId)
+      sourceParagraphs.value = data.paragraphs || []
+      await refreshPreviewNow()
+    } catch (e) { /* 源文件过期则退化为纯问题列表 */ }
+  }
 }
 
-onMounted(() => { loadRules(); loadRecords() })
+function rebuildMap() {
+  Object.keys(paraIssueMap).forEach(k => delete paraIssueMap[k])
+  issues.value.forEach((iss, i) => {
+    const p = iss.paragraph_index
+    if (p === undefined || p === null) return
+    if (!paraIssueMap[p]) paraIssueMap[p] = []
+    paraIssueMap[p].push(i)
+  })
+}
+
+// ---------- 选择 / 接受 ----------
+function selectIssue(i) {
+  activeIssue.value = i
+  nextTick(drawLines)
+}
+function stepIssue(d) {
+  activeIssue.value = Math.min(Math.max(activeIssue.value + d, 0), issues.value.length - 1)
+  nextTick(drawLines)
+}
+function toggleAccept(i) {
+  if (acceptedSet.has(i)) acceptedSet.delete(i); else acceptedSet.add(i)
+  refreshPreview()
+}
+function acceptAll() {
+  issues.value.forEach((iss, i) => { if (iss.fix_hint) acceptedSet.add(i) })
+  refreshPreview()
+}
+function rejectAll() { acceptedSet.clear(); refreshPreview() }
+
+function paraClass(pIdx, side) {
+  const list = paraIssueMap[pIdx]
+  if (!list) return {}
+  return {
+    'para-issue': true,
+    'para-accepted': side === 'right' && list.some(i => acceptedSet.has(i)),
+    'para-active': list.includes(activeIssue.value),
+  }
+}
+function onParaClick(pIdx) {
+  const list = paraIssueMap[pIdx]
+  if (list && list.length) selectIssue(list[0])
+}
+
+// ---------- 修正预览 ----------
+let previewTimer = null
+function refreshPreview() {
+  clearTimeout(previewTimer)
+  previewTimer = setTimeout(refreshPreviewNow, 300)
+}
+async function refreshPreviewNow() {
+  if (!currentRecordId.value || currentFileType.value !== 'docx') return
+  previewing.value = true
+  try {
+    const { data } = await previewFix(currentRecordId.value, [...acceptedSet])
+    const paras = data.paragraphs || []
+    fixedParagraphs.value = paras
+    fixedSet.clear()
+    paras.forEach(p => {
+      const src = sourceParagraphs.value[p.index]
+      if (!src || src.text !== p.text) fixedSet.add(p.index)
+    })
+  } catch (e) {
+    ElMessage.error('修正预览失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    previewing.value = false
+    await nextTick()
+    drawLines()
+  }
+}
+function goPreview() { tab.value = 'preview'; refreshPreviewNow() }
+
+// ---------- 逐段审阅连线 ----------
+function drawLines() {
+  const svg = linesSvg.value, wrap = reviewWrap.value
+  if (!svg || !wrap || tab.value !== 'review') return
+  const wrapRect = wrap.getBoundingClientRect()
+  svg.setAttribute('width', wrapRect.width)
+  svg.setAttribute('height', wrapRect.height)
+  svg.innerHTML = ''
+  issues.value.forEach((iss, i) => {
+    const p = iss.paragraph_index
+    if (p === undefined || p === null) return
+    const l = document.getElementById('lp-' + p)
+    const r = document.getElementById('rp-' + p)
+    if (!l || !r) return
+    const lr = l.getBoundingClientRect(), rr = r.getBoundingClientRect()
+    const x1 = lr.right - wrapRect.left, y1 = lr.top - wrapRect.top + lr.height / 2
+    const x2 = rr.left - wrapRect.left, y2 = rr.top - wrapRect.top + rr.height / 2
+    const mx = (x1 + x2) / 2
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`)
+    const accepted = acceptedSet.has(i)
+    path.setAttribute('fill', 'none')
+    path.setAttribute('stroke', activeIssue.value === i ? '#409eff' : accepted ? '#67c23a' : '#e6a23c')
+    path.setAttribute('stroke-width', activeIssue.value === i ? 2.5 : 1.5)
+    if (!accepted) path.setAttribute('stroke-dasharray', '5,4')
+    path.style.cursor = 'pointer'
+    path.addEventListener('click', () => toggleAccept(i))
+    svg.appendChild(path)
+  })
+}
+watch(tab, v => { if (v === 'review') nextTick(drawLines) })
+
+// ---------- 下载 ----------
+async function onDownload() {
+  if (!currentRecordId.value) return
+  downloading.value = true
+  try {
+    const { data } = await downloadFixed(currentRecordId.value, [...acceptedSet])
+    const url = URL.createObjectURL(data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = '修正稿.docx'
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('修正稿已下载')
+  } catch (e) {
+    ElMessage.error('下载失败：' + (e.response?.data?.detail || e.message))
+  } finally {
+    downloading.value = false
+  }
+}
+
+const onResize = () => drawLines()
+onMounted(() => { loadRecords(); window.addEventListener('resize', onResize) })
+onBeforeUnmount(() => window.removeEventListener('resize', onResize))
 </script>
 
 <style scoped>
-.format-check-page { padding: 24px; background: #f0f2f5; min-height: 100vh; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.page-header h2 { margin: 0; font-size: 22px; color: #303133; }
-.subtitle { margin: 6px 0 0; font-size: 13px; color: #909399; }
-.file-selected { margin-top: 10px; color: #67C23A; font-size: 13px; display: flex; align-items: center; gap: 6px; }
-.form-hint { font-size: 12px; color: #909399; margin-top: 4px; }
-.result-card { min-height: 500px; }
-.result-header { display: flex; align-items: center; gap: 8px; }
-.issue-item { border: 1px solid #ebeef5; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; background: #fafbfc; }
-.issue-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.issue-location { font-weight: 600; color: #303133; font-size: 14px; }
-.issue-element { color: #909399; font-size: 13px; }
-.issue-body { font-size: 13px; color: #606266; line-height: 1.8; }
-.issue-body .lb { color: #909399; margin-right: 4px; }
-.check-fields { width: 100%; }
-.check-field-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.check-field-row .el-checkbox { width: 110px; }
-.unit { font-size: 12px; color: #909399; }
-.checks-preview { font-size: 12px; color: #606266; }
+.fc-page { padding: 20px 24px; }
+.fc-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.fc-title { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.fc-sub { color: #909399; font-size: 13px; margin-top: 4px; }
+.fc-header-actions { display: flex; gap: 10px; }
+
+.file-card {
+  display: flex; align-items: center; gap: 14px;
+  background: #fff; border: 1px solid #ebeef5; border-radius: 10px;
+  padding: 14px 18px; margin-bottom: 4px;
+}
+.file-icon {
+  width: 44px; height: 44px; border-radius: 8px; background: #2b579a;
+  color: #fff; font-weight: 700; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+.file-info { flex: 1; }
+.file-name { font-weight: 600; font-size: 15px; }
+.file-meta { color: #909399; font-size: 12px; margin-top: 4px; }
+.file-status { display: flex; align-items: center; gap: 6px; }
+.ok-text { color: #67c23a; font-weight: 600; }
+.issue-count { color: #606266; margin-left: 10px; }
+.issue-count b { color: #f56c6c; }
+
+.fc-tabs { margin-top: 8px; }
+
+/* 校验结果 */
+.result-layout { display: flex; gap: 16px; align-items: flex-start; }
+.result-main { flex: 1; min-width: 0; }
+.result-side { width: 380px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; }
+
+.stat-row { display: flex; gap: 12px; margin-bottom: 14px; }
+.stat-card {
+  background: #fff; border: 1px solid #ebeef5; border-radius: 10px;
+  padding: 14px 18px; min-width: 110px;
+}
+.stat-label { color: #909399; font-size: 13px; }
+.stat-num { font-size: 28px; font-weight: 700; margin-top: 6px; }
+.stat-num.red { color: #f56c6c; } .stat-num.orange { color: #e6a23c; } .stat-num.blue { color: #409eff; }
+.donut-card { flex: 1; }
+.donut-row { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.donut { width: 76px; height: 76px; border-radius: 50%; position: relative; flex-shrink: 0; }
+.donut::after { content: ''; position: absolute; inset: 20px; background: #fff; border-radius: 50%; }
+.donut-legend { font-size: 12px; color: #606266; display: flex; flex-direction: column; gap: 3px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+
+.filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: #606266; flex-wrap: wrap; }
+.pager { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; color: #909399; font-size: 13px; }
+.tip-row { color: #909399; font-size: 12px; margin-top: 8px; }
+.bottom-bar {
+  display: flex; align-items: center; gap: 14px; justify-content: flex-end;
+  background: #fff; border: 1px solid #ebeef5; border-radius: 10px;
+  padding: 12px 18px; margin-top: 14px;
+}
+.red { color: #f56c6c; }
+
+.side-box { background: #fff; border: 1px solid #ebeef5; border-radius: 10px; }
+.side-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; font-weight: 600; border-bottom: 1px solid #ebeef5;
+}
+.side-nav { display: flex; align-items: center; gap: 4px; font-weight: 400; color: #909399; font-size: 13px; }
+.detail-body { padding: 14px 16px; }
+.detail-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.detail-row { font-size: 13px; color: #303133; line-height: 2; }
+.detail-row .lbl { color: #909399; }
+
+.doc-preview { padding: 12px; max-height: 46vh; overflow-y: auto; background: #f5f6f8; }
+.doc-page {
+  background: #fff; border: 1px solid #e4e7ed; border-radius: 4px;
+  padding: 28px 32px; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+.doc-para { font-size: 14px; line-height: 2.1; min-height: 24px; position: relative; white-space: pre-wrap; word-break: break-all; }
+.doc-hl { background: #fde2e2; border-radius: 3px; }
+.doc-fixed { background: #e1f3d8; border-radius: 3px; }
+.hl-badge {
+  position: absolute; right: -6px; top: 2px; background: #f56c6c; color: #fff;
+  font-size: 11px; min-width: 16px; height: 16px; line-height: 16px;
+  border-radius: 50%; text-align: center;
+}
+
+/* 逐段审阅 */
+.review-wrap {
+  position: relative; display: flex; gap: 64px;
+  border: 1px solid #e4e7ed; border-radius: 8px; background: #fafafa; padding: 0 12px;
+}
+.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.pane-title { padding: 10px 4px; font-weight: 600; font-size: 14px; border-bottom: 1px solid #ebeef5; }
+.pane-body { overflow-y: auto; padding: 12px 4px; max-height: 60vh; background: #fff; }
+.para {
+  padding: 4px 8px; margin: 2px 0; border-radius: 4px;
+  font-size: 14px; line-height: 1.9; min-height: 28px;
+  white-space: pre-wrap; word-break: break-all;
+  border-left: 3px solid transparent;
+}
+.para-issue { border-left-color: #e6a23c; background: #fdf6ec; cursor: pointer; }
+.para-accepted { border-left-color: #67c23a; background: #f0f9eb; }
+.para-active { outline: 2px solid #409eff; }
+.lines-layer { position: absolute; inset: 0; pointer-events: none; }
+.lines-layer path { pointer-events: stroke; }
+
+/* 修正预览 */
+.preview-page { background: #f5f6f8; border-radius: 8px; padding: 16px; }
+.preview-head { margin-bottom: 12px; color: #606266; }
+.preview-head b { color: #67c23a; }
+.preview-page .doc-page { max-height: 62vh; overflow-y: auto; }
+
+/* 修正结果 */
+.fixed-result { background: #fff; border: 1px solid #ebeef5; border-radius: 10px; padding: 30px 0; }
+
+/* 历史 */
+.history-item {
+  padding: 12px 6px; border-bottom: 1px solid #f2f3f5; cursor: pointer;
+}
+.history-item:hover { background: #f5f7fa; }
+.history-name { font-weight: 600; font-size: 14px; }
+.history-meta { color: #909399; font-size: 12px; margin-top: 4px; display: flex; gap: 8px; align-items: center; }
 </style>

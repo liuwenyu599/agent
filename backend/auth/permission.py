@@ -5,9 +5,7 @@ from sqlalchemy.orm import Session
 from backend.database.postgres import get_db
 from backend.database.models import User
 from backend.auth.jwt import decode_token
-
 security = HTTPBearer()
-
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
     payload = decode_token(credentials.credentials)
     if not payload:

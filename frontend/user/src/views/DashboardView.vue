@@ -1,247 +1,323 @@
 <template>
   <div class="dashboard-page">
-    <div class="dashboard-content">
-      <div class="welcome-section">
-        <div class="welcome-left">
-          <h1>欢迎使用白云司法智能写作助手</h1>
-          <p>基于大语言模型，为司法行政工作提供智能公文写作支持</p>
-        </div>
-        <el-button type="primary" size="large" @click="goToChat">
-          <el-icon><EditPen /></el-icon> 开始写作
+    <!-- 顶部 Banner -->
+    <div class="banner">
+      <div class="banner-left">
+        <h1>欢迎使用司法智能办公平台</h1>
+        <p>AI 赋能办公，让工作更高效、更智能</p>
+        <el-button type="primary" size="large" class="banner-btn" @click="goToChat">
+          开始智能写作 <el-icon style="margin-left:6px"><Right /></el-icon>
         </el-button>
       </div>
+      <div class="banner-right">
+        <el-icon :size="120" class="banner-deco"><Monitor /></el-icon>
+      </div>
+    </div>
 
-      <el-row :gutter="16" class="stats-row">
-        <el-col :span="6" v-for="stat in statsList" :key="stat.label">
-          <div class="stat-card" :class="stat.type" @click="stat.action?.()">
-            <div class="stat-icon"><el-icon :size="28"><component :is="stat.icon" /></el-icon></div>
-            <div class="stat-info">
-              <div class="stat-value">{{ stat.value }}</div>
-              <div class="stat-label">{{ stat.label }}</div>
+    <el-row :gutter="20" class="main-row">
+      <!-- 左侧主区域 -->
+      <el-col :span="16">
+        <!-- 快速入口 -->
+        <el-card shadow="never" class="section-card">
+          <template #header>
+            <div class="section-header">快速入口</div>
+          </template>
+          <div class="quick-grid">
+            <div
+              v-for="item in quickEntries"
+              :key="item.name"
+              class="quick-item"
+              :class="{ disabled: item.disabled }"
+              @click="onQuickEntry(item)"
+            >
+              <div class="quick-icon" :style="{ background: item.bg, color: item.color }">
+                <el-icon :size="26"><component :is="item.icon" /></el-icon>
+              </div>
+              <div class="quick-name">{{ item.name }}</div>
+              <div class="quick-desc">{{ item.desc }}</div>
             </div>
           </div>
-        </el-col>
-      </el-row>
+        </el-card>
 
-      <el-row :gutter="16" class="main-row">
-        <el-col :span="16">
-          <el-card shadow="never" class="section-card">
-            <template #header>
-              <div class="section-header"><el-icon><Grid /></el-icon> 快捷入口</div>
-            </template>
-            <el-row :gutter="16">
-              <el-col :span="8" v-for="item in quickEntries" :key="item.name">
-                <div class="quick-card" @click="item.action">
-                  <div class="quick-icon" :class="item.color">
-                    <el-icon :size="28"><component :is="item.icon" /></el-icon>
+        <!-- 最近文档 + 消息通知 -->
+        <el-row :gutter="20" style="margin-top: 20px">
+          <el-col :span="12">
+            <el-card shadow="never" class="section-card">
+              <template #header>
+                <div class="section-header">
+                  最近文档
+                  <el-link type="primary" class="more-link" @click="router.push('/knowledge')">全部 &gt;</el-link>
+                </div>
+              </template>
+              <div v-if="recentDocs.length > 0" class="doc-list">
+                <div v-for="doc in recentDocs" :key="doc.id" class="doc-item">
+                  <el-icon class="doc-icon" color="#2b6cb0"><Document /></el-icon>
+                  <div class="doc-info">
+                    <div class="doc-title">{{ doc.title }}</div>
+                    <div class="doc-meta">更新时间：{{ doc.time }}<span v-if="doc.kb_name">　来源：{{ doc.kb_name }}</span></div>
                   </div>
-                  <div class="quick-title">{{ item.name }}</div>
-                  <div class="quick-desc">{{ item.desc }}</div>
-                </div>
-              </el-col>
-            </el-row>
-          </el-card>
-
-          <el-card shadow="never" class="section-card" style="margin-top: 16px">
-            <template #header>
-              <div class="section-header"><el-icon><Document /></el-icon> 常用公文类型</div>
-            </template>
-            <div class="doc-types">
-              <div v-for="doc in docTypes" :key="doc.type" class="doc-type-item" @click="startDocWriting(doc.type)">
-                <el-icon :size="18"><component :is="doc.icon" /></el-icon>
-                <span>{{ doc.name }}</span>
-                <el-tag v-if="doc.hot" size="small" type="danger" effect="dark">常用</el-tag>
-              </div>
-            </div>
-          </el-card>
-        </el-col>
-
-        <el-col :span="8">
-          <el-card shadow="never" class="section-card">
-            <template #header>
-              <div class="section-header"><el-icon><Timer /></el-icon> 最近动态</div>
-            </template>
-            <div class="activity-list" v-if="activities.length > 0">
-              <div v-for="act in activities" :key="act.id" class="activity-item">
-                <div class="activity-dot" :class="act.type"></div>
-                <div class="activity-content">
-                  <div class="activity-title">{{ act.title }}</div>
-                  <div class="activity-time">{{ act.time }}</div>
                 </div>
               </div>
-            </div>
-            <el-empty v-else description="暂无动态" :image-size="60" />
-          </el-card>
+              <el-empty v-else description="暂无文档，可前往知识库上传" :image-size="70" />
+            </el-card>
+          </el-col>
+          <el-col :span="12">
+            <el-card shadow="never" class="section-card">
+              <template #header>
+                <div class="section-header">
+                  消息通知
+                  <el-link type="primary" class="more-link" disabled>全部已读</el-link>
+                </div>
+              </template>
+              <div class="notice-list">
+                <div v-for="(n, i) in notices" :key="i" class="notice-item">
+                  <el-avatar :size="30" :icon="n.icon" :style="{ background: n.color }" />
+                  <div class="notice-info">
+                    <div class="notice-title">{{ n.title }}</div>
+                    <div class="notice-time">{{ n.time }}</div>
+                  </div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
+      </el-col>
 
-          <el-card shadow="never" class="section-card" style="margin-top: 16px">
-            <template #header>
-              <div class="section-header"><el-icon><Cpu /></el-icon> 系统状态</div>
-            </template>
-            <div class="status-list">
-              <div class="status-item"><span>AI 模型</span><el-tag size="small" type="success" effect="dark">运行中</el-tag></div>
-              <div class="status-item"><span>知识库</span><span>{{ kbCount }} 个</span></div>
-              <div class="status-item"><span>覆盖部门</span><span>{{ deptCount }} 个</span></div>
-              <div class="status-item"><span>模型版本</span><span>Qwen2.5-14B</span></div>
+      <!-- 右侧栏 -->
+      <el-col :span="8">
+        <!-- 我的工作流 -->
+        <el-card shadow="never" class="section-card">
+          <template #header>
+            <div class="section-header">
+              我的工作流
+              <el-link type="primary" class="more-link" disabled>全部 &gt;</el-link>
             </div>
-          </el-card>
-        </el-col>
-      </el-row>
-    </div>
+          </template>
+          <div class="workflow-list">
+            <div v-for="wf in workflows" :key="wf.name" class="workflow-item">
+              <div class="workflow-head">
+                <span class="workflow-name">{{ wf.name }}</span>
+                <el-tag size="small" :type="wf.statusType" effect="light">{{ wf.status }}</el-tag>
+              </div>
+              <div class="workflow-meta">{{ wf.type }} ｜ 更新于 {{ wf.time }}</div>
+            </div>
+          </div>
+          <div class="workflow-tip">工作流功能开发中，以上为示例数据</div>
+        </el-card>
+
+        <!-- 常用模板 -->
+        <el-card shadow="never" class="section-card" style="margin-top: 20px">
+          <template #header>
+            <div class="section-header">
+              常用模板
+              <el-link type="primary" class="more-link" @click="router.push('/templates')">全部 &gt;</el-link>
+            </div>
+          </template>
+          <div v-if="templates.length > 0" class="tpl-list">
+            <div v-for="t in templates" :key="t.id" class="tpl-item" @click="useTemplate(t)">
+              <el-icon class="tpl-icon" color="#e6a23c"><DocumentCopy /></el-icon>
+              <div class="tpl-info">
+                <div class="tpl-name">{{ t.name }}</div>
+                <div class="tpl-desc">{{ t.description || t.category }}</div>
+              </div>
+              <el-tag size="small" effect="plain" type="primary">{{ t.category }}</el-tag>
+            </div>
+          </div>
+          <el-empty v-else description="暂无模板" :image-size="70" />
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import {
-  EditPen, Grid, Document, Timer, Cpu,
-  ChatLineRound, Collection, DocumentCopy,
-  UserFilled, Bell, Calendar, DataLine, Microphone, Files
+  Right, Monitor, Document, DocumentCopy, Bell, CircleCheck,
+  ChatLineRound, Collection, Share, DataAnalysis, UserFilled
 } from '@element-plus/icons-vue'
 import axios from 'axios'
 
 const router = useRouter()
 
-const statsList = ref([
-  { label: '今日写作', value: 0, icon: 'EditPen', type: 'blue', action: () => router.push('/chat') },
-  { label: '知识库文档', value: 0, icon: 'Collection', type: 'green', action: () => router.push('/knowledge') },
-  { label: '写作模板', value: 0, icon: 'DocumentCopy', type: 'orange', action: () => router.push('/templates') },
-  { label: '活跃用户', value: 1, icon: 'UserFilled', type: 'purple', action: () => router.push('/admin') }
-])
-
+// ===== 快速入口（与效果图一致；未上线功能点击提示） =====
 const quickEntries = ref([
-  { name: '智能写作', desc: '输入主题，AI自动生成公文', icon: 'ChatLineRound', color: 'blue', action: () => router.push('/chat') },
-  { name: '知识库', desc: '管理司法局文档资料', icon: 'Collection', color: 'green', action: () => router.push('/knowledge') },
-  { name: '写作模板', desc: '常用公文模板快速套用', icon: 'DocumentCopy', color: 'orange', action: () => router.push('/templates') }
+  { name: '信息写作', desc: '自由对话写作', icon: 'ChatLineRound', bg: '#e8f0fe', color: '#2b6cb0', path: '/chat' },
+  { name: '公文助手', desc: '文种模板写作', icon: 'DocumentCopy', bg: '#f3eafd', color: '#7c5cd6', path: '/templates' },
+  { name: '知识库', desc: '检索与问答', icon: 'Collection', bg: '#e6f7ee', color: '#38a169', path: '/knowledge' },
+  { name: '工作流', desc: '任务全流程管理', icon: 'Share', bg: '#fdeee4', color: '#dd6b20', disabled: true },
+  { name: '智能PPT', desc: '生成汇报PPT', icon: 'DataAnalysis', bg: '#e3f2fd', color: '#3182ce', disabled: true },
+  { name: '格式校验', desc: '文档格式检查', icon: 'CircleCheck', bg: '#e6fffa', color: '#2c9a8a', path: '/format-check' },
 ])
 
-const docTypes = ref([
-  { name: '通知通报', type: '通知通报', icon: 'Bell', hot: true },
-  { name: '请示报告', type: '请示报告', icon: 'Document', hot: true },
-  { name: '会议纪要', type: '会议纪要', icon: 'Calendar', hot: true },
-  { name: '工作总结', type: '工作总结', icon: 'DataLine', hot: false },
-  { name: '领导讲话', type: '领导讲话', icon: 'Microphone', hot: false },
-  { name: '调研报告', type: '调研报告', icon: 'Files', hot: false }
+function onQuickEntry(item) {
+  if (item.disabled) {
+    ElMessage.info(`「${item.name}」将在后续版本开放`)
+    return
+  }
+  router.push(item.path)
+}
+
+// ===== 我的工作流（示例数据，P2 工作流框架上线后接真实接口） =====
+const workflows = ref([
+  { name: '2026年司法行政工作会议', type: '会议工作流', time: '2026-08-01 14:30', status: '进行中', statusType: 'primary' },
+  { name: '社区矫正宣传活动', type: '活动工作流', time: '2026-07-30 10:20', status: '进行中', statusType: 'success' },
+  { name: '基层调研工作任务', type: '调研工作流', time: '2026-07-28 16:45', status: '草稿', statusType: 'warning' },
+  { name: '年度工作汇报材料', type: '汇报工作流', time: '2026-07-25 09:15', status: '已完成', statusType: 'info' },
 ])
 
-const activities = ref([])
-const kbCount = ref(0)
-const deptCount = ref(0)
+// ===== 消息通知（示例数据） =====
+const notices = ref([
+  { title: '欢迎使用司法智能办公平台，信息写作已支持参考模板', time: '刚刚', icon: 'Bell', color: '#2b6cb0' },
+  { title: '文档格式校验能力已上线，可在办公工具中使用', time: '1天前', icon: 'CircleCheck', color: '#38a169' },
+  { title: '系统公告：请勿在材料中填写涉密信息', time: '3天前', icon: 'UserFilled', color: '#dd6b20' },
+])
 
-onMounted(() => { loadStats() })
+// ===== 常用模板（真实接口） =====
+const templates = ref([])
+const recentDocs = ref([])
 
-async function loadStats() {
+onMounted(() => {
+  loadTemplates()
+  loadRecentDocs()
+})
+
+async function loadTemplates() {
   try {
     const token = localStorage.getItem('token')
-    const tplRes = await axios.get('/api/v1/templates/', { headers: { Authorization: `Bearer ${token}` } })
-    statsList.value[2].value = (tplRes.data || []).length
-    const kbRes = await axios.get('/api/v1/knowledge/list', { headers: { Authorization: `Bearer ${token}` } })
+    const res = await axios.get('/api/v1/templates/', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    templates.value = (res.data || [])
+      .sort((a, b) => (b.use_count || 0) - (a.use_count || 0))
+      .slice(0, 4)
+  } catch (e) { console.error('加载模板失败', e) }
+}
+
+async function loadRecentDocs() {
+  // 普通用户无全局"最近文档"接口，这里从可访问知识库的已发布文档中取最新几条
+  try {
+    const token = localStorage.getItem('token')
+    const headers = { Authorization: `Bearer ${token}` }
+    const kbRes = await axios.get('/api/v1/knowledge/list', { headers })
     const kbs = kbRes.data || []
-    kbCount.value = kbs.length
-    statsList.value[1].value = kbs.reduce((sum, k) => sum + (k.doc_count || 0), 0)
-    const depts = new Set(kbs.map(k => k.department).filter(Boolean))
-    deptCount.value = depts.size
-  } catch (e) { console.error('加载统计失败', e) }
+    const docs = []
+    for (const kb of kbs.slice(0, 3)) {
+      try {
+        const dRes = await axios.get(`/api/v1/knowledge/${kb.id}/documents`, {
+          headers, params: { page: 1, page_size: 3 }
+        })
+        for (const d of (dRes.data?.data || [])) {
+          docs.push({ id: d.id, title: d.title, time: formatTime(d.created_at), kb_name: kb.name })
+        }
+      } catch { /* 单个库失败不影响整体 */ }
+    }
+    recentDocs.value = docs.slice(0, 4)
+  } catch (e) { console.error('加载最近文档失败', e) }
+}
+
+function formatTime(d) {
+  if (!d) return ''
+  const date = new Date(d)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 function goToChat() { router.push('/chat') }
-function startDocWriting(type) { router.push({ path: '/chat', query: { docType: type } }) }
+function useTemplate(t) { router.push({ path: '/templates', query: { use: t.id } }) }
 </script>
 
 <style scoped>
-.dashboard-page { min-height: 100vh; background: #f0f2f5; }
-.dashboard-content { padding: 24px; }
+.dashboard-page { min-height: 100vh; background: #f3f5f9; padding: 20px; }
 
-.welcome-section {
+/* ===== Banner ===== */
+.banner {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
-  padding: 24px 32px;
-  background: linear-gradient(135deg, #1a5fb4 0%, #3584e4 100%);
-  border-radius: 12px;
+  padding: 36px 48px;
+  border-radius: 10px;
+  background: linear-gradient(120deg, #1c4f9e 0%, #2b6cb0 60%, #3182ce 100%);
   color: white;
+  margin-bottom: 20px;
+  overflow: hidden;
 }
+.banner h1 { margin: 0 0 10px; font-size: 26px; font-weight: 700; }
+.banner p { margin: 0 0 22px; font-size: 14px; opacity: 0.85; }
+.banner-btn { background: #1a73e8; border-color: #1a73e8; }
+.banner-right { opacity: 0.25; }
+.banner-deco { color: #fff; }
 
-.welcome-section h1 { margin: 0 0 8px 0; font-size: 22px; }
-.welcome-section p { margin: 0; font-size: 14px; opacity: 0.85; }
-
-.stats-row { margin-bottom: 24px; }
-.stat-card {
-  cursor: pointer;
-  background: white;
-  border-radius: 12px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-  transition: all 0.3s;
+/* ===== 卡片通用 ===== */
+.section-card { border-radius: 10px; border: 1px solid #edf0f5; }
+.section-card :deep(.el-card__header) { padding: 14px 20px; border-bottom: 1px solid #f2f4f8; }
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 15px; font-weight: 600; color: #303133;
 }
-.stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+.more-link { font-size: 12px; font-weight: 400; }
 
-.stat-icon {
-  width: 52px; height: 52px; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center;
-  background: #f5f7fa; color: #909399;
+/* ===== 快速入口 ===== */
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
 }
-.stat-card.blue .stat-icon { background: #ecf5ff; color: #409EFF; }
-.stat-card.green .stat-icon { background: #f0f9eb; color: #67C23A; }
-.stat-card.orange .stat-icon { background: #fdf6ec; color: #E6A23C; }
-.stat-card.purple .stat-icon { background: #f5f0ff; color: #9254DE; }
-
-.stat-info { flex: 1; }
-.stat-value { font-size: 26px; font-weight: 700; color: #303133; line-height: 1; margin-bottom: 6px; }
-.stat-label { font-size: 13px; color: #909399; }
-
-.main-row { margin: 0 !important; }
-.section-card { border-radius: 12px; }
-.section-card :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #f0f2f5; }
-.section-header { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: #303133; }
-.section-header .el-icon { color: #409EFF; }
-
-.quick-card {
-  padding: 20px 16px; text-align: center; border-radius: 12px;
-  background: #fafbfc; border: 1px solid #ebeef5;
-  cursor: pointer; transition: all 0.3s; margin-bottom: 16px;
-}
-.quick-card:hover {
-  background: white; border-color: #409EFF;
-  box-shadow: 0 8px 24px rgba(64,158,255,0.15);
-  transform: translateY(-4px);
-}
+.quick-item { text-align: center; cursor: pointer; padding: 14px 6px; border-radius: 8px; transition: background 0.2s; }
+.quick-item:hover { background: #f7f9fc; }
+.quick-item.disabled { cursor: default; opacity: 0.6; }
 .quick-icon {
-  width: 48px; height: 48px; border-radius: 50%;
+  width: 52px; height: 52px; border-radius: 12px; margin: 0 auto 10px;
   display: flex; align-items: center; justify-content: center;
-  margin: 0 auto 10px; background: #f5f7fa; color: #909399;
 }
-.quick-icon.blue { background: #ecf5ff; color: #409EFF; }
-.quick-icon.green { background: #f0f9eb; color: #67C23A; }
-.quick-icon.orange { background: #fdf6ec; color: #E6A23C; }
-.quick-title { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 4px; }
-.quick-desc { font-size: 12px; color: #909399; }
+.quick-name { font-size: 14px; font-weight: 600; color: #303133; }
+.quick-desc { font-size: 12px; color: #909399; margin-top: 2px; }
 
-.doc-types { display: flex; flex-wrap: wrap; gap: 10px; }
-.doc-type-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 16px; border-radius: 8px;
-  background: #f5f7fa; border: 1px solid transparent;
-  cursor: pointer; transition: all 0.2s;
-  font-size: 13px; color: #606266;
+/* ===== 最近文档 ===== */
+.doc-list { padding: 4px 0; }
+.doc-item { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f2f4f8; }
+.doc-item:last-child { border-bottom: none; }
+.doc-icon { margin-top: 3px; flex-shrink: 0; }
+.doc-title { font-size: 13px; color: #303133; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-meta { font-size: 12px; color: #a0a5ad; margin-top: 3px; }
+
+/* ===== 消息通知 ===== */
+.notice-list { padding: 4px 0; }
+.notice-item { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f2f4f8; }
+.notice-item:last-child { border-bottom: none; }
+.notice-title { font-size: 13px; color: #303133; }
+.notice-time { font-size: 12px; color: #a0a5ad; margin-top: 3px; }
+
+/* ===== 我的工作流 ===== */
+.workflow-list { padding: 4px 0; }
+.workflow-item { padding: 10px 0; border-bottom: 1px solid #f2f4f8; }
+.workflow-item:last-child { border-bottom: none; }
+.workflow-head { display: flex; justify-content: space-between; align-items: center; }
+.workflow-name { font-size: 13px; font-weight: 500; color: #303133; }
+.workflow-meta { font-size: 12px; color: #a0a5ad; margin-top: 4px; }
+.workflow-tip {
+  margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e8ecf1;
+  font-size: 12px; color: #c0c4cc; text-align: center;
 }
-.doc-type-item:hover { background: #ecf5ff; border-color: #409EFF; color: #409EFF; }
 
-.activity-list { padding: 8px 0; }
-.activity-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f0f2f5; }
-.activity-item:last-child { border-bottom: none; }
-.activity-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
-.activity-dot.system { background: #409EFF; }
-.activity-title { font-size: 13px; color: #303133; }
-.activity-time { font-size: 12px; color: #c0c4cc; margin-top: 2px; }
+/* ===== 常用模板 ===== */
+.tpl-list { padding: 4px 0; }
+.tpl-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid #f2f4f8; cursor: pointer;
+}
+.tpl-item:last-child { border-bottom: none; }
+.tpl-item:hover .tpl-name { color: #2b6cb0; }
+.tpl-icon { flex-shrink: 0; }
+.tpl-info { flex: 1; min-width: 0; }
+.tpl-name { font-size: 13px; font-weight: 500; color: #303133; }
+.tpl-desc {
+  font-size: 12px; color: #a0a5ad; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
-.status-list { padding: 8px 0; }
-.status-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #f0f2f5; }
-.status-item:last-child { border-bottom: none; }
-.status-item span:first-child { font-size: 13px; color: #606266; }
-.status-item span:last-child { font-size: 13px; color: #303133; font-weight: 500; }
+@media (max-width: 1280px) {
+  .quick-grid { grid-template-columns: repeat(3, 1fr); }
+}
 </style>

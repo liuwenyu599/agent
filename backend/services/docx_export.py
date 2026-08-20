@@ -258,7 +258,7 @@ def _add_header_footer(doc, title=""):
         header = section.header
         header.is_linked_to_previous = False
         hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-        hp.text = title if title else "白云司法智能写作助手"
+        hp.text = title if title else "司法智能办公辅助平台 V1.0"
         _set_paragraph_format(hp, alignment=WD_ALIGN_PARAGRAPH.CENTER)
         for run in hp.runs:
             _set_font(run, '宋体', Pt(10), color=RGBColor(0x80, 0x80, 0x80))

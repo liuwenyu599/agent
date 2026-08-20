@@ -228,3 +228,70 @@ async def get_batch_task(task_id: str, user: User = Depends(get_current_user)):
 @router.get("/queue-status")
 async def queue_status(user: User = Depends(require_knowledge_admin)):
     return get_queue_status()
+
+# ========== 网页链接导入知识库 ==========
+from backend.services.web_import_service import WebImportService, parse_urls_from_excel
+from backend.services.web_fetcher import extract_urls_from_text
+
+class UrlImportRequest(BaseModel):
+    kb_id: str
+    urls: List[str]
+
+class UrlTextImportRequest(BaseModel):
+    """批量粘贴文本（每行一个或多个链接）"""
+    kb_id: str
+    text: str
+
+web_import_service = WebImportService(doc_service=doc_service)
+
+def _check_kb_write(kb_id: str, user: User, db: Session) -> KnowledgeBase:
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    if not kb: raise HTTPException(status_code=404, detail="Knowledge base not found")
+    if kb.kb_type == "personal" and kb.owner_id != user.id: raise HTTPException(status_code=403, detail="No permission")
+    if kb.kb_type == "public" and user.role not in ["knowledge_admin", "developer", "admin"]:
+        raise HTTPException(status_code=403, detail="公共知识库仅管理员可导入")
+    return kb
+
+@router.post("/import-urls")
+async def import_urls(req: UrlImportRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """导入一个或多个网页链接。单个失败不影响其他（部分成功）。"""
+    kb = _check_kb_write(req.kb_id, user, db)
+    urls = [u.strip() for u in req.urls if u and u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="未提供有效链接")
+    if len(urls) > 500:
+        raise HTTPException(status_code=400, detail="单次最多导入 500 个链接")
+    items = [{"url": u} for u in urls]
+    return web_import_service.import_urls(db, kb.id, user.id, user.role, items)
+
+@router.post("/import-urls-text")
+async def import_urls_text(req: UrlTextImportRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """粘贴一段文本（可含多个链接），自动识别并导入"""
+    kb = _check_kb_write(req.kb_id, user, db)
+    urls = extract_urls_from_text(req.text)
+    if not urls:
+        raise HTTPException(status_code=400, detail="文本中未识别到 http(s) 链接")
+    items = [{"url": u} for u in urls]
+    return web_import_service.import_urls(db, kb.id, user.id, user.role, items)
+
+@router.post("/import-urls-excel")
+async def import_urls_excel(kb_id: str = Query(...), file: UploadFile = File(...),
+                            user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """从 Excel 批量导入链接（如外宣统计表：标题/媒体/刊发时间/佐证材料列）。
+
+    Excel 中的标题、媒体、刊发时间优先作为文档元数据，网页抓取结果兜底。
+    """
+    kb = _check_kb_write(kb_id, user, db)
+    filename = file.filename or ""
+    if not filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
+        raise HTTPException(status_code=400, detail="请上传 .xlsx 格式的 Excel 文件")
+    data = await file.read()
+    try:
+        items = parse_urls_from_excel(data, filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not items:
+        raise HTTPException(status_code=400, detail="Excel 中未识别到任何 http(s) 链接")
+    if len(items) > 1000:
+        raise HTTPException(status_code=400, detail="单次最多导入 1000 条")
+    return web_import_service.import_urls(db, kb.id, user.id, user.role, items)

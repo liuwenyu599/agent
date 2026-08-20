@@ -10,7 +10,14 @@ const routes = [
   { path: '/templates', name: 'templates', component: () => import('@/views/TemplatesView.vue'), meta: { requiresAuth: true } },
   { path: '/template/:id', name: 'template-use', component: () => import('@/views/TemplateView.vue'), meta: { requiresAuth: true } },
   { path: '/format-check', name: 'format-check', component: () => import('@/views/FormatCheckView.vue'), meta: { requiresAuth: true } },
-  { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue'), meta: { requiresAuth: true, requiresAdmin: true } }
+  { path: '/ppt', name: 'ppt', component: () => import('@/views/PptView.vue'), meta: { requiresAuth: true } },
+  { path: '/ppt/templates', name: 'ppt-templates', component: () => import('@/views/PptTemplateLib.vue'), meta: { requiresAuth: true } },
+  { path: '/ppt/edit/:id', name: 'ppt-editor', component: () => import('@/views/PptEditorView.vue'), meta: { requiresAuth: true } },
+  { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue'), meta: { requiresAuth: true, requiresAdmin: true } },
+
+  // ===== 工作流（一级菜单直达） =====
+  { path: '/workflows', name: 'workflows', component: () => import('@/views/WorkflowsView.vue'), meta: { requiresAuth: true } },
+  { path: '/workflows/:id', name: 'workflow-detail', component: () => import('@/views/WorkflowDetailView.vue'), meta: { requiresAuth: true } },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

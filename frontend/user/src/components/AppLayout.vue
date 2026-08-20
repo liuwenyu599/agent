@@ -1,32 +1,48 @@
 <template>
   <el-container class="app-layout">
-    <el-aside width="220px" class="sidebar">
-      <div class="logo">
-        <el-icon :size="28"><OfficeBuilding /></el-icon>
-        <span>白云司法智能写作助手</span>
+    <el-aside :width="collapsed ? '64px' : '220px'" class="sidebar">
+      <div class="logo" v-if="!collapsed">
+        <el-icon :size="26"><OfficeBuilding /></el-icon>
+        <div class="logo-text">
+          <span>司法智能办公平台</span>
+          <span class="logo-sub">智能 · 高效 · 安全</span>
+        </div>
       </div>
-      <el-menu :default-active="activeMenu" router class="sidebar-menu"
+      <div class="logo" v-else>
+        <el-icon :size="26"><OfficeBuilding /></el-icon>
+      </div>
+
+      <el-menu :default-active="activeMenu" router :collapse="collapsed" class="sidebar-menu"
         background-color="transparent" text-color="#b0c4de" active-text-color="#ffffff">
         <el-menu-item index="/dashboard">
           <el-icon><HomeFilled /></el-icon><span>首页</span>
         </el-menu-item>
-        <el-menu-item index="/chat">
-          <el-icon><ChatLineRound /></el-icon><span>智能写作</span>
+
+        <el-sub-menu index="writing">
+          <template #title><el-icon><ChatLineRound /></el-icon><span>智能写作</span></template>
+          <el-menu-item index="/chat">信息写作</el-menu-item>
+          <el-menu-item index="/templates">公文助手</el-menu-item>
+          <el-menu-item index="/knowledge">知识库</el-menu-item>
+        </el-sub-menu>
+
+        <el-menu-item index="/workflows">
+          <el-icon><Share /></el-icon><span>工作流</span>
         </el-menu-item>
-        <el-menu-item index="/templates">
-          <el-icon><DocumentCopy /></el-icon><span>写作模板</span>
+
+        <el-menu-item index="/ppt">
+          <el-icon><Film /></el-icon><span>PPT助手</span>
         </el-menu-item>
-        <el-menu-item index="/knowledge">
-          <el-icon><Collection /></el-icon><span>知识库</span>
-        </el-menu-item>
+
         <el-menu-item index="/format-check">
           <el-icon><CircleCheck /></el-icon><span>格式校验</span>
         </el-menu-item>
+
         <el-menu-item index="/admin" v-if="isAdmin">
           <el-icon><Setting /></el-icon><span>管理后台</span>
         </el-menu-item>
       </el-menu>
-      <div class="sidebar-footer">
+
+      <div class="sidebar-footer" v-if="!collapsed">
         <div class="user-info">
           <el-avatar :size="32" :icon="UserFilled" />
           <div class="user-meta">
@@ -39,33 +55,72 @@
         </el-button>
       </div>
     </el-aside>
-    <el-main class="main-content">
-      <!-- 去掉 Transition，避免异步组件加载时白屏 -->
-      <router-view />
-    </el-main>
+
+    <el-container>
+      <el-header class="topbar" height="56px">
+        <el-button text @click="collapsed = !collapsed">
+          <el-icon><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
+        </el-button>
+        <span class="page-title">{{ pageTitle }}</span>
+        <div class="topbar-right">
+          <el-badge :value="0" :hidden="true"><el-icon :size="18"><Bell /></el-icon></el-badge>
+          <el-dropdown @command="onUserCmd">
+            <span class="topbar-user">
+              <el-avatar :size="28" :icon="UserFilled" /> {{ userName }}
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </el-header>
+      <el-main class="main-content">
+        <router-view />
+      </el-main>
+    </el-container>
   </el-container>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { HomeFilled, ChatLineRound, DocumentCopy, Collection, Setting, UserFilled, SwitchButton, OfficeBuilding } from '@element-plus/icons-vue'
+import {
+  OfficeBuilding, HomeFilled, ChatLineRound, Share, CircleCheck,
+  Setting, UserFilled, SwitchButton, Fold, Expand, Bell, Film,
+} from '@element-plus/icons-vue'
 
-const route = useRoute(), router = useRouter()
-const activeMenu = computed(() => route.path)
+const route = useRoute()
+const router = useRouter()
+const collapsed = ref(false)
+
+const activeMenu = computed(() =>
+  route.path.startsWith('/workflows') ? '/workflows' : route.path)
+
+const TITLES = {
+  '/dashboard': '首页', '/chat': '信息写作', '/templates': '公文助手',
+  '/knowledge': '知识库', '/workflows': '工作流', '/ppt': 'PPT助手',
+  '/format-check': '格式校验', '/admin': '管理后台',
+}
+const pageTitle = computed(() =>
+  route.path.startsWith('/workflows/') && route.path !== '/workflows'
+    ? '工作流详情'
+    : TITLES[route.path] || '')
 
 const isAdmin = computed(() => {
   try {
-    const userStr = localStorage.getItem('user')
-    if (!userStr) return false
-    const user = JSON.parse(userStr)
+    const user = JSON.parse(localStorage.getItem('user') || 'null')
     return ['developer', 'knowledge_admin', 'admin'].includes(user?.role)
   } catch { return false }
 })
 
 const userName = computed(() => {
-  try { const user = JSON.parse(localStorage.getItem('user') || '{}'); return user.real_name || user.username || '用户' } catch { return '用户' }
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    return user.real_name || user.username || '用户'
+  } catch { return '用户' }
 })
 
 const userRole = computed(() => {
@@ -77,24 +132,51 @@ const userRole = computed(() => {
 })
 
 function logout() {
-  localStorage.removeItem('token'); localStorage.removeItem('user')
-  ElMessage.success('已退出登录'); router.push('/login')
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  ElMessage.success('已退出登录')
+  router.push('/login')
 }
+function onUserCmd(cmd) { if (cmd === 'logout') logout() }
 </script>
 
 <style scoped>
 .app-layout { height: 100vh; overflow: hidden; }
-.sidebar { background: linear-gradient(180deg, #1a5fb4 0%, #1c4587 100%); display: flex; flex-direction: column; color: white; }
-.logo { height: 64px; display: flex; align-items: center; gap: 12px; padding: 0 20px; font-size: 16px; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1); }
-.sidebar-menu { flex: 1; border-right: none; padding: 12px 0; }
-.sidebar-menu :deep(.el-menu-item) { height: 48px; line-height: 48px; margin: 4px 12px; border-radius: 8px; }
-.sidebar-menu :deep(.el-menu-item:hover) { background: rgba(255,255,255,0.1) !important; }
-.sidebar-menu :deep(.el-menu-item.is-active) { background: rgba(255,255,255,0.2) !important; font-weight: 600; }
-.sidebar-footer { padding: 16px; border-top: 1px solid rgba(255,255,255,0.1); }
-.user-info { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sidebar {
+  background: #16223f; display: flex; flex-direction: column; color: white;
+  transition: width .2s;
+}
+.logo {
+  height: 64px; display: flex; align-items: center; gap: 10px; padding: 0 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08); overflow: hidden;
+}
+.logo-text { display: flex; flex-direction: column; }
+.logo-text span:first-child { font-size: 15px; font-weight: 600; white-space: nowrap; }
+.logo-sub { font-size: 11px; color: rgba(255,255,255,0.5); }
+.sidebar-menu { flex: 1; border-right: none; padding: 10px 0; }
+.sidebar-menu :deep(.el-menu-item), .sidebar-menu :deep(.el-sub-menu__title) {
+  height: 44px; line-height: 44px; margin: 2px 10px; border-radius: 8px;
+}
+.sidebar-menu :deep(.el-sub-menu .el-menu-item) { min-width: 0; padding-left: 48px !important; }
+.sidebar-menu :deep(.el-menu-item:hover), .sidebar-menu :deep(.el-sub-menu__title:hover) {
+  background: rgba(255,255,255,0.08) !important;
+}
+.sidebar-menu :deep(.el-menu-item.is-active) {
+  background: #2f5cff !important; font-weight: 600;
+}
+.sidebar-footer { padding: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
+.user-info { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .user-meta { flex: 1; overflow: hidden; }
-.user-name { font-size: 14px; font-weight: 500; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.user-role { font-size: 12px; color: rgba(255,255,255,0.6); }
+.user-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-role { font-size: 12px; color: rgba(255,255,255,0.55); }
 .sidebar-footer .el-button { color: rgba(255,255,255,0.7); width: 100%; justify-content: center; }
+
+.topbar {
+  background: #fff; border-bottom: 1px solid #ebeef5;
+  display: flex; align-items: center; gap: 12px; padding: 0 16px;
+}
+.page-title { font-size: 15px; font-weight: 600; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+.topbar-user { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
 .main-content { padding: 0; background: #f0f2f5; overflow-y: auto; }
 </style>

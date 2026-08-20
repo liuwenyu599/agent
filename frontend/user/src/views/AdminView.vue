@@ -129,7 +129,7 @@
             <template #header><span>系统参数</span></template>
             <el-form :model="settings" label-width="150px">
               <el-form-item label="Token 有效期(小时)"><el-input-number v-model="settings.token_expire" :min="1" :max="168" /></el-form-item>
-              <el-form-item label="最大上传文件大小(MB)"><el-input-number v-model="settings.max_upload_size" :min="1" :max="2048" /></el-form-item>
+              <el-form-item label="最大上传文件大小(MB)"><el-input-number v-model="settings.max_upload_size" :min="1" :max="8192" /></el-form-item>
             </el-form>
           </el-card>
           <div class="settings-actions">
@@ -244,7 +244,7 @@ const sessionSearch = ref('')
 const sessionLoading = ref(false)
 const sessionDetailVisible = ref(false)
 const currentSession = ref(null)
-const settings = ref({ model_name: 'Qwen2.5-14B-Instruct', temperature: 0.3, max_tokens: 2048, rag_top_k: 5, rag_threshold: 0.5, token_expire: 24, max_upload_size: 50 })
+const settings = ref({ model_name: 'Qwen2.5-14B-Instruct', temperature: 0.3, max_tokens: 8192, rag_top_k: 5, rag_threshold: 0.5, token_expire: 24, max_upload_size: 50 })
 const saving = ref(false)
 const token = computed(() => localStorage.getItem('token') || '')
 const headers = computed(() => ({ Authorization: `Bearer ${token.value}` }))
@@ -284,7 +284,7 @@ function filterSessions() { if (!sessionSearch.value) { filteredSessions.value =
 async function viewSession(row) { try { const res = await axios.get(`/api/v1/chat/sessions/${row.id}/messages`, { headers: headers.value }); currentSession.value = { ...row, messages: res.data || [] }; sessionDetailVisible.value = true; } catch (e) { ElMessage.error('加载会话详情失败') } }
 async function deleteSession(row) { try { await ElMessageBox.confirm('确定删除该会话？此操作不可恢复。', '确认', { type: 'danger' }); await axios.delete(`/api/v1/chat/admin/sessions/${row.id}`, { headers: headers.value }); ElMessage.success('已删除'); loadSessions(); } catch (e) { if (e !== 'cancel') ElMessage.error('删除失败') } }
 function saveSettings() { localStorage.setItem('admin_settings', JSON.stringify(settings.value)); ElMessage.success('设置已保存（仅本地存储）'); }
-function resetSettings() { settings.value = { model_name: 'Qwen2.5-14B-Instruct', temperature: 0.3, max_tokens: 2048, rag_top_k: 5, rag_threshold: 0.5, token_expire: 24, max_upload_size: 50 }; }
+function resetSettings() { settings.value = { model_name: 'Qwen2.5-14B-Instruct', temperature: 0.3, max_tokens: 8192, rag_top_k: 5, rag_threshold: 0.5, token_expire: 24, max_upload_size: 50 }; }
 function roleType(role) { const map = { developer: 'danger', knowledge_admin: 'warning', user: 'info' }; return map[role] || 'info'; }
 function roleText(role) { const map = { developer: '系统管理员', knowledge_admin: '知识管理员', user: '普通用户' }; return map[role] || role; }
 function statusType(s) { const map = { published: 'success', pending: 'warning', archived: 'info', rejected: 'danger' }; return map[s] || 'info'; }

@@ -1,3 +1,4 @@
+
 from sqlalchemy import create_engine, Column, String, DateTime, Integer, Boolean, JSON, ForeignKey, Text, BigInteger, Float
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import declarative_base
@@ -226,6 +227,18 @@ class WritingTemplate(Base):
     need_date = Column(Boolean, default=True, comment="是否需要日期")
     need_doc_number = Column(Boolean, default=False, comment="是否需要文号")
     keywords = Column(Text, nullable=True, comment="关键词/补充说明，传给AI的额外指令")
+    # —— 新版新建模板设计 ——
+    template_kind = Column(String(20), default="official_doc", comment="official_doc=公文模板(固定结构) / writing_ref=写作参考模板(无固定结构)")
+    tags = Column(JSON, default=list, comment="模板标签")
+    scene = Column(String(300), comment="适用场景")
+    writing_guide = Column(Text, comment="写作要点与注意事项")
+    structure = Column(JSON, default=list, comment="结构设置 [{name, guide}]，仅公文模板")
+    kb_ids = Column(JSON, default=list, comment="关联知识库 id 列表，写作时优先检索")
+    visibility = Column(String(20), default="official", comment="official=官方模板 / personal=个人模板")
+    share_scope = Column(String(20), default="all", comment="all=全平台 / department=指定部门 / role=指定角色")
+    share_departments = Column(JSON, default=list, comment="指定部门可用")
+    share_roles = Column(JSON, default=list, comment="指定角色可用")
+    is_draft = Column(Boolean, default=False, comment="草稿状态")
 
 
 class TemplateCategory(Base):
@@ -293,3 +306,82 @@ class FormatCheckRecord(Base):
     rule_issue_count = Column(Integer, default=0, comment="程序规则发现的问题数")
     ai_issue_count = Column(Integer, default=0, comment="AI 辅助发现的问题数")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class WorkflowTemplate(Base):
+    """公共工作流模板（会议/活动/调研/汇报等）"""
+    __tablename__ = "workflow_templates"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    name = Column(String(100), nullable=False, comment="模板名称，如 会议组织工作流")
+    code = Column(String(50), unique=True, nullable=False, comment="模板代码，如 meeting")
+    category = Column(String(50), default="通用", comment="分类")
+    description = Column(Text, comment="适用场景说明")
+    icon = Column(String(50), default="Share")
+    is_builtin = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    nodes = relationship("WorkflowNode", back_populates="template",
+                         cascade="all, delete-orphan",
+                         order_by="WorkflowNode.sort_order")
+
+
+class WorkflowNode(Base):
+    """工作流模板中的节点定义（如 会议通知/会议议程/会议纪要）"""
+    __tablename__ = "workflow_nodes"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    template_id = Column(String(36), ForeignKey("workflow_templates.id"), nullable=False)
+    name = Column(String(100), nullable=False, comment="节点名称")
+    stage = Column(String(20), default="中期", comment="阶段：前期/中期/后期")
+    description = Column(Text, comment="节点说明")
+    # 生成该节点时的写作要求（注入 AI），如会议纪要的结构要求
+    write_guide = Column(Text, comment="AI 生成指导")
+    sort_order = Column(Integer, default=0)
+    optional = Column(Boolean, default=False, comment="是否可选节点（如领导讲话稿）")
+
+    template = relationship("WorkflowTemplate", back_populates="nodes")
+
+
+class WorkflowInstance(Base):
+    """用户创建的工作流实例（一项具体工作，如 2026年度司法行政工作推进会）"""
+    __tablename__ = "workflow_instances"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    template_id = Column(String(36), ForeignKey("workflow_templates.id"), nullable=False)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    title = Column(String(200), nullable=False, comment="工作名称")
+    # draft / running / completed / archived
+    status = Column(String(20), default="running", comment="draft/running/completed/archived")
+    basic_info = Column(JSON, comment="基本信息（时间/地点/主办部门等，自由键值对）")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    template = relationship("WorkflowTemplate")
+    user = relationship("User")
+    nodes = relationship("NodeInstance", back_populates="instance",
+                         cascade="all, delete-orphan",
+                         order_by="NodeInstance.sort_order")
+
+
+class NodeInstance(Base):
+    """工作流实例中每个节点的办理状态与成果内容"""
+    __tablename__ = "node_instances"
+    __table_args__ = {'extend_existing': True}
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    instance_id = Column(String(36), ForeignKey("workflow_instances.id"), nullable=False)
+    node_id = Column(String(36), ForeignKey("workflow_nodes.id"), nullable=False)
+    sort_order = Column(Integer, default=0)
+    # pending / editing / draft / done
+    status = Column(String(20), default="pending", comment="未开始/编辑中/草稿/已完成")
+    content = Column(Text, comment="节点成果内容（草稿或定稿）")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    instance = relationship("WorkflowInstance", back_populates="nodes")
+    node = relationship("WorkflowNode")

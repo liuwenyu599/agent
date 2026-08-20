@@ -1,7 +1,7 @@
 <template>
   <div class="login-container">
     <el-card class="login-card">
-      <template #header><h2>🏛️ 白云司法智能写作助手</h2></template>
+      <template #header><h2>🏛️ 司法智能办公辅助平台 V1.0</h2></template>
       <el-tabs v-model="activeTab">
         <el-tab-pane label="登录" name="login">
           <el-form :model="loginForm" @submit.prevent="handleLogin">

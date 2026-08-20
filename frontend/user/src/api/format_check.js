@@ -37,6 +37,22 @@ export const checkFormat = (file, useAi = true, ruleIds = null) => {
 export const listCheckRecords = (params) => api.get('/format-check/records', { params })
 export const getCheckRecord = (id) => api.get(`/format-check/records/${id}`)
 
+// ========== 审阅模式 ==========
+// 源文档段落（左栏）
+export const getRecordParagraphs = (id) => api.get(`/format-check/records/${id}/paragraphs`)
+// 修正预览（右栏，按已接受的问题实时生成）
+export const previewFix = (recordId, acceptedIndices) =>
+  api.post('/format-check/preview-fix', {
+    record_id: recordId,
+    accepted_indices: acceptedIndices
+  })
+// 下载修正稿（blob）
+export const downloadFixed = (recordId, acceptedIndices) =>
+  api.post('/format-check/fix', {
+    record_id: recordId,
+    accepted_indices: acceptedIndices
+  }, { responseType: 'blob' })
+
 // ========== 格式规则 ==========
 export const listFormatRules = () => api.get('/format-check/rules')
 export const createFormatRule = (data) => api.post('/format-check/rules', data)

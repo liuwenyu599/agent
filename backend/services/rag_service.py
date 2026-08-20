@@ -1,3 +1,4 @@
+
 import re
 from typing import List, Dict
 from sqlalchemy.orm import Session
@@ -55,11 +56,17 @@ class RAGService:
                 # 直接查数据库，不再拼相邻段落
                 chunk = db.query(Chunk).filter(Chunk.id == chunk_id).first()
                 if chunk:
+                    meta = (chunk.document.doc_metadata or {}) if chunk.document else {}
+                    src_type = meta.get("source_type", "file")
                     results.append({
                         "content": chunk.content,
                         "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
                         "score": hit["distance"],
-                        "match_type": "vector"
+                        "match_type": "vector",
+                        # 来源标识：网页 / 文件，网页附原始链接，前端点击可打开
+                        "source_type": {"web": "网页", "file": "文件"}.get(src_type, src_type),
+                        "source_url": meta.get("source_url"),
+                        "source_name": meta.get("source_name"),
                     })
                 
                 if len(results) >= top_k:

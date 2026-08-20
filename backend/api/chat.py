@@ -1,3 +1,4 @@
+
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -6,13 +7,14 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from backend.database.postgres import get_db
-from backend.database.models import ChatSession, ChatMessage, ChatAttachment, User
+from backend.database.models import ChatSession, ChatMessage, ChatAttachment, User, WritingTemplate
 from backend.auth.permission import get_current_user, require_admin_or_above
 from backend.services.llm_service import LLMService
 from backend.services.rag_service import RAGService
 from backend.services.memory_service import MemoryService
 from backend.services.docx_export import markdown_to_docx, generate_official_document
 from backend.services.attachment_service import AttachmentService
+from backend.services.intent_service import IntentService
 from backend.config.settings import CHAT_MAX_ATTACHMENTS
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -20,6 +22,7 @@ router = APIRouter(prefix="/chat", tags=["对话"])
 llm_service = LLMService()
 rag_service = RAGService()
 attachment_service = AttachmentService()
+intent_service = IntentService(llm_service)
 
 
 class ChatRequest(BaseModel):
@@ -30,6 +33,8 @@ class ChatRequest(BaseModel):
     template_category: Optional[str] = None
     source: Optional[str] = "chat"  # chat / template
     attachment_ids: Optional[List[str]] = None  # 本次消息引用的附件
+    reference_template_id: Optional[str] = None  # 对话中选择的"参考模板"（信息写作）
+    task_reference_ids: Optional[List[str]] = None  # 模板中心"当前写作材料"的 id 列表（不进知识库）
 
 
 class ChatResponse(BaseModel):
@@ -165,6 +170,31 @@ async def delete_attachment(attachment_id: str, user: User = Depends(get_current
     return {"message": "附件已删除"}
 
 
+def _load_reference_template(template_id: Optional[str], db: Session) -> Optional[dict]:
+    """加载对话中选择的参考模板，转为注入上下文的字典。找不到/已停用则返回 None。"""
+    if not template_id:
+        return None
+    tmpl = db.query(WritingTemplate).filter(
+        WritingTemplate.id == template_id,
+        WritingTemplate.is_active == True
+    ).first()
+    if not tmpl:
+        return None
+    return {
+        "id": tmpl.id,
+        "name": tmpl.name,
+        "content_template": tmpl.content_template,
+        "system_prompt": tmpl.system_prompt,
+        "writing_style": tmpl.writing_style,
+        "word_count": tmpl.word_count,
+        "need_red_header": tmpl.need_red_header,
+        "need_signature": tmpl.need_signature,
+        "need_date": tmpl.need_date,
+        "need_doc_number": tmpl.need_doc_number,
+        "keywords": tmpl.keywords,
+    }
+
+
 @router.post("/send", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 获取或创建会话
@@ -188,40 +218,75 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user), db: Ses
 
     # 会话级附件上下文：只要会话中有附件，就持续注入（多轮引用）
     session_attachments = attachment_service.get_session_attachments(session.id, db)
-    attachment_context = attachment_service.build_attachment_context(session_attachments)
+    attachment_context = attachment_service.build_attachment_context(session_attachments, query=req.message)
 
-    # 只有 use_rag=true 才检索
-    sources = []
-    if req.use_rag:
-        sources = rag_service.search(
-            query=req.message,
-            user_id=user.id,
-            kb_types=["public", "personal"]
-        )
+    # 加载对话级参考模板（信息写作）
+    reference_template = _load_reference_template(req.reference_template_id, db)
 
-    # 使用 MemoryService 获取上下文
+    # 加载写作参考材料（需求九：三类信息职责分离）
+    # - task_reference_context：本次写作的事实材料（优先级最高）
+    # - template_reference_context：模板固定参考材料（仅用于学习风格范式）
+    from backend.api.references import (
+        build_task_reference_context, build_template_reference_context,
+    )
+    task_reference_context = build_task_reference_context(
+        req.task_reference_ids or [], user.id, db
+    ) or None
+    template_reference_context = None
+    if req.reference_template_id:
+        template_reference_context = build_template_reference_context(
+            req.reference_template_id, db
+        ) or None
+
+    # 使用 MemoryService 获取上下文（包含历史对话）
     memory_service = MemoryService(llm_service)
-
-    # 获取会话上下文（包含历史对话）
     history_messages = memory_service.get_session_context(session.id, db)
 
-    # 写作类请求：额外检索同类范文作为模仿样例
-    examples = []
-    if any(k in req.message for k in ["写", "起草", "生成", "撰写", "拟"]):
-        examples = rag_service.search_examples(req.message, user.id, top_k=2)
+    # ===== P1：写作类请求的信息完整度判断 =====
+    # 信息不足时，AI 主动询问最关键的 2~3 个问题（提问也作为正常消息入库，
+    # 用户下一轮直接回答即可继续）。模板表单生成模式（带 system_prompt）跳过。
+    clarify_reply = None
+    if not req.system_prompt:
+        clarify_reply = intent_service.check_writing_clarification(
+            message=req.message,
+            history=history_messages,
+            has_materials=bool(attachment_context),
+            reference_template=reference_template,
+        )
 
-    # 调用 LLM（附件材料作为独立上下文注入）
-    reply = llm_service.chat(
-        message=req.message,
-        history=history_messages,
-        sources=sources,
-        user_role=user.role,
-        memories=None,  # 关闭长期记忆注入
-        examples=examples,
-        system_prompt=req.system_prompt,
-        template_category=req.template_category,
-        attachment_context=attachment_context or None
-    )
+    if clarify_reply:
+        reply = clarify_reply
+        sources = []
+    else:
+        # 只有 use_rag=true 才检索
+        sources = []
+        if req.use_rag:
+            sources = rag_service.search(
+                query=req.message,
+                user_id=user.id,
+                kb_types=["public", "personal"]
+            )
+
+        # 写作类请求：额外检索同类范文作为模仿样例
+        examples = []
+        if any(k in req.message for k in ["写", "起草", "生成", "撰写", "拟"]):
+            examples = rag_service.search_examples(req.message, user.id, top_k=2)
+
+        # 调用 LLM（附件材料、参考模板作为独立上下文注入）
+        reply = llm_service.chat(
+            message=req.message,
+            history=history_messages,
+            sources=sources,
+            user_role=user.role,
+            memories=None,  # 关闭长期记忆注入
+            examples=examples,
+            system_prompt=req.system_prompt,
+            template_category=req.template_category,
+            attachment_context=attachment_context or None,
+            reference_template=reference_template,
+            task_reference_context=task_reference_context,
+            template_reference_context=template_reference_context
+        )
 
     # 保存消息
     user_msg = ChatMessage(
@@ -329,7 +394,7 @@ async def admin_delete_session(
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+    db.query(ChatMessage).filter(ChatMessage.session_id == session.id).delete()
     db.delete(session)
     db.commit()
     return {"message": "Session deleted"}

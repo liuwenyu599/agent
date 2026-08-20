@@ -70,6 +70,7 @@ export const getPendingDocs = () => api.get('/knowledge/pending')
 export const reviewDoc = (data) => api.post('/knowledge/review', data)
 
 // ========== 聊天 ==========
-export const sendChat = (data) => api.post('/chat/send', data)
+// 写作类生成耗时较长（本地 vLLM 常超 30s），单独放宽到 180s，避免后端已返回但前端误判失败
+export const sendChat = (data) => api.post('/chat/send', data, { timeout: 180000 })
 export const listSessions = () => api.get('/chat/sessions')
 export const getMessages = (sessionId) => api.get(`/chat/sessions/${sessionId}/messages`)

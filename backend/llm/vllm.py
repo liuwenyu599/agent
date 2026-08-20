@@ -27,5 +27,10 @@ class VLLMClient:
             return result["choices"][0]["message"]["content"]
         except requests.exceptions.ConnectionError:
             return None  # vLLM 未启动，让上层 fallback
+        except requests.exceptions.HTTPError as e:
+            # 关键：打印 vLLM 返回的具体错误
+            print("[vLLM错误]", e.response.text)
+            return f"调用模型失败: {e.response.text}"
         except Exception as e:
+            print("[vLLM错误]", str(e))
             return f"调用失败: {str(e)}"

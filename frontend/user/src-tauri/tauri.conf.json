@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "白云司法智能写作助手",
+  "productName": "司法智能办公辅助平台 V1.0",
   "version": "0.1.0",
   "identifier": "com.baiyun.judicial-ai",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "白云司法智能写作助手",
+        "title": "司法智能办公辅助平台 V1.0",
         "width": 800,
         "height": 600,
         "resizable": true,

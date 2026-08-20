@@ -1,5 +1,5 @@
 """
-司法智能写作助手 - 新功能集成测试
+司法智能办公辅助平台 V1.0 - 新功能集成测试
 覆盖：计划总结合并、格式校验、对话附件上传、多轮引用、原有功能兼容
 
 运行前确保：
@@ -187,7 +187,7 @@ def make_docx_with_issues() -> bytes:
     # 落款：左对齐（应为右对齐）
     p4 = doc.add_paragraph()
     p4.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    run4 = p4.add_run("白云区司法局")
+    run4 = p4.add_run("区司法局")
     run4.font.name = "仿宋"
     run4.font.size = Pt(14)
 
@@ -241,7 +241,7 @@ def make_simple_docx() -> bytes:
 
 # ==================== 测试开始 ====================
 print("=" * 70)
-print("司法智能写作助手 v2.0 - 新功能集成测试")
+print("司法智能办公辅助平台 V1.0 v2.0 - 新功能集成测试")
 print(f"后端地址: {BASE_URL}")
 print(f"跳过 AI 测试: {'是' if SKIP_AI else '否'}")
 print("=" * 70)

@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""公文格式校验服务
+"""公文格式校验服务（完整文件，直接覆盖 backend/services/format_check_service.py）
 
 设计要点：
 1. 程序规则校验（确定性）：用 python-docx 读取 Word 的字体/字号/对齐/行距/缩进/页边距等
    真实排版属性，与 FormatRule 中配置的期望值逐项比对。
 2. AI 辅助判断：只处理规则难以表达的问题（落款规范、结构完整性、明显异常），
    结果与规则校验统一格式返回，source 字段区分 "rule" / "ai"。
-3. 为后续"自动修正"预留：每个 issue 带有 fix_hint（修正动作描述）和定位信息
-   （paragraph_index / run 属性），后续修正器可直接按定位回写 docx。
+3. 自动修正：apply_fixes 按 issue 中的 fix_hint 和 paragraph_index 回写 docx，
+   供"审阅模式"的修正预览与修正稿下载使用。
 4. 规则不写死：所有期望值来自数据库 FormatRule，司法局正式规范确定后仅需在后台录入。
 """
 import re
-import copy
+import json as _json
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -73,7 +73,7 @@ def _fmt_value(kind: str, value) -> str:
 
 
 class FormatCheckService:
-    """格式校验引擎：规则校验 + AI 辅助 + （预留）自动修正"""
+    """格式校验引擎：规则校验 + AI 辅助 + 自动修正"""
 
     def __init__(self, llm_service=None):
         self.llm = llm_service
@@ -387,9 +387,8 @@ class FormatCheckService:
                  {"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=1024
             )
-            if not reply or "调用" in reply and "失败" in reply:
+            if not reply or ("调用" in reply and "失败" in reply):
                 return None
-            import json as _json
             m = re.search(r'\[.*\]', reply, re.S)
             if not m:
                 return []
@@ -412,8 +411,129 @@ class FormatCheckService:
             print(f"[FormatCheck] AI 辅助判断失败: {e}")
             return None
 
-    # ================= （预留）自动修正 =================
-    def apply_fixes(self, file_path: Path, issues: List[Dict]) -> Path:
-        """预留接口：根据 issue 中的 fix_hint 自动修正 docx。
-        本次需求只做校验，这里提供桩实现：明确告知未启用，架构上保持独立。"""
-        raise NotImplementedError("自动修正功能尚未启用，当前版本仅提供格式校验")
+    # ================= 自动修正 =================
+    def apply_fixes(self, file_path: Path, issues: List[Dict],
+                    accepted_indices: Optional[List[int]] = None,
+                    out_path: Optional[Path] = None) -> List[str]:
+        """按 issue 中的 fix_hint 自动修正 docx。
+
+        :param file_path: 源 docx 路径
+        :param issues: 校验返回的 issue 列表（顺序与前端展示一致）
+        :param accepted_indices: 要应用的 issue 下标；传 None 表示全部应用
+        :param out_path: 修正稿输出路径；传 None 则在源文件同名目录生成 *_fixed.docx
+        :return: 修正后的段落文本列表（供审阅模式右栏预览）
+        """
+        file_path = Path(file_path)
+        if out_path is None:
+            out_path = file_path.with_name(file_path.stem + "_fixed.docx")
+        out_path = Path(out_path)
+
+        if accepted_indices is None:
+            accepted_indices = list(range(len(issues)))
+
+        doc = DocxDocument(str(file_path))
+
+        # 先应用非删除类修正；删除段落最后按索引从大到小执行，避免索引位移
+        deletes = []
+        for idx in accepted_indices:
+            if idx < 0 or idx >= len(issues):
+                continue
+            issue = issues[idx] or {}
+            hint = issue.get("fix_hint") or {}
+            htype = hint.get("type")
+            p_idx = issue.get("paragraph_index")
+            try:
+                if htype == "page":
+                    self._apply_page_fix(doc, hint.get("field"), hint.get("value"))
+                elif htype == "paragraph":
+                    if p_idx is None or p_idx >= len(doc.paragraphs):
+                        continue
+                    self._apply_paragraph_fix(doc.paragraphs[p_idx],
+                                              hint.get("field"), hint.get("value"))
+                elif htype == "trim_text":
+                    if p_idx is None or p_idx >= len(doc.paragraphs):
+                        continue
+                    for r in doc.paragraphs[p_idx].runs:
+                        if r.text != r.text.rstrip():
+                            r.text = r.text.rstrip()
+                elif htype == "delete_paragraph":
+                    if p_idx is not None:
+                        deletes.append(p_idx)
+            except Exception as e:
+                print(f"[FormatCheck] 修正第{idx}条失败（已跳过）: {e}")
+
+        for p_idx in sorted(set(deletes), reverse=True):
+            try:
+                if p_idx < len(doc.paragraphs):
+                    p = doc.paragraphs[p_idx]._p
+                    p.getparent().remove(p)
+            except Exception as e:
+                print(f"[FormatCheck] 删除第{p_idx + 1}段失败（已跳过）: {e}")
+
+        doc.save(str(out_path))
+
+        # 返回修正后的段落文本供预览
+        return [p.text for p in DocxDocument(str(out_path)).paragraphs]
+
+    # ---- 修正辅助 ----
+    @staticmethod
+    def _set_run_font(run, font_name=None, size_pt=None, bold=None):
+        if font_name:
+            run.font.name = font_name
+            rpr = run._element.get_or_add_rPr()
+            rfonts = rpr.find(qn("w:rFonts"))
+            if rfonts is None:
+                rfonts = rpr.makeelement(qn("w:rFonts"), {})
+                rpr.append(rfonts)
+            rfonts.set(qn("w:ascii"), font_name)
+            rfonts.set(qn("w:hAnsi"), font_name)
+            rfonts.set(qn("w:eastAsia"), font_name)
+        if size_pt is not None:
+            run.font.size = Pt(float(size_pt))
+        if bold is not None:
+            run.font.bold = bool(bold)
+
+    def _apply_paragraph_fix(self, para, field, value):
+        pf = para.paragraph_format
+        if field in ("font_name", "font_size_pt", "bold"):
+            if not para.runs:
+                para.add_run("")
+            for r in para.runs:
+                if field == "font_name":
+                    self._set_run_font(r, font_name=str(value))
+                elif field == "font_size_pt":
+                    self._set_run_font(r, size_pt=float(value))
+                else:
+                    self._set_run_font(r, bold=bool(value))
+        elif field == "alignment":
+            align = _ALIGN_MAP.get(str(value).strip().lower())
+            if align is not None:
+                pf.alignment = align
+        elif field == "line_spacing_pt":
+            pf.line_spacing = Pt(float(value))
+        elif field == "first_line_indent_chars":
+            chars = float(value)
+            pf.first_line_indent = Pt(12 * chars)  # 兜底近似
+            ppr = para._p.get_or_add_pPr()
+            ind = ppr.find(qn("w:ind"))
+            if ind is None:
+                ind = ppr.makeelement(qn("w:ind"), {})
+                ppr.append(ind)
+            ind.set(qn("w:firstLineChars"), str(int(chars * 100)))
+        elif field == "space_before_pt":
+            pf.space_before = Pt(float(value))
+        elif field == "space_after_pt":
+            pf.space_after = Pt(float(value))
+
+    @staticmethod
+    def _apply_page_fix(doc, field, value):
+        """页面级修正：页边距/页面尺寸（*_cm 字段，单位厘米）。"""
+        attr = re.sub(r'_cm$', '', str(field or ''))
+        if not attr:
+            return
+        for sec in doc.sections:
+            try:
+                if hasattr(sec, attr):
+                    setattr(sec, attr, Cm(float(value)))
+            except Exception:
+                pass

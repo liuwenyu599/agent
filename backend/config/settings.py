@@ -22,9 +22,8 @@ ES_INDEX = os.getenv("ES_INDEX", "judicial_docs")
 # LLM
 VLLM_URL = os.getenv("VLLM_URL", "http://localhost:8001/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "Qwen2.5-14B-Instruct")
-# vLLM 启动参数中的 max_model_len（start.sh 当前为 4096）。
 # 用于后端在拼接"对话历史 + 附件材料"时估算可用上下文预算。
-LLM_MAX_MODEL_LEN = int(os.getenv("LLM_MAX_MODEL_LEN", "4096"))
+LLM_MAX_MODEL_LEN = int(os.getenv("LLM_MAX_MODEL_LEN", "16384"))
 
 # Embedding
 EMBED_MODEL_PATH = os.getenv("EMBED_MODEL_PATH", "/home/lwy/models/BAAI/bge-small-zh-v1.5")
@@ -61,7 +60,7 @@ CHAT_SUPPORTED_TYPES = CHAT_DOC_TYPES + CHAT_IMAGE_TYPES
 # 注入给模型的附件文本总预算（字符数）。
 # 注意：start.sh 中 max_model_len=4096，约折合中文 2500~3500 字可用空间，
 # 对话历史和 system prompt 也要占用，因此默认 2000，调高 max_model_len 后可同步调大。
-ATTACH_CONTEXT_BUDGET = int(os.getenv("ATTACH_CONTEXT_BUDGET", "2000"))
+ATTACH_CONTEXT_BUDGET = int(os.getenv("ATTACH_CONTEXT_BUDGET", "4000"))
 
 # OCR（图片附件识别）
 # 需要系统安装 tesseract 及中文语言包：apt install tesseract-ocr tesseract-ocr-chi-sim
