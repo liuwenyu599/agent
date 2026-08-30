@@ -1,0 +1,85 @@
+# ============================================================
+# 生产环境依赖清单（KunLun G2280 / 银河麒麟 / 国产算力卡）
+#
+# 与开发环境的差异：
+#   1. 移除全部 nvidia-* / triton / xformers / vllm(CUDA版)
+#   2. torch 需替换为与算力卡匹配的版本：
+#        - 昇腾(Ascend)：torch + torch-npu（华为镜像源安装）
+#        - 推理框架：vllm-ascend 或 MindIE（均提供 OpenAI 兼容协议，
+#          后端 llm_service 无需改动）
+#   3. bge 嵌入模型用 torch-npu 推理，代码需设备探测（见迁移报告 K）
+#   4. 标记 [需验证] 的包请在麒麟 arm64 环境逐个确认可用性
+#      （银河麒麟 V10 通常为 aarch64，纯 Python 包无风险，
+#        含 C 扩展的包需确认有 aarch64 wheel 或源码编译）
+# ============================================================
+
+# ---- Web 框架 ----
+fastapi==0.139.2
+starlette==1.3.1
+uvicorn==0.51.0            # [需验证] 纯 Python，低风险
+python-multipart==0.0.32
+httpx==0.28.1
+requests==2.34.2
+websockets==16.1.1
+prometheus-fastapi-instrumentator==8.0.2
+
+# ---- 数据校验 / 配置 ----
+pydantic==2.13.4           # [需验证] pydantic_core 含 Rust 扩展，需 aarch64 wheel
+pydantic-extra-types==2.11.1
+pydantic_core==2.46.4
+python-dotenv==1.2.2
+PyYAML==6.0.3
+
+# ---- 认证 / 安全 ----
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==5.0.0              # [需验证] 含 C 扩展
+cryptography==49.0.0       # [需验证] 含 Rust 扩展，需 aarch64 wheel
+
+# ---- 数据库 ----
+SQLAlchemy==2.0.51         # SQLite 麒麟自带，无需额外驱动
+
+# ---- 文档处理 ----
+python-docx==1.2.0
+python-pptx==1.0.2
+docx2txt==0.9
+PyPDF2==3.0.1
+pymupdf==1.28.2            # [需验证] 含 C 扩展，确认 aarch64 wheel
+openpyxl==3.1.5
+xlsxwriter==3.2.9
+lxml==6.1.1                # [需验证] 含 C 扩展
+pillow==12.2.0             # [需验证] 含 C 扩展
+beautifulsoup4==4.15.0
+
+# ---- AI / RAG（推理栈除外） ----
+openai==2.46.0             # 仅作 OpenAI 兼容客户端
+transformers==4.57.6
+sentence-transformers==5.6.0
+faiss-cpu==1.14.3          # [需验证] 含 C++ 扩展，aarch64 可能需源码编译
+tokenizers==0.22.2         # [需验证] 含 Rust 扩展
+sentencepiece==0.2.2       # [需验证] 含 C++ 扩展
+numpy==1.26.4
+scikit-learn==1.7.2        # [需验证]
+scipy==1.15.3              # [需验证]
+pandas==2.3.3              # [需验证]
+
+# ---- 国产算力卡推理栈（占位，按实际卡型从厂商源安装）----
+# 昇腾示例：
+#   torch==2.5.1            （CPU 基座）
+#   torch-npu==2.5.1        （华为昇腾镜像源）
+#   vllm-ascend             （OpenAI 兼容，替代 vllm CUDA 版）
+#   或：MindIE（华为推理引擎，OpenAI 兼容服务）
+
+# ---- 工具 ----
+Jinja2==3.1.6
+click==8.4.2
+rich==15.0.0
+tqdm==4.69.0
+psutil==7.2.2
+jsonschema==4.26.0
+python-dateutil==2.9.0.post0
+
+# ---- 系统级依赖（麒麟上用 yum/kylin 包管理器安装，非 pip）----
+#   libreoffice          （PPT 模板预览图渲染）
+#   poppler-utils        （pdftoppm，预览图）
+#   中文字体包            （PPT/文档渲染显示）
