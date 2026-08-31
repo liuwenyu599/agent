@@ -22,3 +22,4 @@ build/
 **/.gradle/
 .idea/
 training/.depstraining/.deps/
+training/.deps/
