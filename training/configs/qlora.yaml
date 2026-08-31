@@ -1,0 +1,30 @@
+# QLoRA 训练默认配置（4-bit，适用于 7B/14B 显存受限）
+# 推荐用于 14B 模型在 RTX 4090 24GB 上训练
+
+model: "/home/lwy/Qwen2.5-14B-Instruct"
+train_file: "training/data/processed/train.jsonl"
+val_file: "training/data/processed/val.jsonl"
+output_dir: "training/outputs/judicial-qlora"
+
+# 训练参数
+epochs: 3
+batch_size: 1
+gradient_accumulation: 8
+learning_rate: 1.0e-4
+warmup_ratio: 0.03
+max_length: 2048
+seed: 42
+
+# LoRA 参数（QLoRA 通常 alpha 较小）
+lora_r: 64
+lora_alpha: 16
+lora_dropout: 0.05
+
+# 保存与评估
+save_steps: 500
+eval_steps: 500
+logging_steps: 10
+
+# QLoRA 特有
+bnb_4bit_compute_dtype: "bfloat16"
+double_quant: true

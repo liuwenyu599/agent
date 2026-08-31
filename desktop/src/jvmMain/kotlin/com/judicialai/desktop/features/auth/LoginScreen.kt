@@ -79,7 +79,7 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                 val tabs = if (vm.isFirstUser)
                     listOf("登录", "首次注册（系统管理员）")
                 else
-                    listOf("登录", "注册")
+                    listOf("登录")
                 var tab by remember(vm.isFirstUser) {
                     mutableStateOf(if (vm.isFirstUser) 1 else 0)
                 }
@@ -99,8 +99,7 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
 
                 when (tabs[tab]) {
                     "登录" -> LoginForm(vm)
-                    "注册" -> RegisterForm(vm, first = false)
-                    else -> RegisterForm(vm, first = true)
+                   "首次注册（系统管理员）" -> RegisterForm(vm, first = true)
                 }
 
                 vm.error?.let {

@@ -26,8 +26,11 @@ import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.net.ConnectException
@@ -46,7 +49,31 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
     val loggedIn: Boolean get() = token != null
 
     private val json = Json { ignoreUnknownKeys = true }
-
+    private fun Any?.toJsonElement(): JsonElement = when (this) {
+        null -> JsonNull
+        is JsonElement -> this
+        is String -> JsonPrimitive(this)
+        is Boolean -> JsonPrimitive(this)
+        is Int -> JsonPrimitive(this)
+        is Long -> JsonPrimitive(this)
+        is Float -> JsonPrimitive(this)
+        is Double -> JsonPrimitive(this)
+        is Number -> JsonPrimitive(this.toString())
+        is Map<*, *> -> JsonObject(
+            this.entries
+                .filter { it.key is String }
+                .associate { (key, value) ->
+                    key as String to value.toJsonElement()
+                }
+        )
+        is Iterable<*> -> JsonArray(
+            this.map { it.toJsonElement() }
+        )
+        is Array<*> -> JsonArray(
+            this.map { it.toJsonElement() }
+        )
+        else -> JsonPrimitive(this.toString())
+    }
     private fun client(timeoutMs: Long? = null): HttpClient {
         val cfg = configProvider()
         return HttpClient(CIO) {
@@ -221,10 +248,14 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     HttpMethod.Get -> c.get(url) { auth(); params.forEach { (k, v) -> parameter(k, v) } }
                     HttpMethod.Delete -> c.delete(url) { auth() }
                     HttpMethod.Put -> c.put(url) {
-                        auth(); contentType(ContentType.Application.Json); body?.let { setBody(it) }
+                        auth()
+                        contentType(ContentType.Application.Json)
+                        body?.let { setBody(it.toJsonElement()) }
                     }
                     else -> c.post(url) {
-                        auth(); contentType(ContentType.Application.Json); body?.let { setBody(it) }
+                        auth()
+                        contentType(ContentType.Application.Json)
+                        body?.let { setBody(it.toJsonElement()) }
                     }
                 }
                 val text = r.body<String>()
@@ -303,7 +334,7 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         return try {
             client(300_000).use { c ->
                 val r = c.post(url) {
-                    auth(); contentType(ContentType.Application.Json); setBody(body)
+                    auth(); contentType(ContentType.Application.Json); setBody(body.toJsonElement())
                 }
                 if (r.status.isSuccess()) {
                     target.writeBytes(r.body())

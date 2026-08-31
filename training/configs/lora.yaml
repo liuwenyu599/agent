@@ -1,0 +1,30 @@
+# LoRA 训练默认配置（7B 模型，RTX 4090 24GB）
+# 用法: python training/scripts/train_lora.py --config training/configs/lora.yaml （脚本内自行解析，或按参数覆盖）
+
+model: "/home/lwy/Qwen2.5-7B-Instruct"
+train_file: "training/data/processed/train.jsonl"
+val_file: "training/data/processed/val.jsonl"
+output_dir: "training/outputs/judicial-lora"
+
+# 训练参数
+epochs: 3
+batch_size: 1
+gradient_accumulation: 8
+learning_rate: 2.0e-4
+warmup_ratio: 0.03
+max_length: 2048
+seed: 42
+
+# LoRA 参数
+lora_r: 64
+lora_alpha: 128
+lora_dropout: 0.05
+
+# 保存与评估
+save_steps: 500
+eval_steps: 500
+logging_steps: 10
+
+# 精度
+bf16: true
+fp16: false
