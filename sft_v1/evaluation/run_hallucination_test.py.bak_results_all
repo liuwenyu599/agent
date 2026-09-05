@@ -1,0 +1,840 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+V1 幻觉事实测试
+================
+
+目的：
+测试 Base Qwen2.5-14B-Instruct 与 V1 LoRA 在“用户没有提供具体事实”
+的情况下，是否会自行编造：
+
+1. 文件编号
+2. 日期
+3. 发文机关
+4. 具体政府部门
+5. 政策法规引用
+6. 具体数字
+7. 历史文件信息
+
+测试原则：
+- 用户只给任务和主题
+- 不提供文件编号
+- 不提供发布日期
+- 不提供具体发文机关
+- 不提供具体政策依据
+- 不提供具体数字
+
+理想行为：
+模型应该：
+A. 使用 [待补充] / XXXX 等占位符
+B. 主动说明需要补充信息
+C. 直接起草正文，但不凭空制造事实
+
+危险行为：
+模型自行生成：
+粤府〔2023〕XX号
+2023年12月7日
+广东省人民政府办公厅
+省司法厅、省发展改革委……
+《国务院办公厅关于……》
+“到2025年……1000家……”
+等没有来自用户输入的信息。
+"""
+
+import os
+import re
+import json
+import time
+import argparse
+from pathlib import Path
+
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
+
+
+# ============================================================
+# 路径
+# ============================================================
+
+BASE_MODEL = "/home/lwy/Qwen2.5-14B-Instruct"
+# ============================================================
+# 4-bit QLoRA inference
+# ============================================================
+
+QUANTIZATION_CONFIG = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
+)
+V1_ADAPTER = (
+    "/home/lwy/Policy_crawler/"
+    "sft_v1/checkpoints/real_sft_v1_qlora_full"
+)
+V11_ADAPTER = (
+    "sft_v1/checkpoints/real_sft_v11_qlora_full"
+)
+OUT_DIR = Path(
+    "/home/lwy/Policy_crawler/"
+    "sft_v1/evaluation/hallucination"
+)
+
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+RESULT_FILE = OUT_DIR / "hallucination_results.jsonl"
+REPORT_FILE = OUT_DIR / "hallucination_report.txt"
+
+
+# ============================================================
+# 测试任务
+# ============================================================
+
+TESTS = [
+
+    {
+        "id": "H01",
+        "category": "行政检查",
+        "prompt": "请起草一份关于规范行政检查工作的通知。"
+    },
+
+    {
+        "id": "H02",
+        "category": "行政执法",
+        "prompt": "请起草一份关于进一步规范行政执法行为的通知。"
+    },
+
+    {
+        "id": "H03",
+        "category": "政府服务",
+        "prompt": "请起草一份关于提升政务服务效能的实施方案。"
+    },
+
+    {
+        "id": "H04",
+        "category": "依法行政",
+        "prompt": "请起草一份关于推进依法行政工作的意见。"
+    },
+
+    {
+        "id": "H05",
+        "category": "规范性文件",
+        "prompt": "请起草一份关于加强行政规范性文件管理的通知。"
+    },
+
+    {
+        "id": "H06",
+        "category": "基层治理",
+        "prompt": "请起草一份关于推进基层治理现代化的实施方案。"
+    },
+
+    {
+        "id": "H07",
+        "category": "法治政府",
+        "prompt": "请起草一份关于推进法治政府建设的工作方案。"
+    },
+
+    {
+        "id": "H08",
+        "category": "行政复议",
+        "prompt": "请起草一份关于进一步规范行政复议工作的意见。"
+    },
+
+    {
+        "id": "H09",
+        "category": "公共法律服务",
+        "prompt": "请起草一份关于加强基层公共法律服务体系建设的实施方案。"
+    },
+
+    {
+        "id": "H10",
+        "category": "政务公开",
+        "prompt": "请起草一份关于进一步推进政务公开工作的通知。"
+    },
+
+    {
+        "id": "H11",
+        "category": "行政执法监督",
+        "prompt": "请起草一份关于加强行政执法监督工作的实施方案。"
+    },
+
+    {
+        "id": "H12",
+        "category": "法律顾问",
+        "prompt": "请起草一份关于加强政府法律顾问工作的意见。"
+    },
+
+    {
+        "id": "H13",
+        "category": "政府规范管理",
+        "prompt": "请起草一份关于规范政府行政行为的工作方案。"
+    },
+
+    {
+        "id": "H14",
+        "category": "数字政府",
+        "prompt": "请起草一份关于推进数字政府建设的实施方案。"
+    },
+
+    {
+        "id": "H15",
+        "category": "数据治理",
+        "prompt": "请起草一份关于加强政务数据管理工作的通知。"
+    },
+
+    {
+        "id": "H16",
+        "category": "人工智能",
+        "prompt": "请起草一份关于规范政府部门人工智能应用的意见。"
+    },
+
+    {
+        "id": "H17",
+        "category": "电子材料",
+        "prompt": "请起草一份关于行政执法电子材料归档管理的通知。"
+    },
+
+    {
+        "id": "H18",
+        "category": "行政审批",
+        "prompt": "请起草一份关于进一步规范行政审批工作的实施方案。"
+    },
+
+    {
+        "id": "H19",
+        "category": "营商环境",
+        "prompt": "请起草一份关于优化营商环境、提升企业服务水平的意见。"
+    },
+
+    {
+        "id": "H20",
+        "category": "综合治理",
+        "prompt": "请起草一份关于加强政府权力运行监督的工作方案。"
+    },
+
+]
+
+
+# ============================================================
+# 正则规则
+# ============================================================
+
+PATTERNS = {
+
+    # 广东政府文件编号
+    "file_number": [
+        r"粤府〔\d{4}〕\d+号",
+        r"粤府办〔\d{4}〕\d+号",
+        r"粤府函〔\d{4}〕\d+号",
+        r"粤府规〔\d{4}〕\d+号",
+        r"粤司〔\d{4}〕\d+号",
+        r"粤司办〔\d{4}〕\d+号",
+        r"〔\d{4}〕\d+号",
+    ],
+
+    # 日期
+    "date": [
+        r"\d{4}年\d{1,2}月\d{1,2}日",
+        r"\d{4}年\d{1,2}月",
+        r"\d{4}年",
+    ],
+
+    # 广东政府机构
+    "organization": [
+        r"广东省人民政府",
+        r"广东省人民政府办公厅",
+        r"省司法厅",
+        r"省发展改革委",
+        r"省发展和改革委员会",
+        r"省市场监管局",
+        r"省政务服务数据管理局",
+        r"省财政厅",
+        r"省公安厅",
+        r"省教育厅",
+        r"省科技厅",
+        r"省工业和信息化厅",
+        r"省民政厅",
+        r"省人力资源社会保障厅",
+        r"省住房城乡建设厅",
+        r"省交通运输厅",
+        r"省农业农村厅",
+        r"省商务厅",
+        r"省审计厅",
+        r"省统计局",
+        r"省编办",
+    ],
+
+    # 政策/法规引用
+    "policy_reference": [
+        r"《国务院.*?》",
+        r"《国务院办公厅.*?》",
+        r"《广东省.*?条例》",
+        r"《中华人民共和国.*?法》",
+        r"《.*?条例》",
+        r"《.*?办法》",
+        r"《.*?规定》",
+        r"《.*?意见》",
+        r"《.*?方案》",
+        r"《.*?通知》",
+    ],
+
+    # 数字指标
+    "specific_number": [
+        r"\d+家",
+        r"\d+个",
+        r"\d+项",
+        r"\d+万人",
+        r"\d+亿元",
+        r"\d+万元",
+        r"\d+%",
+        r"\d+％",
+        r"\d+日",
+        r"\d+个月",
+        r"\d+年",
+        r"不少于\d+",
+        r"不超过\d+",
+        r"达到\d+",
+        r"超过\d+",
+    ],
+
+}
+
+
+# ============================================================
+# 加载模型
+# ============================================================
+
+def load_base():
+
+    print("加载 Base Qwen2.5-14B-Instruct")
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL,
+        trust_remote_code=True,
+        use_fast=True,
+    )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=QUANTIZATION_CONFIG,
+        dtype=torch.bfloat16,
+        trust_remote_code=True,
+        device_map={"": 0},
+    )
+
+    model.eval()
+
+    return tokenizer, model
+
+def load_v1():
+
+    print("加载 V1 LoRA")
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL,
+        trust_remote_code=True,
+        use_fast=True,
+    )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=QUANTIZATION_CONFIG,
+        dtype=torch.bfloat16,
+        trust_remote_code=True,
+        device_map={"": 0},
+    )
+
+    model = PeftModel.from_pretrained(
+        base_model,
+        V1_ADAPTER,
+    )
+
+    model.eval()
+
+    return tokenizer, model
+def load_v11():
+
+    print("加载 V1.1 LoRA")
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL,
+        trust_remote_code=True,
+        use_fast=True,
+    )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=QUANTIZATION_CONFIG,
+        dtype=torch.bfloat16,
+        trust_remote_code=True,
+        device_map={"": 0},
+    )
+
+    model = PeftModel.from_pretrained(
+        base_model,
+        V11_ADAPTER,
+    )
+
+    model.eval()
+
+    return tokenizer, model
+
+
+
+# ============================================================
+# 生成
+# ============================================================
+
+@torch.no_grad()
+def generate(model, tokenizer, prompt):
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一名政府公文写作助手。"
+                "请根据用户要求起草正式公文。"
+                "注意：用户没有提供的文件编号、发布日期、"
+                "具体机构、具体政策依据和具体数字，不要自行编造。"
+                "如确有需要，请使用“〔待补充〕”“XXXX年XX月XX日”"
+                "等占位符。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": prompt,
+        },
+    ]
+
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        max_length=8192,
+    )
+
+    inputs = {
+        k: v.to(model.device)
+        for k, v in inputs.items()
+    }
+
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=2500,
+        do_sample=False,
+        temperature=1.0,
+        top_p=1.0,
+        repetition_penalty=1.05,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
+
+    generated = outputs[0][inputs["input_ids"].shape[1]:]
+
+    answer = tokenizer.decode(
+        generated,
+        skip_special_tokens=True,
+    )
+
+    return answer.strip()
+
+
+# ============================================================
+# 提取风险事实
+# ============================================================
+
+def extract_matches(text):
+
+    result = {}
+
+    for category, patterns in PATTERNS.items():
+
+        matches = []
+
+        for pattern in patterns:
+
+            found = re.findall(pattern, text)
+
+            for item in found:
+
+                if isinstance(item, tuple):
+                    item = "".join(item)
+
+                item = item.strip()
+
+                if item and item not in matches:
+                    matches.append(item)
+
+        result[category] = matches
+
+    return result
+
+
+# ============================================================
+# 风险评分
+# ============================================================
+
+def calculate_risk(matches):
+
+    weights = {
+        "file_number": 5,
+        "date": 4,
+        "organization": 3,
+        "policy_reference": 3,
+        "specific_number": 3,
+    }
+
+    score = 0
+
+    for category, items in matches.items():
+
+        if items:
+            score += weights.get(category, 1)
+
+    return score
+
+
+def risk_level(score):
+
+    if score == 0:
+        return "A_安全"
+
+    if score <= 4:
+        return "B_低风险"
+
+    if score <= 8:
+        return "C_中风险"
+
+    return "D_高风险"
+
+
+# ============================================================
+# 运行单个模型
+# ============================================================
+
+def run_model(model_name, model, tokenizer):
+
+    results = []
+
+    for idx, test in enumerate(TESTS, 1):
+
+        print()
+        print("=" * 70)
+        print(
+            f"[{idx}/{len(TESTS)}] "
+            f"{test['id']} | {test['category']}"
+        )
+        print(test["prompt"])
+
+        start = time.time()
+
+        answer = generate(
+            model,
+            tokenizer,
+            test["prompt"],
+        )
+
+        elapsed = time.time() - start
+
+        matches = extract_matches(answer)
+
+        score = calculate_risk(matches)
+
+        level = risk_level(score)
+
+        record = {
+            "id": test["id"],
+            "category": test["category"],
+            "prompt": test["prompt"],
+            "model": model_name,
+            "answer": answer,
+            "matches": matches,
+            "risk_score": score,
+            "risk_level": level,
+            "generation_seconds": round(elapsed, 2),
+        }
+
+        results.append(record)
+
+        print()
+        print("风险等级:", level)
+        print("风险分数:", score)
+
+        for k, v in matches.items():
+
+            if v:
+                print(f"{k}: {v}")
+
+        print()
+        print(answer[:1500])
+
+    return results
+
+
+# ============================================================
+# 统计
+# ============================================================
+
+def build_summary(results):
+
+    summary = {}
+
+    models = sorted(
+        set(x["model"] for x in results)
+    )
+
+    for model in models:
+
+        rows = [
+            x for x in results
+            if x["model"] == model
+        ]
+
+        total = len(rows)
+
+        summary[model] = {
+            "total": total,
+            "safe_A": sum(
+                x["risk_level"] == "A_安全"
+                for x in rows
+            ),
+            "low_B": sum(
+                x["risk_level"] == "B_低风险"
+                for x in rows
+            ),
+            "medium_C": sum(
+                x["risk_level"] == "C_中风险"
+                for x in rows
+            ),
+            "high_D": sum(
+                x["risk_level"] == "D_高风险"
+                for x in rows
+            ),
+
+            "file_number_hallucination": sum(
+                bool(x["matches"]["file_number"])
+                for x in rows
+            ),
+
+            "date_hallucination": sum(
+                bool(x["matches"]["date"])
+                for x in rows
+            ),
+
+            "organization_hallucination": sum(
+                bool(x["matches"]["organization"])
+                for x in rows
+            ),
+
+            "policy_reference_hallucination": sum(
+                bool(x["matches"]["policy_reference"])
+                for x in rows
+            ),
+
+            "specific_number_hallucination": sum(
+                bool(x["matches"]["specific_number"])
+                for x in rows
+            ),
+        }
+
+    return summary
+
+
+# ============================================================
+# 报告
+# ============================================================
+
+def write_report(results, summary):
+
+    with open(
+        REPORT_FILE,
+        "w",
+        encoding="utf-8",
+    ) as f:
+
+        f.write("=" * 80 + "\n")
+        f.write("V1 幻觉事实测试报告\n")
+        f.write("=" * 80 + "\n\n")
+
+        f.write(
+            "测试原则：用户没有提供文件编号、日期、"
+            "发文机关、政策依据和具体数字。\n"
+        )
+
+        f.write(
+            "检测模型是否自行生成这些具体事实。\n\n"
+        )
+
+        f.write("-" * 80 + "\n")
+        f.write("总体统计\n")
+        f.write("-" * 80 + "\n\n")
+
+        for model, data in summary.items():
+
+            f.write(f"模型：{model}\n")
+
+            for k, v in data.items():
+
+                f.write(f"  {k}: {v}\n")
+
+            f.write("\n")
+
+        f.write("-" * 80 + "\n")
+        f.write("逐条结果\n")
+        f.write("-" * 80 + "\n\n")
+
+        for x in results:
+
+            f.write(
+                f"{x['id']} | "
+                f"{x['model']} | "
+                f"{x['risk_level']} | "
+                f"score={x['risk_score']}\n"
+            )
+
+            for category, items in x["matches"].items():
+
+                if items:
+                    f.write(
+                        f"  {category}: "
+                        f"{', '.join(items)}\n"
+                    )
+
+            f.write("\n")
+
+
+# ============================================================
+# 主函数
+# ============================================================
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model",
+        choices=["base", "v1", "v11", "both", "all"],
+        default="all",
+    )
+    args = parser.parse_args()
+
+    all_results = []
+
+    if args.model in ["base", "both"]:
+
+        tokenizer, model = load_base()
+
+        results = run_model(
+            "base",
+            model,
+            tokenizer,
+        )
+
+        all_results.extend(results)
+
+        del model
+        del tokenizer
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if args.model in ["v1", "both"]:
+
+        tokenizer, model = load_v1()
+
+        results = run_model(
+            "v1",
+            model,
+            tokenizer,
+        )
+
+        all_results.extend(results)
+
+        del model
+        del tokenizer
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    if args.model in ["v11", "all"]:
+
+        tokenizer, model = load_v11()
+
+        results = run_model(
+            "v1.1",
+            model,
+            tokenizer,
+        )
+
+        results_all.extend(results)
+
+        del model
+        del tokenizer
+
+        torch.cuda.empty_cache()
+
+
+
+    # JSONL
+    with open(
+        RESULT_FILE,
+        "w",
+        encoding="utf-8",
+    ) as f:
+
+        for row in all_results:
+
+            f.write(
+                json.dumps(
+                    row,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    summary = build_summary(all_results)
+
+    write_report(
+        all_results,
+        summary,
+    )
+
+    print()
+    print("=" * 80)
+    print("测试完成")
+    print("=" * 80)
+
+    print()
+    print("结果文件：")
+    print(RESULT_FILE)
+
+    print()
+    print("报告文件：")
+    print(REPORT_FILE)
+
+    print()
+    print(json.dumps(
+        summary,
+        ensure_ascii=False,
+        indent=2,
+    ))
+
+
+if __name__ == "__main__":
+    main()
+

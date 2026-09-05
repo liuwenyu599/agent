@@ -1,0 +1,41 @@
+{
+ "total_docs": 2951,
+ "empty_text": 0,
+ "min_chars": 2,
+ "max_chars": 67875,
+ "mean_chars": 3512.0,
+ "median_chars": 2224,
+ "P50": 2224,
+ "P75": 4695,
+ "P90": 7295,
+ "P95": 10125,
+ "P99": 22990,
+ "field_problems": {
+  "uid_dup": 0,
+  "missing": {},
+  "maintext_type": 0,
+  "json_error": 0
+ },
+ "cleaning_rule_hits": {
+  "网站页脚": 153,
+  "社交分享": 1
+ },
+ "split": {
+  "train_uids": 2656,
+  "val_uids": 295,
+  "train_real": 2656,
+  "train_synthetic": 2656,
+  "val_real": 295,
+  "val_synthetic": 295
+ },
+ "token_stats": {
+  "min": 1,
+  "max": 40752,
+  "mean": 2025.7,
+  "median": 1320,
+  "P90": 4131,
+  "P99": 13292,
+  "over_2048": 1026,
+  "over_4096": 302
+ }
+}

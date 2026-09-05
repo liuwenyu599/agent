@@ -1,0 +1,114 @@
+================================================================================
+公文事实幻觉测试报告
+================================================================================
+
+测试原则：
+用户只提供任务和主题，没有提供具体文件编号、日期、具体政策文件、具体数字和具体时间目标。
+正常法律法规知识不自动判定为幻觉。
+重点检测未经用户提供的具体事实。
+
+--------------------------------------------------------------------------------
+总体统计
+--------------------------------------------------------------------------------
+
+模型：v1.1
+  total: 20
+  safe_A: 2
+  low_B: 6
+  medium_C: 12
+  high_D: 0
+  file_number_hallucination: 0
+  date_hallucination: 1
+  historical_year_hallucination: 9
+  specific_number_hallucination: 2
+  policy_document_hallucination: 0
+  policy_reference_occurrence: 4
+  common_law_occurrence: 0
+  organization_occurrence: 7
+  historical_policy_context: 17
+  error_count: 0
+
+--------------------------------------------------------------------------------
+逐条结果
+--------------------------------------------------------------------------------
+
+H01 | v1.1 | A_安全 | score=0
+
+H02 | v1.1 | B_低风险 | score=1
+  organization: 省司法厅
+
+H03 | v1.1 | C_中风险 | score=6
+  historical_year: 到2025年
+  organization: 省政务服务数据管理局
+  historical_policy_context: 党的二十大
+
+H04 | v1.1 | C_中风险 | score=5
+  historical_year: 到2020年
+  historical_policy_context: 党的十八大, 十八届三中全会, 邓小平理论, “三个代表”重要思想, 科学发展观
+
+H05 | v1.1 | C_中风险 | score=5
+  specific_number: 6个, 7个, 不少于7, 不超过5, 超过5, 超过10
+  historical_policy_context: 科学发展观
+
+H06 | v1.1 | C_中风险 | score=6
+  historical_year: 到2025年
+  organization: 省司法厅, 省市场监管局, 省教育厅, 省民政厅, 省人力资源社会保障厅, 省交通运输厅, 省农业农村厅, 省商务厅
+  policy_reference: 《广东省基层治理促进条例》, 《广东省基层治理政策评估办法》, 《广东省基层治理权责清单管理办法》, 《广东省基层治理考核评价办法》, 《广东省基层治理激励保障办法》, 《广东省基层治理风险防控办法》, 《广东省基层治理组织架构管理办法》, 《广东省基层治理组织运行机制管理办法》, 《广东省基层治理组织协同机制管理办法》, 《广东省基层治理决策机制管理办法》, 《广东省基层治理执行机制管理办法》, 《广东省基层治理监督机制管理办法》
+  historical_policy_context: 党的二十大
+
+H07 | v1.1 | C_中风险 | score=6
+  historical_year: 到2020年
+  organization: 省发展改革委, 省公安厅, 省审计厅, 省编办
+  historical_policy_context: 邓小平理论, “三个代表”重要思想, 科学发展观
+
+H08 | v1.1 | B_低风险 | score=2
+  historical_policy_context: 科学发展观
+
+H09 | v1.1 | C_中风险 | score=5
+  historical_year: 到2022年
+  historical_policy_context: 党的十九大
+
+H10 | v1.1 | B_低风险 | score=2
+  historical_policy_context: 科学发展观
+
+H11 | v1.1 | C_中风险 | score=5
+  historical_year: 到2017年底, 到2017年
+  historical_policy_context: 党的十八大, 邓小平理论, “三个代表”重要思想, 科学发展观
+
+H12 | v1.1 | A_安全 | score=0
+
+H13 | v1.1 | C_中风险 | score=5
+  date: 2014年1月10日, 2014年5月10日, 2014年1月10日前, 2014年5月10日前
+  policy_reference: 《广东省重大行政决策听证规定》
+  historical_policy_context: 党的十八大, 邓小平理论, “三个代表”重要思想, 科学发展观
+
+H14 | v1.1 | C_中风险 | score=6
+  historical_year: 到2025年, 到2035年
+  organization: 省司法厅, 省发展改革委, 省市场监管局, 省政务服务数据管理局, 省公安厅, 省教育厅, 省民政厅, 省人力资源社会保障厅, 省住房城乡建设厅, 省交通运输厅
+  historical_policy_context: 党的二十大
+
+H15 | v1.1 | B_低风险 | score=3
+  organization: 省司法厅, 省市场监管局, 省政务服务数据管理局, 省公安厅, 省教育厅, 省科技厅, 省工业和信息化厅, 省人力资源社会保障厅
+  policy_reference: 《广东省数据条例》
+  historical_policy_context: 党的二十大
+
+H16 | v1.1 | C_中风险 | score=5
+  historical_year: 到2021年底, 到2021年
+  historical_policy_context: 党的十九大
+
+H17 | v1.1 | B_低风险 | score=3
+  organization: 省司法厅, 省政务服务数据管理局
+  policy_reference: 《广东省行政执法公示办法》, 《广东省行政执法全过程记录办法》, 《广东省重大行政执法决定法制审核办法》
+  historical_policy_context: 党的十九大
+
+H18 | v1.1 | B_低风险 | score=2
+  historical_policy_context: 邓小平理论, “三个代表”重要思想, 科学发展观
+
+H19 | v1.1 | C_中风险 | score=5
+  specific_number: 3个, 1个, 5个, 70%
+  historical_policy_context: 党的十九大
+
+H20 | v1.1 | C_中风险 | score=5
+  historical_year: 到2017年底, 到2017年
+  historical_policy_context: 党的十八大, 十八届三中全会, 邓小平理论, “三个代表”重要思想, 科学发展观
+

@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Data / generated data
+data/
+datasets/
+raw_data/
+processed_data/
+output/
+outputs/
+
+# Large model / feature files
+checkpoints/
+checkpoint/
+weights/
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.npz
+*.npy
+*.pkl
+*.pickle
+
+# Logs / experiments
+logs/
+runs/
+wandb/
+tensorboard/
+*.log
+
+# Cache / temporary
+.cache/
+cache/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Build
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,8 @@
+V1
+├── real_sft_v1.jsonl
+└── real_sft_v1_qlora_full
+
+V1.1
+├── real_sft_v11.jsonl          ← 训练集
+└── real_sft_v11_audit.jsonl    ← 审计，不参与训练
+“去历史事实化/槽位化 SFT 能够在保持领域公文风格迁移的同时，降低模型对训练语料中历史性元数据的机械复现。”
