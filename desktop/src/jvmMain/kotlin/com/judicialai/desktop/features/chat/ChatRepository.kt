@@ -16,6 +16,15 @@ import java.io.File
 class ChatRepository(private val api: ApiClient) {
 
     /** GET /chat/sessions → 纯数组 [{id,title,created_at}] */
+    /** Chat「加入训练集」：用户真实需求 + AI 初稿 + 人工最终稿 → 候选样本（不触发训练） */
+    suspend fun addToTraining(sessionId: String, instruction: String, draft: String, output: String) =
+        api.post(Endpoints.Training.SAMPLE_FROM_CHAT, buildMap<String, Any?> {
+            put("session_id", sessionId)
+            put("instruction", instruction)
+            put("draft", draft)
+            put("output", output)
+        })
+
     suspend fun listSessions(): ApiResult<List<ChatSession>> = when (val r = api.get(Endpoints.Chat.SESSIONS)) {
         is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
             ChatSession(it["id"].str(), it["title"].str().ifBlank { "未命名会话" }, it["created_at"].str())

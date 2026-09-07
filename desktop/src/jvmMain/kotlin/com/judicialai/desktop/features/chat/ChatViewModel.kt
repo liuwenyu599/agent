@@ -131,6 +131,17 @@ class ChatViewModel(private val repo: ChatRepository) {
         }
     }
 
+    /** 加入训练集：进入候选数据，需审核后才参与训练 */
+    fun addToTraining(instruction: String, draft: String, output: String) {
+        val sid = currentSessionId ?: ""
+        scope.launch {
+            status = when (val r = repo.addToTraining(sid, instruction, draft, output)) {
+                is ApiResult.Ok -> "已加入训练集（待审核），可在「数据资产中心」查看"
+                is ApiResult.Err -> "加入训练集失败：${r.message}"
+            }
+        }
+    }
+
     fun lastAssistantMessage(): String =
         messages.lastOrNull { it.role == "assistant" }?.content ?: ""
 }

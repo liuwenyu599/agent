@@ -24,6 +24,7 @@ from app.infrastructure.database.models import (  # noqa: E402,F401
     ppt,
     references,
     templates,
+    training,
     workflow,
 )
 
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
         ppt,
         references,
         templates,
+        training,
         users,
         workflow,
     )
@@ -144,6 +146,7 @@ def create_app() -> FastAPI:
         knowledge.router,
         references.router,
         templates.router,
+        training.router,
         workflow.router,
         ppt.router,
     ]

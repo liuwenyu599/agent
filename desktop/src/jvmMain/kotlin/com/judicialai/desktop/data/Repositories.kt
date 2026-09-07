@@ -7,6 +7,7 @@ import com.judicialai.desktop.features.formatcheck.FormatCheckRepository
 import com.judicialai.desktop.features.knowledge.KnowledgeRepository
 import com.judicialai.desktop.features.ppt.PptRepository
 import com.judicialai.desktop.features.templates.TemplatesRepository
+import com.judicialai.desktop.features.training.TrainingRepository
 import com.judicialai.desktop.features.workflow.WorkflowRepository
 
 /**
@@ -21,5 +22,6 @@ object Repositories {
     val ppt: PptRepository by lazy { PptRepository(AppState.api) }
     val workflow: WorkflowRepository by lazy { WorkflowRepository(AppState.api) }
     val admin: AdminRepository by lazy { AdminRepository(AppState.api) }
+    val training: TrainingRepository by lazy { TrainingRepository(AppState.api) }
 }
 

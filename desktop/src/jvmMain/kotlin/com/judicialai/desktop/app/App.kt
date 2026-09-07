@@ -12,6 +12,7 @@ import com.judicialai.desktop.features.knowledge.KnowledgeScreen
 import com.judicialai.desktop.features.ppt.PptScreen
 import com.judicialai.desktop.features.settings.SettingsScreen
 import com.judicialai.desktop.features.templates.TemplatesScreen
+import com.judicialai.desktop.features.training.TrainingScreen
 import com.judicialai.desktop.features.workflow.WorkflowScreen
 
 /** 应用根组件：主题 + 登录门 + 外壳 */
@@ -42,6 +43,7 @@ fun App() {
                 AppScreen.FORMAT_CHECK -> FormatCheckScreen()
                 AppScreen.PPT -> PptScreen()
                 AppScreen.WORKFLOW -> WorkflowScreen()
+                AppScreen.TRAINING -> TrainingScreen()
                 AppScreen.ADMIN -> AdminScreen()
                 AppScreen.SETTINGS -> SettingsScreen()
             }

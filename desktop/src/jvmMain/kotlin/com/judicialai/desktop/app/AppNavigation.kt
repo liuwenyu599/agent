@@ -2,6 +2,7 @@ package com.judicialai.desktop.app
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
@@ -24,6 +25,7 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
     WORKFLOW("工作流", Icons.Default.Share),
     PPT("PPT助手", Icons.Default.PlayArrow),
     FORMAT_CHECK("格式校验", Icons.Default.CheckCircle),
+    TRAINING("数据资产中心", Icons.Default.Star),
     ADMIN("管理后台", Icons.Default.Email),
     SETTINGS("服务器连接设置", Icons.Default.Settings),
 }
@@ -48,6 +50,7 @@ object AppMenu {
         MenuEntry(AppScreen.WORKFLOW, "工作流", Icons.Default.Share),
         MenuEntry(AppScreen.PPT, "PPT助手", Icons.Default.PlayArrow),
         MenuEntry(AppScreen.FORMAT_CHECK, "格式校验", Icons.Default.CheckCircle),
+        MenuEntry(AppScreen.TRAINING, "数据资产中心", Icons.Default.Star),
         MenuEntry(AppScreen.ADMIN, "管理后台", Icons.Default.Settings, adminOnly = true),
     )
 

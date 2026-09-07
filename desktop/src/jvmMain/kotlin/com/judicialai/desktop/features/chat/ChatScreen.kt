@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -31,6 +32,8 @@ import androidx.compose.material.CheckboxDefaults
 import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
+import androidx.compose.material.AlertDialog
+import androidx.compose.material.Button
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
@@ -264,7 +267,13 @@ private fun MessageList(vm: ChatViewModel) {
         modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        items(vm.messages) { msg -> MessageBubble(msg, vm) }
+        itemsIndexed(vm.messages) { i, msg ->
+            // 该条 AI 回复对应的用户原始需求（向前找最近一条 user 消息）
+            val userRequest = if (msg.role != "user")
+                vm.messages.subList(0, i).lastOrNull { it.role == "user" }?.content ?: ""
+            else ""
+            MessageBubble(msg, vm, userRequest)
+        }
         if (vm.sending) {
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -284,8 +293,9 @@ private fun MessageList(vm: ChatViewModel) {
 }
 
 @Composable
-private fun MessageBubble(msg: ChatMessage, vm: ChatViewModel) {
+private fun MessageBubble(msg: ChatMessage, vm: ChatViewModel, userRequest: String = "") {
     val isUser = msg.role == "user"
+    var addToTrainingFor by remember { mutableStateOf<ChatMessage?>(null) }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
@@ -361,12 +371,53 @@ private fun MessageBubble(msg: ChatMessage, vm: ChatViewModel) {
                         vm.export(mapOf("title" to "公文", "content" to msg.content),
                             redHeader = true, target = target)
                     }) { Text("红头导出", fontSize = 12.sp, color = EpPrimary) }
+                    TextButton(onClick = { addToTrainingFor = msg }) {
+                        Text("加入训练集", fontSize = 12.sp, color = EpSuccess)
+                    }
                 }
             }
         }
         Spacer(Modifier.width(12.dp))
         if (isUser) AvatarBox(EpPrimaryDark, "我")
     }
+
+    addToTrainingFor?.let {
+        AddToTrainingDialog(vm, it.content, userRequest) { addToTrainingFor = null }
+    }
+}
+
+@Composable
+private fun AddToTrainingDialog(vm: ChatViewModel, draft: String, userRequest: String,
+                                onClose: () -> Unit) {
+    var instruction by remember { mutableStateOf(userRequest) }
+    var output by remember { mutableStateOf(draft) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("加入训练集") },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("将本次写作结果加入候选训练数据，审核通过后才参与训练。请把「最终定稿」修改为你认可的版本。",
+                    fontSize = 12.sp, color = TextSecondary)
+                OutlinedTextField(instruction, { instruction = it },
+                    label = { Text("你的原始需求") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(output, { output = it },
+                    label = { Text("最终定稿（AI 初稿基础上修改）") },
+                    modifier = Modifier.fillMaxWidth().height(220.dp))
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (instruction.isNotBlank() && output.isNotBlank()) {
+                    vm.addToTraining(instruction, draft, output)
+                }
+                onClose()
+            }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+                Text("加入训练集", color = Color.White)
+            }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
+    )
 }
 
 @Composable

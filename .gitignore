@@ -1,25 +1,131 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+envs/
+ENV/
+*.env
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+*.iml
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Secrets
+# =========================
 .env
 .env.*
 !.env.example
-__pycache__/
-*.py[cod]
+*.pem
+*.key
+*.crt
+credentials.json
+secrets.json
+config.local.*
+
+# =========================
+# Dataset / Data
+# =========================
+data/
+dataset/
+datasets/
+raw_data/
+processed_data/
+output/
+outputs/
+*.jsonl
+*.json
+*.csv
+*.parquet
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# =========================
+# Model / Checkpoints
+# =========================
+checkpoints/
+checkpoint/
+weights/
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# =========================
+# Training output
+# =========================
+runs/
+wandb/
+tensorboard/
+logs/
 *.log
-.venv/
-venv/
-*.db
-*.sqlite3
-uploads/
-media/
-node_modules/
-dist/
+
+# =========================
+# Cache
+# =========================
+.cache/
+cache/
+huggingface/
+transformers_cache/
+hf_cache/
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# =========================
+# Build
+# =========================
 build/
-.idea/
-.vscode/
-.gradle/
-**/.gradle/
-.idea/
-.gradle/
-**/.gradle/
-.idea/
-training/.depstraining/.deps/
-training/.deps/
+dist/
+*.egg-info/
+
+# =========================
+# Large archives
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+desktop/.gradle/file-system.probe
+desktop/.gradle/8.10.2/gc.properties
+desktop/.gradle/8.10.2/checksums/checksums.lock
+desktop/.gradle/8.10.2/dependencies-accessors/gc.properties
+desktop/.gradle/8.10.2/executionHistory/executionHistory.lock
+desktop/.gradle/8.10.2/fileHashes/fileHashes.lock
+desktop/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+desktop/.gradle/buildOutputCleanup/cache.properties
+desktop/.gradle/vcs-1/gc.properties

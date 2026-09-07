@@ -90,5 +90,26 @@ object Endpoints {
         fun nodeGenerate(nodeInstId: String) = "/workflow/nodes/$nodeInstId/generate"
         fun nodeUpdate(nodeInstId: String) = "/workflow/nodes/$nodeInstId"
     }
+
+    object Training {
+        const val OVERVIEW = "/training/overview"
+        const val ASSETS = "/training/assets"
+        fun asset(id: String) = "/training/assets/$id"
+        const val IMPORT_DIR = "/training/assets/import-dir"
+        const val IMPORT_FILE = "/training/assets/import-file"
+        fun assetGenerateSample(id: String) = "/training/assets/$id/generate-sample"
+        const val SAMPLES = "/training/samples"
+        const val SAMPLE_FROM_CHAT = "/training/samples/from-chat"
+        fun sample(id: String) = "/training/samples/$id"
+        fun sampleReview(id: String) = "/training/samples/$id/review"
+        const val DATASETS = "/training/datasets"
+        fun datasetVersions(datasetId: String) = "/training/datasets/$datasetId/versions"
+        const val JOBS = "/training/jobs"
+        fun job(id: String) = "/training/jobs/$id"
+        fun jobCancel(id: String) = "/training/jobs/$id/cancel"
+        const val MODELS = "/training/models"
+        fun modelPublish(id: String) = "/training/models/$id/publish"
+        fun modelArchive(id: String) = "/training/models/$id/archive"
+    }
 }
 
