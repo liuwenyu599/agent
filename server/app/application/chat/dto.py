@@ -21,6 +21,13 @@ class ChatResponse(BaseModel):
     sources: List[dict] = []
     attachments: List[dict] = []
     session_id: str
+    # 智能写作流水线产物（仅写作类请求返回）
+    document_id: Optional[str] = None
+    document_number: Optional[str] = None
+    document_date: Optional[str] = None
+    quality: Optional[Dict[str, Any]] = None
+    content_check: Optional[Dict[str, Any]] = None
+    postprocess_events: List[str] = []
 
 
 class ExportRequest(BaseModel):

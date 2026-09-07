@@ -49,6 +49,13 @@ object Endpoints {
         fun documentArchive(docId: String) = "/knowledge/documents/$docId/archive"
     }
 
+    object Documents {
+        const val LIST = "/documents"
+        fun item(id: String) = "/documents/$id"
+        fun version(id: String, no: Int) = "/documents/$id/versions/$no"
+        fun exportDocx(id: String) = "/documents/$id/export/docx"
+    }
+
     object Templates {
         const val LIST = "/templates/"
         const val CREATE = "/templates/"

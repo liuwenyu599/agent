@@ -34,6 +34,18 @@ class Settings:
         # auto: 有 active 模型走其 provider；mock: 强制 MockProvider（测试）
         self.AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")
 
+        # 智能写作流水线（V1.3 推理层机制服务端化）
+        # 生成后自动：后处理（文号/日期程序接管）→ 质量门 → 内容校验
+        self.WRITING_AUTO_QA = os.getenv("WRITING_AUTO_QA", "true").lower() == "true"
+        # 文号默认代字（无法从落款推导时使用）
+        self.DOC_NUMBER_DEFAULT_DAIZI = os.getenv("DOC_NUMBER_DEFAULT_DAIZI", "粤府办")
+        # 生成后是否追加一次基于格式规则的 AI 内容检查（消耗一次模型调用）
+        self.WRITING_AI_FORMAT_CHECK = os.getenv("WRITING_AI_FORMAT_CHECK", "false").lower() == "true"
+        # 质量门 D 级（退化/截断等硬伤）自动重试次数上限
+        self.WRITING_RETRY_MAX = int(os.getenv("WRITING_RETRY_MAX", "1"))
+        # 写作生成后自动保存草稿到"我的文档"（版本 1）
+        self.WRITING_AUTO_SAVE_DRAFT = os.getenv("WRITING_AUTO_SAVE_DRAFT", "true").lower() == "true"
+
         # Embedding / 向量检索
         self.EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "auto")  # auto|bge|mock
         self.EMBED_MODEL_PATH = os.getenv("EMBED_MODEL_PATH", "/home/lwy/models/BAAI/bge-small-zh-v1.5")

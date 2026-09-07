@@ -129,3 +129,15 @@ desktop/.gradle/8.10.2/fileHashes/fileHashes.lock
 desktop/.gradle/buildOutputCleanup/buildOutputCleanup.lock
 desktop/.gradle/buildOutputCleanup/cache.properties
 desktop/.gradle/vcs-1/gc.properties
+!server/app/infrastructure/database/models/
+!server/app/infrastructure/database/models/**
+server/app/infrastructure/database/models/__pycache__/__init__.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/chat.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/format_check.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/identity.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/knowledge.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/ppt.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/references.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/templates.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/training.cpython-310.pyc
+server/app/infrastructure/database/models/__pycache__/workflow.cpython-310.pyc

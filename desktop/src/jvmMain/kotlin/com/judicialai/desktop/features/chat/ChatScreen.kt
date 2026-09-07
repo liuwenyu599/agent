@@ -336,6 +336,38 @@ private fun MessageBubble(msg: ChatMessage, vm: ChatViewModel, userRequest: Stri
                         lineHeight = 27.sp,
                         color = if (isUser) Color.White else TextPrimary,
                     )
+                    if (!isUser && msg.qualityLevel != null) {
+                        Spacer(Modifier.height(10.dp))
+                        val levelColor = when (msg.qualityLevel) {
+                            "A" -> Color(0xFF2E7D32)
+                            "B" -> Color(0xFFF9A825)
+                            else -> Color(0xFFC62828)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("质检 ${msg.qualityLevel}", fontSize = 11.sp,
+                                color = Color.White,
+                                modifier = Modifier.clip(RoundedCornerShape(4.dp))
+                                    .background(levelColor)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp))
+                            if (msg.qualityIssues.isNotEmpty()) {
+                                Text("${msg.qualityIssues.size} 项提示", fontSize = 12.sp,
+                                    color = TextSecondary)
+                            }
+                            if (msg.documentId != null) {
+                                Text("已存草稿", fontSize = 12.sp, color = EpPrimary)
+                            }
+                        }
+                        msg.qualityIssues.take(3).forEach {
+                            Text("· $it", fontSize = 12.sp, color = TextSecondary,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        if (msg.unverifiedCitations.isNotEmpty()) {
+                            Text("内容核查未核实：${msg.unverifiedCitations.take(3).joinToString("、")}",
+                                fontSize = 12.sp, color = Color(0xFFC62828),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                     if (!isUser && msg.sources.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
                         Box(Modifier.fillMaxWidth().height(1.dp)

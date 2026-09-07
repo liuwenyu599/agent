@@ -18,6 +18,8 @@ logger = get_logger(__name__)
 # ---- 导入全部 ORM 模型完成注册（Base.metadata.create_all 需要） ----
 from app.infrastructure.database.models import (  # noqa: E402,F401
     chat,
+    doc_number,
+    document,
     format_check,
     identity,
     knowledge,
@@ -128,6 +130,7 @@ def create_app() -> FastAPI:
     from app.interfaces import (
         auth,
         chat,
+        documents,
         format_check,
         knowledge,
         ppt,
@@ -142,6 +145,7 @@ def create_app() -> FastAPI:
         auth.router,
         users.router,
         chat.router,
+        documents.router,
         format_check.router,
         knowledge.router,
         references.router,

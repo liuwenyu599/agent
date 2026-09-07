@@ -12,6 +12,17 @@ import com.judicialai.desktop.features.chat.model.ChatMessage
 import com.judicialai.desktop.features.chat.model.ChatSession
 import java.io.File
 
+/** /chat/send 完整结果（含智能写作流水线字段） */
+data class SendOutcome(
+    val reply: String,
+    val sources: List<String>,
+    val sessionId: String?,
+    val documentId: String? = null,
+    val qualityLevel: String? = null,
+    val qualityIssues: List<String> = emptyList(),
+    val unverifiedCitations: List<String> = emptyList(),
+)
+
 /** 智能写作数据访问（端点与返回结构对应 backend/api/chat.py 与 Web api/knowledge.js） */
 class ChatRepository(private val api: ApiClient) {
 
@@ -59,7 +70,7 @@ class ChatRepository(private val api: ApiClient) {
     suspend fun send(
         message: String, sessionId: String?, useRag: Boolean,
         attachmentIds: List<String>, referenceTemplateId: String?,
-    ): ApiResult<Triple<String, List<String>, String?>> {
+    ): ApiResult<SendOutcome> {
         val body = buildMap<String, Any?> {
             put("message", message)
             put("session_id", sessionId)
@@ -75,7 +86,21 @@ class ChatRepository(private val api: ApiClient) {
                     ?: d?.get("content")?.str()?.ifBlank { null } ?: ""
                 val sources = d?.get("sources")?.arr()?.map { it.str() }
                     ?.filter { it.isNotBlank() } ?: emptyList()
-                ApiResult.Ok(Triple(reply, sources, d?.get("session_id")?.str()?.ifBlank { null }))
+                val quality = d?.get("quality")?.obj()
+                val issues = quality?.get("issues")?.arr()
+                    ?.mapNotNull { it.obj()?.get("message")?.str() }
+                    ?.filter { it.isNotBlank() } ?: emptyList()
+                val unverified = d?.get("content_check")?.obj()?.get("unverified")?.arr()
+                    ?.map { it.str() }?.filter { it.isNotBlank() } ?: emptyList()
+                ApiResult.Ok(SendOutcome(
+                    reply = reply,
+                    sources = sources,
+                    sessionId = d?.get("session_id")?.str()?.ifBlank { null },
+                    documentId = d?.get("document_id")?.str()?.ifBlank { null },
+                    qualityLevel = quality?.get("level")?.str()?.ifBlank { null },
+                    qualityIssues = issues,
+                    unverifiedCitations = unverified,
+                ))
             }
             is ApiResult.Err -> r
         }

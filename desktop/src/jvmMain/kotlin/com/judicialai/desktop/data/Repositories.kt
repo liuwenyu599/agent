@@ -3,6 +3,7 @@ package com.judicialai.desktop.data
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.features.admin.AdminRepository
 import com.judicialai.desktop.features.chat.ChatRepository
+import com.judicialai.desktop.features.documents.DocumentsRepository
 import com.judicialai.desktop.features.formatcheck.FormatCheckRepository
 import com.judicialai.desktop.features.knowledge.KnowledgeRepository
 import com.judicialai.desktop.features.ppt.PptRepository
@@ -23,5 +24,6 @@ object Repositories {
     val workflow: WorkflowRepository by lazy { WorkflowRepository(AppState.api) }
     val admin: AdminRepository by lazy { AdminRepository(AppState.api) }
     val training: TrainingRepository by lazy { TrainingRepository(AppState.api) }
+    val documents: DocumentsRepository by lazy { DocumentsRepository(AppState.api) }
 }
 

@@ -88,9 +88,15 @@ class ChatViewModel(private val repo: ChatRepository) {
             when (val r = repo.send(text, currentSessionId, useRag,
                 attachments.map { it.id }, referenceTemplate?.first)) {
                 is ApiResult.Ok -> {
-                    messages = messages + ChatMessage("assistant", r.data.first, sources = r.data.second)
-                    if (currentSessionId == null && r.data.third != null) {
-                        currentSessionId = r.data.third
+                    messages = messages + ChatMessage(
+                        "assistant", r.data.reply, sources = r.data.sources,
+                        documentId = r.data.documentId,
+                        qualityLevel = r.data.qualityLevel,
+                        qualityIssues = r.data.qualityIssues,
+                        unverifiedCitations = r.data.unverifiedCitations,
+                    )
+                    if (currentSessionId == null && r.data.sessionId != null) {
+                        currentSessionId = r.data.sessionId
                         loadSessions()
                     }
                     attachments = emptyList()
