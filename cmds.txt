@@ -1,3 +1,37 @@
-echo "XMODIFIERS=$XMODIFIERS"
-echo "GTK_IM_MODULE=$GTK_IM_MODULE"
-echo "QT_IM_MODULE=$QT_IM_MODULE"
+(base) lwy@finestation:~/judicial_app$ xrandr --verbose | head -80
+Screen 0: minimum 320 x 200, current 1920 x 1080, maximum 1920 x 2048
+VGA-1 connected primary 1920x1080+0+0 (0x841) normal (normal left inverted right x axis y axis) 0mm x 0mm
+        Identifier: 0x40
+        Timestamp:  692511742
+        Subpixel:   unknown
+        Gamma:      1.0:1.0:1.0
+        Brightness: 1.0
+        Clones:    
+        CRTC:       0
+        CRTCs:      0
+        Transform:  1.000000 0.000000 0.000000
+                    0.000000 1.000000 0.000000
+                    0.000000 0.000000 1.000000
+                   filter: 
+        link-status: Good 
+                supported: Good, Bad
+        CONNECTOR_ID: 34 
+                supported: 34
+        non-desktop: 0 
+                range: (0, 1)
+  1024x768 (0x42) 65.000MHz -HSync -VSync
+        h: width  1024 start 1048 end 1184 total 1344 skew    0 clock  48.36KHz
+        v: height  768 start  771 end  777 total  806           clock  60.00Hz
+  800x600 (0x43) 40.000MHz +HSync +VSync
+        h: width   800 start  840 end  968 total 1056 skew    0 clock  37.88KHz
+        v: height  600 start  601 end  605 total  628           clock  60.32Hz
+  800x600 (0x44) 36.000MHz +HSync +VSync
+        h: width   800 start  824 end  896 total 1024 skew    0 clock  35.16KHz
+        v: height  600 start  601 end  603 total  625           clock  56.25Hz
+  640x480 (0x45) 25.175MHz -HSync -VSync
+        h: width   640 start  656 end  752 total  800 skew    0 clock  31.47KHz
+        v: height  480 start  490 end  492 total  525           clock  59.94Hz
+  1920x1080_60.00 (0x841) 173.000MHz -HSync +VSync *current
+        h: width  1920 start 2048 end 2248 total 2576 skew    0 clock  67.16KHz
+        v: height 1080 start 1083 end 1088 total 1120           clock  59.96Hz
+(base) lwy@finestation:~/judicial_app$ 
