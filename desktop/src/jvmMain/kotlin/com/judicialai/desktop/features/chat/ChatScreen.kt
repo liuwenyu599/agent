@@ -520,6 +520,15 @@ private fun InputArea(vm: ChatViewModel) {
                 Text(it, fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.width(12.dp))
             }
+            val writingIntent = listOf("写", "起草", "撰写", "拟").any { text.contains(it) } &&
+                listOf("通知", "总结", "报告", "请示", "函", "讲话", "方案").any { text.contains(it) }
+            if (writingIntent) {
+                TextButton(onClick = {
+                    AppState.pendingWritingIntent = text
+                    AppState.screen = com.judicialai.desktop.app.AppScreen.WRITING
+                    text = ""
+                }) { Text("进入写作工作台 →", fontSize = 12.sp) }
+            }
             Button(
                 onClick = { vm.send(text); text = "" },
                 enabled = !vm.sending && text.isNotBlank(),

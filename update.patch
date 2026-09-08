@@ -1,0 +1,1566 @@
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/app/AppState.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/app/AppState.kt
+index 7a54a9e..37c69b9 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/app/AppState.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/app/AppState.kt
+@@ -14,6 +14,9 @@ object AppState {
+ 
+     var screen by mutableStateOf(AppScreen.DASHBOARD)
+ 
++    /** 普通聊天中识别到写作意图时，跳转到工作台携带的一句话需求 */
++    var pendingWritingIntent by mutableStateOf<String?>(null)
++
+     var serverConfig by mutableStateOf(ServerConfig.load())
+         private set
+ 
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/core/network/Endpoints.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/core/network/Endpoints.kt
+index 986059f..95925a7 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/core/network/Endpoints.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/core/network/Endpoints.kt
+@@ -49,6 +49,18 @@ object Endpoints {
+         fun documentArchive(docId: String) = "/knowledge/documents/$docId/archive"
+     }
+ 
++    object WritingTasks {
++        const val LIST = "/writing/tasks"
++        fun item(id: String) = "/writing/tasks/$id"
++        fun chat(id: String) = "/writing/tasks/$id/chat"
++        fun draft(id: String) = "/writing/tasks/$id/draft"
++        fun revise(id: String) = "/writing/tasks/$id/revise"
++        fun versions(id: String) = "/writing/tasks/$id/versions"
++        fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
++        fun export(id: String, redHeader: Boolean) = "/writing/tasks/$id/export?red_header=$redHeader"
++        fun trainingSample(id: String) = "/writing/tasks/$id/training-sample"
++    }
++
+     object Documents {
+         const val LIST = "/documents"
+         fun item(id: String) = "/documents/$id"
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/chat/ChatScreen.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/chat/ChatScreen.kt
+index 87d8c14..b0422ea 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/chat/ChatScreen.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/chat/ChatScreen.kt
+@@ -520,6 +520,15 @@ private fun InputArea(vm: ChatViewModel) {
+                 Text(it, fontSize = 12.sp, color = TextSecondary)
+                 Spacer(Modifier.width(12.dp))
+             }
++            val writingIntent = listOf("写", "起草", "撰写", "拟").any { text.contains(it) } &&
++                listOf("通知", "总结", "报告", "请示", "函", "讲话", "方案").any { text.contains(it) }
++            if (writingIntent) {
++                TextButton(onClick = {
++                    AppState.pendingWritingIntent = text
++                    AppState.screen = com.judicialai.desktop.app.AppScreen.WRITING
++                    text = ""
++                }) { Text("进入写作工作台 →", fontSize = 12.sp) }
++            }
+             Button(
+                 onClick = { vm.send(text); text = "" },
+                 enabled = !vm.sending && text.isNotBlank(),
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingRepository.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingRepository.kt
+index b8838cb..64d7e17 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingRepository.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingRepository.kt
+@@ -4,127 +4,109 @@ import com.judicialai.desktop.core.network.ApiClient
+ import com.judicialai.desktop.core.network.ApiResult
+ import com.judicialai.desktop.core.network.Endpoints
+ import com.judicialai.desktop.core.utils.arr
+-import com.judicialai.desktop.core.utils.int
+ import com.judicialai.desktop.core.utils.items
+ import com.judicialai.desktop.core.utils.obj
+ import com.judicialai.desktop.core.utils.str
+-import com.judicialai.desktop.features.chat.SendOutcome
+ import com.judicialai.desktop.features.chat.model.ChatAttachment
++import kotlinx.serialization.json.JsonObject
+ import java.io.File
+ 
+ /**
+- * 智能写作工作台数据访问。
+- * 起草/修改走 /chat/send（后端写作流水线：RAG + 后处理 + 质检 + 内容核查 + 自动草稿），
+- * 版本管理走 /documents，导出走 /chat/export 或 /documents/{id}/export/docx。
++ * 智能写作工作台数据访问（/writing/tasks 系列接口）。
++ * 任务 = 结构化上下文 + 当前文档 + 持续对话 + 版本链，全部行为落在后端。
+  */
+ class WritingRepository(private val api: ApiClient) {
+ 
+-    /** 发起写作请求（起草 / AI 修改 / 提纲），返回流水线完整结果 */
+-    suspend fun send(
+-        message: String, sessionId: String?, useRag: Boolean,
+-        attachmentIds: List<String>, referenceTemplateId: String?,
+-    ): ApiResult<SendOutcome> {
+-        val body = buildMap<String, Any?> {
+-            put("message", message)
+-            put("session_id", sessionId)
+-            put("use_rag", useRag)
+-            if (attachmentIds.isNotEmpty()) put("attachment_ids", attachmentIds)
+-            if (!referenceTemplateId.isNullOrBlank()) put("reference_template_id", referenceTemplateId)
++    /** POST /writing/tasks 从自然语言创建任务 */
++    suspend fun createTask(message: String): ApiResult<JsonObject?> =
++        when (val r = api.post(Endpoints.WritingTasks.LIST,
++            mapOf("message" to message), timeoutMs = 120_000)) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
++            is ApiResult.Err -> r
+         }
+-        return when (val r = api.post(Endpoints.Chat.SEND, body, timeoutMs = 300_000)) {
+-            is ApiResult.Ok -> {
+-                val d = r.data.obj()
+-                val quality = d?.get("quality")?.obj()
+-                val issues = quality?.get("issues")?.arr()
+-                    ?.mapNotNull { it.obj()?.get("message")?.str() }
+-                    ?.filter { it.isNotBlank() } ?: emptyList()
+-                val unverified = d?.get("content_check")?.obj()?.get("unverified")?.arr()
+-                    ?.map { it.str() }?.filter { it.isNotBlank() } ?: emptyList()
+-                val refs = d?.get("sources")?.arr()?.map { it.str() }
+-                    ?.filter { it.isNotBlank() } ?: emptyList()
+-                ApiResult.Ok(SendOutcome(
+-                    reply = d?.get("reply")?.str().orEmpty(),
+-                    sources = refs,
+-                    sessionId = d?.get("session_id")?.str()?.ifBlank { null },
+-                    documentId = d?.get("document_id")?.str()?.ifBlank { null },
+-                    documentNumber = d?.get("document_number")?.str()?.ifBlank { null },
+-                    documentDate = d?.get("document_date")?.str()?.ifBlank { null },
+-                    qualityLevel = quality?.get("level")?.str()?.ifBlank { null },
+-                    qualityIssues = issues,
+-                    unverifiedCitations = unverified,
+-                ))
+-            }
++
++    /** GET /writing/tasks/{id} 获取任务全量状态 */
++    suspend fun getTask(id: String): ApiResult<JsonObject?> =
++        when (val r = api.get(Endpoints.WritingTasks.item(id))) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+             is ApiResult.Err -> r
+         }
+-    }
+ 
+-    suspend fun uploadMaterials(files: List<File>): ApiResult<List<ChatAttachment>> =
+-        when (val r = api.upload(Endpoints.Chat.ATTACHMENTS_UPLOAD, "files", files)) {
+-            is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
+-                ChatAttachment(it["id"].str(),
+-                    it["filename"].str().ifBlank { it["name"].str() },
+-                    it["kind"].str().ifBlank { "doc" },
+-                    it["parse_status"].str() == "failed")
+-            })
++    /** PATCH /writing/tasks/{id} 同步用户手改的结构化字段 */
++    suspend fun patchContext(id: String, patch: Map<String, Any?>): ApiResult<JsonObject?> =
++        when (val r = api.put(Endpoints.WritingTasks.item(id), mapOf("context" to patch))) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+             is ApiResult.Err -> r
+         }
+ 
+-    suspend fun deleteAttachment(id: String) = api.del(Endpoints.Chat.attachmentDelete(id))
++    /** POST /writing/tasks/{id}/chat 任务内持续对话（可能更新上下文/起草/修改） */
++    suspend fun chat(id: String, message: String): ApiResult<JsonObject?> =
++        when (val r = api.post(Endpoints.WritingTasks.chat(id),
++            mapOf("message" to message), timeoutMs = 300_000)) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
++            is ApiResult.Err -> r
++        }
+ 
+-    /** 保存当前编辑内容为新版本（无文档则先创建） */
+-    suspend fun saveVersion(
+-        documentId: String?, title: String, content: String,
+-        docType: String?, note: String?,
+-    ): ApiResult<Pair<String, Int>> {
+-        if (documentId == null) {
+-            val r = api.post(Endpoints.Documents.LIST, buildMap<String, Any?> {
+-                put("title", title.ifBlank { "未命名文档" })
+-                put("content", content)
+-                if (!docType.isNullOrBlank()) put("doc_type", docType)
+-                put("note", note ?: "工作台创建")
+-            })
+-            return when (r) {
+-                is ApiResult.Ok -> {
+-                    val d = r.data.obj()
+-                    ApiResult.Ok((d?.get("id").str()) to (d?.get("current_version").int()))
+-                }
+-                is ApiResult.Err -> r
+-            }
++    /** POST /writing/tasks/{id}/draft 生成初稿 */
++    suspend fun draft(id: String, outlineOnly: Boolean = false): ApiResult<JsonObject?> =
++        when (val r = api.post(Endpoints.WritingTasks.draft(id),
++            mapOf("outline_only" to outlineOnly), timeoutMs = 300_000)) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
++            is ApiResult.Err -> r
++        }
++
++    /** POST /writing/tasks/{id}/revise 修改当前文档（核心：作用于 currentContent） */
++    suspend fun revise(
++        id: String, instruction: String, mode: String,
++        currentContent: String, selection: String? = null,
++    ): ApiResult<JsonObject?> =
++        when (val r = api.post(Endpoints.WritingTasks.revise(id), buildMap<String, Any?> {
++            put("instruction", instruction)
++            put("mode", mode)
++            put("current_content", currentContent)
++            if (!selection.isNullOrBlank()) put("selection", selection)
++        }, timeoutMs = 300_000)) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
++            is ApiResult.Err -> r
+         }
+-        val r = api.put(Endpoints.Documents.item(documentId), buildMap<String, Any?> {
++
++    /** POST /writing/tasks/{id}/versions 保存当前编辑为新版本 */
++    suspend fun saveVersion(id: String, content: String, note: String?): ApiResult<JsonObject?> =
++        when (val r = api.post(Endpoints.WritingTasks.versions(id), buildMap<String, Any?> {
+             put("content", content)
+-            put("title", title.ifBlank { "未命名文档" })
+             if (!note.isNullOrBlank()) put("note", note)
+-        })
+-        return when (r) {
++        })) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
++            is ApiResult.Err -> r
++        }
++
++    suspend fun listVersions(id: String): ApiResult<List<JsonObject>> =
++        when (val r = api.get(Endpoints.WritingTasks.versions(id))) {
+             is ApiResult.Ok -> {
+-                val d = r.data.obj()
+-                ApiResult.Ok((d?.get("id").str()) to (d?.get("current_version").int()))
++                val items = r.data.obj()?.get("items")?.arr()?.mapNotNull { it.obj() }
++                    ?: r.data.items()
++                ApiResult.Ok(items)
+             }
+             is ApiResult.Err -> r
+         }
+-    }
+ 
+-    /** 导出：redHeader=true 走红头公文格式，否则通用 Word */
+-    suspend fun export(
+-        redHeader: Boolean, title: String, content: String,
+-        docNumber: String, docDate: String, recipient: String, signature: String,
+-        target: File,
+-    ): ApiResult<String> {
+-        val payload = mapOf(
+-            "title" to title, "content" to content, "doc_number" to docNumber,
+-            "date_text" to docDate, "recipient" to recipient, "signature" to signature,
+-        )
+-        val path = if (redHeader) Endpoints.Chat.EXPORT_OFFICIAL else Endpoints.Chat.EXPORT_DOCX
+-        return api.downloadPost(path, payload, target)
+-    }
++    suspend fun export(id: String, redHeader: Boolean, target: File) =
++        api.downloadGet(Endpoints.WritingTasks.export(id, redHeader), target)
++
++    /** 加入训练数据：instruction + AI 初稿 + 人工最终稿 → pending_review */
++    suspend fun addToTraining(id: String, finalContent: String) =
++        api.post(Endpoints.WritingTasks.trainingSample(id), mapOf("final_content" to finalContent))
+ 
+-    /** 加入训练数据（AI 初稿 + 人工最终稿 → 候选样本） */
+-    suspend fun addToTraining(sessionId: String, instruction: String, draft: String, output: String) =
+-        api.post(Endpoints.Training.SAMPLE_FROM_CHAT, mapOf(
+-            "session_id" to sessionId,
+-            "instruction" to instruction,
+-            "draft" to draft,
+-            "output" to output,
+-        ))
++    // ---- 材料（复用对话附件通道，绑定到任务关联会话） ----
++
++    suspend fun uploadMaterials(files: List<File>): ApiResult<List<ChatAttachment>> =
++        when (val r = api.upload(Endpoints.Chat.ATTACHMENTS_UPLOAD, "files", files)) {
++            is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
++                ChatAttachment(it["id"].str(),
++                    it["filename"].str().ifBlank { it["name"].str() },
++                    it["kind"].str().ifBlank { "doc" },
++                    it["parse_status"].str() == "failed")
++            })
++            is ApiResult.Err -> r
++        }
+ }
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingScreen.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingScreen.kt
+index 745ca85..f72d005 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingScreen.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingScreen.kt
+@@ -11,43 +11,44 @@ import androidx.compose.foundation.layout.fillMaxHeight
+ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.heightIn
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.rememberScrollState
+-import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.Button
+ import androidx.compose.material.Checkbox
+ import androidx.compose.material.Divider
+-import androidx.compose.material.DropdownMenu
+-import androidx.compose.material.DropdownMenuItem
+ import androidx.compose.material.Icon
+ import androidx.compose.material.MaterialTheme
+ import androidx.compose.material.OutlinedButton
+ import androidx.compose.material.OutlinedTextField
++import androidx.compose.material.Switch
+ import androidx.compose.material.Text
+ import androidx.compose.material.TextButton
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Add
+ import androidx.compose.material.icons.filled.Close
+-import androidx.compose.material.icons.filled.KeyboardArrowDown
++import androidx.compose.material.icons.filled.Send
+ import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+-import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import com.judicialai.desktop.core.platform.pickFiles
+ import com.judicialai.desktop.core.platform.pickSaveFile
++import com.judicialai.desktop.core.utils.int
++import com.judicialai.desktop.core.utils.str
+ import com.judicialai.desktop.data.Repositories
+ import com.judicialai.desktop.design.components.AppCard
+ import com.judicialai.desktop.design.components.ErrorText
+@@ -57,332 +58,319 @@ private val OkGreen = Color(0xFF2E7D32)
+ private val WarnOrange = Color(0xFFF9A825)
+ private val BadRed = Color(0xFFC62828)
+ private val TextSecondary = Color(0xFF6B7280)
++private val Pending = "待补充"
+ 
+-private val STEP_LABELS = listOf("填写需求", "上传材料", "检索依据", "AI 起草", "结果编辑", "导出保存")
+-private val DOC_TYPES = listOf("通知", "请示", "报告", "工作总结", "函", "讲话稿", "方案")
+-private val URGENCY = listOf("普通", "加急", "特急")
+-private val SECRECY = listOf("公开", "内部", "秘密")
+-
+-/** 智能写作工作台：一句话入口 → 渐进式任务构建 → 起草 → 质检 → 版本 → Word。 */
++/** 智能写作工作台：一个持续的 Writing Task（对话 + 文档 + 版本）。 */
+ @Composable
+ fun WritingScreen() {
+     val vm = remember { WritingViewModel(Repositories.writing) }
+ 
++    if (!vm.hasTask) {
++        EntryView(vm)
++        return
++    }
++
+     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+-        StepBar(vm.step)
+         ErrorText(vm.status)
+-
+         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+-            LeftPanel(vm, Modifier.width(280.dp).fillMaxHeight())
+-            CenterPanel(vm, Modifier.weight(1f).fillMaxHeight())
+-            if (vm.hasDraft) RightPanel(vm, Modifier.width(280.dp).fillMaxHeight())
++            TaskPanel(vm, Modifier.width(280.dp).fillMaxHeight())
++            EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
++            AssistantPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+         }
+     }
+ }
+ 
+-// ---------------- 顶部步骤条 ----------------
++// ---------------- 零门槛入口 ----------------
+ 
+ @Composable
+-private fun StepBar(current: Int) {
+-    AppCard(Modifier.fillMaxWidth()) {
+-        Row(verticalAlignment = Alignment.CenterVertically,
+-            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+-            STEP_LABELS.forEachIndexed { i, label ->
+-                val no = i + 1
+-                val active = no == current
+-                val done = no < current
+-                Box(
+-                    Modifier.size(24.dp).clip(CircleShape)
+-                        .background(if (active || done) EpPrimary else Color(0xFFE5E7EB)),
+-                    contentAlignment = Alignment.Center,
+-                ) {
+-                    Text("$no", fontSize = 12.sp,
+-                        color = if (active || done) Color.White else TextSecondary)
+-                }
+-                Text(label, fontSize = 13.sp,
+-                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+-                    color = if (active) EpPrimary else if (done) Color(0xFF111827) else TextSecondary)
+-                if (no < STEP_LABELS.size) {
+-                    Box(Modifier.width(16.dp).height(1.dp).background(Color(0xFFD1D5DB)))
+-                }
+-            }
++private fun EntryView(vm: WritingViewModel) {
++    androidx.compose.runtime.LaunchedEffect(Unit) {
++        com.judicialai.desktop.app.AppState.pendingWritingIntent?.let {
++            vm.entryInput = it
++            com.judicialai.desktop.app.AppState.pendingWritingIntent = null
++            vm.startFromIntent()
++        }
++    }
++    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
++        verticalArrangement = Arrangement.Center) {
++        Text("今天想写什么？", fontSize = 26.sp, fontWeight = FontWeight.Bold)
++        Spacer(Modifier.height(6.dp))
++        Text("一句话告诉我即可，文种、依据、框架由系统逐步引导补全",
++            fontSize = 13.sp, color = TextSecondary)
++        Spacer(Modifier.height(20.dp))
++        OutlinedTextField(
++            vm.entryInput, { vm.entryInput = it },
++            placeholder = { Text("例如：帮我写一份 2026 年度司法行政工作总结") },
++            modifier = Modifier.fillMaxWidth(0.6f),
++            enabled = !vm.busy,
++        )
++        Spacer(Modifier.height(12.dp))
++        Button(onClick = { vm.startFromIntent() },
++            enabled = !vm.busy && vm.entryInput.isNotBlank()) {
++            Text(if (vm.busy) "系统处理中…" else "开始写作")
++        }
++        vm.status?.let {
++            Spacer(Modifier.height(8.dp))
++            Text(it, fontSize = 12.sp, color = BadRed)
+         }
+     }
+ }
+ 
+-// ---------------- 左栏：任务要素 ----------------
++// ---------------- 左栏：写作任务状态 ----------------
+ 
+ @Composable
+-private fun LeftPanel(vm: WritingViewModel, modifier: Modifier) {
++private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
+     AppCard(modifier) {
+         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+             verticalArrangement = Arrangement.spacedBy(8.dp)) {
+ 
+-            Text("1. 文档信息", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            DropdownField("文种", vm.docType, DOC_TYPES) { vm.docType = it }
+-            OutlinedTextField(vm.title, { vm.title = it },
+-                label = { Text("标题") }, modifier = Modifier.fillMaxWidth())
+-            OutlinedTextField(vm.recipient, { vm.recipient = it },
+-                label = { Text("发文对象（主送机关）") }, modifier = Modifier.fillMaxWidth())
+-            OutlinedTextField(vm.authority, { vm.authority = it },
+-                label = { Text("发文机关（落款）") }, modifier = Modifier.fillMaxWidth())
+-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+-                Box(Modifier.weight(1f)) { DropdownField("紧急程度", vm.urgency, URGENCY) { vm.urgency = it } }
+-                Box(Modifier.weight(1f)) { DropdownField("密级", vm.secrecy, SECRECY) { vm.secrecy = it } }
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text("写作任务", fontWeight = FontWeight.Bold, fontSize = 14.sp)
++                Spacer(Modifier.weight(1f))
++                TextButton(onClick = { vm.newTask() }) { Text("新建任务", fontSize = 11.sp) }
+             }
+ 
+-            Divider()
+-            Text("2. 写作要求", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            OutlinedTextField(
+-                vm.requirements, { vm.requirements = it },
+-                label = { Text("如：结合现行政策，明确工作要求，语言正式、结构完整") },
+-                modifier = Modifier.fillMaxWidth().height(90.dp),
+-            )
++            TaskField("文种", vm.task.documentType, vm) { v -> vm.patchContext(mapOf("document_type" to v)) }
++            TaskField("标题", vm.task.title, vm) { v -> vm.patchContext(mapOf("title" to v)) }
++            TaskField("主题", vm.task.topic, vm) { v -> vm.patchContext(mapOf("topic" to v)) }
++            TaskField("时间", vm.task.timeRange, vm) { v -> vm.patchContext(mapOf("time_range" to v)) }
++            TaskField("主送机关", vm.task.recipient, vm) { v -> vm.patchContext(mapOf("recipient" to v)) }
++            TaskField("发文机关", vm.task.authority, vm) { v -> vm.patchContext(mapOf("authority" to v)) }
++            if (vm.task.keyFacts.isNotEmpty()) {
++                Text("主要工作：${vm.task.keyFacts.joinToString("、")}",
++                    fontSize = 12.sp)
++            }
++
++            // 文号：可选元数据，默认关闭
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text("文号", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(72.dp))
++                Switch(checked = vm.task.documentNumberEnabled,
++                    onCheckedChange = { vm.toggleDocNumber(it) })
++                Text(if (vm.task.documentNumberEnabled) "启用" else "不使用",
++                    fontSize = 12.sp)
++            }
++            if (vm.task.documentNumberEnabled) {
++                OutlinedTextField(
++                    vm.task.documentNumber, { vm.setDocNumber(it) },
++                    label = { Text("文号（手工填写，系统不编造）") },
++                    modifier = Modifier.fillMaxWidth(),
++                    singleLine = true,
++                )
++            }
++            if (vm.task.documentDate.isNotBlank()) {
++                Text("成文日期：${vm.task.documentDate}", fontSize = 12.sp)
++            }
++
++            if (vm.task.missingFields.isNotEmpty()) {
++                Divider()
++                Text("还需要的信息", fontWeight = FontWeight.Bold, fontSize = 13.sp)
++                vm.task.missingFields.forEach {
++                    Text("○ $it", fontSize = 12.sp, color = WarnOrange)
++                }
++            }
+ 
+             Divider()
+-            Text("3. 上传材料（可选）", fontWeight = FontWeight.Bold, fontSize = 14.sp)
++            Text("材料", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+             OutlinedButton(onClick = { vm.uploadMaterials(pickFiles("选择写作材料", multi = true)) },
+                 modifier = Modifier.fillMaxWidth()) {
+                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+-                Text(" 上传 Word / PDF / 图片")
++                Text(" 上传 Word / PDF / 图片", fontSize = 12.sp)
+             }
+-            vm.attachments.forEach { a ->
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    Text(a.name, fontSize = 12.sp, maxLines = 1,
+-                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+-                    Icon(Icons.Default.Close, contentDescription = "移除",
+-                        modifier = Modifier.size(16.dp).clickable { vm.removeAttachment(a) },
+-                        tint = TextSecondary)
+-                }
++            if (vm.materials.isEmpty()) {
++                Text("未上传（可先起草，随时补充）", fontSize = 11.sp, color = TextSecondary)
+             }
+-
+-            Divider()
+-            Text("4. 高级选项", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            CheckRow("检索知识库（推荐）", vm.useRag) { vm.useRag = it }
+-            CheckRow("参考相似范文", vm.useSimilar) { vm.useSimilar = it }
+-            CheckRow("使用模板结构", vm.useTemplate) { vm.useTemplate = it }
+-
+-            Divider()
+-            Text("要素完整度", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            vm.completeness().forEach { (label, ok) ->
+-                Text((if (ok) "✅ " else "⚠️ ") + label + if (ok) "" else "（待补充）",
+-                    fontSize = 12.sp, color = if (ok) OkGreen else WarnOrange)
++            vm.materials.forEach { a ->
++                Text("📄 ${a.name}", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+             }
+ 
+             Spacer(Modifier.height(4.dp))
+-            Button(onClick = { vm.draft() }, enabled = !vm.busy,
+-                modifier = Modifier.fillMaxWidth()) {
+-                Text(if (vm.hasDraft) "重新生成" else "AI 起草")
+-            }
+-            if (!vm.hasDraft && !vm.hasMaterials) {
+-                Text("没有材料也可以开始：", fontSize = 12.sp, color = TextSecondary)
+-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+-                    TextButton(onClick = { vm.draft(outlineOnly = true) }) { Text("先搭框架", fontSize = 12.sp) }
+-                    TextButton(onClick = { vm.retrieveReferences() }) { Text("从资料库找依据", fontSize = 12.sp) }
+-                    TextButton(onClick = { vm.uploadMaterials(pickFiles("选择写作材料", multi = true)) }) {
+-                        Text("补充材料", fontSize = 12.sp)
+-                    }
+-                }
++            if (!vm.hasDraft) {
++                Button(onClick = { vm.draft() }, enabled = !vm.busy,
++                    modifier = Modifier.fillMaxWidth()) { Text("生成初稿") }
++                OutlinedButton(onClick = { vm.draft(outlineOnly = true) }, enabled = !vm.busy,
++                    modifier = Modifier.fillMaxWidth()) { Text("先搭框架", fontSize = 12.sp) }
+             }
+         }
+     }
+ }
+ 
+-// ---------------- 中栏：入口 / 编辑器 ----------------
++/** 可编辑任务字段：失焦/回车由用户点右侧 ✓ 同步后端 */
++@Composable
++private fun TaskField(label: String, value: String, vm: WritingViewModel,
++                      onSync: (String) -> Unit) {
++    var editing = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
++    val shown = editing.value ?: value
++    Row(verticalAlignment = Alignment.CenterVertically) {
++        Text(label, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(72.dp))
++        OutlinedTextField(
++            value = shown,
++            onValueChange = { editing.value = it },
++            placeholder = { Text(Pending, fontSize = 12.sp, color = TextSecondary) },
++            modifier = Modifier.weight(1f).heightIn(max = 46.dp),
++            singleLine = true,
++            textStyle = MaterialTheme.typography.body2,
++        )
++        if (editing.value != null && editing.value != value) {
++            Text("✓", fontSize = 14.sp, color = EpPrimary,
++                modifier = Modifier.clickable {
++                    onSync(editing.value ?: "")
++                    editing.value = null
++                }.padding(4.dp))
++        }
++    }
++}
++
++// ---------------- 中栏：当前文档 ----------------
+ 
+ @Composable
+-private fun CenterPanel(vm: WritingViewModel, modifier: Modifier) {
++private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
+     AppCard(modifier) {
+         if (!vm.hasDraft) {
+-            // 零门槛入口
+             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
+                 verticalArrangement = Arrangement.Center) {
+-                Text("今天想写什么？", fontSize = 24.sp, fontWeight = FontWeight.Bold)
++                Text("还没有草稿", fontSize = 16.sp, color = TextSecondary)
+                 Spacer(Modifier.height(6.dp))
+-                Text("一句话告诉我即可，文种、依据、框架由系统逐步补全",
+-                    fontSize = 13.sp, color = TextSecondary)
+-                Spacer(Modifier.height(20.dp))
+-                OutlinedTextField(
+-                    vm.entryInput, { vm.entryInput = it },
+-                    placeholder = { Text("例如：帮我写一份 2026 年度司法行政工作总结") },
+-                    modifier = Modifier.fillMaxWidth(0.8f),
+-                    enabled = !vm.busy,
+-                )
+-                Spacer(Modifier.height(12.dp))
+-                Button(onClick = { vm.startFromIntent() },
+-                    enabled = !vm.busy && vm.entryInput.isNotBlank()) {
+-                    Text(if (vm.busy) "系统处理中…" else "开始写作")
+-                }
+-                Spacer(Modifier.height(10.dp))
+-                Text("也可以在左侧直接填写文档要素后点「AI 起草」",
++                Text("在右侧告诉 AI「先写一版」，或点击左侧「生成初稿」",
+                     fontSize = 12.sp, color = TextSecondary)
+             }
+-        } else {
+-            // 公文编辑区
+-            Column(Modifier.fillMaxSize()) {
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    Text("公文编辑区", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-                    Spacer(Modifier.weight(1f))
+-                    vm.qualityLevel?.let { QualityBadge(it) }
+-                }
+-                Spacer(Modifier.height(6.dp))
+-                if (vm.title.isNotBlank()) {
+-                    Text(vm.title, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+-                        modifier = Modifier.fillMaxWidth(),
+-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+-                }
+-                if (vm.docNumber.isNotBlank()) {
+-                    Text(vm.docNumber, fontSize = 13.sp, color = TextSecondary,
+-                        modifier = Modifier.fillMaxWidth(),
+-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
++            return@AppCard
++        }
++        Column(Modifier.fillMaxSize()) {
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                // 明确标注：这是初稿，待完善
++                Text("V${maxOf(vm.versionNo, 1)} 初稿", fontSize = 11.sp, color = Color.White,
++                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(WarnOrange)
++                        .padding(horizontal = 6.dp, vertical = 2.dp))
++                Spacer(Modifier.width(8.dp))
++                Text("待完善", fontSize = 11.sp, color = TextSecondary)
++                Spacer(Modifier.weight(1f))
++                if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
++                    Text(vm.task.documentNumber, fontSize = 12.sp, color = TextSecondary)
+                 }
++            }
++            Spacer(Modifier.height(6.dp))
++            if (vm.task.title.isNotBlank()) {
++                Text(vm.task.title, fontSize = 18.sp, fontWeight = FontWeight.Bold,
++                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                 Spacer(Modifier.height(6.dp))
+-                OutlinedTextField(
+-                    vm.content, { vm.content = it },
+-                    modifier = Modifier.fillMaxWidth().weight(1f),
+-                    textStyle = MaterialTheme.typography.body1.copy(lineHeight = 24.sp),
+-                )
+-                Spacer(Modifier.height(6.dp))
+-                Row(verticalAlignment = Alignment.CenterVertically) {
+-                    Text("字数：约 ${vm.content.length} 字", fontSize = 12.sp, color = TextSecondary)
+-                    Spacer(Modifier.width(12.dp))
+-                    Text("版本：${if (vm.versionNo > 0) "v${vm.versionNo}" else "未保存"}",
+-                        fontSize = 12.sp, color = TextSecondary)
+-                    Spacer(Modifier.weight(1f))
+-                    TextButton(onClick = { vm.newTask() }) { Text("新建任务", fontSize = 12.sp) }
++            }
++            OutlinedTextField(
++                vm.content, { vm.content = it },
++                modifier = Modifier.fillMaxWidth().weight(1f),
++                textStyle = MaterialTheme.typography.body1.copy(lineHeight = 24.sp),
++            )
++            Spacer(Modifier.height(6.dp))
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text("字数：约 ${vm.content.length} 字", fontSize = 12.sp, color = TextSecondary)
++                Spacer(Modifier.width(12.dp))
++                Text("版本：${if (vm.versionNo > 0) "v${vm.versionNo}" else "未保存"}",
++                    fontSize = 12.sp, color = TextSecondary)
++                Spacer(Modifier.weight(1f))
++                Button(onClick = { vm.saveVersion() }, enabled = !vm.busy) {
++                    Text("保存版本", fontSize = 12.sp)
+                 }
+             }
+         }
+     }
+ }
+ 
+-// ---------------- 右栏：状态 / AI 助手 / 依据 / 操作 ----------------
++// ---------------- 右栏：AI 对话 + 依据 + 操作 ----------------
++
++private val QUICK_ACTIONS = listOf(
++    Triple("扩写", "expand", "扩写当前内容"),
++    Triple("润色", "polish", "润色当前内容"),
++    Triple("精简", "condense", "精简当前内容"),
++    Triple("规范化", "normalize", "调整为司法行政机关正式材料语言"),
++    Triple("补充结构", "complete", "判断当前文档缺少哪些必要部分并补充"),
++    Triple("检查问题", "revise", "检查当前文档存在的问题并列出"),
++)
+ 
+ @Composable
+-private fun RightPanel(vm: WritingViewModel, modifier: Modifier) {
++private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
+     AppCard(modifier) {
+-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        Column(Modifier.fillMaxSize()) {
++            Text("AI 助手", fontWeight = FontWeight.Bold, fontSize = 14.sp)
++            Spacer(Modifier.height(6.dp))
+ 
+-            Row(verticalAlignment = Alignment.CenterVertically) {
+-                Text("文档状态", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-                Spacer(Modifier.weight(1f))
+-                Text("生成完成", fontSize = 11.sp, color = Color.White,
+-                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(OkGreen)
+-                        .padding(horizontal = 6.dp, vertical = 2.dp))
+-            }
+-            StatusRow("质量评级", when (vm.qualityLevel) {
+-                "A" -> "A（优秀）"; "B" -> "B（需人工完善）"; "D" -> "D（需重生成）"; else -> "—"
+-            }, when (vm.qualityLevel) { "A" -> OkGreen; "B" -> WarnOrange; else -> BadRed })
+-            StatusRow("质检提示", "${vm.qualityIssues.size} 项",
+-                if (vm.qualityIssues.isEmpty()) OkGreen else WarnOrange)
+-            StatusRow("未核实引用", "${vm.unverifiedCitations.size} 项",
+-                if (vm.unverifiedCitations.isEmpty()) OkGreen else BadRed)
+-            if (vm.generatedAt.isNotBlank()) StatusRow("生成时间", vm.generatedAt, TextSecondary)
+-            vm.qualityIssues.take(3).forEach {
+-                Text("· $it", fontSize = 11.sp, color = TextSecondary,
+-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+-            }
+-            vm.unverifiedCitations.take(3).forEach {
+-                Text("⚠️ 缺少事实依据：$it", fontSize = 11.sp, color = BadRed,
+-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
++            // 对话区（持续对话，贯穿任务全程）
++            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
++                items(vm.messages) { m ->
++                    val isUser = m.role == "user"
++                    Column(Modifier.fillMaxWidth(),
++                        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
++                        Box(
++                            Modifier.clip(RoundedCornerShape(8.dp))
++                                .background(if (isUser) EpPrimary else Color(0xFFF3F4F6))
++                                .padding(8.dp),
++                        ) {
++                            Text(m.content, fontSize = 12.sp,
++                                color = if (isUser) Color.White else Color(0xFF111827))
++                        }
++                    }
++                }
++                if (vm.busy) {
++                    item { Text("AI 处理中…", fontSize = 12.sp, color = TextSecondary) }
++                }
+             }
+ 
+-            Divider()
+-            Text("AI 助手", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+-                AssistButton("智能修改", vm) { vm.aiAssist("对当前草稿进行智能修改，提升公文规范性") }
+-                AssistButton("扩写润色", vm) { vm.aiAssist("在不改变事实的前提下扩写润色") }
++            // 快捷操作：全部走当前文档 revision 逻辑
++            Spacer(Modifier.height(6.dp))
++            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                QUICK_ACTIONS.take(3).forEach { (label, mode, hint) ->
++                    OutlinedButton(onClick = { vm.revise(hint, mode) },
++                        enabled = !vm.busy && vm.hasDraft) { Text(label, fontSize = 11.sp) }
++                }
+             }
+-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+-                AssistButton("补充政策依据", vm) { vm.aiAssist("补充可引用的政策依据") }
+-                AssistButton("精简篇幅", vm) { vm.aiAssist("精简篇幅，保留要点") }
++            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
++                QUICK_ACTIONS.drop(3).forEach { (label, mode, hint) ->
++                    OutlinedButton(onClick = { vm.revise(hint, mode) },
++                        enabled = !vm.busy && vm.hasDraft) { Text(label, fontSize = 11.sp) }
++                }
+             }
+ 
+-            Divider()
+-            Text("写作依据（${vm.references.size}）", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            if (vm.references.isEmpty()) {
+-                Text("起草后自动列出检索到的内部资料", fontSize = 11.sp, color = TextSecondary)
+-            }
+-            vm.references.take(8).forEach { ref ->
+-                Text("📄 $ref", fontSize = 11.sp, maxLines = 2,
+-                    overflow = TextOverflow.Ellipsis)
++            // 对话输入：主要操作方式
++            Spacer(Modifier.height(6.dp))
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                OutlinedTextField(
++                    vm.chatInput, { vm.chatInput = it },
++                    placeholder = { Text("继续说：把第二部分写详细一点…", fontSize = 12.sp) },
++                    modifier = Modifier.weight(1f).heightIn(max = 46.dp),
++                    singleLine = true,
++                    enabled = !vm.busy,
++                    textStyle = MaterialTheme.typography.body2,
++                )
++                Icon(Icons.Default.Send, contentDescription = "发送",
++                    tint = if (vm.chatInput.isBlank() || vm.busy) TextSecondary else EpPrimary,
++                    modifier = Modifier.padding(start = 6.dp).size(22.dp)
++                        .clickable(enabled = vm.chatInput.isNotBlank() && !vm.busy) { vm.sendChat() })
+             }
+ 
+-            Divider()
+-            Text("操作", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+-                OutlinedButton(onClick = {
+-                    pickSaveFile("${vm.title.ifBlank { "公文" }}.docx")?.let { vm.export(false, it) }
+-                }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("下载 Word", fontSize = 12.sp) }
+-                OutlinedButton(onClick = {
+-                    pickSaveFile("${vm.title.ifBlank { "公文" }}-红头.docx")?.let { vm.export(true, it) }
+-                }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("生成红头版", fontSize = 12.sp) }
+-            }
+-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+-                Button(onClick = { vm.saveVersion() }, enabled = !vm.busy,
+-                    modifier = Modifier.weight(1f)) { Text("保存版本", fontSize = 12.sp) }
+-                OutlinedButton(onClick = { vm.addToTraining() }, enabled = !vm.busy,
+-                    modifier = Modifier.weight(1f)) { Text("加入训练数据", fontSize = 12.sp) }
++            // 写作依据
++            if (vm.references.isNotEmpty()) {
++                Spacer(Modifier.height(6.dp))
++                Divider()
++                Text("写作依据（${vm.references.size}）", fontWeight = FontWeight.Bold, fontSize = 12.sp)
++                vm.references.take(5).forEach {
++                    Text("📄 $it", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
++                }
+             }
+-        }
+-    }
+-}
+-
+-// ---------------- 小部件 ----------------
+ 
+-@Composable
+-private fun DropdownField(label: String, value: String, options: List<String>, onPick: (String) -> Unit) {
+-    var open by remember { mutableStateOf(false) }
+-    Column {
+-        Text(label, fontSize = 11.sp, color = TextSecondary)
+-        Box {
+-            Row(
+-                Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+-                    .background(Color(0xFFF3F4F6)).clickable { open = true }
+-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+-                verticalAlignment = Alignment.CenterVertically,
+-            ) {
+-                Text(value, fontSize = 13.sp, modifier = Modifier.weight(1f))
+-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null,
+-                    modifier = Modifier.size(16.dp), tint = TextSecondary)
+-            }
+-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+-                options.forEach { opt ->
+-                    DropdownMenuItem(onClick = { onPick(opt); open = false }) {
+-                        Text(opt, fontSize = 13.sp)
+-                    }
++            // 版本与操作
++            if (vm.hasDraft) {
++                Spacer(Modifier.height(6.dp))
++                Divider()
++                if (vm.versions.isNotEmpty()) {
++                    Text("历史版本：" + vm.versions.joinToString("  ") { "v${it["version_no"].int()}" },
++                        fontSize = 11.sp, color = TextSecondary)
++                }
++                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
++                    OutlinedButton(onClick = {
++                        pickSaveFile("${vm.task.title.ifBlank { "公文" }}.docx")?.let { vm.export(true, it) }
++                    }, enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("导出 Word", fontSize = 11.sp) }
++                    OutlinedButton(onClick = { vm.addToTraining() },
++                        enabled = !vm.busy, modifier = Modifier.weight(1f)) { Text("加入训练数据", fontSize = 11.sp) }
+                 }
+             }
+         }
+     }
+ }
+-
+-@Composable
+-private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+-    Row(verticalAlignment = Alignment.CenterVertically) {
+-        Checkbox(checked = checked, onCheckedChange = onChange)
+-        Text(label, fontSize = 12.sp)
+-    }
+-}
+-
+-@Composable
+-private fun StatusRow(label: String, value: String, color: Color) {
+-    Row {
+-        Text(label, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(72.dp))
+-        Text(value, fontSize = 12.sp, color = color, fontWeight = FontWeight.Medium)
+-    }
+-}
+-
+-@Composable
+-private fun QualityBadge(level: String) {
+-    val color = when (level) { "A" -> OkGreen; "B" -> WarnOrange; else -> BadRed }
+-    Text("质检 $level", fontSize = 11.sp, color = Color.White,
+-        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(color)
+-            .padding(horizontal = 6.dp, vertical = 2.dp))
+-}
+-
+-@Composable
+-private fun AssistButton(label: String, vm: WritingViewModel, onClick: () -> Unit) {
+-    OutlinedButton(onClick = onClick, enabled = !vm.busy) { Text(label, fontSize = 12.sp) }
+-}
+diff --git a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingViewModel.kt b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingViewModel.kt
+index 9c03d63..5e236b2 100644
+--- a/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingViewModel.kt
++++ b/desktop/src/jvmMain/kotlin/com/judicialai/desktop/features/writing/WritingViewModel.kt
+@@ -4,295 +4,313 @@ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.setValue
+ import com.judicialai.desktop.core.network.ApiResult
++import com.judicialai.desktop.core.utils.arr
++import com.judicialai.desktop.core.utils.bool
++import com.judicialai.desktop.core.utils.int
++import com.judicialai.desktop.core.utils.obj
++import com.judicialai.desktop.core.utils.str
+ import com.judicialai.desktop.features.chat.model.ChatAttachment
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.SupervisorJob
+ import kotlinx.coroutines.launch
++import kotlinx.serialization.json.JsonObject
+ import java.io.File
+-import java.text.SimpleDateFormat
+-import java.util.Date
++
++/** 工作台对话消息 */
++data class TaskChatMessage(val role: String, val content: String)
+ 
+ /**
+- * 智能写作工作台状态机。
+- *
+- * 步骤：1 填写需求 → 2 上传材料 → 3 检索依据 → 4 AI 起草 → 5 结果编辑 → 6 导出保存
+- * 入口：零门槛一句话（entryInput），或左侧要素表单；两条路径最终都汇入同一份草稿状态。
++ * 写作任务状态（对应后端 task_context）。
++ * 所有字段的权威来源是后端返回；前端字段可编辑，编辑后 PATCH 同步回后端。
+  */
++data class WritingTaskState(
++    val taskId: String? = null,
++    val documentType: String = "",
++    val title: String = "",
++    val topic: String = "",
++    val purpose: String = "",
++    val timeRange: String = "",
++    val recipient: String = "",
++    val authority: String = "",
++    val keyFacts: List<String> = emptyList(),
++    val requirements: String = "",
++    val tone: String = "",
++    val wordCountTarget: Int = 0,
++    val documentNumberEnabled: Boolean = false,
++    val documentNumber: String = "",
++    val documentDate: String = "",
++    val missingFields: List<String> = emptyList(),
++)
++
+ class WritingViewModel(private val repo: WritingRepository) {
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+ 
+-    // ---- 步骤 ----
+-    var step by mutableStateOf(1)
++    var task by mutableStateOf(WritingTaskState())
+         private set
+-
+-    // ---- 任务要素（左栏） ----
+-    var docType by mutableStateOf("通知")
+-    var title by mutableStateOf("")
+-    var recipient by mutableStateOf("")      // 发文对象 / 主送机关
+-    var authority by mutableStateOf("")      // 发文机关（落款）
+-    var urgency by mutableStateOf("普通")
+-    var secrecy by mutableStateOf("公开")
+-    var requirements by mutableStateOf("")   // 写作要求
+-    var attachments by mutableStateOf(listOf<ChatAttachment>())
+-        private set
+-    var useRag by mutableStateOf(true)
+-    var useSimilar by mutableStateOf(true)
+-    var useTemplate by mutableStateOf(true)
+-
+-    // ---- 草稿（中栏） ----
+     var content by mutableStateOf("")
+-    var docNumber by mutableStateOf("")
+-        private set
+-    var docDate by mutableStateOf("")
++    var versionNo by mutableStateOf(0)
+         private set
+-    var generatedAt by mutableStateOf("")
++    var status by mutableStateOf<String?>(null)
++    var taskStatus by mutableStateOf("collecting")
+         private set
+ 
+-    // ---- 质量与依据（右栏） ----
+-    var qualityLevel by mutableStateOf<String?>(null)
++    var messages by mutableStateOf(listOf<TaskChatMessage>())
+         private set
+-    var qualityIssues by mutableStateOf(listOf<String>())
+-        private set
+-    var unverifiedCitations by mutableStateOf(listOf<String>())
++    var chatInput by mutableStateOf("")
++    var materials by mutableStateOf(listOf<ChatAttachment>())
+         private set
+     var references by mutableStateOf(listOf<String>())
+         private set
+-
+-    // ---- 文档/版本 ----
+-    var documentId by mutableStateOf<String?>(null)
+-        private set
+-    var versionNo by mutableStateOf(0)
+-        private set
+-    var sessionId by mutableStateOf<String?>(null)
++    var versions by mutableStateOf(listOf<JsonObject>())
+         private set
+-    /** AI 初稿原文（用于加入训练数据时作为 draft） */
+-    var aiDraft by mutableStateOf("")
++    var busy by mutableStateOf(false)
+         private set
+ 
+-    // ---- 入口对话 ----
++    /** 零门槛入口输入 */
+     var entryInput by mutableStateOf("")
+ 
+-    var status by mutableStateOf<String?>(null)
+-    var busy by mutableStateOf(false)
+-        private set
+-
++    val hasTask: Boolean get() = task.taskId != null
+     val hasDraft: Boolean get() = content.isNotBlank()
+-    val hasMaterials: Boolean get() = attachments.isNotEmpty()
+ 
+-    /** 要素完整度（左栏清单用）：返回 (label, ok) 列表 */
+-    fun completeness(): List<Pair<String, Boolean>> = listOf(
+-        "文种" to docType.isNotBlank(),
+-        "标题" to title.isNotBlank(),
+-        "发文对象" to recipient.isNotBlank(),
+-        "发文机关" to authority.isNotBlank(),
+-        "写作要求" to requirements.isNotBlank(),
+-        "事实材料" to (attachments.isNotEmpty() || references.isNotEmpty()),
+-    )
++    // ---------------- 状态装载 ----------------
++
++    private fun applyResponse(d: JsonObject) {
++        val ctx = d["task_context"].obj() ?: return
++        task = WritingTaskState(
++            taskId = d["task_id"].str().ifBlank { task.taskId },
++            documentType = ctx["document_type"].str(),
++            title = ctx["title"].str(),
++            topic = ctx["topic"].str(),
++            purpose = ctx["purpose"].str(),
++            timeRange = ctx["time_range"].str(),
++            recipient = ctx["recipient"].str(),
++            authority = ctx["authority"].str(),
++            keyFacts = ctx["key_facts"].arr().map { it.str() }.filter { it.isNotBlank() },
++            requirements = ctx["requirements"].str(),
++            tone = ctx["tone"].str(),
++            wordCountTarget = ctx["word_count_target"].int(),
++            documentNumberEnabled = ctx["document_number_enabled"].bool(),
++            documentNumber = ctx["document_number"].str(),
++            documentDate = ctx["document_date"].str(),
++            missingFields = ctx["missing_fields"].arr().map { it.str() }.filter { it.isNotBlank() },
++        )
++        d["current_content"].str().takeIf { it.isNotBlank() }?.let { content = it }
++        versionNo = d["version_no"].int()
++        taskStatus = d["status"].str().ifBlank { taskStatus }
++        d["references"].arr().map { it.str() }.filter { it.isNotBlank() }
++            .takeIf { it.isNotEmpty() }?.let { references = it }
++        if (d["content_changed"].bool()) refreshVersions()
++    }
++
++    private fun fail(msg: String) {
++        status = msg
++        busy = false
++    }
+ 
+-    // ---------- 零门槛入口 ----------
++    // ---------------- 入口 ----------------
+ 
+-    /** 一句话启动：系统解析意图 → 自动检索 → V1.2 起草 → 质检 → 自动存草稿 */
++    /** 一句话启动任务 */
+     fun startFromIntent() {
+         val text = entryInput.trim()
+         if (text.isBlank() || busy) return
+-        status = "正在理解您的写作意图并起草…"
+-        step = 4
+-        doSend(text) { }
++        busy = true
++        status = null
++        messages = messages + TaskChatMessage("user", text)
++        scope.launch {
++            when (val r = repo.createTask(text)) {
++                is ApiResult.Ok -> {
++                    r.data?.let { d ->
++                        applyResponse(d)
++                        d["reply"].str().takeIf { it.isNotBlank() }
++                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
++                    }
++                    entryInput = ""
++                }
++                is ApiResult.Err -> fail(r.message)
++            }
++            busy = false
++        }
+     }
+ 
+-    // ---------- 材料 ----------
++    // ---------------- 任务内对话 ----------------
+ 
+-    fun uploadMaterials(files: List<File>) {
+-        if (files.isEmpty()) return
++    /** 用户在工作台持续对话（补要素 / 起草 / 自然语言修改都由后端决策） */
++    fun sendChat() {
++        val text = chatInput.trim()
++        val id = task.taskId
++        if (text.isBlank() || busy || id == null) return
+         busy = true
+-        status = "上传材料中…"
++        messages = messages + TaskChatMessage("user", text)
++        chatInput = ""
+         scope.launch {
+-            when (val r = repo.uploadMaterials(files)) {
++            when (val r = repo.chat(id, text)) {
+                 is ApiResult.Ok -> {
+-                    attachments = attachments + r.data
+-                    status = "已上传 ${r.data.size} 份材料"
+-                    if (step < 2) step = 2
++                    r.data?.let { d ->
++                        applyResponse(d)
++                        d["reply"].str().takeIf { it.isNotBlank() }
++                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
++                    }
+                 }
+-                is ApiResult.Err -> status = r.message
++                is ApiResult.Err -> fail(r.message)
+             }
+             busy = false
+         }
+     }
+ 
+-    fun removeAttachment(a: ChatAttachment) {
+-        attachments = attachments - a
+-        scope.launch { repo.deleteAttachment(a.id) }
+-    }
+-
+-    // ---------- 起草 ----------
++    // ---------------- 起草 / 修改 ----------------
+ 
+-    /** 按要素表单起草（无材料时合法：由调用方选择路径后进入） */
+     fun draft(outlineOnly: Boolean = false) {
++        val id = task.taskId ?: return
+         if (busy) return
+-        if (title.isBlank() && requirements.isBlank()) {
+-            status = "请先填写标题或写作要求"
+-            return
+-        }
+-        val sb = StringBuilder()
+-        if (outlineOnly) {
+-            sb.append("请为以下公文只生成提纲框架（不要正文）：")
+-        } else {
+-            sb.append("请起草一份").append(docType)
++        busy = true
++        scope.launch {
++            when (val r = repo.draft(id, outlineOnly)) {
++                is ApiResult.Ok -> r.data?.let { d ->
++                    applyResponse(d)
++                    d["reply"].str().takeIf { it.isNotBlank() }
++                        ?.let { messages = messages + TaskChatMessage("assistant", it) }
++                }
++                is ApiResult.Err -> fail(r.message)
++            }
++            busy = false
+         }
+-        if (title.isNotBlank()) sb.append("，标题：").append(title)
+-        if (requirements.isNotBlank()) sb.append("。写作要求：").append(requirements)
+-        if (recipient.isNotBlank()) sb.append("。主送机关：").append(recipient)
+-        if (authority.isNotBlank()) sb.append("。落款单位：").append(authority)
+-        if (outlineOnly) sb.append("。")
+-        status = if (outlineOnly) "正在生成提纲框架…" else "V1.2 正在起草…"
+-        step = if (outlineOnly) 3 else 4
+-        doSend(sb.toString()) { }
+     }
+ 
+-    /** AI 助手操作：智能修改 / 扩写润色 / 精简篇幅 / 补充政策依据 等 */
+-    fun aiAssist(instruction: String) {
++    /**
++     * AI 修改当前文档（快捷按钮与自然语言共用同一后端 revision 逻辑）。
++     * mode: expand/polish/condense/normalize/complete/rewrite/revise
++     */
++    fun revise(instruction: String, mode: String) {
++        val id = task.taskId ?: return
+         if (busy || !hasDraft) return
+-        val msg = buildString {
+-            append("以下是当前公文草稿：\n")
+-            append(content.take(6000))
+-            append("\n\n请").append(instruction)
+-            append("，直接输出修改后的完整公文，不要解释。")
++        busy = true
++        scope.launch {
++            when (val r = repo.revise(id, instruction, mode, content)) {
++                is ApiResult.Ok -> r.data?.let { d ->
++                    applyResponse(d)
++                    d["reply"].str().takeIf { it.isNotBlank() }
++                        ?.let { messages = messages + TaskChatMessage("assistant", it) }
++                }
++                is ApiResult.Err -> fail(r.message)
++            }
++            busy = false
+         }
+-        status = "AI 处理中：$instruction"
+-        doSend(msg) { }
+     }
+ 
+-    /** 从资料库找依据（无材料路径之一）：仅检索不生成全文 */
+-    fun retrieveReferences() {
+-        if (busy) return
+-        val topic = title.ifBlank { requirements.ifBlank { entryInput } }
+-        if (topic.isBlank()) {
+-            status = "请先告诉我写作主题"
+-            return
++    // ---------------- 字段编辑同步 ----------------
++
++    /** 用户手改左侧字段后同步后端 */
++    fun patchContext(patch: Map<String, Any?>) {
++        val id = task.taskId ?: return
++        scope.launch {
++            when (val r = repo.patchContext(id, patch)) {
++                is ApiResult.Ok -> r.data?.let { applyResponse(it) }
++                is ApiResult.Err -> status = r.message
++            }
+         }
+-        status = "正在从资料库检索写作依据…"
+-        step = 3
+-        doSend("请围绕主题「$topic」列出可引用的政策依据和事实材料要点，不需要写正文。") { }
+     }
+ 
+-    private fun doSend(message: String, after: () -> Unit) {
++    fun toggleDocNumber(enabled: Boolean) {
++        task = task.copy(documentNumberEnabled = enabled,
++            documentNumber = if (enabled) task.documentNumber else "")
++        patchContext(mapOf(
++            "document_number_enabled" to enabled,
++            "document_number" to if (enabled) task.documentNumber else null,
++        ))
++    }
++
++    fun setDocNumber(number: String) {
++        task = task.copy(documentNumber = number)
++        patchContext(mapOf("document_number" to number.ifBlank { null },
++            "document_number_enabled" to number.isNotBlank()))
++    }
++
++    // ---------------- 材料 ----------------
++
++    fun uploadMaterials(files: List<File>) {
++        if (files.isEmpty() || busy) return
+         busy = true
++        status = "上传材料中…"
+         scope.launch {
+-            when (val r = repo.send(
+-                message, sessionId, useRag,
+-                attachments.map { it.id }, null,
+-            )) {
++            when (val r = repo.uploadMaterials(files)) {
+                 is ApiResult.Ok -> {
+-                    val d = r.data
+-                    sessionId = d.sessionId ?: sessionId
+-                    references = d.sources.ifEmpty { references }
+-                    if (d.reply.isNotBlank()) {
+-                        content = d.reply
+-                        if (aiDraft.isBlank()) aiDraft = d.reply
+-                        // 标题：正文首个非空行（公文标题居中行）
+-                        if (title.isBlank()) {
+-                            title = d.reply.lineSequence()
+-                                .firstOrNull { it.isNotBlank() }?.trim()
+-                                ?.take(60).orEmpty()
+-                        }
+-                        generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())
+-                    }
+-                    d.documentId?.let { documentId = it }
+-                    d.documentNumber?.let { docNumber = it }
+-                    d.documentDate?.let { docDate = it }
+-                    qualityLevel = d.qualityLevel
+-                    qualityIssues = d.qualityIssues
+-                    unverifiedCitations = d.unverifiedCitations
+-                    if (versionNo == 0 && d.documentId != null) versionNo = 1
+-                    status = when (d.qualityLevel) {
+-                        "A" -> "起草完成，质检优秀"
+-                        "B" -> "起草完成，质检通过（有 ${d.qualityIssues.size} 项提示）"
+-                        "D" -> "起草未通过质检，请修改要求后重新生成"
+-                        else -> "起草完成"
+-                    }
+-                    if (hasDraft) step = 5
+-                }
+-                is ApiResult.Err -> {
+-                    status = r.message
+-                    if (step > 2) step = 2
++                    materials = materials + r.data
++                    status = "已上传 ${r.data.size} 份材料，将随下次起草/修改提供给 AI"
+                 }
++                is ApiResult.Err -> fail(r.message)
+             }
+             busy = false
+-            after()
+         }
+     }
+ 
+-    /** 重新生成 */
+-    fun regenerate() {
+-        if (entryInput.isNotBlank() && title.isBlank()) startFromIntent() else draft()
+-    }
+-
+-    // ---------- 版本 / 导出 / 训练 ----------
++    // ---------------- 版本 / 导出 / 训练 ----------------
+ 
+     fun saveVersion(note: String? = null) {
++        val id = task.taskId ?: return
+         if (busy || !hasDraft) return
+         busy = true
+         scope.launch {
+-            when (val r = repo.saveVersion(documentId, title, content, docType, note)) {
++            when (val r = repo.saveVersion(id, content, note)) {
+                 is ApiResult.Ok -> {
+-                    documentId = r.data.first
+-                    versionNo = r.data.second
+-                    status = "已保存版本 v${r.data.second}"
+-                    if (step < 6) step = 6
++                    r.data?.let { applyResponse(it) }
++                    status = "已保存版本 v$versionNo"
++                    refreshVersions()
+                 }
+-                is ApiResult.Err -> status = r.message
++                is ApiResult.Err -> fail(r.message)
+             }
+             busy = false
+         }
+     }
+ 
++    fun refreshVersions() {
++        val id = task.taskId ?: return
++        scope.launch {
++            when (val r = repo.listVersions(id)) {
++                is ApiResult.Ok -> versions = r.data
++                is ApiResult.Err -> {}
++            }
++        }
++    }
++
+     fun export(redHeader: Boolean, target: File) {
++        val id = task.taskId ?: return
+         if (busy || !hasDraft) return
+         busy = true
+         status = "导出 Word 中…"
+         scope.launch {
+-            when (val r = repo.export(redHeader, title, content, docNumber, docDate,
+-                recipient, authority, target)) {
+-                is ApiResult.Ok -> {
+-                    status = "已导出：${target.name}"
+-                    if (step < 6) step = 6
+-                }
+-                is ApiResult.Err -> status = r.message
++            when (val r = repo.export(id, redHeader, target)) {
++                is ApiResult.Ok -> status = "已导出：${target.name}"
++                is ApiResult.Err -> fail(r.message)
+             }
+             busy = false
+         }
+     }
+ 
+     fun addToTraining() {
+-        val sid = sessionId
+-        if (sid == null) { status = "请先完成一次 AI 起草"; return }
+-        if (!hasDraft) return
++        val id = task.taskId ?: return
++        if (busy || !hasDraft) return
+         busy = true
+         scope.launch {
+-            val instruction = buildString {
+-                append("起草").append(docType)
+-                if (title.isNotBlank()) append("：").append(title)
+-                if (requirements.isNotBlank()) append("（").append(requirements).append("）")
+-            }
+-            when (val r = repo.addToTraining(sid, instruction, aiDraft.ifBlank { content }, content)) {
+-                is ApiResult.Ok -> status = "已加入训练候选样本（AI 初稿 + 当前稿）"
+-                is ApiResult.Err -> status = r.message
++            when (val r = repo.addToTraining(id, content)) {
++                is ApiResult.Ok -> status = "已加入训练候选样本（待审核）"
++                is ApiResult.Err -> fail(r.message)
+             }
+             busy = false
+         }
+     }
+ 
+-    /** 全部重置，回到零门槛入口 */
+     fun newTask() {
+-        step = 1
+-        title = ""; recipient = ""; requirements = ""
+-        attachments = emptyList()
+-        content = ""; docNumber = ""; docDate = ""; generatedAt = ""
+-        qualityLevel = null; qualityIssues = emptyList()
+-        unverifiedCitations = emptyList(); references = emptyList()
+-        documentId = null; versionNo = 0; sessionId = null; aiDraft = ""
++        task = WritingTaskState()
++        content = ""
++        versionNo = 0
++        taskStatus = "collecting"
++        messages = emptyList()
++        materials = emptyList()
++        references = emptyList()
++        versions = emptyList()
+         entryInput = ""
++        chatInput = ""
+         status = null
+     }
+ }
+diff --git a/server/app/application/writing/postprocessor.py b/server/app/application/writing/postprocessor.py
+index ab971f0..8520ec9 100644
+--- a/server/app/application/writing/postprocessor.py
++++ b/server/app/application/writing/postprocessor.py
+@@ -154,9 +154,10 @@ def inject_docnum(text: str, docnum: str) -> str:
+ 
+ # ---------- 落款日期 ----------
+ 
+-def fix_signoff_date(text: str) -> Tuple[str, Optional[str]]:
+-    """文末 200 字内的落款日期偏离当前年份 → 替换为今天。
++def fix_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
++    """文末 200 字内的落款日期偏离目标日期（默认今天）→ 替换。
+     正文中的历史引用日期不受影响。"""
++    target = target or TODAY_STR
+     normalized = normalize_width(text)
+     matches = []
+     for pattern in DATE_PATTERNS:
+@@ -166,23 +167,27 @@ def fix_signoff_date(text: str) -> Tuple[str, Optional[str]]:
+     last = matches[-1]
+     if last.start() < len(normalized) - 200:
+         return text, None
+-    year = _parse_date_year(last.group(0))
+-    if year is None or (TODAY.year - 1 <= year <= TODAY.year + 1):
++    if normalize_width(last.group(0)).replace(" ", "") == target:
+         return text, None
++    if target == TODAY_STR:
++        year = _parse_date_year(last.group(0))
++        if year is None or (TODAY.year - 1 <= year <= TODAY.year + 1):
++            return text, None
+     old = last.group(0)
+-    return text[:last.start()] + TODAY_STR + text[last.end():], \
+-        f"落款日期校正：{old} → {TODAY_STR}"
++    return text[:last.start()] + target + text[last.end():], \
++        f"落款日期校正：{old} → {target}"
+ 
+ 
+-def ensure_signoff_date(text: str) -> Tuple[str, Optional[str]]:
+-    """有落款单位但缺成文日期时，在落款后补今天的日期。"""
++def ensure_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
++    """有落款单位但缺成文日期时，在落款后补目标日期（默认今天）。"""
++    target = target or TODAY_STR
+     lines = text.split("\n")
+     for i in range(len(lines) - 1, max(len(lines) - 8, -1), -1):
+         if SIGNOFF_LINE_RE.match(lines[i].strip()):
+             following = "\n".join(lines[i + 1:i + 3])
+             if not any(re.search(p, following) for p in DATE_PATTERNS):
+-                lines.insert(i + 1, TODAY_STR)
+-                return "\n".join(lines), f"补充成文日期：{TODAY_STR}"
++                lines.insert(i + 1, target)
++                return "\n".join(lines), f"补充成文日期：{target}"
+             return text, None
+     return text, None
+ 
+@@ -314,8 +319,24 @@ class PostProcessor:
+         self.db = db
+ 
+     def process(
+-        self, text: str, signoff_hint: Optional[str] = None
+-    ) -> Tuple[str, List[str], str, str]:
++        self,
++        text: str,
++        signoff_hint: Optional[str] = None,
++        doc_number: Optional[str] = None,
++        doc_date: Optional[str] = None,
++        inject_docnum: bool = True,
++        inject_date: bool = True,
++    ) -> Tuple[str, List[str], Optional[str], Optional[str]]:
++        """后处理。
++
++        文号/日期策略（业务规则）：
++        - doc_number 传入用户指定文号 -> 原样注入，绝不改写；
++        - inject_docnum=True 且未指定 -> 程序生成（序列号服务）；
++        - inject_docnum=False -> 不注入任何文号（默认为关闭）。
++        - doc_date 传入用户指定日期 -> 落款使用该日期；
++        - inject_date=True -> 修正/补充为系统当天；
++        - inject_date=False -> 不补不改成文日期。
++        """
+         from app.application.writing.doc_number_service import (
+             DocNumberService,
+         )
+@@ -331,13 +352,21 @@ class PostProcessor:
+         if fixes:
+             events.append(f"历史文号格式规范化 {len(fixes)} 处")
+ 
+-        # 3. 落款日期校正 / 补充（正文历史日期不动）
+-        text, date_fix = fix_signoff_date(text)
+-        if date_fix:
+-            events.append(date_fix)
+-        text, date_add = ensure_signoff_date(text)
+-        if date_add:
+-            events.append(date_add)
++        # 3. 落款日期：用户指定 > 系统当天 > 不处理
++        if doc_date:
++            text, date_fix = fix_signoff_date(text, target=doc_date)
++            if date_fix:
++                events.append(date_fix)
++            text, date_add = ensure_signoff_date(text, target=doc_date)
++            if date_add:
++                events.append(date_add)
++        elif inject_date:
++            text, date_fix = fix_signoff_date(text)
++            if date_fix:
++                events.append(date_fix)
++            text, date_add = ensure_signoff_date(text)
++            if date_add:
++                events.append(date_add)
+ 
+         # 4. 数字与日期微修
+         text, fw = normalize_fullwidth_digits(text)
+@@ -346,10 +375,17 @@ class PostProcessor:
+         text, typo_events = fix_date_typos(text)
+         events.extend(typo_events)
+ 
+-        # 5. 程序生成当前文号并插入标题之后
+-        daizi = derive_daizi(signoff_hint or text)
+-        doc_number = DocNumberService(self.db).next_number(daizi)
+-        text = inject_docnum(text, doc_number)
+-        events.append(f"程序注入文号：{doc_number}")
+-
+-        return text, events, doc_number, TODAY_STR
++        # 5. 文号：用户指定 > 程序生成 > 不注入
++        out_number: Optional[str] = None
++        if doc_number:
++            text = inject_docnum(text, doc_number)
++            out_number = doc_number
++            events.append(f"使用用户指定文号：{doc_number}")
++        elif inject_docnum:
++            daizi = derive_daizi(signoff_hint or text)
++            out_number = DocNumberService(self.db).next_number(daizi)
++            text = inject_docnum(text, out_number)
++            events.append(f"程序注入文号：{out_number}")
++
++        out_date = doc_date or (TODAY_STR if inject_date else None)
++        return text, events, out_number, out_date
+diff --git a/server/app/main.py b/server/app/main.py
+index fdf66e8..5cc8ada 100644
+--- a/server/app/main.py
++++ b/server/app/main.py
+@@ -28,6 +28,7 @@ from app.infrastructure.database.models import (  # noqa: E402,F401
+     templates,
+     training,
+     workflow,
++    writing_task,
+ )
+ 
+ 
+@@ -138,6 +139,7 @@ def create_app() -> FastAPI:
+         templates,
+         training,
+         users,
++        writing_tasks,
+         workflow,
+     )
+ 
+@@ -151,6 +153,7 @@ def create_app() -> FastAPI:
+         references.router,
+         templates.router,
+         training.router,
++        writing_tasks.router,
+         workflow.router,
+         ppt.router,
+     ]

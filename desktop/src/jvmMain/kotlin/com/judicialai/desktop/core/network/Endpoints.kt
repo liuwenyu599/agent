@@ -49,6 +49,18 @@ object Endpoints {
         fun documentArchive(docId: String) = "/knowledge/documents/$docId/archive"
     }
 
+    object WritingTasks {
+        const val LIST = "/writing/tasks"
+        fun item(id: String) = "/writing/tasks/$id"
+        fun chat(id: String) = "/writing/tasks/$id/chat"
+        fun draft(id: String) = "/writing/tasks/$id/draft"
+        fun revise(id: String) = "/writing/tasks/$id/revise"
+        fun versions(id: String) = "/writing/tasks/$id/versions"
+        fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
+        fun export(id: String, redHeader: Boolean) = "/writing/tasks/$id/export?red_header=$redHeader"
+        fun trainingSample(id: String) = "/writing/tasks/$id/training-sample"
+    }
+
     object Documents {
         const val LIST = "/documents"
         fun item(id: String) = "/documents/$id"

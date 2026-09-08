@@ -4,59 +4,100 @@ import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
-import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
-import com.judicialai.desktop.features.chat.SendOutcome
 import com.judicialai.desktop.features.chat.model.ChatAttachment
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /**
- * 智能写作工作台数据访问。
- * 起草/修改走 /chat/send（后端写作流水线：RAG + 后处理 + 质检 + 内容核查 + 自动草稿），
- * 版本管理走 /documents，导出走 /chat/export 或 /documents/{id}/export/docx。
+ * 智能写作工作台数据访问（/writing/tasks 系列接口）。
+ * 任务 = 结构化上下文 + 当前文档 + 持续对话 + 版本链，全部行为落在后端。
  */
 class WritingRepository(private val api: ApiClient) {
 
-    /** 发起写作请求（起草 / AI 修改 / 提纲），返回流水线完整结果 */
-    suspend fun send(
-        message: String, sessionId: String?, useRag: Boolean,
-        attachmentIds: List<String>, referenceTemplateId: String?,
-    ): ApiResult<SendOutcome> {
-        val body = buildMap<String, Any?> {
-            put("message", message)
-            put("session_id", sessionId)
-            put("use_rag", useRag)
-            if (attachmentIds.isNotEmpty()) put("attachment_ids", attachmentIds)
-            if (!referenceTemplateId.isNullOrBlank()) put("reference_template_id", referenceTemplateId)
+    /** POST /writing/tasks 从自然语言创建任务 */
+    suspend fun createTask(message: String): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.LIST,
+            mapOf("message" to message), timeoutMs = 120_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
         }
-        return when (val r = api.post(Endpoints.Chat.SEND, body, timeoutMs = 300_000)) {
+
+    /** GET /writing/tasks/{id} 获取任务全量状态 */
+    suspend fun getTask(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.item(id))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** PATCH /writing/tasks/{id} 同步用户手改的结构化字段 */
+    suspend fun patchContext(id: String, patch: Map<String, Any?>): ApiResult<JsonObject?> =
+        when (val r = api.put(Endpoints.WritingTasks.item(id), mapOf("context" to patch))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** POST /writing/tasks/{id}/chat 任务内持续对话（可能更新上下文/起草/修改） */
+    suspend fun chat(id: String, message: String): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.chat(id),
+            mapOf("message" to message), timeoutMs = 300_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** POST /writing/tasks/{id}/draft 生成初稿 */
+    suspend fun draft(id: String, outlineOnly: Boolean = false): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.draft(id),
+            mapOf("outline_only" to outlineOnly), timeoutMs = 300_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** POST /writing/tasks/{id}/revise 修改当前文档（核心：作用于 currentContent） */
+    suspend fun revise(
+        id: String, instruction: String, mode: String,
+        currentContent: String, selection: String? = null,
+    ): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.revise(id), buildMap<String, Any?> {
+            put("instruction", instruction)
+            put("mode", mode)
+            put("current_content", currentContent)
+            if (!selection.isNullOrBlank()) put("selection", selection)
+        }, timeoutMs = 300_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** POST /writing/tasks/{id}/versions 保存当前编辑为新版本 */
+    suspend fun saveVersion(id: String, content: String, note: String?): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.versions(id), buildMap<String, Any?> {
+            put("content", content)
+            if (!note.isNullOrBlank()) put("note", note)
+        })) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun listVersions(id: String): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.WritingTasks.versions(id))) {
             is ApiResult.Ok -> {
-                val d = r.data.obj()
-                val quality = d?.get("quality")?.obj()
-                val issues = quality?.get("issues")?.arr()
-                    ?.mapNotNull { it.obj()?.get("message")?.str() }
-                    ?.filter { it.isNotBlank() } ?: emptyList()
-                val unverified = d?.get("content_check")?.obj()?.get("unverified")?.arr()
-                    ?.map { it.str() }?.filter { it.isNotBlank() } ?: emptyList()
-                val refs = d?.get("sources")?.arr()?.map { it.str() }
-                    ?.filter { it.isNotBlank() } ?: emptyList()
-                ApiResult.Ok(SendOutcome(
-                    reply = d?.get("reply")?.str().orEmpty(),
-                    sources = refs,
-                    sessionId = d?.get("session_id")?.str()?.ifBlank { null },
-                    documentId = d?.get("document_id")?.str()?.ifBlank { null },
-                    documentNumber = d?.get("document_number")?.str()?.ifBlank { null },
-                    documentDate = d?.get("document_date")?.str()?.ifBlank { null },
-                    qualityLevel = quality?.get("level")?.str()?.ifBlank { null },
-                    qualityIssues = issues,
-                    unverifiedCitations = unverified,
-                ))
+                val items = r.data.obj()?.get("items")?.arr()?.mapNotNull { it.obj() }
+                    ?: r.data.items()
+                ApiResult.Ok(items)
             }
             is ApiResult.Err -> r
         }
-    }
+
+    suspend fun export(id: String, redHeader: Boolean, target: File) =
+        api.downloadGet(Endpoints.WritingTasks.export(id, redHeader), target)
+
+    /** 加入训练数据：instruction + AI 初稿 + 人工最终稿 → pending_review */
+    suspend fun addToTraining(id: String, finalContent: String) =
+        api.post(Endpoints.WritingTasks.trainingSample(id), mapOf("final_content" to finalContent))
+
+    // ---- 材料（复用对话附件通道，绑定到任务关联会话） ----
 
     suspend fun uploadMaterials(files: List<File>): ApiResult<List<ChatAttachment>> =
         when (val r = api.upload(Endpoints.Chat.ATTACHMENTS_UPLOAD, "files", files)) {
@@ -68,63 +109,4 @@ class WritingRepository(private val api: ApiClient) {
             })
             is ApiResult.Err -> r
         }
-
-    suspend fun deleteAttachment(id: String) = api.del(Endpoints.Chat.attachmentDelete(id))
-
-    /** 保存当前编辑内容为新版本（无文档则先创建） */
-    suspend fun saveVersion(
-        documentId: String?, title: String, content: String,
-        docType: String?, note: String?,
-    ): ApiResult<Pair<String, Int>> {
-        if (documentId == null) {
-            val r = api.post(Endpoints.Documents.LIST, buildMap<String, Any?> {
-                put("title", title.ifBlank { "未命名文档" })
-                put("content", content)
-                if (!docType.isNullOrBlank()) put("doc_type", docType)
-                put("note", note ?: "工作台创建")
-            })
-            return when (r) {
-                is ApiResult.Ok -> {
-                    val d = r.data.obj()
-                    ApiResult.Ok((d?.get("id").str()) to (d?.get("current_version").int()))
-                }
-                is ApiResult.Err -> r
-            }
-        }
-        val r = api.put(Endpoints.Documents.item(documentId), buildMap<String, Any?> {
-            put("content", content)
-            put("title", title.ifBlank { "未命名文档" })
-            if (!note.isNullOrBlank()) put("note", note)
-        })
-        return when (r) {
-            is ApiResult.Ok -> {
-                val d = r.data.obj()
-                ApiResult.Ok((d?.get("id").str()) to (d?.get("current_version").int()))
-            }
-            is ApiResult.Err -> r
-        }
-    }
-
-    /** 导出：redHeader=true 走红头公文格式，否则通用 Word */
-    suspend fun export(
-        redHeader: Boolean, title: String, content: String,
-        docNumber: String, docDate: String, recipient: String, signature: String,
-        target: File,
-    ): ApiResult<String> {
-        val payload = mapOf(
-            "title" to title, "content" to content, "doc_number" to docNumber,
-            "date_text" to docDate, "recipient" to recipient, "signature" to signature,
-        )
-        val path = if (redHeader) Endpoints.Chat.EXPORT_OFFICIAL else Endpoints.Chat.EXPORT_DOCX
-        return api.downloadPost(path, payload, target)
-    }
-
-    /** 加入训练数据（AI 初稿 + 人工最终稿 → 候选样本） */
-    suspend fun addToTraining(sessionId: String, instruction: String, draft: String, output: String) =
-        api.post(Endpoints.Training.SAMPLE_FROM_CHAT, mapOf(
-            "session_id" to sessionId,
-            "instruction" to instruction,
-            "draft" to draft,
-            "output" to output,
-        ))
 }

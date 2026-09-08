@@ -154,9 +154,10 @@ def inject_docnum(text: str, docnum: str) -> str:
 
 # ---------- 落款日期 ----------
 
-def fix_signoff_date(text: str) -> Tuple[str, Optional[str]]:
-    """文末 200 字内的落款日期偏离当前年份 → 替换为今天。
+def fix_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """文末 200 字内的落款日期偏离目标日期（默认今天）→ 替换。
     正文中的历史引用日期不受影响。"""
+    target = target or TODAY_STR
     normalized = normalize_width(text)
     matches = []
     for pattern in DATE_PATTERNS:
@@ -166,23 +167,27 @@ def fix_signoff_date(text: str) -> Tuple[str, Optional[str]]:
     last = matches[-1]
     if last.start() < len(normalized) - 200:
         return text, None
-    year = _parse_date_year(last.group(0))
-    if year is None or (TODAY.year - 1 <= year <= TODAY.year + 1):
+    if normalize_width(last.group(0)).replace(" ", "") == target:
         return text, None
+    if target == TODAY_STR:
+        year = _parse_date_year(last.group(0))
+        if year is None or (TODAY.year - 1 <= year <= TODAY.year + 1):
+            return text, None
     old = last.group(0)
-    return text[:last.start()] + TODAY_STR + text[last.end():], \
-        f"落款日期校正：{old} → {TODAY_STR}"
+    return text[:last.start()] + target + text[last.end():], \
+        f"落款日期校正：{old} → {target}"
 
 
-def ensure_signoff_date(text: str) -> Tuple[str, Optional[str]]:
-    """有落款单位但缺成文日期时，在落款后补今天的日期。"""
+def ensure_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """有落款单位但缺成文日期时，在落款后补目标日期（默认今天）。"""
+    target = target or TODAY_STR
     lines = text.split("\n")
     for i in range(len(lines) - 1, max(len(lines) - 8, -1), -1):
         if SIGNOFF_LINE_RE.match(lines[i].strip()):
             following = "\n".join(lines[i + 1:i + 3])
             if not any(re.search(p, following) for p in DATE_PATTERNS):
-                lines.insert(i + 1, TODAY_STR)
-                return "\n".join(lines), f"补充成文日期：{TODAY_STR}"
+                lines.insert(i + 1, target)
+                return "\n".join(lines), f"补充成文日期：{target}"
             return text, None
     return text, None
 
@@ -292,8 +297,8 @@ def detect_truncation(text: str) -> Optional[str]:
 
 
 def detect_garbled(text: str) -> Optional[str]:
-    if "�" in text:
-        return "含替换符 �"
+    if " " in text:
+        return "含替换符  "
     pua = re.findall(r"[\ue000-\uf8ff]", text)
     if pua:
         return f"含私用区字符 ×{len(pua)}"
@@ -314,8 +319,24 @@ class PostProcessor:
         self.db = db
 
     def process(
-        self, text: str, signoff_hint: Optional[str] = None
-    ) -> Tuple[str, List[str], str, str]:
+        self,
+        text: str,
+        signoff_hint: Optional[str] = None,
+        doc_number: Optional[str] = None,
+        doc_date: Optional[str] = None,
+        inject_docnum: bool = True,
+        inject_date: bool = True,
+    ) -> Tuple[str, List[str], Optional[str], Optional[str]]:
+        """后处理。
+
+        文号/日期策略（业务规则）：
+        - doc_number 传入用户指定文号 -> 原样注入，绝不改写；
+        - inject_docnum=True 且未指定 -> 程序生成（序列号服务）；
+        - inject_docnum=False -> 不注入任何文号（默认为关闭）。
+        - doc_date 传入用户指定日期 -> 落款使用该日期；
+        - inject_date=True -> 修正/补充为系统当天；
+        - inject_date=False -> 不补不改成文日期。
+        """
         from app.application.writing.doc_number_service import (
             DocNumberService,
         )
@@ -331,13 +352,21 @@ class PostProcessor:
         if fixes:
             events.append(f"历史文号格式规范化 {len(fixes)} 处")
 
-        # 3. 落款日期校正 / 补充（正文历史日期不动）
-        text, date_fix = fix_signoff_date(text)
-        if date_fix:
-            events.append(date_fix)
-        text, date_add = ensure_signoff_date(text)
-        if date_add:
-            events.append(date_add)
+        # 3. 落款日期：用户指定 > 系统当天 > 不处理
+        if doc_date:
+            text, date_fix = fix_signoff_date(text, target=doc_date)
+            if date_fix:
+                events.append(date_fix)
+            text, date_add = ensure_signoff_date(text, target=doc_date)
+            if date_add:
+                events.append(date_add)
+        elif inject_date:
+            text, date_fix = fix_signoff_date(text)
+            if date_fix:
+                events.append(date_fix)
+            text, date_add = ensure_signoff_date(text)
+            if date_add:
+                events.append(date_add)
 
         # 4. 数字与日期微修
         text, fw = normalize_fullwidth_digits(text)
@@ -346,10 +375,17 @@ class PostProcessor:
         text, typo_events = fix_date_typos(text)
         events.extend(typo_events)
 
-        # 5. 程序生成当前文号并插入标题之后
-        daizi = derive_daizi(signoff_hint or text)
-        doc_number = DocNumberService(self.db).next_number(daizi)
-        text = inject_docnum(text, doc_number)
-        events.append(f"程序注入文号：{doc_number}")
+        # 5. 文号：用户指定 > 程序生成 > 不注入
+        out_number: Optional[str] = None
+        if doc_number:
+            text = inject_docnum(text, doc_number)
+            out_number = doc_number
+            events.append(f"使用用户指定文号：{doc_number}")
+        elif inject_docnum:
+            daizi = derive_daizi(signoff_hint or text)
+            out_number = DocNumberService(self.db).next_number(daizi)
+            text = inject_docnum(text, out_number)
+            events.append(f"程序注入文号：{out_number}")
 
-        return text, events, doc_number, TODAY_STR
+        out_date = doc_date or (TODAY_STR if inject_date else None)
+        return text, events, out_number, out_date

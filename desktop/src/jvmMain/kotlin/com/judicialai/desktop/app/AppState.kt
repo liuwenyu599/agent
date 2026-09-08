@@ -14,6 +14,9 @@ object AppState {
 
     var screen by mutableStateOf(AppScreen.DASHBOARD)
 
+    /** 普通聊天中识别到写作意图时，跳转到工作台携带的一句话需求 */
+    var pendingWritingIntent by mutableStateOf<String?>(null)
+
     var serverConfig by mutableStateOf(ServerConfig.load())
         private set
 
