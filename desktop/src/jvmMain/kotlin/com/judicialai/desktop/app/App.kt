@@ -7,6 +7,7 @@ import com.judicialai.desktop.features.admin.AdminScreen
 import com.judicialai.desktop.features.auth.LoginScreen
 import com.judicialai.desktop.features.chat.ChatScreen
 import com.judicialai.desktop.features.documents.DocumentsScreen
+import com.judicialai.desktop.features.writing.WritingScreen
 import com.judicialai.desktop.features.dashboard.DashboardScreen
 import com.judicialai.desktop.features.formatcheck.FormatCheckScreen
 import com.judicialai.desktop.features.knowledge.KnowledgeScreen
@@ -38,6 +39,7 @@ fun App() {
         ) {
             when (AppState.screen) {
                 AppScreen.DASHBOARD -> DashboardScreen()
+                AppScreen.WRITING -> WritingScreen()
                 AppScreen.CHAT -> ChatScreen()
                 AppScreen.DOCUMENTS -> DocumentsScreen()
                 AppScreen.KNOWLEDGE -> KnowledgeScreen()

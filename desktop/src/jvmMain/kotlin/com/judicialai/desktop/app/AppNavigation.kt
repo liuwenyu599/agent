@@ -20,9 +20,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
  */
 enum class AppScreen(val title: String, val icon: ImageVector) {
     DASHBOARD("首页", Icons.Default.Home),
-    CHAT("智能写作", Icons.Default.Edit),
+    WRITING("智能写作", Icons.Default.Edit),
+    CHAT("对话助手", Icons.Default.Email),
     DOCUMENTS("我的文档", Icons.Default.Create),
-    TEMPLATES("公文助手", Icons.Default.Star),
+    TEMPLATES("模板中心", Icons.Default.Star),
     KNOWLEDGE("知识库", Icons.Default.List),
     WORKFLOW("工作流", Icons.Default.Share),
     PPT("PPT助手", Icons.Default.PlayArrow),
@@ -47,7 +48,7 @@ object AppMenu {
         MenuEntry(AppScreen.DASHBOARD, "首页", Icons.Default.Home),
         MenuEntry(
             null, "智能写作", Icons.Default.Edit,
-            children = listOf(AppScreen.CHAT, AppScreen.DOCUMENTS, AppScreen.TEMPLATES, AppScreen.KNOWLEDGE),
+            children = listOf(AppScreen.WRITING, AppScreen.DOCUMENTS, AppScreen.TEMPLATES, AppScreen.KNOWLEDGE, AppScreen.CHAT),
         ),
         MenuEntry(AppScreen.WORKFLOW, "工作流", Icons.Default.Share),
         MenuEntry(AppScreen.PPT, "PPT助手", Icons.Default.PlayArrow),
