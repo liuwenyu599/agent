@@ -74,34 +74,41 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(20.dp))
+                val tabs = listOf(
+                    "登录",
+                    "首次注册（系统管理员）",
+                )
 
-                // Tab：首次使用时只显示 登录 / 首次注册（系统管理员）
-                val tabs = if (vm.isFirstUser)
-                    listOf("登录", "首次注册（系统管理员）")
-                else
-                    listOf("登录")
-                var tab by remember(vm.isFirstUser) {
+                var tab by remember {
                     mutableStateOf(if (vm.isFirstUser) 1 else 0)
                 }
+
                 TabRow(
-                    selectedTabIndex = tab,
+                    selectedTabIndex = tab.coerceIn(0, tabs.lastIndex),
                     backgroundColor = Color.White,
                     contentColor = EpPrimary,
                 ) {
                     tabs.forEachIndexed { i, title ->
-                        Tab(selected = tab == i, onClick = { tab = i }) {
-                            Text(title, fontSize = 14.sp,
-                                modifier = Modifier.padding(vertical = 12.dp))
+                        Tab(
+                            selected = tab == i,
+                            onClick = {
+                                if (i == 1 && !vm.isFirstUser) return@Tab
+                                tab = i
+                            },
+                        ) {
+                            Text(
+                                title,
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(vertical = 12.dp),
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.height(20.dp))
 
-                when (tabs[tab]) {
-                    "登录" -> LoginForm(vm)
-                   "首次注册（系统管理员）" -> RegisterForm(vm, first = true)
+                when (tab.coerceIn(0, tabs.lastIndex)) {
+                    0 -> LoginForm(vm)
+                    1 -> RegisterForm(vm, first = true)
                 }
-
                 vm.error?.let {
                     Spacer(Modifier.height(12.dp))
                     Text(it, color = EpDanger, fontSize = 13.sp)

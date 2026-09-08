@@ -141,3 +141,5 @@ server/app/infrastructure/database/models/__pycache__/references.cpython-310.pyc
 server/app/infrastructure/database/models/__pycache__/templates.cpython-310.pyc
 server/app/infrastructure/database/models/__pycache__/training.cpython-310.pyc
 server/app/infrastructure/database/models/__pycache__/workflow.cpython-310.pyc
+cmds.txt
+cmds.txt
