@@ -10,8 +10,9 @@ Create Date: 2026-09-08
 from alembic import op
 import sqlalchemy as sa
 
+
 revision = 'b3f7c2d91e04'
-down_revision = "a112a03b86f2"
+down_revision = 'a112a03b86f2'
 branch_labels = None
 depends_on = None
 

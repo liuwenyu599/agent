@@ -53,6 +53,58 @@ class WritingTaskService:
         self.assistant = assistant
         self.rag = rag
         self.attachments = attachments
+        from app.application.writing.intent_interpreter import WritingIntentInterpreter
+        self.interpreter = WritingIntentInterpreter(assistant) if assistant else None
+
+    # ---------------- 上下文合并 ----------------
+
+    @staticmethod
+    def _apply_interpretation(ctx: Dict[str, Any], it: Dict[str, Any],
+                              message: str) -> List[str]:
+        """合并 LLM 语义理解结果；确定性字段（文号/日期/字数）由 parser 裁定覆盖。
+
+        - LLM 只填它确信的语义字段，None 不覆盖已有值；
+        - parser 对文号/日期/字数拥有最终裁定权（用户明确说的不能被 LLM 改）；
+        - key_facts 做并集合并，不丢用户已补充的事实。
+        """
+        from app.application.writing.intent_interpreter import SEMANTIC_FIELDS
+        upd: Dict[str, Any] = {}
+        for f in SEMANTIC_FIELDS:
+            v = it.get(f)
+            if v is None:
+                continue
+            if f == "key_facts":
+                merged = list(dict.fromkeys((ctx.get("key_facts") or []) + (v or [])))
+                if merged != (ctx.get("key_facts") or []):
+                    upd["key_facts"] = merged
+            elif not ctx.get(f) or ctx.get(f) != v:
+                # 用户本轮重新指定的允许覆盖；否则仅填空
+                if not ctx.get(f):
+                    upd[f] = v
+                elif f in ("title", "topic", "document_type", "time_range",
+                           "recipient", "authority", "requirements", "tone", "purpose"):
+                    upd[f] = v
+        # 确定性字段：parser 裁定
+        det = task_parser.parse_message(message)
+        for f in ("document_number_enabled", "document_number",
+                  "document_date", "word_count_target"):
+            if f in det:
+                upd[f] = det[f]
+        return task_parser.merge_context(ctx, upd)
+
+    def _interpret(self, message: str, ctx: Dict[str, Any],
+                   has_draft: bool) -> Optional[Dict[str, Any]]:
+        if not self.interpreter:
+            return None
+        history = (ctx.get("history") or [])[-6:]
+        return self.interpreter.interpret(
+            message, context=ctx, has_draft=has_draft, history=history)
+
+    @staticmethod
+    def _push_history(ctx: Dict[str, Any], role: str, content: str) -> None:
+        h = list(ctx.get("history") or [])
+        h.append({"role": role, "content": content[:1000]})
+        ctx["history"] = h[-12:]
 
     # ---------------- 基础 CRUD ----------------
 
@@ -79,16 +131,29 @@ class WritingTaskService:
         }
 
     def create_task(self, user_id: str, message: str,
-                    session_id: Optional[str] = None) -> Dict[str, Any]:
+                    session_id: Optional[str] = None,
+                    template_id: Optional[str] = None,
+                    kb_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """从自然语言初始化任务：解析要素 -> 建任务 -> 返回上下文与追问。"""
         from app.infrastructure.database.models.writing_task import WritingTaskModel
 
         ctx = task_parser.empty_context()
-        changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+        # 创建时即可绑定模板 / 知识库（用户显式选择，原样记录）
+        if template_id:
+            tmpl = self._load_template(template_id)
+            if tmpl:
+                ctx["template_id"] = tmpl["id"]
+                ctx["template_name"] = tmpl["name"]
+        if kb_ids:
+            ctx["kb_ids"] = [k for k in kb_ids if k]
+        # LLM 语义理解优先；失败回退确定性 parser
+        it = self._interpret(message, ctx, has_draft=False)
+        if it:
+            changes = self._apply_interpretation(ctx, it, message)
+        else:
+            changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
         missing = task_parser.compute_missing(ctx)
-        title = task_parser.build_title(ctx)
-        if title:
-            ctx["title"] = title
+        self._push_history(ctx, "user", message)
 
         t = WritingTaskModel(user_id=user_id, session_id=session_id,
                              context=ctx, status="collecting")
@@ -96,7 +161,13 @@ class WritingTaskService:
         self.db.commit()
         self.db.refresh(t)
 
-        reply = self._collecting_reply(ctx, changes, missing, message)
+        if it and it.get("reply"):
+            reply = it["reply"]
+        else:
+            reply = self._collecting_reply(ctx, changes, missing, message)
+        self._push_history(ctx, "assistant", reply)
+        t.context = ctx
+        self.db.commit()
         return {**self._to_dict(t), "reply": reply, "content_changed": False}
 
     def get_task(self, task_id: str, user_id: str) -> Dict[str, Any]:
@@ -120,6 +191,13 @@ class WritingTaskService:
         for k, v in patch.items():
             if k in allowed:
                 ctx[k] = v
+        # 模板绑定：由 template_id 解析名称，前端无需关心
+        if "template_id" in patch:
+            tmpl = self._load_template(ctx.get("template_id")) if ctx.get("template_id") else None
+            ctx["template_name"] = tmpl["name"] if tmpl else None
+            ctx["template_id"] = tmpl["id"] if tmpl else None
+        if "kb_ids" in patch and not isinstance(ctx.get("kb_ids"), list):
+            ctx["kb_ids"] = []
         task_parser.compute_missing(ctx)
         t.context = ctx
         t.updated_at = datetime.utcnow()
@@ -129,34 +207,64 @@ class WritingTaskService:
     # ---------------- 对话（任务内持续对话） ----------------
 
     def chat(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
-        """任务内对话：更新上下文，或触发起草/修改，或追问缺失信息。"""
+        """任务内对话：LLM 意图理解 → 动作编排（追问/更新/起草/修改/回答）。
+
+        规则关键词仅作 LLM 不可用时的确定性回退。
+        """
         t = self._get_owned(task_id, user_id)
         ctx = dict(t.context or {})
+        has_draft = bool((t.current_content or "").strip())
+        self._push_history(ctx, "user", message)
 
-        # 1. 解析并合并要素
-        changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+        # 1. LLM 意图理解（含当前上下文/草稿状态/对话历史）
+        it = self._interpret(message, ctx, has_draft=has_draft)
+        if it:
+            changes = self._apply_interpretation(ctx, it, message)
+            intent = it["intent"]
+        else:
+            changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+            # 确定性回退路径
+            if has_draft and task_parser.looks_like_revise(message):
+                intent = "revise_content"
+            elif not has_draft and task_parser.looks_like_draft(message):
+                intent = "draft"
+            else:
+                intent = "update_context"
+
         missing = task_parser.compute_missing(ctx)
-        title = task_parser.build_title(ctx)
-        if title and not ctx.get("title"):
-            ctx["title"] = title
-            changes.append(f"标题：{title}")
-
-        # 2. 决策：修改当前稿 > 起草 > 继续追问
-        if (t.current_content or "").strip() and task_parser.looks_like_revise(message):
-            result = self.revise(task_id, user_id, instruction=message, mode="revise")
-            result["context_changes"] = changes
-            return result
-
-        if task_parser.looks_like_draft(message) and not (t.current_content or "").strip():
-            result = self.draft(task_id, user_id)
-            result["context_changes"] = changes
-            return result
-
-        # 3. 信息收集对话
         t.context = ctx
         t.updated_at = datetime.utcnow()
         self.db.commit()
-        reply = self._collecting_reply(ctx, changes, missing, message)
+
+        # 2. 动作编排
+        if intent == "revise_content" and has_draft:
+            instruction = (it or {}).get("revision_instruction") or message
+            mode = (it or {}).get("revision_mode") or "revise"
+            result = self.revise(task_id, user_id, instruction=instruction, mode=mode)
+            result["context_changes"] = changes
+            new_ctx = dict(t.context or {})
+            self._push_history(new_ctx, "assistant", result["reply"])
+            t.context = new_ctx
+            self.db.commit()
+            return result
+
+        if intent in ("draft", "outline") and not has_draft:
+            result = self.draft(task_id, user_id, outline_only=(intent == "outline"))
+            result["context_changes"] = changes
+            new_ctx = dict(t.context or {})
+            self._push_history(new_ctx, "assistant", result["reply"])
+            t.context = new_ctx
+            self.db.commit()
+            return result
+
+        # 3. 追问 / 要素更新 / 普通回答
+        if it and it.get("reply"):
+            reply = it["reply"]
+        else:
+            reply = self._collecting_reply(ctx, changes, missing, message)
+        self._push_history(ctx, "assistant", reply)
+        t.context = ctx
+        self.db.commit()
         return {**self._to_dict(t), "reply": reply, "content_changed": False,
                 "context_changes": changes}
 
@@ -183,17 +291,33 @@ class WritingTaskService:
             parts.append("关键信息已齐，回复「起草」即可生成第一版草稿。")
         return "".join(parts)
 
+    # ---------------- 模板 ----------------
+
+    def _load_template(self, template_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """读取任务关联的写作模板；不存在/不可见不阻塞写作，仅视为未绑定。"""
+        if not template_id:
+            return None
+        try:
+            from app.application.templates.service import TemplateService
+            tmpl = TemplateService(self.db).get_template(template_id)
+            return tmpl if tmpl.get("is_active", True) else None
+        except Exception as e:
+            logger.warning("[写作任务] 模板 %s 读取失败: %s", template_id, e)
+            return None
+
     # ---------------- 起草 ----------------
 
     def draft(self, task_id: str, user_id: str,
               outline_only: bool = False) -> Dict[str, Any]:
         t = self._get_owned(task_id, user_id)
         ctx = dict(t.context or {})
-        instruction = self._build_draft_instruction(ctx, outline_only)
+        template = self._load_template(ctx.get("template_id"))
+        instruction = self._build_draft_instruction(ctx, outline_only, template)
         sources = self._retrieve(ctx, user_id)
         attachment_ctx = self._attachment_context(t, ctx)
 
-        text = self._llm_draft(instruction, sources, attachment_ctx, user_id)
+        text = self._llm_draft(instruction, sources, attachment_ctx, user_id,
+                               template=template)
         if not text.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
 
@@ -303,35 +427,50 @@ class WritingTaskService:
         from app.application.documents.service import DocumentService
         return DocumentService(self.db).get_version(t.document_id, version_no, user_id)
 
-    def export_docx(self, task_id: str, user_id: str, red_header: bool = True):
-        """导出当前内容。文号区域仅在 document_number_enabled 且有值时输出。"""
-        from io import BytesIO
-        from urllib.parse import quote
+    def _render_docx(self, content: str, ctx: Dict[str, Any], red_header: bool):
+        """把文本内容渲染为可编辑的带格式 docx（红头或普通排版）。"""
         from app.application.chat.docx_export import generate_official_document, markdown_to_docx
-
-        t = self._get_owned(task_id, user_id)
-        ctx = t.context or {}
-        if not (t.current_content or "").strip():
-            raise HTTPException(status_code=409, detail="暂无内容可导出")
         doc_number = ""
         if ctx.get("document_number_enabled") and ctx.get("document_number"):
             doc_number = ctx["document_number"]
         title = ctx.get("title") or "公文"
-        if red_header:
-            buf = generate_official_document(
-                content=t.current_content, title=title, doc_number=doc_number,
-                recipient=ctx.get("recipient") or "",
-                signature=ctx.get("authority") or "",
-                date_text=ctx.get("document_date") or "",
-            )
-        else:
-            buf = markdown_to_docx(
-                text=t.current_content, title=title, doc_number=doc_number,
-                recipient=ctx.get("recipient") or "",
-                signature=ctx.get("authority") or "",
-                date_text=ctx.get("document_date") or "",
-            )
+        renderer = generate_official_document if red_header else markdown_to_docx
+        buf = renderer(
+            content=content, title=title, doc_number=doc_number,
+            recipient=ctx.get("recipient") or "",
+            signature=ctx.get("authority") or "",
+            date_text=ctx.get("document_date") or "",
+        ) if red_header else renderer(
+            text=content, title=title, doc_number=doc_number,
+            recipient=ctx.get("recipient") or "",
+            signature=ctx.get("authority") or "",
+            date_text=ctx.get("document_date") or "",
+        )
+        return buf, title
+
+    def export_docx(self, task_id: str, user_id: str, red_header: bool = True):
+        """导出当前内容。文号区域仅在 document_number_enabled 且有值时输出。"""
+        from urllib.parse import quote
+        t = self._get_owned(task_id, user_id)
+        if not (t.current_content or "").strip():
+            raise HTTPException(status_code=409, detail="暂无内容可导出")
+        buf, title = self._render_docx(t.current_content, t.context or {}, red_header)
         return buf, quote(f"{title}.docx")
+
+    def export_version_docx(self, task_id: str, user_id: str, version_no: int,
+                            red_header: bool = True):
+        """把某个历史版本导出为可编辑 docx（版本不再是纯文本）。"""
+        from urllib.parse import quote
+        t = self._get_owned(task_id, user_id)
+        if not t.document_id:
+            raise HTTPException(status_code=404, detail="暂无版本")
+        from app.application.documents.service import DocumentService
+        ver = DocumentService(self.db).get_version(t.document_id, version_no, user_id)
+        content = (ver.get("content") or "").strip()
+        if not content:
+            raise HTTPException(status_code=409, detail="该版本内容为空")
+        buf, title = self._render_docx(content, t.context or {}, red_header)
+        return buf, quote(f"{title}_v{version_no}.docx")
 
     def add_to_training(self, task_id: str, user_id: str, final_content: str) -> Dict[str, Any]:
         """instruction + AI 初稿 + 人工最终稿 → 候选样本（pending_review）。"""
@@ -361,12 +500,21 @@ class WritingTaskService:
 
     # ---------------- 内部 ----------------
 
-    def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool) -> str:
+    def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool,
+                                 template: Optional[Dict[str, Any]] = None) -> str:
         parts = ["请起草一份公文提纲。" if outline_only else "请起草一份公文。"]
+        # 关联模板：把模板的结构/写作指导/篇幅作为起草依据（模板内容由管理员/用户预先配置，非模型编造）
+        if template:
+            parts.append(f"本任务关联写作模板「{template.get('name', '')}」，请遵循其要求。")
+            if template.get("writing_style"):
+                parts.append(f"模板文风：{template['writing_style']}。")
+            if template.get("content_template"):
+                parts.append("模板结构参考：\n" + str(template["content_template"])[:1500])
         if ctx.get("document_type"):
             parts.append(f"文种：{ctx['document_type']}。")
-        if ctx.get("title"):
-            parts.append(f"标题：{ctx['title']}。")
+        derived_title = ctx.get("title") or task_parser.build_title(ctx)
+        if derived_title:
+            parts.append(f"标题：{derived_title}。")
         elif ctx.get("topic"):
             parts.append(f"主题：{ctx['topic']}。")
         if ctx.get("time_range"):
@@ -381,6 +529,8 @@ class WritingTaskService:
             parts.append(f"写作要求：{ctx['requirements']}。")
         if ctx.get("word_count_target"):
             parts.append(f"全文约 {ctx['word_count_target']} 字。")
+        elif template and template.get("word_count"):
+            parts.append(f"全文约 {template['word_count']} 字。")
         if ctx.get("tone"):
             parts.append(f"语气风格：{ctx['tone']}。")
         return "".join(parts)
@@ -422,7 +572,8 @@ class WritingTaskService:
         if not query.strip():
             return []
         try:
-            return self.rag.search(query=query, user_id=user_id) or []
+            kb_ids = ctx.get("kb_ids") or None  # 关联知识库时限定检索范围
+            return self.rag.search(query=query, user_id=user_id, kb_ids=kb_ids) or []
         except Exception as e:
             logger.warning("[写作任务] RAG 检索失败: %s", e)
             return []
@@ -439,10 +590,14 @@ class WritingTaskService:
             logger.warning("[写作任务] 附件上下文失败: %s", e)
             return None
 
-    def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id) -> str:
+    def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id,
+                   template: Optional[Dict[str, Any]] = None) -> str:
         if not self.assistant:
             raise HTTPException(status_code=503, detail="模型服务不可用")
         system = DRAFT_RULES
+        # 模板自带系统提示（管理员配置的写作规范）附加在通用起草规则之后
+        if template and template.get("system_prompt"):
+            system = DRAFT_RULES + "\n模板附加要求：\n" + str(template["system_prompt"])[:800]
         return self.assistant.chat(
             message=instruction, history=[], sources=sources, user_role="user",
             system_prompt=system, attachment_context=attachment_ctx,

@@ -74,11 +74,12 @@ class FormatCheckService:
 
         ids = [i for i in rule_ids.split(",") if i] if rule_ids else None
         rules = self.rules.list_for_check(ids)
-        if not rules:
-            raise AppError(
-                400,
-                "尚未配置任何格式规则。请管理员先在「格式校验-规则管理」中录入司法局正式格式规范。"
-            )
+        # 无配置规则不再阻塞校验：降级为纯 AI 校验模式
+        ai_only = not rules
+        if ai_only:
+            if self.engine.assistant is None:
+                raise AppError(503, "尚未配置格式规则，且 AI 服务不可用，暂时无法校验")
+            use_ai = True
         rule_dicts = [_rule_to_dict(r) for r in rules]
 
         tmp_path = self.check_dir / f"{uuid.uuid4().hex}_{filename}"
@@ -113,6 +114,7 @@ class FormatCheckService:
             "filename": filename,
             "file_type": result["file_type"],
             "ai_used": result["ai_used"],
+            "check_mode": "ai_only" if ai_only else "rule",
             "issue_count": len(issues),
             "issues": issues,
             "rules_used": [{"id": r["id"], "name": r["name"], "target": r["target"]}

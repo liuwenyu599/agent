@@ -27,10 +27,17 @@ DOC_TYPE_KEYWORDS = [
 DOCNUM_TYPICAL = {"通知", "请示", "报告", "函", "通报", "意见"}
 
 DOCNUM_RE = re.compile(r"([一-鿿]{2,8})〔\s*(\d{4})\s*〕\s*(\d+)\s*号")
-_DOCNUM_PREFIX_STRIP = re.compile(r"^(文号|编号|发文号)?(是|为|：|:)?")
+_DOCNUM_PREFIX_STRIP = re.compile(r"^(文号|编号|发文号)?(是|为|用|使用|：|:)?")
 YEAR_RE = re.compile(r"(20\d{2})\s*年(?:度)?")
 WORD_COUNT_RE = re.compile(r"(\d{3,5})\s*字")
 DATE_RE = re.compile(r"(20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)")
+# 只有用户明确表达"落款/成文/署名/签发日期"意图时，日期才是 document_date；
+# 内容中的时间（如"下半年的工作计划""2026 年 7 月前完成"）属于 time_range/正文，不得占用落款日期
+DATE_CUE_RE = re.compile(
+    r"(落款|成文|署名|签发|发文).{0,4}(日期|时间)"
+    r"|(日期|时间)\s*(是|为|：|:|定为|写成|用|按)"
+    r"|(用|按|以).{0,6}(这个|该)?日期"
+)
 
 DOCNUM_OFF_RE = re.compile(r"(不需要|不要|不用|无需|不加|去掉|取消).{0,6}文号|文号.{0,4}(不需要|不要|不用|取消|去掉)")
 DOCNUM_ON_RE = re.compile(r"(需要|要|加|加上|使用).{0,4}文号|文号.{0,2}(是|为)")
@@ -64,6 +71,9 @@ def empty_context() -> Dict[str, Any]:
         "document_number": None,
         "document_date": None,
         "signature": None,
+        "template_id": None,      # 关联写作模板（用户显式选择）
+        "template_name": None,
+        "kb_ids": [],             # 关联知识库（限定检索范围；空=全部可访问库）
         "missing_fields": [],
     }
 
@@ -78,7 +88,13 @@ def parse_message(message: str) -> Dict[str, Any]:
             upd["document_type"] = dtype
             break
 
-    m = YEAR_RE.search(msg)
+    # 年份属于"落款日期"时不再当作时间范围
+    date_span = None
+    dm = DATE_RE.search(msg)
+    if dm and DATE_CUE_RE.search(msg):
+        date_span = dm.span(1)
+    msg_for_year = msg if not date_span else msg[:date_span[0]] + msg[date_span[1]:]
+    m = YEAR_RE.search(msg_for_year)
     if m:
         upd["time_range"] = f"{m.group(1)}年度" if "度" in msg[m.end()-1:m.end()+1] or "年度" in msg else f"{m.group(1)}年"
 
@@ -114,7 +130,7 @@ def parse_message(message: str) -> Dict[str, Any]:
         upd["document_number_enabled"] = True
 
     m = DATE_RE.search(msg)
-    if m:
+    if m and DATE_CUE_RE.search(msg):
         upd["document_date"] = re.sub(r"\s+", "", m.group(1))
     elif TODAY_DATE_RE.search(msg):
         today = date.today()
@@ -147,7 +163,7 @@ def merge_context(ctx: Dict[str, Any], upd: Dict[str, Any]) -> List[str]:
         "purpose": "用途", "time_range": "时间", "recipient": "主送机关",
         "authority": "发文机关", "requirements": "写作要求", "tone": "语气",
         "word_count_target": "字数目标", "document_number": "文号",
-        "document_date": "成文日期",
+        "document_date": "落款日期", "template_name": "模板",
     }
     for k, v in upd.items():
         if k == "document_number_enabled":

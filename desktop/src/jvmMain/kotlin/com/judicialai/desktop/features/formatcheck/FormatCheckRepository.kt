@@ -29,5 +29,21 @@ class FormatCheckRepository(private val api: ApiClient) {
     suspend fun fix(recordId: String, acceptedIndices: List<Int>, target: File) =
         api.downloadPost(Endpoints.FormatCheck.FIX,
             mapOf("record_id" to recordId, "accepted_indices" to acceptedIndices), target)
+
+    // ---- 规则管理 ----
+
+    suspend fun rules(): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.FormatCheck.RULES)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun createRule(body: Map<String, Any?>) =
+        api.post(Endpoints.FormatCheck.RULES, body)
+
+    suspend fun updateRule(id: String, body: Map<String, Any?>) =
+        api.put(Endpoints.FormatCheck.rule(id), body)
+
+    suspend fun deleteRule(id: String) = api.del(Endpoints.FormatCheck.rule(id))
 }
 

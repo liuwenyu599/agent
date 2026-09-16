@@ -122,6 +122,16 @@ class ChatService:
             if use_rag:
                 sources = self.rag.search(query=message, user_id=user.id,
                                           kb_types=["public", "personal"])
+                if not sources:
+                    # 承接追问（"把这篇发过来""第三条讲什么"）：
+                    # 用最近几轮用户消息扩展查询再检索一次
+                    prev_user = [m["content"] for m in history_messages
+                                 if m.get("role") == "user"][-2:]
+                    if prev_user:
+                        expanded = " ".join(prev_user + [message])
+                        sources = self.rag.search(
+                            query=expanded, user_id=user.id,
+                            kb_types=["public", "personal"])
 
             examples = []
             if any(k in message for k in ["写", "起草", "生成", "撰写", "拟"]):

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
+import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
@@ -112,11 +114,172 @@ fun FormatCheckScreen() {
             Tab(selected = tab == 1, onClick = { tab = 1 }) {
                 Text("历史记录", fontSize = 14.sp, modifier = Modifier.padding(vertical = 10.dp))
             }
+            Tab(selected = tab == 2, onClick = { tab = 2; vm.loadRules() }) {
+                Text("规则管理", fontSize = 14.sp, modifier = Modifier.padding(vertical = 10.dp))
+            }
         }
 
         when (tab) {
             0 -> ResultPanel(vm, Modifier.weight(1f))
-            else -> HistoryPanel(vm, Modifier.weight(1f)) { tab = 0 }
+            1 -> HistoryPanel(vm, Modifier.weight(1f)) { tab = 0 }
+            else -> RulesPanel(vm, Modifier.weight(1f))
+        }
+    }
+}
+
+// ---------------- 规则管理 ----------------
+
+private val RULE_TARGETS = listOf(
+    "page" to "页面设置", "title" to "标题", "body" to "正文",
+    "heading1" to "一级标题", "heading2" to "二级标题",
+    "signature" to "落款", "date" to "成文日期", "general" to "全文通用",
+)
+private val RULE_SEVERITIES = listOf("error" to "严重", "warning" to "警告", "info" to "提示")
+
+@Composable
+private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
+    val form = vm.editingRule
+    if (form != null) {
+        RuleEditor(vm, form, modifier)
+        return
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("格式规则（为空时校验自动降级为 AI 全面审查）", fontSize = 12.sp,
+                color = TextSecondary, modifier = Modifier.weight(1f))
+            Button(onClick = { vm.openRuleEditor(null) },
+                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+                Text("新建规则", color = Color.White, fontSize = 13.sp)
+            }
+        }
+        Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
+            modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Column {
+                Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
+                    .padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text("名称", Modifier.weight(1.4f), fontSize = 12.sp, color = TextSecondary)
+                    Text("对象", Modifier.width(100.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("程度", Modifier.width(70.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("默认", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("启用", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("操作", Modifier.width(130.dp), fontSize = 12.sp, color = TextSecondary)
+                }
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (vm.rules.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(40.dp),
+                            contentAlignment = Alignment.Center) {
+                            Text("尚未配置规则，上传文档时将使用 AI 全面审查",
+                                color = TextSecondary, fontSize = 13.sp)
+                        }
+                    }
+                    vm.rules.forEach { rule ->
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(rule["name"].str(), Modifier.weight(1.4f), fontSize = 13.sp,
+                                color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(RULE_TARGETS.firstOrNull { it.first == rule["target"].str() }?.second
+                                ?: rule["target"].str(),
+                                Modifier.width(100.dp), fontSize = 12.sp, color = TextRegular)
+                            Box(Modifier.width(70.dp)) {
+                                SevTag(RULE_SEVERITIES.firstOrNull {
+                                    it.first == rule["severity"].str() }?.second ?: "提示",
+                                    when (rule["severity"].str()) {
+                                        "error" -> EpDanger; "warning" -> EpWarning; else -> EpPrimary
+                                    })
+                            }
+                            Text(if (rule["is_default"].bool()) "是" else "否",
+                                Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
+                            Text(if (rule["is_active"].bool(true)) "启用" else "停用",
+                                Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
+                            Row(Modifier.width(130.dp)) {
+                                TextButton(onClick = { vm.openRuleEditor(rule) }) {
+                                    Text("编辑", color = EpPrimary, fontSize = 12.sp)
+                                }
+                                TextButton(onClick = { vm.deleteRule(rule["id"].str()) }) {
+                                    Text("删除", color = EpDanger, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        Divider(color = Color(0xFFF2F4F8))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modifier = Modifier) {
+    var name by remember { mutableStateOf(form.name) }
+    var target by remember { mutableStateOf(form.target) }
+    var severity by remember { mutableStateOf(form.severity) }
+    var checksJson by remember { mutableStateOf(form.checksJson) }
+    var remark by remember { mutableStateOf(form.remark) }
+    var isDefault by remember { mutableStateOf(form.isDefault) }
+    var isActive by remember { mutableStateOf(form.isActive) }
+
+    Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), elevation = 0.dp) {
+        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(if (form.id.isBlank()) "新建规则" else "编辑规则",
+                fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            androidx.compose.material.OutlinedTextField(
+                name, { name = it }, label = { Text("规则名称") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("校验对象", fontSize = 12.sp, color = TextSecondary)
+                    Row(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 120.dp)) {
+                        Column {
+                            RULE_TARGETS.forEach { (key, label) ->
+                                Row(verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { target = key }) {
+                                    androidx.compose.material.RadioButton(
+                                        selected = target == key, onClick = { target = key })
+                                    Text(label, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("严重程度", fontSize = 12.sp, color = TextSecondary)
+                    RULE_SEVERITIES.forEach { (key, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { severity = key }) {
+                            androidx.compose.material.RadioButton(
+                                selected = severity == key, onClick = { severity = key })
+                            Text(label, fontSize = 12.sp)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(isDefault, { isDefault = it })
+                        Text("默认规则", fontSize = 12.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(isActive, { isActive = it })
+                        Text("启用", fontSize = 12.sp)
+                    }
+                }
+            }
+            androidx.compose.material.OutlinedTextField(
+                checksJson, { checksJson = it },
+                label = { Text("校验项（JSON，如 {\"font_name\":\"仿宋_GB2312\",\"font_size_pt\":16}）") },
+                modifier = Modifier.fillMaxWidth().height(120.dp))
+            androidx.compose.material.OutlinedTextField(
+                remark, { remark = it }, label = { Text("备注") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(enabled = !vm.busy, onClick = {
+                    vm.editingRule = form.copy(name = name, target = target, severity = severity,
+                        checksJson = checksJson, remark = remark,
+                        isDefault = isDefault, isActive = isActive)
+                    vm.saveRule()
+                }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+                    Text("保存", color = Color.White)
+                }
+                OutlinedButton(onClick = { vm.editingRule = null }) { Text("取消") }
+            }
         }
     }
 }

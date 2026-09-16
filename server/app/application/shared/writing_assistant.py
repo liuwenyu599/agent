@@ -44,7 +44,10 @@ class WritingAssistant:
         if sources:
             docs = "\n\n".join(f"[参考资料{i+1}]\n{s['content'][:1200]}" for i, s in enumerate(sources))
             parts.append(
-                "以下是检索到的参考资料，若与问题相关请据此作答；若不相关请忽略，直接用你自己的知识回答：\n" + docs
+                "以下是检索到的参考资料（语义候选）。相关性以语义判断："
+                "用户措辞与资料标题/类型用词不同不代表不相关；"
+                "语义相关就明确告知找到的是哪一篇并据此作答；"
+                "确实全部不相关时才说未找到，再用你自己的知识回答：\n" + docs
             )
         return "\n\n".join(parts)
 
@@ -190,8 +193,11 @@ class WritingAssistant:
         if sources:
             docs = "\n\n".join(f"[参考资料{i+1}]\n{s['content'][:1200]}" for i, s in enumerate(sources))
             sources_block = (
-                "\n\n以下是从单位知识库检索到的资料，写作/回答时应优先使用其中与主题相关的内容，"
-                "引用其中的事实和数据；不相关的资料请忽略：\n" + docs
+                "\n\n以下是从单位知识库检索到的资料（语义候选，按相关度排序）。"
+                "判断相关性时以语义为准：用户的口语化说法（如“推文”“材料”“文件”）"
+                "与资料标题/类型用词不同不代表不相关；"
+                "只要语义相关，就应明确告诉用户找到的是哪一篇，并优先使用其中的事实和数据；"
+                "有多篇候选时可列出让用户选择；确实全部不相关时才说明未找到：\n" + docs
             )
 
         if system_prompt:

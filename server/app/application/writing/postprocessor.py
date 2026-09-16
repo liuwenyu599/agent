@@ -297,8 +297,8 @@ def detect_truncation(text: str) -> Optional[str]:
 
 
 def detect_garbled(text: str) -> Optional[str]:
-    if " " in text:
-        return "含替换符  "
+    if "\ufffd" in text:
+        return "含替换符 U+FFFD"
     pua = re.findall(r"[\ue000-\uf8ff]", text)
     if pua:
         return f"含私用区字符 ×{len(pua)}"

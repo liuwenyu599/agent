@@ -14,6 +14,7 @@ fun JsonElement?.arr(): List<JsonElement> = (this as? JsonArray)?.toList() ?: em
 fun JsonElement?.str(): String = (this as? JsonPrimitive)?.contentOrNull ?: ""
 fun JsonElement?.int(): Int = (this as? JsonPrimitive)?.intOrNull ?: 0
 fun JsonElement?.bool(): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: false
+fun JsonElement?.bool(default: Boolean): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: default
 
 /**
  * 列表接口统一取数组：后端不同模块结构不一，按真实返回依次兼容：

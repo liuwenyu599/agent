@@ -57,6 +57,8 @@ object Endpoints {
         fun revise(id: String) = "/writing/tasks/$id/revise"
         fun versions(id: String) = "/writing/tasks/$id/versions"
         fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
+        fun versionExport(id: String, no: Int, redHeader: Boolean) =
+            "/writing/tasks/$id/versions/$no/export?red_header=$redHeader"
         fun export(id: String, redHeader: Boolean) = "/writing/tasks/$id/export?red_header=$redHeader"
         fun trainingSample(id: String) = "/writing/tasks/$id/training-sample"
     }

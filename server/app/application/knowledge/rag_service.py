@@ -34,12 +34,21 @@ class RagService:
         return [kb.id for kb in kbs]
 
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
-               top_k: int = None, min_score: float = None) -> List[Dict]:
-        """只做向量检索，低于阈值一律不注入，避免无关文档带偏模型。"""
+               top_k: int = None, min_score: float = None,
+               kb_ids: List[str] = None) -> List[Dict]:
+        """只做向量检索，低于阈值一律不注入，避免无关文档带偏模型。
+
+        :param kb_ids: 限定检索的知识库（写作任务关联知识库）；与可访问库取交集，
+                       传 None 表示全部可访问库。
+        """
         top_k = top_k or settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
 
-        kb_ids = self._get_accessible_kb_ids(user_id)
+        accessible = self._get_accessible_kb_ids(user_id)
+        if kb_ids:
+            keep = set(kb_ids)
+            accessible = [k for k in accessible if k in keep]
+        kb_ids = accessible
         if not kb_ids:
             return []
 

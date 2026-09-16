@@ -37,6 +37,8 @@ def get_task_service(db: Session = Depends(get_db)) -> WritingTaskService:
 class TaskCreateRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    template_id: Optional[str] = None      # 关联写作模板
+    kb_ids: Optional[list] = None          # 关联知识库（限定检索范围）
 
 
 class TaskChatRequest(BaseModel):
@@ -71,7 +73,8 @@ class TaskTrainingRequest(BaseModel):
 def create_task(req: TaskCreateRequest,
                 user: User = Depends(get_current_user),
                 svc: WritingTaskService = Depends(get_task_service)):
-    return svc.create_task(user.id, req.message, req.session_id)
+    return svc.create_task(user.id, req.message, req.session_id,
+                           template_id=req.template_id, kb_ids=req.kb_ids)
 
 
 @router.get("")
@@ -140,6 +143,17 @@ def get_version(task_id: str, version_no: int,
                 user: User = Depends(get_current_user),
                 svc: WritingTaskService = Depends(get_task_service)):
     return svc.get_version(task_id, user.id, version_no)
+
+
+@router.get("/{task_id}/versions/{version_no}/export")
+def export_version(task_id: str, version_no: int, red_header: bool = True,
+                   user: User = Depends(get_current_user),
+                   svc: WritingTaskService = Depends(get_task_service)):
+    """把指定历史版本导出为可编辑的 docx。"""
+    buf, fname = svc.export_version_docx(task_id, user.id, version_no, red_header)
+    return StreamingResponse(buf, media_type=_DOCX_MEDIA, headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{fname}"
+    })
 
 
 @router.get("/{task_id}/export")
