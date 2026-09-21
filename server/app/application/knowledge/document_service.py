@@ -13,9 +13,11 @@ from sqlalchemy.orm import Session
 
 from app.application.knowledge.chunkers import LegalChunker, OfficialChunker
 from app.application.ports import Embedder, VectorStore
+from app.application.knowledge.access import scope_of_doc, scope_of_kb
 from app.core.config import settings
-from app.domain.organization.departments import SCOPE_GLOBAL, dept_scope
 from app.core.logging import get_logger
+from app.domain.identity.authorization import is_privileged
+from app.domain.organization.departments import SCOPE_GLOBAL
 from app.infrastructure.database.models.knowledge import ChunkModel, DocumentModel, KnowledgeBaseModel
 
 logger = get_logger(__name__)
@@ -68,7 +70,7 @@ class DocumentService:
 
         # 初始状态：管理员/知识管理员直接发布；个人库直接发布；公共库待审核
         kb = db.get(KnowledgeBaseModel, kb_id)
-        if user_role in ["knowledge_admin", "developer"]:
+        if is_privileged(user_role):
             initial_status = "published"
         else:
             if kb and kb.kb_type == "personal" and kb.owner_id == user_id:
@@ -76,9 +78,10 @@ class DocumentService:
             else:
                 initial_status = "pending"
 
-        # 科室作用域：随知识库归属写入向量元数据，检索阶段据此做隔离
+        # 检索作用域：随知识库归属写入向量元数据，检索阶段据此做隔离
+        # 个人库→USER:<owner>；科室库→DEPT:<code>；全局公共库→GLOBAL
+        scope = scope_of_kb(kb)
         dept_code = getattr(kb, "department_code", "") or ""
-        scope = SCOPE_GLOBAL if not dept_code else dept_scope(dept_code)
 
         doc = DocumentModel(
             id=doc_id,
@@ -243,12 +246,8 @@ class DocumentService:
             doc.review_comment = comment or "审核通过"
             db.commit()
 
-            # 审核通过时才向量化，作用域取自文档归属科室
-            doc_scope = (
-                dept_scope(doc.department_code)
-                if getattr(doc, "department_code", "")
-                else SCOPE_GLOBAL
-            )
+            # 审核通过时才向量化，作用域取自文档所属知识库归属
+            doc_scope = scope_of_doc(db, doc)
             chunks = db.scalars(
                 select(ChunkModel).where(ChunkModel.doc_id == doc_id)
             ).all()

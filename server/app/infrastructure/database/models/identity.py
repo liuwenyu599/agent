@@ -17,3 +17,5 @@ class UserModel(Base, IdMixin, TimestampMixin):
     department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 管理员重置密码后为 True，用户下次登录必须修改密码
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)

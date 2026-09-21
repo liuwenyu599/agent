@@ -36,3 +36,10 @@ class UserUpdateRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """本人修改密码：必须验证旧密码，并二次确认新密码。"""
+    old_password: str
+    new_password: str
+    confirm_password: str

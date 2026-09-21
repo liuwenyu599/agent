@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 from app.application.ports import Embedder, VectorStore
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.domain.organization.departments import SCOPE_GLOBAL, dept_scope
+from app.domain.identity.authorization import is_system_admin
+from app.domain.organization.departments import (
+    SCOPE_GLOBAL,
+    dept_scope,
+    user_scope,
+)
 from app.infrastructure.database.models.identity import UserModel
 from app.infrastructure.database.models.knowledge import (
     ChunkModel,
@@ -32,43 +37,69 @@ class RagService:
 
     # ---------------- 组织隔离：作用域解析 ----------------
 
+    @property
+    def access(self):
+        """知识访问策略（唯一权限判定入口）。"""
+        if getattr(self, "_access", None) is None:
+            from app.application.knowledge.access import KnowledgeAccessPolicy
+            self._access = KnowledgeAccessPolicy(self.db)
+        return self._access
+
+    def _user_row(self, user_id: str):
+        return self.db.get(UserModel, user_id)
+
     def _dept_code_of(self, user_id: str) -> str:
-        user = self.db.get(UserModel, user_id)
-        return getattr(user, "department_code", "") or ""
+        user = self._user_row(user_id)
+        code = getattr(user, "department_code", "") or ""
+        if code:
+            return code
+        # 历史数据：按部门名称反查，不做猜测
+        from app.domain.organization.departments import resolve_code
+        return resolve_code(getattr(user, "department", "") or "")
 
     def _is_admin(self, user_id: str) -> bool:
-        user = self.db.get(UserModel, user_id)
-        return bool(user and getattr(user, "role", "") == "admin")
+        """系统管理员判定（developer 正式角色 + admin 历史兼容）。"""
+        user = self._user_row(user_id)
+        return is_system_admin(getattr(user, "role", "") or "")
 
     @staticmethod
-    def resolve_scopes(dept_code: str, is_admin: bool = False) -> List[str]:
-        """用户可见作用域：全局公共 + 本人所属科室（管理员可见全部科室）。
+    def resolve_scopes(dept_code: str, is_admin: bool = False,
+                       user_id: str = "") -> List[str]:
+        """用户可见作用域：GLOBAL + 本人个人 + 本人所属科室。
 
-        该作用域会下传到 FAISS 召回阶段，越权向量不参与 Top-K 竞争。
+        系统管理员返回 None 表示不限制。该作用域下传到 FAISS 召回阶段，
+        越权向量不参与 Top-K 竞争。
         """
         if is_admin:
             return None  # None 表示不限制（仅系统管理员）
         scopes = [SCOPE_GLOBAL]
+        if user_id:
+            scopes.append(user_scope(user_id))
         if dept_code:
             scopes.append(dept_scope(dept_code))
         return scopes
 
     def _get_accessible_kb_ids(self, user_id: str, dept_code: str = "",
                                is_admin: bool = False) -> List[str]:
-        """可访问知识库：全局公共 + 个人 + 本人科室（管理员全部）。"""
+        """可访问知识库：全局公共 + 个人 + 本人科室（系统管理员全部）。"""
         if is_admin:
-            kbs = self.db.scalars(select(KnowledgeBaseModel)).all()
+            kbs = self.db.scalars(
+                select(KnowledgeBaseModel).where(KnowledgeBaseModel.is_active.is_(True))
+            ).all()
             return [kb.id for kb in kbs]
 
         conds = [
-            (KnowledgeBaseModel.kb_type == "public")
+            (KnowledgeBaseModel.kb_type != "personal")
             & (KnowledgeBaseModel.department_code == ""),
             (KnowledgeBaseModel.kb_type == "personal")
             & (KnowledgeBaseModel.owner_id == user_id),
         ]
         if dept_code:
             conds.append(KnowledgeBaseModel.department_code == dept_code)
-        kbs = self.db.scalars(select(KnowledgeBaseModel).where(or_(*conds))).all()
+        kbs = self.db.scalars(
+            select(KnowledgeBaseModel).where(
+                KnowledgeBaseModel.is_active.is_(True), or_(*conds))
+        ).all()
         return [kb.id for kb in kbs]
 
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
@@ -79,17 +110,27 @@ class RagService:
 
         :param kb_ids: 限定检索的知识库（写作任务关联知识库）；与可访问库取交集，
                        传 None 表示全部可访问库。
-        :param dept_code: 用户所属科室 code；未传时从 users 表解析。
-        :param scopes: 允许的作用域（GLOBAL / DEPT:x），管理员可传 None 放开。
+        :param dept_code: **忽略**——用户所属科室一律由服务端从 users 表解析，
+                       客户端传值无法扩大检索范围。
+        :param scopes: 允许的作用域（GLOBAL / DEPT:x / USER:id）；
+                       与服务端解析出的作用域取交集，系统管理员恒为全部。
         """
         top_k = top_k or settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
 
-        if dept_code is None:
-            dept_code = self._dept_code_of(user_id)
+        # 服务端解析，不信任入参
+        dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
-        if scopes is None and not admin:
-            scopes = self.resolve_scopes(dept_code, admin)
+
+        # 客户端 scopes 只能收窄，不能放大
+        server_scopes = self.resolve_scopes(dept_code, admin, user_id)
+        if server_scopes is None:
+            scopes = None  # 系统管理员：不限制
+        elif scopes:
+            allowed = set(server_scopes)
+            scopes = [s for s in scopes if s in allowed]
+        else:
+            scopes = server_scopes
 
         accessible = self._get_accessible_kb_ids(user_id, dept_code, admin)
         if kb_ids:
@@ -159,10 +200,10 @@ class RagService:
 
         向量库不可用时回退关键词检索。检索范围同样受科室作用域约束。
         """
-        if dept_code is None:
-            dept_code = self._dept_code_of(user_id)
+        # 服务端解析，不信任入参
+        dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
-        scopes = self.resolve_scopes(dept_code, admin)
+        scopes = self.resolve_scopes(dept_code, admin, user_id)
         kb_ids = self._get_accessible_kb_ids(user_id, dept_code, admin)
         if not kb_ids:
             return []

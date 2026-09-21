@@ -59,13 +59,25 @@ class SqlAlchemyKnowledgeBaseRepository(KnowledgeBaseRepository):
     def get_model(self, id: str) -> Optional[KnowledgeBaseModel]:
         return self.db.get(KnowledgeBaseModel, id)
 
-    def list_accessible(self, user_id: str, user_role: str) -> List[KnowledgeBase]:
-        q = select(KnowledgeBaseModel)
-        if user_role != "admin":
-            q = q.where(or_(
-                KnowledgeBaseModel.kb_type == "public",
-                (KnowledgeBaseModel.kb_type == "personal") & (KnowledgeBaseModel.owner_id == user_id),
-            ))
+    def list_accessible(self, user_id: str, user_role: str,
+                        dept_code: str = "") -> List[KnowledgeBase]:
+        """可见知识库：全局公共 + 本人个人 + 本人科室（系统管理员返回全部）。
+
+        角色语义统一由 app.domain.identity.authorization 提供，此处不写字面量判断。
+        """
+        from app.domain.identity.authorization import is_system_admin
+
+        q = select(KnowledgeBaseModel).where(KnowledgeBaseModel.is_active.is_(True))
+        if not is_system_admin(user_role):
+            conds = [
+                (KnowledgeBaseModel.department_code == "")
+                & (KnowledgeBaseModel.kb_type != "personal"),
+                (KnowledgeBaseModel.kb_type == "personal")
+                & (KnowledgeBaseModel.owner_id == user_id),
+            ]
+            if dept_code:
+                conds.append(KnowledgeBaseModel.department_code == dept_code)
+            q = q.where(or_(*conds))
         return [_kb_to_entity(m) for m in self.db.scalars(q).all()]
 
     def get_personal_kb(self, user_id: str) -> Optional[KnowledgeBase]:

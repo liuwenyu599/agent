@@ -11,6 +11,8 @@ object Endpoints {
         const val REGISTER_FIRST = "/auth/register-first"
         const val CHECK_FIRST_USER = "/auth/check-first-user"
         const val ME = "/auth/me"
+        /** 当前登录用户修改自己的密码（旧密码 + 新密码二次确认） */
+        const val CHANGE_PASSWORD = "/auth/change-password"
     }
 
     object Users {

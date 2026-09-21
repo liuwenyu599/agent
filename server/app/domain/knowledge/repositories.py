@@ -6,7 +6,13 @@ from app.domain.knowledge.entities import DocumentChunk, KnowledgeBase, Knowledg
 
 
 class KnowledgeBaseRepository(Repository[KnowledgeBase]):
-    def list_accessible(self, user_id: str, user_role: str) -> List[KnowledgeBase]:
+    def list_accessible(self, user_id: str, user_role: str,
+                        dept_code: str = "") -> List[KnowledgeBase]:
+        """按用户可见范围返回知识库；具体判定由访问策略给出参数。
+
+        注意：真正的权限判定在 app.application.knowledge.access，
+        仓储只做数据过滤，不做角色语义判断。
+        """
         raise NotImplementedError
 
     def get_personal_kb(self, user_id: str) -> Optional[KnowledgeBase]:

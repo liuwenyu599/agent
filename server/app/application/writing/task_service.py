@@ -266,24 +266,26 @@ class WritingTaskService:
 
     def _plan_knowledge(self, user_id: str,
                         org_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """用户可见知识库：全局公共 + 本人科室（管理员可见全部）。"""
+        """用户可见知识库：全局公共 + 本人个人 + 本科室（系统管理员全部）。
+
+        走统一访问策略，杜绝把他人个人库或他科室库规划给用户。
+        """
         from app.infrastructure.database.models.knowledge import KnowledgeBaseModel
         try:
             from sqlalchemy import select
             dept_code = org_ctx.get("dept_code") or ""
-            if org_ctx.get("is_admin"):
-                kbs = self.db.scalars(select(KnowledgeBaseModel)).all()
-            else:
-                kbs = self.db.scalars(
-                    select(KnowledgeBaseModel).where(
-                        (KnowledgeBaseModel.department_code == "")
-                        | (KnowledgeBaseModel.department_code == dept_code)
-                    )).all()
+            kb_ids = self.rag._get_accessible_kb_ids(
+                user_id, dept_code, bool(org_ctx.get("is_admin")))
+            if not kb_ids:
+                return []
+            kbs = self.db.scalars(
+                select(KnowledgeBaseModel).where(KnowledgeBaseModel.id.in_(kb_ids))).all()
             return [{
                 "id": kb.id,
                 "label": kb.name,
                 "selected": bool(dept_code and kb.department_code == dept_code),
-                "note": "本科室知识库" if kb.department_code else "全局公共知识库",
+                "note": ("本科室知识库" if kb.department_code
+                         else ("我的个人知识库" if kb.kb_type == "personal" else "全局公共知识库")),
             } for kb in kbs]
         except Exception as e:
             logger.warning("[写作规划] 知识库加载失败: %s", e)

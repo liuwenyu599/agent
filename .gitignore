@@ -152,3 +152,7 @@ deploy/.env
 
 # WorkBuddy workspace data
 .workbuddy/
+
+# pycache under force-included model dirs
+**/__pycache__/
+*.py[cod]

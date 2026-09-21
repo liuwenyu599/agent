@@ -23,6 +23,7 @@ enum class PersonalSection(val title: String) {
     DOCS("我的文档"),
     MY_APPROVALS("我的审批"),
     FAVORITES("我的收藏"),
+    SECURITY("账号安全"),
     SETTINGS("个人设置"),
 }
 
@@ -65,9 +66,67 @@ class PersonalViewModel {
     var todoCount by mutableStateOf(0)
         private set
 
+    // ---- 账号安全：修改密码 ----
+    var changing by mutableStateOf(false)
+        private set
+    var changeError by mutableStateOf<String?>(null)
+        private set
+    var changeSuccess by mutableStateOf<String?>(null)
+        private set
+
+    init {
+        // 管理员重置过密码：打开个人中心时直接落在「账号安全」
+        if (AppState.mustChangePassword) section = PersonalSection.SECURITY
+    }
+
     fun select(section: PersonalSection) {
         this.section = section
-        if (section != PersonalSection.FAVORITES && section != PersonalSection.SETTINGS) load()
+        if (section != PersonalSection.FAVORITES && section != PersonalSection.SETTINGS
+            && section != PersonalSection.SECURITY) load()
+    }
+
+    /**
+     * 修改本人密码。强度规则与后端一致（≥8 位、字母+数字、含符号或 ≥10 位），
+     * 这里只做即时反馈，最终以服务端校验为准；密码不落盘、不进日志。
+     */
+    fun changePassword(oldPassword: String, newPassword: String, confirm: String) {
+        changeError = null
+        changeSuccess = null
+        if (oldPassword.isBlank() || newPassword.isBlank() || confirm.isBlank()) {
+            changeError = "请填写完整"; return
+        }
+        if (newPassword != confirm) {
+            changeError = "两次输入的新密码不一致"; return
+        }
+        if (newPassword == oldPassword) {
+            changeError = "新密码不能与旧密码相同"; return
+        }
+        if (newPassword.length < 8) {
+            changeError = "密码至少 8 位"; return
+        }
+        if (!(newPassword.any { it.isLetter() } && newPassword.any { it.isDigit() })) {
+            changeError = "密码必须同时包含字母和数字"; return
+        }
+        val strong = newPassword.any { !it.isLetterOrDigit() } || newPassword.length >= 10
+        if (!strong) {
+            changeError = "密码强度不足：请包含字母、数字与符号，或长度达到 10 位"; return
+        }
+        changing = true
+        scope.launch {
+            when (val r = AppState.api.changePassword(oldPassword, newPassword)) {
+                is ApiResult.Ok -> {
+                    changeSuccess = "密码修改成功"
+                    AppState.onPasswordChanged()
+                }
+                is ApiResult.Err -> changeError = r.message
+            }
+            changing = false
+        }
+    }
+
+    fun clearChangeResult() {
+        changeError = null
+        changeSuccess = null
     }
 
     fun load() {

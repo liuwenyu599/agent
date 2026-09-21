@@ -37,7 +37,8 @@ class AuthViewModel {
         busy = true; error = null; info = null
         scope.launch {
             when (val r = AppState.api.login(username, password)) {
-                is ApiResult.Ok -> AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role)
+                is ApiResult.Ok -> AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role,
+                    r.data.mustChangePassword)
                 is ApiResult.Err -> error = r.message
             }
             busy = false
@@ -51,7 +52,8 @@ class AuthViewModel {
         busy = true; error = null; info = null
         scope.launch {
             when (val r = AppState.api.register(username, password, email, realName, department)) {
-                is ApiResult.Ok -> AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role)
+                is ApiResult.Ok -> AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role,
+                    r.data.mustChangePassword)
                 is ApiResult.Err -> error = r.message
             }
             busy = false
@@ -67,7 +69,8 @@ class AuthViewModel {
             when (val r = AppState.api.registerFirst(username, password, email, realName, department)) {
                 is ApiResult.Ok -> {
                     isFirstUser = false
-                    AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role)
+                    AppState.onLoginSuccess(r.data.username, r.data.realName, r.data.role,
+                    r.data.mustChangePassword)
                 }
                 is ApiResult.Err -> error = r.message
             }

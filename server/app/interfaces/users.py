@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.application.audit.service import AuditService
 from app.application.identity.dto import (
     ResetPasswordRequest,
     UserCreateRequest,
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/users", tags=["用户"])
 
 
 def get_user_service(db: Session = Depends(get_db)) -> UserService:
-    return UserService(SqlAlchemyUserRepository(db))
+    return UserService(SqlAlchemyUserRepository(db), db=db, audit=AuditService.from_db(db))
 
 
 @router.get("/")
@@ -69,8 +70,9 @@ def reset_password(
     admin: User = Depends(require_admin_or_above),
     svc: UserService = Depends(get_user_service),
 ):
-    svc.reset_password(user_id, req.password)
-    return {"message": "Password reset successfully"}
+    """管理员重置他人密码：重置后该用户下次登录必须修改密码。"""
+    svc.reset_password(admin, user_id, req.password)
+    return {"message": "Password reset successfully", "must_change_password": True}
 
 
 @router.delete("/{user_id}")

@@ -49,10 +49,11 @@ def my_context(db: Session = Depends(get_db),
 @router.get("/agents/{dept_code}")
 def get_agent(dept_code: str, db: Session = Depends(get_db),
               user: User = Depends(get_current_user)):
+    """查看科室 Agent：系统管理员可看全部，其余只能看本人所属科室。"""
     svc = OrganizationService(db)
     ctx = svc.user_context(user.id)
     admin = ctx.get("is_admin")
-    # 非本科室且非管理员：直接 403，不返回任何本科室内容
+    # 非本科室且非系统管理员：直接 403，不泄漏任何他科室配置
     if not admin and ctx.get("dept_code") != dept_code:
         raise HTTPException(status_code=403, detail="无权查看该科室 Agent")
     agent = svc.agent_of(dept_code)

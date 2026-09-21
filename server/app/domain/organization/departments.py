@@ -32,6 +32,8 @@ DEPARTMENT_BY_NAME: Dict[str, Department] = {d.name: d for d in DEPARTMENTS}
 
 # 检索作用域
 SCOPE_GLOBAL = "GLOBAL"
+# 个人知识库作用域前缀（仅 owner 可见）
+SCOPE_USER_PREFIX = "USER:"
 
 
 def dept_scope(code: str) -> str:
@@ -39,9 +41,19 @@ def dept_scope(code: str) -> str:
     return f"DEPT:{code}"
 
 
+def user_scope(user_id: str) -> str:
+    """个人知识库作用域标记，如 USER:<user_id>，仅本人可召回。"""
+    return f"{SCOPE_USER_PREFIX}{user_id}"
+
+
 def resolve_code(name: str) -> str:
-    """按正式名称或简称反查 code；未命中返回空串（不猜测归口）。"""
+    """按 code / 正式名称 / 简称反查 code；未命中返回空串（不猜测归口）。"""
+    if not name:
+        return ""
+    name = name.strip()
+    if name in DEPARTMENT_BY_CODE:
+        return name
     for d in DEPARTMENTS:
-        if name and (name == d.name or name == d.short_name):
+        if name == d.name or name == d.short_name:
             return d.code
     return ""

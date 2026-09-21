@@ -72,7 +72,8 @@ async def upload_document(
     db: Session = Depends(get_db),
     svc: KnowledgeService = Depends(get_knowledge_service),
 ):
-    svc.get_kb_checked(kb_id, user)
+    # 写权限由服务端按科室解析，客户端只能指定目标库，不能扩大范围
+    svc.check_kb_write(kb_id, user)
     return await get_document_service().process_upload(
         file, kb_id, user.id, user.role, db,
         title=title, doc_type=doc_type, department=department, doc_number=doc_number,
@@ -102,15 +103,16 @@ def delete_document(doc_id: str, user: User = Depends(get_current_user),
 @router.get("/pending")
 def list_pending_documents(user: User = Depends(require_knowledge_admin),
                            svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.list_pending()
+    """待审队列：知识管理员仅本人科室，系统管理员全部。"""
+    return svc.list_pending(user)
 
 
 @router.post("/review")
 def review_document(req: ReviewRequest, user: User = Depends(get_current_user),
-                    db: Session = Depends(get_db)):
-    # 仅知识管理员可审核，系统管理员不可审核（旧规则）
-    if user.role != ROLE_KNOWLEDGE_ADMIN:
-        raise AppError(403, "仅知识管理员可执行审核操作")
+                    db: Session = Depends(get_db),
+                    svc: KnowledgeService = Depends(get_knowledge_service)):
+    """审核：知识管理员仅限本科室内容；系统管理员全局。"""
+    svc.assert_can_review(req.doc_id, user)
     return get_document_service().review_document(req.doc_id, req.action, req.comment, user.id, db)
 
 
@@ -130,13 +132,13 @@ def list_all_documents(status: str = Query("all"),
                        user: User = Depends(require_admin_or_above),
                        page: int = Query(1), page_size: int = Query(20),
                        svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.list_all_documents(status, page, page_size)
+    return svc.list_all_documents(user, status, page, page_size)
 
 
 @router.post("/documents/{doc_id}/archive")
 def archive_document(doc_id: str, user: User = Depends(require_admin_or_above),
                      svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.archive_document(doc_id)
+    return svc.archive_document(doc_id, user)
 
 
 @router.get("/{kb_id}")
@@ -150,13 +152,13 @@ def get_kb(kb_id: str, user: User = Depends(get_current_user),
 def update_kb(kb_id: str, req: KBUpdateRequest,
               user: User = Depends(require_knowledge_admin),
               svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.update_kb(kb_id, req.name, req.description)
+    return svc.update_kb(kb_id, req.name, req.description, user)
 
 
 @router.delete("/{kb_id}")
 def delete_kb(kb_id: str, user: User = Depends(require_admin_or_above),
               svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.delete_kb(kb_id)
+    return svc.delete_kb(kb_id, user)
 
 
 @router.get("/{kb_id}/documents")
@@ -171,7 +173,7 @@ def list_documents(kb_id: str, status: str = Query("published"),
 async def batch_upload(kb_id: str = Query(...), files: List[UploadFile] = File(...),
                        user: User = Depends(get_current_user),
                        svc: KnowledgeService = Depends(get_knowledge_service)):
-    svc.get_kb_checked(kb_id, user)
+    svc.check_kb_write(kb_id, user)
     task = BatchImportTask(kb_id=kb_id, user_id=user.id, total_files=len(files))
     tmp_dir = settings.DATA_DIR / "tmp" / "batch"
     tmp_dir.mkdir(parents=True, exist_ok=True)

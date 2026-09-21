@@ -19,18 +19,30 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Icon
+import androidx.compose.material.LocalTextStyle
+import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,6 +54,8 @@ import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.Ok
+import com.judicialai.desktop.design.theme.OkSoft
 import com.judicialai.desktop.design.theme.OnPrimaryText
 import com.judicialai.desktop.design.theme.Primary
 import com.judicialai.desktop.design.theme.PrimarySoft
@@ -140,6 +154,7 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                     PersonalSection.RECENT -> DocList(vm.recent)
                     PersonalSection.DOCS -> DocList(vm.docs)
                     PersonalSection.FAVORITES -> FavoritesPanel()
+                    PersonalSection.SECURITY -> SecurityPanel(vm)
                     PersonalSection.SETTINGS -> SettingsPanel()
                 }
             }
@@ -230,6 +245,115 @@ private fun FavoritesPanel() {
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
     }
+}
+
+/**
+ * 账号安全：修改密码。
+ *
+ * 规则与后端一致（旧密码校验 + 新密码二次确认 + ≥8 位且字母数字组合），
+ * 密码只在内存中传递，不落盘、不写日志；政务内网短信找回尚未开放。
+ */
+@Composable
+private fun SecurityPanel(vm: PersonalViewModel) {
+    var oldPwd by remember { mutableStateOf("") }
+    var newPwd by remember { mutableStateOf("") }
+    var confirmPwd by remember { mutableStateOf("") }
+    var mask by remember { mutableStateOf(true) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+        if (AppState.mustChangePassword) {
+            NoticeBar(
+                text = "管理员已重置你的密码，请先修改密码后再使用其他功能。",
+                fg = Warn, bg = WarnSoft,
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("账号", fontSize = 12.5.sp, color = Muted, modifier = Modifier.width(88.dp))
+            Text(AppState.username.ifBlank { "—" }, fontSize = 13.sp, color = Ink)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("登录方式", fontSize = 12.5.sp, color = Muted, modifier = Modifier.width(88.dp))
+            Text("账号密码", fontSize = 13.sp, color = Ink)
+        }
+        Spacer(Modifier.height(Dimens.space2))
+
+        Text("修改密码", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Ink)
+        Spacer(Modifier.height(Dimens.space1))
+        PasswordField("当前密码", oldPwd, mask) { oldPwd = it }
+        PasswordField("新密码", newPwd, mask) { newPwd = it }
+        PasswordField("确认新密码", confirmPwd, mask) { confirmPwd = it }
+
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
+                .clickable { mask = !mask }.padding(vertical = Dimens.space1),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (mask) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                null, tint = Muted, modifier = Modifier.size(Dimens.iconSm),
+            )
+            Spacer(Modifier.width(Dimens.space2))
+            Text(if (mask) "显示密码" else "隐藏密码", fontSize = 12.sp, color = Muted)
+        }
+        Text("至少 8 位，需同时包含字母和数字；建议包含符号。",
+            fontSize = 11.5.sp, color = Muted)
+
+        if (vm.changeError != null) {
+            NoticeBar(text = vm.changeError!!, fg = Warn, bg = WarnSoft)
+        }
+        if (vm.changeSuccess != null) {
+            NoticeBar(text = vm.changeSuccess!!, fg = Ok, bg = OkSoft)
+        }
+
+        Spacer(Modifier.height(Dimens.space1))
+        Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+            AppButton(
+                text = if (vm.changing) "提交中…" else "确认修改",
+                onClick = { vm.changePassword(oldPwd, newPwd, confirmPwd) },
+                enabled = !vm.changing,
+                icon = Icons.Default.Lock,
+            )
+            AppButton(
+                text = "清空",
+                onClick = {
+                    oldPwd = ""; newPwd = ""; confirmPwd = ""; vm.clearChangeResult()
+                },
+                kind = AppButtonKind.SECONDARY,
+            )
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+        Text(
+            "忘记密码请联系本科室系统管理员重置；政务内网短信验证码功能尚未开放。",
+            fontSize = 11.5.sp, color = Muted,
+        )
+    }
+}
+
+@Composable
+private fun PasswordField(
+    label: String,
+    value: String,
+    mask: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label, fontSize = 12.sp) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        visualTransformation = if (mask) PasswordVisualTransformation() else VisualTransformation.None,
+        textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = Ink),
+        colors = TextFieldDefaults.outlinedTextFieldColors(
+            focusedBorderColor = Primary,
+            unfocusedBorderColor = Line,
+            cursorColor = Primary,
+            focusedLabelColor = Primary,
+            unfocusedLabelColor = Muted,
+        ),
+    )
 }
 
 @Composable

@@ -42,6 +42,13 @@ object AppState {
     /** 待办数量（来自 /approvals/counts，未取到时为 0，前端不臆造） */
     var todoCount by mutableStateOf(0)
 
+    /**
+     * 管理员重置过密码 → true。后端会在改密前拦截业务接口，
+     * 客户端据此引导用户到个人中心「账号安全」修改密码。
+     */
+    var mustChangePassword by mutableStateOf(false)
+        private set
+
     var serverConfig by mutableStateOf(ServerConfig.load())
         private set
 
@@ -89,13 +96,22 @@ object AppState {
         ServerConfig.save(cfg)
     }
 
-    fun onLoginSuccess(username: String, realName: String, role: String) {
+    fun onLoginSuccess(username: String, realName: String, role: String,
+                       mustChangePassword: Boolean = false) {
         this.username = username
         this.realName = realName
         this.role = role
+        this.mustChangePassword = mustChangePassword
         this.loggedIn = true
         this.screen = AppScreen.HOME
         this.navDrawerOpen = false
+        // 管理员重置过密码：自动打开个人中心，由 ViewModel 落到「账号安全」引导改密
+        if (mustChangePassword) this.personalCenterOpen = true
+    }
+
+    /** 改密成功后清除强制改密标记 */
+    fun onPasswordChanged() {
+        mustChangePassword = false
     }
 
     fun logout() {
@@ -104,6 +120,8 @@ object AppState {
         username = ""
         realName = ""
         role = "user"
+        mustChangePassword = false
+        personalCenterOpen = false
         departmentName = ""
         departmentCode = ""
         agentName = ""

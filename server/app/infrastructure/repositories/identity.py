@@ -21,6 +21,8 @@ def _to_entity(m: UserModel) -> User:
         is_active=bool(m.is_active),
         created_at=m.created_at,
         updated_at=m.updated_at,
+        department_code=getattr(m, "department_code", "") or "",
+        must_change_password=bool(getattr(m, "must_change_password", False)),
     )
 
 
@@ -55,6 +57,8 @@ class SqlAlchemyUserRepository(UserRepository):
             department=user.department,
             role=user.role,
             is_active=user.is_active,
+            department_code=user.department_code or "",
+            must_change_password=bool(getattr(user, "must_change_password", False)),
         )
         self.db.add(m)
         self.db.commit()
@@ -70,6 +74,8 @@ class SqlAlchemyUserRepository(UserRepository):
         m.role = user.role
         m.is_active = user.is_active
         m.hashed_password = user.hashed_password
+        m.department_code = user.department_code or ""
+        m.must_change_password = bool(getattr(user, "must_change_password", False))
         self.db.commit()
         self.db.refresh(m)
         return _to_entity(m)

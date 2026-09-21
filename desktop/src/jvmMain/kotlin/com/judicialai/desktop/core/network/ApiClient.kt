@@ -126,6 +126,8 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         val username: String,
         val realName: String,
         val role: String,
+        /** 管理员重置过密码后为 true，客户端需强制引导修改密码 */
+        val mustChangePassword: Boolean = false,
     )
 
     /**
@@ -148,10 +150,16 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     if (t != null) {
                         setToken(t)
                         val u = obj?.get("user") as? JsonObject
+                        val mustChange = obj?.get("must_change_password")
+                            ?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+                            ?: u?.get("must_change_password")
+                                ?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+                            ?: false
                         val user = LoginUser(
                             username = u?.get("username")?.jsonPrimitive?.content ?: username,
                             realName = u?.get("real_name")?.jsonPrimitive?.content ?: "",
                             role = u?.get("role")?.jsonPrimitive?.content ?: "user",
+                            mustChangePassword = mustChange,
                         )
                         ClientLog.info("登录成功")
                         ApiResult.Ok(user)
@@ -234,6 +242,20 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         req(HttpMethod.Post, path, body, emptyMap(), timeoutMs)
 
     suspend fun put(path: String, body: Any? = null) = req(HttpMethod.Put, path, body)
+
+    /**
+     * POST /auth/change-password {old_password, new_password, confirm_password}
+     * 服务端校验旧密码与复杂度；客户端不缓存、不记录任何密码明文。
+     */
+    suspend fun changePassword(oldPassword: String, newPassword: String): ApiResult<String> =
+        when (val r = post(Endpoints.Auth.CHANGE_PASSWORD, mapOf(
+            "old_password" to oldPassword,
+            "new_password" to newPassword,
+            "confirm_password" to newPassword,
+        ))) {
+            is ApiResult.Ok -> ApiResult.Ok("")
+            is ApiResult.Err -> r
+        }
 
     suspend fun del(path: String) = req(HttpMethod.Delete, path, null)
 

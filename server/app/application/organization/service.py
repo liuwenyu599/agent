@@ -14,11 +14,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.domain.identity.authorization import (
+    can_manage_department,
+    is_system_admin,
+    role_of,
+)
 from app.domain.organization.departments import (
     DEPARTMENTS,
     SCOPE_GLOBAL,
     dept_scope,
     resolve_code,
+    user_scope,
 )
 from app.infrastructure.database.models.identity import UserModel
 from app.infrastructure.database.models.organization import (
@@ -166,14 +172,19 @@ class OrganizationService:
         code = self._effective_code(user)
         dept = self.db.get(DepartmentModel, code) if code else None
         agent = self.agent_of(code)
-        scopes = [SCOPE_GLOBAL] + ([dept_scope(code)] if code else [])
+        scopes = [SCOPE_GLOBAL]
+        if getattr(user, "id", ""):
+            scopes.append(user_scope(user.id))
+        if code:
+            scopes.append(dept_scope(code))
         return {
             "dept_code": code,
             "dept_name": dept.name if dept else "",
             "short_name": dept.short_name if dept else "",
             "agent": agent,
             "scopes": scopes,
-            "is_admin": getattr(user, "role", "") == "admin",
+            # 系统管理员：developer（正式）或 admin（历史遗留）
+            "is_admin": is_system_admin(role_of(user)),
         }
 
     @staticmethod
@@ -201,11 +212,11 @@ class OrganizationService:
     # ---------------- 维护（知识管理员 / 管理员） ----------------
 
     def can_manage(self, user: UserModel, dept_code: str) -> bool:
-        if getattr(user, "role", "") in ("admin", "developer"):
-            return True
-        if getattr(user, "role", "") == "knowledge_admin":
-            return self._effective_code(user) == dept_code
-        return False
+        """系统管理员可管理全部科室；知识管理员仅限本人所属科室。
+
+        用户科室归属由服务端从 users 表解析，不采信任何客户端提交的 dept_code。
+        """
+        return can_manage_department(role_of(user), self._effective_code(user), dept_code)
 
     def update_agent(self, user: UserModel, dept_code: str,
                      payload: Dict[str, Any]) -> Dict[str, Any]:

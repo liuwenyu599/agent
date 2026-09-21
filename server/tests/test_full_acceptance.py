@@ -457,7 +457,9 @@ class TestServiceLevel:
                 return [[0.1] * 8]
 
         class FakeStore:
-            def search(self, vec, kb_ids, top_k=20):
+            seen = None
+
+            def search(self, vec, kb_ids, top_k=20, scopes=None):
                 FakeStore.seen = kb_ids
                 return []
 
