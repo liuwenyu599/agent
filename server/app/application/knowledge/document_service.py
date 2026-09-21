@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.application.knowledge.chunkers import LegalChunker, OfficialChunker
 from app.application.ports import Embedder, VectorStore
 from app.core.config import settings
+from app.domain.organization.departments import SCOPE_GLOBAL, dept_scope
 from app.core.logging import get_logger
 from app.infrastructure.database.models.knowledge import ChunkModel, DocumentModel, KnowledgeBaseModel
 
@@ -66,14 +67,18 @@ class DocumentService:
             chunks = self.official_chunker.chunk(text, doc_id)
 
         # 初始状态：管理员/知识管理员直接发布；个人库直接发布；公共库待审核
+        kb = db.get(KnowledgeBaseModel, kb_id)
         if user_role in ["knowledge_admin", "developer"]:
             initial_status = "published"
         else:
-            kb = db.get(KnowledgeBaseModel, kb_id)
             if kb and kb.kb_type == "personal" and kb.owner_id == user_id:
                 initial_status = "published"
             else:
                 initial_status = "pending"
+
+        # 科室作用域：随知识库归属写入向量元数据，检索阶段据此做隔离
+        dept_code = getattr(kb, "department_code", "") or ""
+        scope = SCOPE_GLOBAL if not dept_code else dept_scope(dept_code)
 
         doc = DocumentModel(
             id=doc_id,
@@ -81,6 +86,7 @@ class DocumentService:
             title=title,
             doc_type=final_doc_type,
             department=department,
+            department_code=dept_code,
             doc_number=doc_number,
             file_path=file_path,
             file_size=file_size,
@@ -119,7 +125,7 @@ class DocumentService:
 
         # 向量化（仅对已发布文档）
         if initial_status == "published":
-            self._vectorize(chunk_records)
+            self._vectorize(chunk_records, scope=scope)
 
         return {
             "doc_id": doc_id,
@@ -128,7 +134,7 @@ class DocumentService:
             "message": "已直接发布" if initial_status == "published" else "已提交审核，等待管理员审批",
         }
 
-    def _vectorize(self, chunk_records) -> None:
+    def _vectorize(self, chunk_records, scope: str = SCOPE_GLOBAL) -> None:
         if not (self.embedder and self.vector_store and chunk_records):
             return
         try:
@@ -141,6 +147,7 @@ class DocumentService:
                 "embedding": vectors[i],
                 "content": c["content"],
                 "title": c["title"],
+                "scope": scope,
             } for i, c in enumerate(chunk_records)]
             self.vector_store.add_chunks(faiss_chunks)
             logger.info("[FAISS] 已索引 %d 个 chunk", len(faiss_chunks))
@@ -236,13 +243,19 @@ class DocumentService:
             doc.review_comment = comment or "审核通过"
             db.commit()
 
+            # 审核通过时才向量化，作用域取自文档归属科室
+            doc_scope = (
+                dept_scope(doc.department_code)
+                if getattr(doc, "department_code", "")
+                else SCOPE_GLOBAL
+            )
             chunks = db.scalars(
                 select(ChunkModel).where(ChunkModel.doc_id == doc_id)
             ).all()
             self._vectorize([{
                 "chunk_id": c.id, "doc_id": doc_id, "kb_id": doc.kb_id,
                 "content": c.content, "title": c.title or "",
-            } for c in chunks])
+            } for c in chunks], scope=doc_scope)
 
         elif action in ["reject", "rejected"]:
             doc.status = "rejected"

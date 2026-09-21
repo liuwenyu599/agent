@@ -149,3 +149,6 @@ cmds.txt
 deploy/backups/
 deploy/client/dist/
 deploy/.env
+
+# WorkBuddy workspace data
+.workbuddy/

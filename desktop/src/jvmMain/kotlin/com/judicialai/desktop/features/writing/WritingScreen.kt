@@ -59,20 +59,25 @@ import com.judicialai.desktop.design.theme.Warn
 
 private val Pending = "待补充"
 
-/** 智能写作工作台：一个持续的 Writing Task（对话 + 文档 + 版本）。 */
+/** 智能写作：任务入口 → AI 规划 → 针对本次任务的三栏工作台。 */
 @Composable
 fun WritingScreen() {
     val vm = remember { WritingViewModel(Repositories.writing) }
 
     if (!vm.hasTask) {
-        EntryView(vm)
+        TaskEntryScreen(vm)
         return
     }
 
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ErrorText(vm.status)
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TaskPanel(vm, Modifier.width(280.dp).fillMaxHeight())
+            // 左栏：有 AI 规划结果时按本次任务渲染，否则回退后端 task_context 字段面板
+            if (vm.spec != null) {
+                SpecPanel(vm, Modifier.width(290.dp).fillMaxHeight())
+            } else {
+                TaskPanel(vm, Modifier.width(280.dp).fillMaxHeight())
+            }
             EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
             AssistantPanel(vm, Modifier.width(300.dp).fillMaxHeight())
         }
@@ -81,37 +86,248 @@ fun WritingScreen() {
 
 // ---------------- 零门槛入口 ----------------
 
+/**
+ * 任务入口：第一屏克制，只有一句话输入 + 常见目标。
+ * 提交后由 AI 做任务规划（文种 / 目标 / 材料 / 知识需求 / 模板），
+ * 生成 WorkspaceSpec 后再进入针对本次写作的三栏工作台。
+ */
 @Composable
-private fun EntryView(vm: WritingViewModel) {
+private fun TaskEntryScreen(vm: WritingViewModel) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
         com.judicialai.desktop.app.AppState.pendingWritingIntent?.let {
             vm.entryInput = it
             com.judicialai.desktop.app.AppState.pendingWritingIntent = null
-            vm.startFromIntent()
+            vm.planAndStart()
         }
     }
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center) {
-        Text("今天想写什么？", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
-        Text("一句话告诉我即可，文种、依据、框架由系统逐步引导补全",
+
+    Column(
+        Modifier.fillMaxSize().background(com.judicialai.desktop.design.theme.HomeBg)
+            .padding(horizontal = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("${com.judicialai.desktop.app.AppState.displayName}，今天你想做什么？",
+            fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Text("用一句话描述这次写作任务，系统会为你构造本次写作所需的工作环境",
             fontSize = 13.sp, color = TextSecondary)
-        Spacer(Modifier.height(20.dp))
-        OutlinedTextField(
-            vm.entryInput, { vm.entryInput = it },
-            placeholder = { Text("例如：帮我写一份 2026 年度司法行政工作总结") },
-            modifier = Modifier.fillMaxWidth(0.6f),
-            enabled = !vm.busy,
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = { vm.startFromIntent() },
-            enabled = !vm.busy && vm.entryInput.isNotBlank()) {
-            Text(if (vm.busy) "系统处理中…" else "开始写作")
+
+        Spacer(Modifier.height(28.dp))
+        // 大输入框
+        Column(
+            Modifier.fillMaxWidth(0.62f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.White)
+                .padding(14.dp),
+        ) {
+            OutlinedTextField(
+                vm.entryInput, { vm.entryInput = it },
+                placeholder = { Text("描述你要完成的工作……", fontSize = 14.sp, color = TextSecondary) },
+                modifier = Modifier.fillMaxWidth().height(84.dp),
+                enabled = !vm.busy,
+                maxLines = 4,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("文种、材料、知识范围与模板由 AI 自动规划", fontSize = 11.5.sp,
+                    color = TextSecondary, modifier = Modifier.weight(1f))
+                Button(
+                    onClick = { vm.planAndStart() },
+                    enabled = !vm.busy && vm.entryInput.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(if (vm.planning) "规划中…" else "规划并开始 →") }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        // 常见目标
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(
+                "起草通知" to "起草一份关于行政复议案件办理时限的通知",
+                "撰写报告" to "根据本月工作材料撰写一份向区政府报送的工作情况报告",
+                "根据材料成文" to "根据这份会议材料整理一份会议纪要",
+                "其他" to "",
+            ).forEach { (label, text) ->
+                Box(
+                    Modifier.clip(RoundedCornerShape(999.dp))
+                        .background(Color.White)
+                        .clickable { vm.entryInput = text }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) { Text(label, fontSize = 12.5.sp, color = com.judicialai.desktop.design.theme.Ink2) }
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        // 上下文条：科室 / Agent / 知识范围（真实取自后端，缺失则不显示）
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            ContextTag("当前科室：${com.judicialai.desktop.app.AppState.departmentName.ifBlank { "未设置" }}")
+            ContextTag("可用知识：全局公共 + 本科室")
+        }
+
+        if (vm.planning) {
+            Spacer(Modifier.height(22.dp))
+            Column(
+                Modifier.fillMaxWidth(0.62f).clip(RoundedCornerShape(16.dp))
+                    .background(Color.White).padding(18.dp),
+            ) {
+                Text("AI 正在规划本次写作工作台", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                listOf(
+                    "理解任务语义与写作目标",
+                    "识别文种、报送对象与使用场景",
+                    "匹配参考材料与知识来源（受科室权限约束）",
+                    "确定模板并生成左栏参数",
+                ).forEachIndexed { i, s ->
+                    Row(Modifier.padding(vertical = 3.dp)) {
+                        Text("${i + 1}", fontSize = 11.sp, color = com.judicialai.desktop.design.theme.Primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text(s, fontSize = 12.5.sp, color = TextSecondary)
+                    }
+                }
+            }
+        }
+
+        vm.planError?.let {
+            Spacer(Modifier.height(16.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("任务规划不可用：$it", fontSize = 12.sp, color = Warn)
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = { vm.startWithoutPlan() }) { Text("不规划，直接开始写作") }
+            }
         }
         vm.status?.let {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Text(it, fontSize = 12.sp, color = Accent)
         }
+    }
+}
+
+@Composable
+private fun ContextTag(text: String) {
+    Box(
+        Modifier.clip(RoundedCornerShape(8.dp)).background(Color.White)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) { Text(text, fontSize = 12.sp, color = com.judicialai.desktop.design.theme.Ink2) }
+}
+
+/**
+ * 动态左栏：本次写作的参数由 AI 规划结果决定。
+ * 换一个任务，左栏就变成那一类公文真正需要的分区（如会议纪要 → 参会信息 / 时间地点）。
+ */
+@Composable
+private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
+    val spec = vm.spec ?: return
+    AppCard(modifier) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("本次写作", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f))
+                TextButton(onClick = { vm.backToEntry() }) { Text("重新描述", fontSize = 11.5.sp) }
+            }
+            if (spec.agent.isNotBlank()) {
+                Text(spec.agent, fontSize = 11.sp, color = TextSecondary)
+            }
+            Spacer(Modifier.height(6.dp))
+
+            // 任务要素（文种 / 报送对象 / …）
+            if (spec.docType.isNotBlank()) SpecRow("文种", spec.docType)
+            if (spec.audience.isNotBlank()) SpecRow("报送对象", spec.audience)
+            if (spec.target.isNotBlank()) SpecRow("写作目标", spec.target)
+            spec.fields.forEach { SpecRow(it.label, it.value.ifBlank { Pending }) }
+
+            // 参考材料
+            if (spec.materials.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text("参考材料", fontSize = 11.5.sp, color = TextSecondary,
+                    fontWeight = FontWeight.SemiBold)
+                spec.materials.forEach { opt ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(enabled = opt.note.isBlank()) { vm.toggleMaterial(opt) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = opt.selected,
+                            onCheckedChange = { if (opt.note.isBlank()) vm.toggleMaterial(opt) },
+                            modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(opt.label, fontSize = 12.sp, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (opt.note.isNotBlank()) Text(opt.note, fontSize = 10.5.sp, color = Warn)
+                    }
+                }
+            }
+
+            // 知识来源（后端按权限下发的候选项）
+            if (spec.knowledge.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text("知识来源", fontSize = 11.5.sp, color = TextSecondary,
+                    fontWeight = FontWeight.SemiBold)
+                spec.knowledge.forEach { opt ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(enabled = opt.note.isBlank()) { vm.toggleKnowledge(opt) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(14.dp).clip(RoundedCornerShape(999.dp))
+                                .background(
+                                    if (opt.selected) com.judicialai.desktop.design.theme.Ok
+                                    else com.judicialai.desktop.design.theme.Line,
+                                ),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(opt.label, fontSize = 12.sp, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (opt.note.isNotBlank()) Text(opt.note, fontSize = 10.5.sp, color = Warn)
+                    }
+                }
+                if (spec.scopes.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("检索范围：" + spec.scopes.joinToString(" + "),
+                        fontSize = 10.5.sp, color = TextSecondary)
+                }
+            }
+
+            // 模板
+            if (spec.templateName.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                Text("模板", fontSize = 11.5.sp, color = TextSecondary,
+                    fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        .background(com.judicialai.desktop.design.theme.HomeBg)
+                        .clickable { com.judicialai.desktop.app.AppState.navigate(
+                            com.judicialai.desktop.app.AppScreen.TEMPLATES) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(spec.templateName, fontSize = 12.sp, modifier = Modifier.weight(1f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("切换", fontSize = 11.sp, color = TextSecondary)
+                }
+            }
+
+            if (spec.source == "rule") {
+                Spacer(Modifier.height(12.dp))
+                Text("本次规划由规则降级生成（模型不可用），结构可能较简略",
+                    fontSize = 10.5.sp, color = Warn)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpecRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Text(label, fontSize = 11.5.sp, color = TextSecondary, modifier = Modifier.width(76.dp))
+        Text(value, fontSize = 12.sp, modifier = Modifier.weight(1f),
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -290,6 +506,27 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
         Column(Modifier.fillMaxSize()) {
             Text("AI 助手", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Spacer(Modifier.height(6.dp))
+
+            // AI 针对本次任务给出的动作（来自规划结果，逐条走后端 revision 接口）
+            val actions = vm.spec?.aiActions.orEmpty()
+            if (actions.isNotEmpty() && vm.hasDraft) {
+                Text("当前任务", fontSize = 11.sp, color = TextSecondary)
+                Spacer(Modifier.height(4.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    actions.chunked(2).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            row.forEach { a ->
+                                OutlinedButton(
+                                    onClick = { vm.revise(a, "revise") },
+                                    enabled = !vm.busy,
+                                    modifier = Modifier.weight(1f).height(34.dp),
+                                ) { Text(a, fontSize = 11.5.sp, maxLines = 1) }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
 
             // 对话区（持续对话，贯穿任务全程）
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {

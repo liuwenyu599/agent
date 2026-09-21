@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>白云司法局智慧办公平台 · v3.1 产品预览</title>
+<style>
+:root{
+  --ink:#17202E; --ink2:#3E4B5E; --ink3:#667486; --muted:#8A95A6;
+  --line:#E6EAF0; --line2:#D6DCE6; --bg:#F4F6FA; --home:#F7F9FC; --surface:#FFFFFF;
+  --nav-bg:#F8FAFC;
+  --gov:#1E4E8C; --gov-deep:#163A6B;
+  --ok:#0E7C63; --ok-soft:#E4F3EF;
+  --warn:#9A6207; --warn-soft:#FBF1E0;
+  --err:#B4231A; --err-soft:#FBE9E7;
+  --info:#2B4C7E; --info-soft:#EDF1FD;
+
+  /* 四张功能卡专属色系 */
+  --w-a:#3D5BC9; --w-b:#5B78E8; --w-soft:#EDF1FD; --w-deep:#2F49A8;
+  --t-a:#0E7C63; --t-b:#17957B; --t-soft:#E4F3EF; --t-deep:#0A5F4D;
+  --p-a:#5A4BA8; --p-b:#7A69CE; --p-soft:#EFEDFA; --p-deep:#453888;
+  --c-a:#A9670F; --c-b:#C98A22; --c-soft:#FCF2E1; --c-deep:#8A540A;
+
+  --r-xs:6px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:22px;
+  --sh:0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+  --sh-lg:0 12px 28px rgba(16,24,40,.12);
+  --font:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:#E7EBF1;color:var(--ink);font-size:13px;
+  -webkit-font-smoothing:antialiased;line-height:1.55}
+
+/* ---------- 预览控制条（不属于产品） ---------- */
+.bar{position:sticky;top:0;z-index:80;background:#0F172A;color:#fff;
+  padding:9px 18px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;
+  box-shadow:0 2px 12px rgba(0,0,0,.28)}
+.bar .t{font-size:12.5px;opacity:.6;margin-right:4px;font-weight:600}
+.tab{background:rgba(255,255,255,.09);border:0;color:#DCE3EE;padding:6px 13px;
+  border-radius:999px;font-size:12.5px;cursor:pointer;font-family:var(--font)}
+.tab:hover{background:rgba(255,255,255,.2)}
+.tab.on{background:#22C55E;color:#05240F;font-weight:700}
+.bar .r{margin-left:auto;font-size:11.5px;opacity:.5}
+
+/* ---------- 窗口 ---------- */
+.win{max-width:1500px;margin:16px auto;background:var(--bg);border-radius:var(--r-lg);
+  overflow:hidden;box-shadow:var(--sh-lg);border:1px solid #D9DEE7}
+.page{display:none}
+.page.on{display:block}
+
+/* ---------- 顶部 Header（HOME 与业务页共用，无侧栏） ---------- */
+.hd{height:58px;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 18px;gap:14px;position:relative}
+.brand{display:flex;align-items:center;gap:9px;cursor:pointer;padding:5px 8px;
+  border-radius:var(--r-sm);transition:background .15s}
+.brand:hover{background:#F1F4F9}
+.seal{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--gov),var(--gov-deep));
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;
+  box-shadow:0 2px 6px rgba(30,78,140,.28)}
+.bname{font-size:15px;font-weight:700;letter-spacing:.2px;color:var(--ink)}
+.hd .sp{flex:1}
+.search{display:flex;align-items:center;gap:7px;background:#F4F6FA;border:1px solid var(--line);
+  border-radius:999px;padding:5px 13px;width:236px;color:var(--muted);font-size:12.5px}
+.iconbtn{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  color:var(--ink2);cursor:pointer;font-size:14px;position:relative;transition:background .15s}
+.iconbtn:hover{background:#F1F4F9}
+.dot{position:absolute;top:4px;right:4px;min-width:15px;height:15px;background:var(--err);
+  color:#fff;border-radius:999px;font-size:9.5px;display:flex;align-items:center;justify-content:center;
+  padding:0 3px;font-weight:700;border:2px solid #fff}
+.me{display:flex;align-items:center;gap:8px;padding:4px 10px 4px 4px;border-radius:999px;
+  cursor:pointer;transition:background .15s}
+.me:hover{background:#F1F4F9}
+.av{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#3D5BC9,#5B78E8);
+  color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.men{font-size:12.5px;font-weight:600}
+
+/* ---------- 首页 ---------- */
+.home{background:var(--home);min-height:722px;padding:44px 56px 56px}
+.hlo{font-size:29px;font-weight:700;letter-spacing:-.3px}
+.hsub{font-size:15px;color:var(--ink2);margin-top:7px}
+.meta{display:flex;align-items:center;gap:12px;margin-top:16px;font-size:12.5px;color:var(--muted)}
+.meta .s{width:4px;height:4px;border-radius:50%;background:var(--line2)}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;
+  font-size:12px;font-weight:600}
+.chip.agent{background:var(--w-soft);color:var(--w-deep)}
+.chip.live{background:var(--ok-soft);color:var(--ok)}
+.chip.todo{background:var(--warn-soft);color:var(--warn)}
+.chip.grey{background:#EEF1F6;color:var(--ink3)}
+
+.grid{margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.card{position:relative;height:214px;border-radius:var(--r-xl);padding:26px 28px;cursor:pointer;
+  overflow:hidden;color:#fff;display:flex;flex-direction:column;
+  box-shadow:0 2px 8px rgba(16,24,40,.08);transition:transform .18s ease, box-shadow .18s ease}
+.card:hover{transform:translateY(-4px);box-shadow:0 16px 34px rgba(16,24,40,.18)}
+.card .deco{position:absolute;border-radius:50%;background:rgba(255,255,255,.13);pointer-events:none}
+.card .deco.d1{width:210px;height:210px;right:-56px;top:-72px}
+.card .deco.d2{width:130px;height:130px;right:44px;bottom:-58px;background:rgba(255,255,255,.09)}
+.card .deco.d3{position:absolute;right:22px;bottom:14px;font-size:104px;opacity:.16;
+  font-weight:800;line-height:1;letter-spacing:-4px}
+.card .tag{font-size:11.5px;opacity:.82;letter-spacing:1.4px;font-weight:600}
+.card h3{font-size:27px;font-weight:700;margin-top:12px;letter-spacing:.5px}
+.card p{font-size:13.5px;opacity:.9;margin-top:8px;max-width:70%}
+.card .go{margin-top:auto;display:flex;align-items:center;gap:7px;font-size:13px;
+  font-weight:600;opacity:.95}
+.card .go i{font-style:normal;transition:transform .18s ease;display:inline-block}
+.card:hover .go i{transform:translateX(5px)}
+.card.w{background:linear-gradient(135deg,var(--w-a),var(--w-b))}
+.card.t{background:linear-gradient(135deg,var(--t-a),var(--t-b))}
+.card.p{background:linear-gradient(135deg,var(--p-a),var(--p-b))}
+.card.c{background:linear-gradient(135deg,var(--c-a),var(--c-b))}
+.homefoot{margin-top:38px;display:flex;gap:10px;flex-wrap:wrap}
+.hint{font-size:12px;color:var(--muted);background:#fff;border:1px solid var(--line);
+  border-radius:999px;padding:5px 13px}
+
+/* ---------- 业务页骨架 ---------- */
+.body{display:flex;min-height:722px}
+.rail{width:236px;background:var(--nav-bg);border-right:1px solid var(--line);
+  padding:12px 10px;flex-shrink:0;position:relative}
+.rail.collapsed{width:60px}
+.rail-hd{display:flex;align-items:center;gap:6px;padding:4px 8px 10px}
+.rail-hd b{font-size:11.5px;color:var(--muted);font-weight:600;flex:1}
+.mini{width:24px;height:24px;border-radius:var(--r-xs);display:flex;align-items:center;
+  justify-content:center;color:var(--muted);cursor:pointer;font-size:12px}
+.mini:hover{background:#EAEEF5}
+.mini.on{color:var(--gov);background:var(--info-soft)}
+.grp{font-size:11px;color:var(--muted);padding:12px 10px 5px;font-weight:600}
+.nav{display:flex;align-items:center;gap:10px;height:37px;border-radius:var(--r-sm);
+  padding:0 9px;cursor:pointer;font-size:13px;color:var(--ink2);margin-bottom:2px}
+.nav:hover{background:#ECEFF6}
+.nav.on{background:#fff;color:var(--gov);font-weight:700;box-shadow:var(--sh);position:relative}
+.nav.on::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;
+  border-radius:2px;background:var(--gov)}
+.nav .n{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav .e{font-size:12px;opacity:.7;width:14px;text-align:center}
+.resize{position:absolute;right:0;top:0;bottom:0;width:9px;cursor:col-resize;
+  display:flex;align-items:center;justify-content:center}
+.resize::after{content:"";width:1px;height:100%;background:var(--line2)}
+.resize:hover::after{width:3px;background:var(--gov)}
+.main{flex:1;min-width:0;padding:22px 26px;overflow:auto}
+
+.ph{margin-bottom:18px}
+.ph h2{font-size:19px;font-weight:700;letter-spacing:-.2px}
+.ph p{font-size:12.5px;color:var(--ink3);margin-top:4px}
+.crumb{font-size:12px;color:var(--muted);margin-bottom:8px}
+.crumb b{color:var(--ink2);font-weight:600}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);
+  box-shadow:var(--sh)}
+.sec-t{font-size:12px;font-weight:700;color:var(--ink3);letter-spacing:.4px;
+  padding:14px 16px 8px}
+.row-i{display:flex;align-items:center;gap:9px;padding:7px 16px;font-size:12.5px;color:var(--ink2)}
+.row-i .k{color:var(--muted);width:64px;flex-shrink:0}
+.row-i .v{flex:1;font-weight:600;color:var(--ink)}
+hr.sep{border:0;border-top:1px solid var(--line);margin:10px 0}
+.lbl{font-size:11.5px;font-weight:700;color:var(--ink3);letter-spacing:.4px;
+  padding:12px 16px 6px}
+.cb{display:flex;align-items:flex-start;gap:8px;padding:7px 16px;cursor:pointer;font-size:12.5px}
+.cb .bx{width:15px;height:15px;border:1.5px solid var(--line2);border-radius:4px;flex-shrink:0;
+  margin-top:2px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff}
+.cb.on .bx{background:var(--gov);border-color:var(--gov)}
+.cb .tx{flex:1;color:var(--ink2)}
+.cb .nt{font-size:11px;color:var(--muted)}
+.rdo{display:flex;align-items:center;gap:8px;padding:7px 16px;cursor:pointer;font-size:12.5px}
+.rdo .rd{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line2);flex-shrink:0}
+.rdo.on .rd{border-color:var(--gov);border-width:4.5px;background:#fff}
+.rdo .tx{flex:1}
+.rdo .nt{font-size:11px;color:var(--muted)}
+
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r-sm);
+  font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:var(--font)}
+.btn.pri{background:var(--gov);color:#fff}
+.btn.pri:hover{background:var(--gov-deep)}
+.btn.sec{background:#fff;border-color:var(--line2);color:var(--ink2)}
+.btn.sec:hover{background:#F5F7FB}
+.btn.gh{background:transparent;color:var(--gov);padding:6px 10px}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.dan{background:var(--err-soft);color:var(--err);border-color:#F3C9C5}
+
+.tag{display:inline-block;padding:2px 8px;border-radius:var(--r-xs);font-size:11px;font-weight:600}
+.tag.g{background:var(--ok-soft);color:var(--ok)}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.tag.e{background:var(--err-soft);color:var(--err)}
+.tag.i{background:var(--info-soft);color:var(--gov)}
+.tag.n{background:#EEF1F6;color:var(--ink3)}
+
+/* ---------- 写作任务入口 ---------- */
+.entry{min-height:722px;background:var(--home);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:0 40px;text-align:center}
+.entry h1{font-size:27px;font-weight:700;letter-spacing:-.3px}
+.entry .tip{font-size:13px;color:var(--ink3);margin-top:8px}
+.bigbox{width:640px;margin-top:30px;background:#fff;border:1px solid var(--line);
+  border-radius:var(--r-lg);padding:14px;box-shadow:var(--sh);text-align:left}
+.bigbox textarea{width:100%;border:0;outline:none;resize:none;height:82px;font-size:14px;
+  font-family:var(--font);color:var(--ink);line-height:1.7}
+.bigbox textarea::placeholder{color:var(--muted)}
+.bigbox .bt{display:flex;align-items:center;gap:10px;margin-top:8px;padding-top:10px;
+  border-top:1px solid var(--line)}
+.bigbox .bt span{flex:1;font-size:11.5px;color:var(--muted)}
+.send{width:38px;height:34px;border-radius:var(--r-sm);background:var(--gov);color:#fff;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}
+.send:hover{background:var(--gov-deep)}
+.quick{display:flex;gap:10px;margin-top:16px}
+.quick div{background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 16px;
+  font-size:12.5px;color:var(--ink2);cursor:pointer;box-shadow:var(--sh)}
+.quick div:hover{border-color:var(--gov);color:var(--gov)}
+.ctx{display:flex;gap:10px;margin-top:22px}
+.ctx div{background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:5px 12px;font-size:12px;color:var(--ink2)}
+.planbox{width:640px;margin-top:26px;background:#fff;border:1px solid var(--line);
+  border-radius:var(--r-lg);padding:18px;text-align:left;box-shadow:var(--sh)}
+.planbox h4{font-size:13px;font-weight:700}
+.planbox ol{margin:10px 0 0 16px;font-size:12.5px;color:var(--ink3)}
+.planbox li{margin-bottom:4px}
+.planbox li.done{color:var(--ok);font-weight:600}
+
+/* ---------- 三栏工作台 ---------- */
+.ws{display:flex;gap:14px;height:672px}
+.col-l{width:286px;flex-shrink:0;overflow:auto}
+.col-c{flex:1;min-width:0;display:flex;flex-direction:column}
+.col-r{width:290px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}
+.editor{flex:1;background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+  padding:0;display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--sh)}
+.ed-bar{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);
+  font-size:12px;color:var(--ink3)}
+.ed-bar .sp{flex:1}
+.ed-title{padding:18px 26px 8px;font-size:19px;font-weight:700;text-align:center;
+  border:0;outline:none;width:100%;font-family:var(--font);color:var(--ink)}
+.ed-body{flex:1;padding:4px 30px 22px;font-size:13.5px;line-height:2.05;color:#26303F;overflow:auto}
+.ed-body .p1{text-indent:2em;margin-bottom:9px}
+.ed-body .h{font-weight:700;margin:14px 0 6px}
+.mark{background:#FFF3C4;border-radius:2px}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:14px}
+.acts button{background:#fff;border:1px solid var(--line2);border-radius:var(--r-sm);
+  padding:9px 8px;font-size:12px;color:var(--ink2);cursor:pointer;font-family:var(--font);
+  text-align:left;transition:.15s}
+.acts button:hover{border-color:var(--gov);color:var(--gov);background:var(--info-soft)}
+.chat{flex:1;overflow:auto;padding:12px 14px}
+.msg{font-size:12.5px;color:var(--ink2);background:#F5F7FB;border-radius:var(--r-md);
+  padding:9px 11px;margin-bottom:8px;line-height:1.65}
+.msg.me{background:var(--info-soft);color:var(--ink)}
+.chat-in{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
+.chat-in input{flex:1;border:1px solid var(--line2);border-radius:var(--r-sm);padding:7px 10px;
+  font-size:12.5px;outline:none;font-family:var(--font)}
+
+/* ---------- 模板中心 ---------- */
+.tpl-top{display:flex;gap:12px;align-items:center;margin-bottom:16px}
+.tpl-top .search{width:300px}
+.cats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.cat{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 15px;
+  font-size:12.5px;color:var(--ink2);cursor:pointer}
+.cat.on{background:var(--t-a);border-color:var(--t-a);color:#fff;font-weight:600}
+.tgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.tcard{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:16px;
+  cursor:pointer;transition:.16s;box-shadow:var(--sh);position:relative;overflow:hidden}
+.tcard:hover{transform:translateY(-3px);box-shadow:var(--sh-lg);border-color:var(--t-a)}
+.tcard .tp{width:34px;height:34px;border-radius:var(--r-sm);background:var(--t-soft);
+  color:var(--t-deep);display:flex;align-items:center;justify-content:center;font-weight:700;
+  font-size:13px;margin-bottom:10px}
+.tcard h4{font-size:14px;font-weight:700;margin-bottom:5px}
+.tcard .d{font-size:12px;color:var(--ink3);line-height:1.6;min-height:38px}
+.tcard .m{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11.5px;color:var(--muted)}
+.tcard .use{margin-top:11px;padding-top:10px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--t-deep);font-weight:600;display:flex;align-items:center;gap:5px}
+.tcard .own{position:absolute;top:12px;right:12px}
+
+/* ---------- PPT ---------- */
+.steps{display:flex;align-items:center;gap:0;margin-bottom:20px;background:#fff;
+  border:1px solid var(--line);border-radius:var(--r-md);padding:14px 18px;box-shadow:var(--sh)}
+.step{display:flex;align-items:center;gap:9px}
+.step .no{width:24px;height:24px;border-radius:50%;background:#EEF1F6;color:var(--muted);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.step.done .no{background:var(--ok);color:#fff}
+.step.on .no{background:var(--p-a);color:#fff}
+.step .tx{font-size:12.5px;color:var(--muted)}
+.step.done .tx,.step.on .tx{color:var(--ink);font-weight:600}
+.step .ar{margin:0 12px;color:var(--line2);font-size:13px}
+.ppt{display:flex;gap:14px;height:598px}
+.thumbs{width:176px;flex-shrink:0;overflow:auto;display:flex;flex-direction:column;gap:9px}
+.th{background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;
+  cursor:pointer;box-shadow:var(--sh)}
+.th.on{border-color:var(--p-a);box-shadow:0 0 0 2px rgba(90,75,168,.16)}
+.th .no{font-size:10.5px;color:var(--muted);padding:4px 7px}
+.th .pv{height:78px;background:linear-gradient(160deg,#F2F4F9,#E7EBF3);padding:7px 8px;
+  display:flex;flex-direction:column;gap:4px}
+.th .pv b{font-size:9.5px;color:#4A5567;display:block}
+.th .pv i{height:3px;background:#CDD5E0;border-radius:2px;display:block}
+.th .pv i.s{width:60%}
+.stage{flex:1;background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+  display:flex;flex-direction:column;overflow:hidden;box-shadow:var(--sh)}
+.stage .sb{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);
+  font-size:12.5px;color:var(--ink3)}
+.stage .sb .sp{flex:1}
+.slide{flex:1;margin:18px 26px;background:linear-gradient(150deg,#FAFBFD,#EEF2F8);
+  border:1px solid var(--line);border-radius:var(--r-md);padding:38px 44px;display:flex;
+  flex-direction:column;justify-content:center}
+.slide h3{font-size:22px;font-weight:700;color:var(--gov);margin-bottom:16px}
+.slide ul{margin-left:18px;font-size:13.5px;color:#3E4B5E;line-height:2.1}
+.slide .ft{margin-top:auto;font-size:11.5px;color:var(--muted);text-align:right}
+.ppt-r{width:284px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}
+
+/* ---------- 格式校验 ---------- */
+.fc{display:flex;gap:14px;height:648px}
+.fc-l{width:290px;flex-shrink:0;overflow:auto}
+.issue{display:flex;gap:9px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.issue:hover{background:#F7F9FC}
+.issue.on{background:var(--info-soft)}
+.issue .ic{width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;
+  align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700}
+.issue .ic.e{background:var(--err)} .issue .ic.w{background:var(--warn)}
+.issue .ic.i{background:var(--gov)} .issue .ic.o{background:var(--ok)}
+.issue .tt{flex:1;font-size:12.5px;font-weight:600;color:var(--ink)}
+.issue .ds{font-size:11.5px;color:var(--ink3);margin-top:2px;line-height:1.5}
+.fc-c{flex:1;display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);
+  border-radius:var(--r-md);overflow:hidden;box-shadow:var(--sh)}
+.fc-c .hd2{padding:11px 16px;border-bottom:1px solid var(--line);font-size:12.5px;
+  color:var(--ink3);display:flex;align-items:center;gap:9px}
+.doc{flex:1;padding:20px 30px;font-size:13.5px;line-height:2.1;color:#26303F;overflow:auto}
+.doc .p1{text-indent:2em}
+.bad{background:var(--err-soft);border-bottom:2px solid var(--err);border-radius:2px}
+.warnx{background:var(--warn-soft);border-bottom:2px solid var(--warn);border-radius:2px}
+.fc-r{width:288px;flex-shrink:0;overflow:auto}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;padding:10px 14px;color:var(--ink3);font-weight:600;font-size:11.5px;
+  border-bottom:1px solid var(--line);background:#FAFBFD;letter-spacing:.3px}
+td{padding:11px 14px;border-bottom:1px solid var(--line);color:var(--ink2)}
+tr:hover td{background:#FAFBFD}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tabs div{padding:9px 15px;font-size:13px;color:var(--ink3);cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs div.on{color:var(--gov);font-weight:700;border-bottom-color:var(--gov)}
+
+/* ---------- 科室空间 ---------- */
+.org{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:20px;
+  margin-bottom:18px;box-shadow:var(--sh)}
+.orgbox{display:flex;flex-direction:column;align-items:center;gap:0}
+.node{background:var(--gov);color:#fff;border-radius:var(--r-sm);padding:7px 18px;
+  font-size:13px;font-weight:700}
+.vline{width:1px;height:16px;background:var(--line2)}
+.hline{width:76%;height:1px;background:var(--line2);position:relative}
+.hline::before,.hline::after{content:"";position:absolute;top:0;width:1px;height:14px;background:var(--line2)}
+.hline::before{left:25%} .hline::after{right:25%}
+.two{display:flex;justify-content:space-around;width:76%}
+.node.sm{background:#EEF1F6;color:var(--ink2);font-size:12px;padding:5px 14px;font-weight:600}
+.node.gb{background:var(--ok-soft);color:var(--ok)}
+.dept-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+.dp{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);padding:13px;
+  cursor:pointer;transition:.16s;box-shadow:var(--sh)}
+.dp:hover{border-color:var(--gov);transform:translateY(-2px)}
+.dp.on{border-color:var(--gov);box-shadow:0 0 0 2px rgba(30,78,140,.13)}
+.dp b{font-size:13px;display:block}
+.dp span{font-size:11px;color:var(--muted);display:block;margin-top:2px}
+.dp .mt{display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--ink3)}
+.agentbox{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);
+  padding:20px;box-shadow:var(--sh)}
+.agent-hd{display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.agent-av{width:42px;height:42px;border-radius:var(--r-md);background:linear-gradient(135deg,var(--p-a),var(--p-b));
+  color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:9px 14px;font-size:12.5px;padding:14px 0}
+.kv .k{color:var(--muted)}
+.kv .v{color:var(--ink)}
+.pill{display:inline-block;background:var(--p-soft);color:var(--p-deep);border-radius:var(--r-xs);
+  padding:2px 9px;font-size:11.5px;font-weight:600;margin-right:6px}
+
+/* ---------- 个人中心抽屉 ---------- */
+.drawer{position:absolute;top:58px;right:0;bottom:0;width:352px;background:#fff;
+  border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(16,24,40,.08);z-index:40;
+  display:flex;flex-direction:column}
+.dr-hd{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center}
+.dr-hd .av{width:42px;height:42px;font-size:14px}
+.dr-hd b{font-size:14.5px}
+.dr-hd span{font-size:12px;color:var(--muted);display:block}
+.dr-tabs{display:flex;flex-wrap:wrap;gap:7px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.dr-tabs div{background:#F4F6FA;border-radius:999px;padding:5px 12px;font-size:12px;
+  color:var(--ink2);cursor:pointer}
+.dr-tabs div.on{background:var(--gov);color:#fff;font-weight:600}
+.dr-body{flex:1;overflow:auto;padding:12px 16px}
+.dr-item{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
+.dr-item .ic{width:28px;height:28px;border-radius:var(--r-sm);background:var(--info-soft);
+  color:var(--gov);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.dr-item .tt{flex:1;font-size:12.5px;font-weight:600;color:var(--ink)}
+.dr-item .ds{font-size:11.5px;color:var(--muted);margin-top:2px}
+
+.note{font-size:11.5px;color:var(--muted);background:#fff;border:1px dashed var(--line2);
+  border-radius:var(--r-sm);padding:9px 13px;margin-top:16px;line-height:1.6}
+.foot{max-width:1500px;margin:0 auto 40px;font-size:12px;color:#6B7684;padding:0 4px;line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="t">页面预览</span>
+  <button class="tab on" onclick="go('home')">① HOME 工作台</button>
+  <button class="tab" onclick="go('entry')">② 智能写作 · 任务入口</button>
+  <button class="tab" onclick="go('write')">③ 智能写作 · 动态工作台</button>
+  <button class="tab" onclick="go('tpl')">④ 模板中心</button>
+  <button class="tab" onclick="go('ppt')">⑤ PPT 助手</button>
+  <button class="tab" onclick="go('fc')">⑥ 格式校验</button>
+  <button class="tab" onclick="go('appr')">⑦ 审批</button>
+  <button class="tab" onclick="go('kb')">⑧ 知识库</button>
+  <button class="tab" onclick="go('dept')">⑨ 科室空间 / Agent</button>
+  <button class="tab" onclick="go('me')">⑩ 个人中心</button>
+  <button class="tab" onclick="go('admin')">⑪ 管理后台</button>
+  <span class="r">1440 × 900 桌面尺寸 · 全部数据取自真实后端接口</span>
+</div>
+
+<!-- ==================== ① HOME ==================== -->
+<div class="win"><div class="page on" id="p-home">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="search">🔍 搜索功能、模板或文档</div>
+    <div class="iconbtn">🔔<span class="dot">3</span></div>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+
+  <div class="home">
+    <div class="hlo">下午好，刘某某</div>
+    <div class="hsub">今天有什么需要处理？</div>
+    <div class="meta">
+      <span>2026年9月21日 星期一</span><span class="s"></span>
+      <span>行政复议科</span><span class="s"></span>
+      <span class="chip agent">复议科 Agent</span>
+      <span class="s"></span><span class="chip live">● AI 在线</span>
+      <span class="s"></span><span class="chip todo">3 项待办</span>
+    </div>
+
+    <div class="grid">
+      <div class="card w" onclick="go('entry')">
+        <div class="deco d1"></div><div class="deco d2"></div><div class="deco d3">写</div>
+        <div class="tag">AI WRITING</div>
+        <h3>智能写作</h3>
+        <p>一句话描述任务，系统自动构造本次写作的工作环境</p>
+        <div class="go">进入 <i>→</i></div>
+      </div>
+      <div class="card t" onclick="go('tpl')">
+        <div class="deco d1"></div><div class="deco d2"></div><div class="deco d3">模</div>
+        <div class="tag">TEMPLATES</div>
+        <h3>模板中心</h3>
+        <p>按文种挑规范模板，看清适用场景后直接开始写作</p>
+        <div class="go">进入 <i>→</i></div>
+      </div>
+      <div class="card p" onclick="go('ppt')">
+        <div class="deco d1"></div><div class="deco d2"></div><div class="deco d3">P</div>
+        <div class="tag">PPT ASSISTANT</div>
+        <h3>PPT 助手</h3>
+        <p>从材料生成汇报演示文稿，可逐页修改与导出</p>
+        <div class="go">进入 <i>→</i></div>
+      </div>
+      <div class="card c" onclick="go('fc')">
+        <div class="deco d1"></div><div class="deco d2"></div><div class="deco d3">检</div>
+        <div class="tag">FORMAT CHECK</div>
+        <h3>格式校验</h3>
+        <p>公文规范逐条检查，定位问题并给出修改建议</p>
+        <div class="go">进入 <i>→</i></div>
+      </div>
+    </div>
+
+    <div class="homefoot">
+      <span class="hint">点击左上角「白云司法局智慧办公平台」打开全局导航</span>
+      <span class="hint">最近使用 / 我的待办 已收进右上角「个人中心」</span>
+      <span class="hint">HOME 默认不显示侧边栏</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ② 写作任务入口 ==================== -->
+<div class="page" id="p-entry">
+  <div class="hd">
+    <div class="brand">← 白云司法局智慧办公平台</div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="entry">
+    <h1>刘某某，今天你想做什么？</h1>
+    <div class="tip">用一句话描述这次写作任务，系统会为你构造本次写作所需的工作环境</div>
+
+    <div class="bigbox">
+      <textarea placeholder="描述你要完成的工作……">根据区司法局本月行政复议工作材料，帮我起草一份向区政府报送的工作情况报告。</textarea>
+      <div class="bt">
+        <span>文种、材料、知识范围与模板由 AI 自动规划</span>
+        <div class="send">→</div>
+      </div>
+    </div>
+
+    <div class="quick">
+      <div>起草通知</div><div>撰写报告</div><div>根据材料成文</div><div>其他</div>
+    </div>
+
+    <div class="ctx">
+      <div>当前科室：行政复议科</div>
+      <div>可用知识：全局公共 + 本科室</div>
+    </div>
+
+    <div class="planbox">
+      <h4>AI 正在规划本次写作工作台</h4>
+      <ol>
+        <li class="done">✓ 理解任务语义与写作目标</li>
+        <li class="done">✓ 识别文种、报送对象与使用场景</li>
+        <li>匹配参考材料与知识来源（受科室权限约束）</li>
+        <li>确定模板并生成左栏参数</li>
+      </ol>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ③ 动态三栏工作台 ==================== -->
+<div class="page" id="p-write">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">科室空间</div>
+      <div class="nav"><span class="e">👥</span><span class="n">科室空间</span></div>
+      <div class="grp">业务能力</div>
+      <div class="nav on"><span class="e">✎</span><span class="n">智能写作</span></div>
+      <div class="nav"><span class="e">📚</span><span class="n">知识库</span></div>
+      <div class="nav"><span class="e">✓</span><span class="n">审批</span></div>
+      <div class="nav"><span class="e">📄</span><span class="n">我的文档</span></div>
+      <div class="nav"><span class="e">🕘</span><span class="n">历史任务</span></div>
+      <div class="resize"></div>
+    </div>
+
+    <div class="main">
+      <div class="crumb">智能写作 <b>/ 工作情况报告</b></div>
+      <div class="ws">
+        <!-- 左栏：本次写作（由 WorkspaceSpec 动态生成） -->
+        <div class="col-l">
+          <div class="panel">
+            <div class="sec-t">本次写作</div>
+            <div class="row-i"><span class="k">文种</span><span class="v">工作情况报告</span></div>
+            <div class="row-i"><span class="k">报送对象</span><span class="v">区政府</span></div>
+            <div class="row-i"><span class="k">时间范围</span><span class="v">2026年9月</span></div>
+            <div class="row-i"><span class="k">承办</span><span class="v">行政复议科</span></div>
+            <hr class="sep">
+            <div class="lbl">参考材料</div>
+            <div class="cb on"><div class="bx">✓</div><div class="tx">本月复议案件办理统计<span class="nt">行政复议科知识库</span></div></div>
+            <div class="cb on"><div class="bx">✓</div><div class="tx">上月工作情况报告<span class="nt">行政复议科知识库</span></div></div>
+            <div class="cb"><div class="bx"></div><div class="tx">区司法局月度工作要点<span class="nt">全局公共知识库</span></div></div>
+            <hr class="sep">
+            <div class="lbl">知识来源</div>
+            <div class="rdo on"><div class="rd"></div><div class="tx">复议科知识库<span class="nt">本科室</span></div></div>
+            <div class="rdo"><div class="rd"></div><div class="tx">全局公共知识库<span class="nt">全局</span></div></div>
+            <div class="note">检索范围由后端下发并强隔离：<code>search(query, allowed_scope=[GLOBAL, DEPT:fuyi])</code></div>
+            <hr class="sep">
+            <div class="lbl">模板</div>
+            <div class="row-i"><span class="k">已选</span><span class="v">工作情况报告</span></div>
+          </div>
+        </div>
+
+        <!-- 中栏：正文编辑器（最大区域） -->
+        <div class="col-c">
+          <div class="editor">
+            <div class="ed-bar">
+              <span>第 3 版</span><span class="tag n">自动保存于 14:28</span>
+              <span class="sp"></span>
+              <span class="btn sec sm">格式检查</span>
+              <span class="btn sec sm">保存版本</span>
+              <span class="btn pri sm">提交审批</span>
+            </div>
+            <input class="ed-title" value="广州市白云区司法局关于2026年9月行政复议案件办理情况的工作报告"/>
+            <div class="ed-body">
+              <div class="h">一、基本情况</div>
+              <div class="p1">2026年9月，我局共新收行政复议申请42件，办结38件，其中维持21件、撤销5件、责令履行4件、驳回8件。案件涉及市场监管、城乡规划、劳动保障等领域。</div>
+              <div class="h">二、主要做法</div>
+              <div class="p1">（一）压实办理责任。实行案件台账管理，明确承办人与办结时限，确保法定时限内办结率100%。</div>
+              <div class="p1">（二）强化实地核查。对事实争议较大的案件，组织办案人员实地走访，<span class="mark">补充证据材料12份</span>。</div>
+              <div class="p1">（三）推动争议化解。坚持调解优先，本月促成和解撤回复议申请6件。</div>
+              <div class="h">三、存在问题</div>
+              <div class="p1">部分部门答复材料不够规范，证据链条不完整，一次补正率偏高。</div>
+              <div class="h">四、下一步工作</div>
+              <div class="p1">继续推进答复规范化培训，建立典型案例通报机制。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右栏：AI 写作助手 -->
+        <div class="col-r">
+          <div class="panel" style="display:flex;flex-direction:column;height:100%">
+            <div class="sec-t">AI 写作助手</div>
+            <div class="chat">
+              <div class="msg me">已按「工作情况报告」构造本次写作环境：文种、报送对象、参考材料与知识范围已确定。</div>
+              <div class="msg">已生成初稿，共 4 个部分。第二部分缺少量化数据支撑，建议补充来源或标注缺少依据。</div>
+            </div>
+            <div class="acts">
+              <button>完善结构</button><button>补充依据</button>
+              <button>压缩篇幅</button><button>政策核验</button>
+              <button>公文润色</button><button>改写这段</button>
+            </div>
+            <div class="chat-in"><input placeholder="对正文提出修改要求…"/><span class="send">↑</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ④ 模板中心 ==================== -->
+<div class="page" id="p-tpl">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">业务能力</div>
+      <div class="nav"><span class="e">✎</span><span class="n">智能写作</span></div>
+      <div class="nav on"><span class="e">★</span><span class="n">模板中心</span></div>
+      <div class="nav"><span class="e">📚</span><span class="n">知识库</span></div>
+      <div class="nav"><span class="e">✓</span><span class="n">审批</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>模板中心</h2><p>先看懂这是什么模板、适合什么公文、什么时候用，再开始写作</p></div>
+      <div class="tpl-top">
+        <div class="search">🔍 搜索模板名称、适用场景或关键词</div>
+        <span class="btn sec sm">最近使用</span>
+        <span class="btn sec sm">我的收藏</span>
+      </div>
+      <div class="cats">
+        <span class="cat on">全部</span><span class="cat">通知</span><span class="cat">报告</span>
+        <span class="cat">请示</span><span class="cat">函</span><span class="cat">会议纪要</span>
+        <span class="cat">工作总结</span><span class="cat">意见</span><span class="cat">通报</span>
+        <span class="cat">本科室模板</span>
+      </div>
+      <div class="tgrid">
+        <div class="tcard">
+          <span class="tag i own">本科室</span>
+          <div class="tp">报</div>
+          <h4>工作情况报告</h4>
+          <div class="d">向上级机关报送阶段性工作进展，含基本情况、主要做法、存在问题与下一步安排。</div>
+          <div class="m"><span>适用：月度 / 季度报送</span><span>·</span><span>用过 24 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+        <div class="tcard">
+          <div class="tp">纪</div>
+          <h4>会议纪要</h4>
+          <div class="d">记载会议主要情况和议定事项，适用于局务会、专题会、协调会。</div>
+          <div class="m"><span>适用：会后 24 小时内</span><span>·</span><span>用过 41 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+        <div class="tcard">
+          <div class="tp">通</div>
+          <h4>印发通知</h4>
+          <div class="d">印发规章制度、工作方案或转发上级文件，含主送机关与执行要求。</div>
+          <div class="m"><span>适用：制度下发</span><span>·</span><span>用过 58 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+        <div class="tcard">
+          <div class="tp">请</div>
+          <h4>请示</h4>
+          <div class="d">向上级机关请求指示、批准事项，一事一请，结尾用语规范。</div>
+          <div class="m"><span>适用：需批复事项</span><span>·</span><span>用过 17 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+        <div class="tcard">
+          <div class="tp">函</div>
+          <h4>商洽函</h4>
+          <div class="d">不相隶属机关之间商洽工作、询问和答复问题。</div>
+          <div class="m"><span>适用：跨单位协调</span><span>·</span><span>用过 12 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+        <div class="tcard">
+          <span class="tag i own">本科室</span>
+          <div class="tp">答</div>
+          <h4>行政复议答复书</h4>
+          <div class="d">被申请人针对复议请求作出答复，需载明事实、理由与证据清单。</div>
+          <div class="m"><span>适用：复议答复</span><span>·</span><span>用过 33 次</span></div>
+          <div class="use">用此模板开始写作 →</div>
+        </div>
+      </div>
+      <div class="note">模板维护（新建 / 编辑 / 停用）在管理后台；普通用户首屏只看到模板消费体验。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑤ PPT 助手 ==================== -->
+<div class="page" id="p-ppt">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">业务能力</div>
+      <div class="nav"><span class="e">✎</span><span class="n">智能写作</span></div>
+      <div class="nav on"><span class="e">▶</span><span class="n">PPT 助手</span></div>
+      <div class="nav"><span class="e">📚</span><span class="n">知识库</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>PPT 助手</h2><p>选择材料 → AI 分析 → 大纲编辑 → 生成幻灯片 → 逐页修改 → 导出</p></div>
+      <div class="steps">
+        <div class="step done"><span class="no">✓</span><span class="tx">选择材料</span></div><span class="ar">→</span>
+        <div class="step done"><span class="no">✓</span><span class="tx">AI 分析</span></div><span class="ar">→</span>
+        <div class="step done"><span class="no">✓</span><span class="tx">大纲编辑</span></div><span class="ar">→</span>
+        <div class="step done"><span class="no">✓</span><span class="tx">生成幻灯片</span></div><span class="ar">→</span>
+        <div class="step on"><span class="no">5</span><span class="tx">编辑与导出</span></div>
+      </div>
+      <div class="ppt">
+        <div class="thumbs">
+          <div class="th on"><div class="no">01</div><div class="pv"><b>封面</b><i></i><i class="s"></i></div></div>
+          <div class="th"><div class="no">02</div><div class="pv"><b>目录</b><i></i><i></i><i class="s"></i></div></div>
+          <div class="th"><div class="no">03</div><div class="pv"><b>总体情况</b><i></i><i class="s"></i><i></i></div></div>
+          <div class="th"><div class="no">04</div><div class="pv"><b>案件分析</b><i></i><i></i><i class="s"></i></div></div>
+          <div class="th"><div class="no">05</div><div class="pv"><b>存在问题</b><i class="s"></i><i></i><i></i></div></div>
+          <div class="th"><div class="no">06</div><div class="pv"><b>下一步</b><i></i><i class="s"></i><i></i></div></div>
+          <div class="th"><div class="no">07</div><div class="pv"><b>结束页</b><i class="s"></i></div></div>
+        </div>
+        <div class="stage">
+          <div class="sb"><span>第 3 页 / 共 7 页</span><span class="sp"></span>
+            <span class="btn sec sm">重新生成本页</span><span class="btn pri sm">导出 PPT</span></div>
+          <div class="slide">
+            <h3>一、本月案件总体情况</h3>
+            <ul>
+              <li>新收行政复议申请 42 件，同比增长 12%</li>
+              <li>办结 38 件，法定期限内办结率 100%</li>
+              <li>维持 21 件 · 撤销 5 件 · 责令履行 4 件 · 驳回 8 件</li>
+              <li>促成和解撤回 6 件，争议化解率 15.8%</li>
+            </ul>
+            <div class="ft">广州市白云区司法局 · 2026年9月</div>
+          </div>
+        </div>
+        <div class="ppt-r">
+          <div class="panel">
+            <div class="sec-t">当前页属性</div>
+            <div class="row-i"><span class="k">版式</span><span class="v">标题 + 要点</span></div>
+            <div class="row-i"><span class="k">要点数</span><span class="v">4 条</span></div>
+            <div class="row-i"><span class="k">字数</span><span class="v">86 字</span></div>
+            <hr class="sep">
+            <div class="lbl">AI 修改</div>
+            <div class="acts" style="padding:0 14px 14px">
+              <button>修改标题</button><button>改写内容</button>
+              <button>精简要点</button><button>补充数据</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="sec-t">材料来源</div>
+            <div class="cb on"><div class="bx">✓</div><div class="tx">本月复议案件统计表</div></div>
+            <div class="cb on"><div class="bx">✓</div><div class="tx">上月工作情况报告</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑥ 格式校验 ==================== -->
+<div class="page" id="p-fc">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">业务能力</div>
+      <div class="nav on"><span class="e">✓</span><span class="n">格式校验</span></div>
+      <div class="nav"><span class="e">📄</span><span class="n">我的文档</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>格式校验</h2><p>选择文档 → 执行检查 → 问题分类 → 定位问题 → 修改建议 → 重新检查</p></div>
+      <div class="tabs">
+        <div class="on">全部问题 9</div><div>错误 2</div><div>警告 4</div><div>建议 3</div><div>已通过 12</div>
+      </div>
+      <div class="fc">
+        <div class="fc-l">
+          <div class="panel">
+            <div class="sec-t">检查结果</div>
+            <div class="issue on"><div class="ic e">!</div><div><div class="tt">标题字体不符合规范</div>
+              <div class="ds">应为方正小标宋简体二号，当前为黑体</div></div></div>
+            <div class="issue"><div class="ic e">!</div><div><div class="tt">缺少成文日期</div>
+              <div class="ds">正文结束后应有成文日期（阿拉伯数字）</div></div></div>
+            <div class="issue"><div class="ic w">!</div><div><div class="tt">主送机关表述不规范</div>
+              <div class="ds">建议使用机关全称或规范化简称</div></div></div>
+            <div class="issue"><div class="ic w">!</div><div><div class="tt">层次序数使用混乱</div>
+              <div class="ds">一、（一）1.（1）层级应保持一致</div></div></div>
+            <div class="issue"><div class="ic w">!</div><div><div class="tt">段落间距不一致</div>
+              <div class="ds">正文行距建议固定值 28–30 磅</div></div></div>
+            <div class="issue"><div class="ic w">!</div><div><div class="tt">数字用法不统一</div>
+              <div class="ds">同类别数字应统一为阿拉伯数字或汉字</div></div></div>
+            <div class="issue"><div class="ic i">i</div><div><div class="tt">缺少关键词标注</div>
+              <div class="ds">便于归档与检索，建议补 3–5 个</div></div></div>
+            <div class="issue"><div class="ic i">i</div><div><div class="tt">附件说明位置可优化</div>
+              <div class="ds">建议置于正文下空一行</div></div></div>
+          </div>
+        </div>
+        <div class="fc-c">
+          <div class="hd2"><span>2026年9月行政复议案件办理情况报告.docx</span><span class="tag e">2 错误</span>
+            <span class="tag w">4 警告</span><span class="tag i">3 建议</span>
+            <span style="flex:1"></span><span class="btn pri sm">重新检查</span></div>
+          <div class="doc">
+            <div style="text-align:center;font-size:17px;font-weight:700;margin-bottom:14px"
+              class="bad">广州市白云区司法局关于2026年9月行政复议案件办理情况的工作报告</div>
+            <div class="p1"><span class="warnx">区政府</span>：</div>
+            <div class="p1">现将我局2026年9月行政复议案件办理情况报告如下。</div>
+            <div style="font-weight:700;margin:12px 0 6px">一、基本情况</div>
+            <div class="p1">2026年9月，我局共新收行政复议申请42件，办结38件。</div>
+            <div style="font-weight:700;margin:12px 0 6px">二、主要做法</div>
+            <div class="p1">（一）压实办理责任。实行案件台账管理……</div>
+            <div class="p1">1.明确承办人与办结时限<span class="warnx">……</span></div>
+          </div>
+        </div>
+        <div class="fc-r">
+          <div class="panel">
+            <div class="sec-t">问题解释</div>
+            <div style="padding:0 16px 14px;font-size:12.5px;color:var(--ink2);line-height:1.75">
+              公文标题应使用<b>方正小标宋简体二号</b>，居中排布；回行时词意完整，排列对称。
+            </div>
+            <hr class="sep">
+            <div class="sec-t">修改建议</div>
+            <div style="padding:0 16px 14px">
+              <div class="row-i" style="padding-left:0"><span class="k">当前</span><span class="v" style="color:var(--err)">黑体 · 三号</span></div>
+              <div class="row-i" style="padding-left:0"><span class="k">建议</span><span class="v" style="color:var(--ok)">方正小标宋简体 · 二号</span></div>
+              <div style="margin-top:12px;display:flex;gap:8px">
+                <span class="btn pri sm">应用建议</span><span class="btn sec sm">忽略此项</span>
+              </div>
+            </div>
+            <hr class="sep">
+            <div class="sec-t">已通过项</div>
+            <div class="row-i"><span class="k">字号</span><span class="v" style="color:var(--ok)">✓ 三号仿宋</span></div>
+            <div class="row-i"><span class="k">页码</span><span class="v" style="color:var(--ok)">✓ 页脚居中</span></div>
+            <div class="row-i"><span class="k">文号</span><span class="v" style="color:var(--ok)">✓ 格式正确</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">「应用建议」调用后端真实的 /preview-fix 与 /fix 生成修正稿；前端不虚构自动修复能力。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑦ 审批 ==================== -->
+<div class="page" id="p-appr">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="iconbtn">🔔<span class="dot">3</span></div>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">业务能力</div>
+      <div class="nav on"><span class="e">✓</span><span class="n">审批</span></div>
+      <div class="nav"><span class="e">📄</span><span class="n">我的文档</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>审批</h2><p>业务工作区：先看清是什么文件、谁提交、当前在哪个节点</p></div>
+      <div class="tabs">
+        <div class="on">我的待办 3</div><div>我发起的 5</div><div>已处理 21</div>
+      </div>
+      <div style="display:flex;gap:14px">
+        <div style="flex:1.15">
+          <div class="panel">
+            <table>
+              <tr><th>文件标题</th><th>提交人</th><th>当前节点</th><th>提交时间</th><th>状态</th></tr>
+              <tr style="background:var(--info-soft)"><td><b>关于2026年9月行政复议案件办理情况的工作报告</b></td><td>刘某某</td><td>科室负责人审核</td><td>09-21 10:24</td><td><span class="tag i">待审批</span></td></tr>
+              <tr><td>关于印发《行政复议答复规范指引》的通知</td><td>陈某某</td><td>办公室核稿</td><td>09-20 16:41</td><td><span class="tag i">待审批</span></td></tr>
+              <tr><td>关于申请追加人民调解工作经费的请示</td><td>黄某某</td><td>分管领导审批</td><td>09-19 09:12</td><td><span class="tag w">已退回</span></td></tr>
+              <tr><td>2026年第三季度社区矫正工作总结</td><td>李某</td><td>已办结</td><td>09-15 14:03</td><td><span class="tag g">已通过</span></td></tr>
+            </table>
+          </div>
+        </div>
+        <div style="flex:1">
+          <div class="panel" style="padding:16px">
+            <div style="font-size:14.5px;font-weight:700">关于2026年9月行政复议案件办理情况的工作报告</div>
+            <div class="kv">
+              <span class="k">提交人</span><span class="v">刘某某（行政复议科）</span>
+              <span class="k">当前节点</span><span class="v">科室负责人审核</span>
+              <span class="k">提交时间</span><span class="v">2026-09-21 10:24</span>
+              <span class="k">紧急程度</span><span class="v">普通</span>
+              <span class="k">附件</span><span class="v">案件统计表.xlsx · 正文.docx</span>
+            </div>
+            <hr class="sep">
+            <div class="lbl">审批历史</div>
+            <div class="row-i"><span class="k">10:24</span><span class="v">刘某某 提交</span></div>
+            <div class="row-i"><span class="k">10:31</span><span class="v">系统 格式预检通过</span></div>
+            <div class="row-i"><span class="k">待办</span><span class="v" style="color:var(--gov)">张某某 科室负责人审核</span></div>
+            <hr class="sep">
+            <div class="lbl">可用操作（以后端 available_actions 为准）</div>
+            <div style="display:flex;gap:8px;padding:0 16px 16px">
+              <span class="btn pri">同意</span><span class="btn dan">退回</span>
+              <span class="btn sec">转办</span><span class="btn sec">查看正文</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note">前端不硬编码任何权限：可执行的动作完全来自后端 /approvals/{id}/actions 返回值。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑧ 知识库 ==================== -->
+<div class="page" id="p-kb">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">业务能力</div>
+      <div class="nav on"><span class="e">📚</span><span class="n">知识库</span></div>
+      <div class="nav"><span class="e">✓</span><span class="n">审批</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>知识库</h2><p>本科室可见：全局公共知识 + 行政复议科知识（后端强隔离）</p></div>
+      <div class="tpl-top"><div class="search">🔍 在可见知识范围内检索</div>
+        <span class="btn pri sm">导入文档</span><span class="btn sec sm">批量上传</span></div>
+      <div class="tgrid" style="grid-template-columns:repeat(2,1fr);margin-bottom:16px">
+        <div class="panel" style="padding:16px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="tp" style="width:34px;height:34px;border-radius:8px;background:var(--t-soft);color:var(--t-deep);display:flex;align-items:center;justify-content:center;font-weight:700">复</div>
+            <div><div style="font-size:14px;font-weight:700">行政复议科知识库</div>
+              <div style="font-size:11.5px;color:var(--muted)">本科室 · 42 篇文档 · 已索引 40</div></div>
+            <span style="flex:1"></span><span class="tag g">索引正常</span>
+          </div>
+        </div>
+        <div class="panel" style="padding:16px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="tp" style="width:34px;height:34px;border-radius:8px;background:var(--info-soft);color:var(--gov);display:flex;align-items:center;justify-content:center;font-weight:700">公</div>
+            <div><div style="font-size:14px;font-weight:700">全局公共知识库</div>
+              <div style="font-size:11.5px;color:var(--muted)">全局可见 · 168 篇文档 · 已索引 160</div></div>
+            <span style="flex:1"></span><span class="tag w">8 篇待索引</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <table>
+          <tr><th>文档标题</th><th>类型</th><th>所属科室</th><th>索引状态</th><th>更新时间</th></tr>
+          <tr><td>2026年行政复议案件办理情况统计</td><td>规范</td><td>行政复议科</td><td><span class="tag g">已索引</span></td><td>09-21 11:02</td></tr>
+          <tr><td>行政复议答复格式规范</td><td>规范</td><td>行政复议科</td><td><span class="tag g">已索引</span></td><td>09-20 15:37</td></tr>
+          <tr><td>行政复议法释义与适用指引</td><td>法规</td><td>全局公共</td><td><span class="tag g">已索引</span></td><td>09-18 09:44</td></tr>
+          <tr><td>广东省行政复议案件办理规程</td><td>法规</td><td>全局公共</td><td><span class="tag w">索引中</span></td><td>09-21 13:20</td></tr>
+        </table>
+      </div>
+      <div class="note">检索链路：<code>search(query, allowed_scope=[GLOBAL, DEPT:fuyi])</code> — 作用域在 FAISS 召回阶段生效，不是返回结果后再过滤。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑨ 科室空间 ==================== -->
+<div class="page" id="p-dept">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">科室空间</div>
+      <div class="nav on"><span class="e">👥</span><span class="n">科室空间</span></div>
+      <div class="grp">业务能力</div>
+      <div class="nav"><span class="e">📚</span><span class="n">知识库</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>科室空间</h2><p>科室 Agent 是组织知识与业务能力的载体；十套 Agent 共用同一个底层模型服务</p></div>
+
+      <div class="org">
+        <div class="orgbox">
+          <div class="node">广州市白云区司法局</div>
+          <div class="vline"></div>
+          <div class="hline"></div>
+          <div class="two">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:0">
+              <div class="vline"></div><div class="node gb">全局能力</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:6px">全局知识库 · 公共模板 · 公共政策</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:0">
+              <div class="vline"></div><div class="node sm">科室空间</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:6px">10 个科室 Agent · 各自知识与模板</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dept-grid">
+        <div class="dp"><b>办公室</b><span>办公室</span><div class="mt"><span>12 人</span><span>3 库</span></div></div>
+        <div class="dp"><b>法制科</b><span>法制与律师管理科</span><div class="mt"><span>9 人</span><span>2 库</span></div></div>
+        <div class="dp"><b>执法科</b><span>行政复议应诉综合科</span><div class="mt"><span>7 人</span><span>2 库</span></div></div>
+        <div class="dp on"><b>复议科</b><span>行政复议科</span><div class="mt"><span>11 人</span><span>4 库</span></div></div>
+        <div class="dp"><b>公法科</b><span>公共法律服务管理科</span><div class="mt"><span>8 人</span><span>2 库</span></div></div>
+        <div class="dp"><b>社矫安帮科</b><span>社区矫正和安置帮教科</span><div class="mt"><span>10 人</span><span>1 库</span></div></div>
+        <div class="dp"><b>人事科</b><span>人事科</span><div class="mt"><span>5 人</span><span>1 库</span></div></div>
+        <div class="dp"><b>机关党委</b><span>机关党委</span><div class="mt"><span>4 人</span><span>1 库</span></div></div>
+        <div class="dp"><b>区法援处</b><span>白云区法律援助处</span><div class="mt"><span>14 人</span><span>2 库</span></div></div>
+        <div class="dp"><b>区公职所</b><span>白云区公职律师事务所</span><div class="mt"><span>6 人</span><span>1 库</span></div></div>
+      </div>
+
+      <div class="agentbox">
+        <div class="agent-hd">
+          <div class="agent-av">复</div>
+          <div><div style="font-size:16px;font-weight:700">复议科 Agent</div>
+            <div style="font-size:12px;color:var(--muted)">行政复议科 · 底层模型 Qwen2.5-VL-3B-Instruct</div></div>
+          <span style="flex:1"></span>
+          <span class="btn sec sm">配置本科室 Agent</span>
+        </div>
+        <div class="kv">
+          <span class="k">简介</span><span class="v">面向行政复议科业务的 AI 助手，熟悉案件办理、答复规范与复议口径。</span>
+          <span class="k">知识范围</span><span class="v"><span class="pill">GLOBAL</span><span class="pill">DEPT:fuyi</span></span>
+          <span class="k">推荐任务</span><span class="v">案件分析报告 · 复议答复书 · 月度工作情况报告 · 争议化解情况汇报</span>
+          <span class="k">本科室模板</span><span class="v">行政复议答复书 · 案件分析报告 · 工作情况报告</span>
+          <span class="k">知识管理员</span><span class="v">张某某</span>
+        </div>
+      </div>
+      <div class="note">知识管理员只能维护本科室的简介、推荐任务与模板；不得修改知识范围（scopes）与任何权限位。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑩ 个人中心 ==================== -->
+<div class="page" id="p-me" style="position:relative">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me" style="background:#F1F4F9"><div class="av">刘</div><span class="men">刘某某</span></div>
+  </div>
+  <div class="home" style="position:relative;min-height:722px">
+    <div class="hlo">下午好，刘某某</div>
+    <div class="hsub">今天有什么需要处理？</div>
+    <div class="meta"><span>2026年9月21日 星期一</span><span class="s"></span>
+      <span class="chip agent">复议科 Agent</span><span class="s"></span><span class="chip todo">3 项待办</span></div>
+    <div class="grid" style="opacity:.35">
+      <div class="card w"><div class="deco d1"></div><div class="deco d3">写</div><div class="tag">AI WRITING</div><h3>智能写作</h3><p>一句话描述任务，系统自动构造本次写作的工作环境</p></div>
+      <div class="card t"><div class="deco d1"></div><div class="deco d3">模</div><div class="tag">TEMPLATES</div><h3>模板中心</h3><p>按文种挑规范模板，看清适用场景后直接开始写作</p></div>
+      <div class="card p"><div class="deco d1"></div><div class="deco d3">P</div><div class="tag">PPT ASSISTANT</div><h3>PPT 助手</h3><p>从材料生成汇报演示文稿，可逐页修改与导出</p></div>
+      <div class="card c"><div class="deco d1"></div><div class="deco d3">检</div><div class="tag">FORMAT CHECK</div><h3>格式校验</h3><p>公文规范逐条检查，定位问题并给出修改建议</p></div>
+    </div>
+
+    <div class="drawer">
+      <div class="dr-hd">
+        <div class="av">刘</div>
+        <div><b>刘某某</b><span>行政复议科 · 复议科 Agent</span></div>
+        <span style="flex:1"></span><span class="btn sec sm">退出</span>
+      </div>
+      <div class="dr-tabs">
+        <div class="on">我的待办 3</div><div>最近使用</div><div>我的文档</div>
+        <div>我的审批</div><div>我的收藏</div><div>个人设置</div>
+      </div>
+      <div class="dr-body">
+        <div class="dr-item"><div class="ic">✓</div><div><div class="tt">关于2026年9月行政复议案件办理情况的工作报告</div>
+          <div class="ds">科室负责人审核 · 09-21 10:24</div></div></div>
+        <div class="dr-item"><div class="ic">✓</div><div><div class="tt">关于印发《行政复议答复规范指引》的通知</div>
+          <div class="ds">办公室核稿 · 09-20 16:41</div></div></div>
+        <div class="dr-item"><div class="ic">✓</div><div><div class="tt">关于申请追加人民调解工作经费的请示</div>
+          <div class="ds">已退回 · 09-19 09:12</div></div></div>
+        <div style="margin-top:14px" class="lbl">最近使用</div>
+        <div class="dr-item"><div class="ic">✎</div><div><div class="tt">工作情况报告（初稿）</div><div class="ds">14:28 编辑</div></div></div>
+        <div class="dr-item"><div class="ic">★</div><div><div class="tt">行政复议答复书模板</div><div class="ds">昨天使用</div></div></div>
+        <div class="dr-item"><div class="ic">▶</div><div><div class="tt">9月工作汇报.pptx</div><div class="ds">09-20 生成</div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ⑪ 管理后台 ==================== -->
+<div class="page" id="p-admin">
+  <div class="hd">
+    <div class="brand"><div class="seal">白</div><span class="bname">白云司法局智慧办公平台</span></div>
+    <span class="sp"></span>
+    <div class="me"><div class="av">管</div><span class="men">系统管理员</span></div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <div class="rail-hd"><b>工作区</b><div class="mini on">📌</div><div class="mini">◀</div></div>
+      <div class="grp">管理能力</div>
+      <div class="nav on"><span class="e">👤</span><span class="n">用户与角色</span></div>
+      <div class="nav"><span class="e">⚙</span><span class="n">公文与审批配置</span></div>
+      <div class="nav"><span class="e">🕘</span><span class="n">审计与统计</span></div>
+      <div class="nav"><span class="e">🗄</span><span class="n">数据资产中心</span></div>
+      <div class="resize"></div>
+    </div>
+    <div class="main">
+      <div class="ph"><h2>管理后台</h2><p>治理页面保持后台管理结构：表格 / Tab / 配置表单，不与办公页面混用</p></div>
+      <div class="tabs">
+        <div>统计概览</div><div class="on">用户与角色</div><div>知识库</div><div>文档</div><div>会话台账</div><div>审批配置</div>
+      </div>
+      <div class="tpl-top"><div class="search">🔍 搜索用户名、姓名或科室</div>
+        <span class="btn pri sm">新增用户</span><span class="btn sec sm">导出</span></div>
+      <div class="panel">
+        <table>
+          <tr><th>用户名</th><th>姓名</th><th>科室（正式名称）</th><th>科室代码</th><th>角色</th><th>状态</th><th>操作</th></tr>
+          <tr><td>admin</td><td>系统管理员</td><td>—</td><td>—</td><td><span class="tag i">系统管理员</span></td><td><span class="tag g">启用</span></td><td>编辑</td></tr>
+          <tr><td>fuyike</td><td>刘某某</td><td>行政复议科</td><td>fuyi</td><td><span class="tag n">普通成员</span></td><td><span class="tag g">启用</span></td><td>编辑</td></tr>
+          <tr><td>zhangsf</td><td>张某某</td><td>行政复议科</td><td>fuyi</td><td><span class="tag w">知识管理员</span></td><td><span class="tag g">启用</span></td><td>编辑</td></tr>
+          <tr><td>gongfa01</td><td>陈某某</td><td>公共法律服务管理科</td><td>gongfa</td><td><span class="tag w">知识管理员</span></td><td><span class="tag g">启用</span></td><td>编辑</td></tr>
+          <tr><td>bgs01</td><td>黄某某</td><td>办公室</td><td>bangongshi</td><td><span class="tag n">普通成员</span></td><td><span class="tag n">停用</span></td><td>编辑</td></tr>
+        </table>
+      </div>
+      <div class="note">科室同时保存正式名称与简称：日常 UI 显示简称，正式文件与管理页面显示全称。</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="foot">
+  说明：本预览为 Desktop v3.1 产品结构与交互的一比一高保真还原，用于评审视觉与信息架构；
+  页面中的人名、文档名、统计数字为演示数据，接口字段与工作流与后端真实能力一致
+  （/organization/*、/writing/tasks/plan、/templates、/ppt/*、/format-check/*、/approvals/*、/dashboard/summary）。
+</div>
+
+<script>
+function go(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  document.getElementById('p-'+id).classList.add('on');
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.remove('on'));
+  const map={home:0,entry:1,write:2,tpl:3,ppt:4,fc:5,appr:6,kb:7,dept:8,me:9,admin:10};
+  document.querySelectorAll('.tab')[map[id]].classList.add('on');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+</script>
+</body>
+</html>

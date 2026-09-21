@@ -2,6 +2,8 @@ package com.judicialai.desktop.design.layout
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,12 +21,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.DropdownMenu
 import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
-import androidx.compose.material.IconButton
+import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,22 +38,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.judicialai.desktop.app.AppMenu
+import com.judicialai.desktop.app.AppNav
 import com.judicialai.desktop.app.AppScreen
-import com.judicialai.desktop.design.components.AppSidebar
-import com.judicialai.desktop.design.theme.MainBg
-import com.judicialai.desktop.design.theme.SidebarActive
+import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.app.NavItem
+import com.judicialai.desktop.design.components.AppNavRail
+import com.judicialai.desktop.design.components.GlobalNavDrawer
+import com.judicialai.desktop.design.components.PersonalCenterDrawer
+import com.judicialai.desktop.features.personal.PersonalViewModel
+import com.judicialai.desktop.design.theme.AppBg
+import com.judicialai.desktop.design.theme.Dimens
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.NavBorder
+import com.judicialai.desktop.design.theme.NavHover
+import com.judicialai.desktop.design.theme.OnPrimaryText
+import com.judicialai.desktop.design.theme.Primary
 import com.judicialai.desktop.design.theme.Surface
-import com.judicialai.desktop.design.theme.TextPrimary
-import com.judicialai.desktop.design.theme.TextRegular
-import com.judicialai.desktop.design.theme.TopbarBorder
 
 /**
- * 应用外壳：1:1 还原 Web 端 AppLayout.vue
- * 深色侧边栏 + 56px 白顶栏（折叠按钮 + 页面标题 + 用户下拉）+ #f0f2f5 主区。
+ * 应用外壳（v3.1）
+ *
+ * - HOME 默认不显示侧边导航，页面干净宽阔；
+ * - 顶部轻量 Header：品牌名（点击打开全局导航）+ 导航搜索 + 待办 + 用户；
+ * - 业务 / 管理页面出现工作区导航，可展开、收起、固定；
+ * - 导航是工具，不是产品视觉主体。
  */
 @Composable
 fun AppShell(
@@ -56,80 +76,174 @@ fun AppShell(
     username: String,
     userRole: String,
     isAdmin: Boolean,
-    onNavigate: (AppScreen) -> Unit,
+    onNavigate: (NavItem) -> Unit,
+    onHome: () -> Unit,
     onLogout: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    var collapsed by remember { mutableStateOf(false) }
-    var userMenuOpen by remember { mutableStateOf(false) }
+    val showNav = current != AppScreen.HOME
+    val personalVm: PersonalViewModel = remember { PersonalViewModel() }
 
-    Row(Modifier.fillMaxSize().background(MainBg)) {
-        AppSidebar(
-            current = current,
-            collapsed = collapsed,
-            username = username,
-            userRole = userRole,
-            isAdmin = isAdmin,
-            onNavigate = onNavigate,
-            onLogout = onLogout,
-        )
-        Column(Modifier.weight(1f).fillMaxHeight()) {
-            // 顶栏：56px 白底
-            Row(
-                Modifier.fillMaxWidth().height(56.dp).background(Surface)
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                IconButton(onClick = { collapsed = !collapsed }) {
-                    Icon(
-                        if (collapsed) Icons.Default.KeyboardArrowRight
-                        else Icons.Default.KeyboardArrowLeft,
-                        contentDescription = "折叠菜单", tint = TextRegular,
-                    )
+    Box(Modifier.fillMaxSize().background(AppBg)) {
+        Column(Modifier.fillMaxSize()) {
+            AppHeader(current = current, username = username, userRole = userRole,
+                onHome = onHome, onLogout = onLogout)
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                if (showNav) {
+                    AppNavRail(current = current, isAdmin = isAdmin, onNavigate = onNavigate)
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(NavBorder))
                 }
-                Text(AppMenu.titleOf(current), fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Spacer(Modifier.weight(1f))
-                Icon(
-                    Icons.Default.Notifications, contentDescription = null,
-                    tint = TextRegular, modifier = Modifier.size(18.dp),
-                )
-                Box {
-                    Row(
-                        Modifier.clip(RoundedCornerShape(8.dp))
-                            .clickable { userMenuOpen = true }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(
-                            Modifier.size(28.dp).clip(CircleShape).background(SidebarActive),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(username.take(1).uppercase(), color = Surface,
-                                fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Text(username, fontSize = 14.sp, color = TextPrimary)
-                    }
-                    DropdownMenu(expanded = userMenuOpen,
-                        onDismissRequest = { userMenuOpen = false }) {
-                        DropdownMenuItem(onClick = {
-                            userMenuOpen = false
-                            onNavigate(AppScreen.SETTINGS)
-                        }) { Text("服务器连接设置") }
-                        DropdownMenuItem(onClick = {
-                            userMenuOpen = false
-                            onLogout()
-                        }) { Text("退出登录") }
-                    }
-                }
+                Box(Modifier.weight(1f).fillMaxHeight()) { content() }
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(TopbarBorder))
-            Box(Modifier.weight(1f).fillMaxWidth().background(MainBg)) {
-                content()
-            }
+        }
+
+        if (AppState.navDrawerOpen) {
+            GlobalNavDrawer(
+                isAdmin = isAdmin,
+                onNavigate = onNavigate,
+                onHome = onHome,
+                onDismiss = { AppState.navDrawerOpen = false },
+            )
+        }
+
+        if (AppState.personalCenterOpen) {
+            PersonalCenterDrawer(
+                vm = personalVm,
+                onDismiss = { AppState.personalCenterOpen = false },
+            )
         }
     }
 }
 
+@Composable
+private fun AppHeader(
+    current: AppScreen,
+    username: String,
+    userRole: String,
+    onHome: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    var userMenuOpen by remember { mutableStateOf(false) }
+    val group = AppNav.groupOf(current)
+
+    Row(
+        Modifier.fillMaxWidth().height(Dimens.headerHeight).background(Surface)
+            .padding(horizontal = Dimens.space5),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 品牌名：点击打开全局导航
+        Row(
+            Modifier.clip(RoundedCornerShape(Dimens.radiusSm))
+                .clickable { AppState.navDrawerOpen = true }
+                .padding(horizontal = Dimens.space2, vertical = Dimens.space2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.AccountBalance, contentDescription = null,
+                tint = Primary, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(Dimens.space2))
+            Text("白云司法局智慧办公平台", fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold, color = Ink)
+            Spacer(Modifier.width(Dimens.space1))
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "打开全局导航",
+                tint = Muted, modifier = Modifier.size(18.dp))
+        }
+
+        // 当前位置（面包屑）：只在业务 / 管理页出现
+        if (current != AppScreen.HOME && group != null) {
+            Spacer(Modifier.width(Dimens.space4))
+            Box(Modifier.width(1.dp).height(20.dp).background(Line))
+            Spacer(Modifier.width(Dimens.space4))
+            Text(group.title, fontSize = 12.5.sp, color = Muted)
+            Spacer(Modifier.width(Dimens.space2))
+            Text("›", fontSize = 12.5.sp, color = Muted)
+            Spacer(Modifier.width(Dimens.space2))
+            Text(current.title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                color = Ink)
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        // 导航搜索：真实过滤导航项，不做假数据检索
+        OutlinedTextField(
+            value = AppState.navQuery,
+            onValueChange = {
+                AppState.navQuery = it
+                AppState.navDrawerOpen = true
+            },
+            placeholder = { Text("搜索功能", fontSize = 12.5.sp, color = Muted) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = Muted,
+                modifier = Modifier.size(Dimens.iconMd)) },
+            singleLine = true,
+            modifier = Modifier.width(220.dp).height(40.dp),
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = Primary, cursorColor = Primary, unfocusedBorderColor = Line),
+        )
+
+        Spacer(Modifier.width(Dimens.space3))
+
+        // 个人中心：待办、最近使用、我的文档、我的审批、收藏与设置（徽标为后端真实待办数）
+        Box(
+            Modifier.clip(RoundedCornerShape(Dimens.radiusSm))
+                .clickable { AppState.personalCenterOpen = true }
+                .padding(horizontal = Dimens.space3, vertical = Dimens.space2),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Person, contentDescription = null,
+                    tint = Ink2, modifier = Modifier.size(Dimens.iconMd))
+                Spacer(Modifier.width(Dimens.space2))
+                Text("个人中心", fontSize = 13.sp, color = Ink2)
+                if (AppState.todoCount > 0) {
+                    Spacer(Modifier.width(Dimens.space2))
+                    Box(
+                        Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
+                            .background(com.judicialai.desktop.design.theme.Accent)
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("${AppState.todoCount}", fontSize = 11.sp, color = OnPrimaryText,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.width(Dimens.space2))
+
+        // 用户
+        Box {
+            Row(
+                Modifier.clip(RoundedCornerShape(Dimens.radiusSm))
+                    .clickable { userMenuOpen = true }
+                    .padding(horizontal = Dimens.space2, vertical = Dimens.space2),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(30.dp).clip(CircleShape).background(Primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(username.take(1).uppercase(), color = OnPrimaryText,
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.width(Dimens.space2))
+                Column {
+                    Text(username, fontSize = 13.sp, color = Ink,
+                        fontWeight = FontWeight.Medium)
+                    Text(userRole, fontSize = 11.sp, color = Muted)
+                }
+            }
+            DropdownMenu(expanded = userMenuOpen,
+                onDismissRequest = { userMenuOpen = false }) {
+                DropdownMenuItem(onClick = {
+                    userMenuOpen = false
+                    AppState.navigate(AppScreen.SETTINGS)
+                }) { Text("服务器连接设置", fontSize = 13.sp) }
+                DropdownMenuItem(onClick = {
+                    userMenuOpen = false
+                    onLogout()
+                }) { Text("退出登录", fontSize = 13.sp) }
+            }
+        }
+    }
+}

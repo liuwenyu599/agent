@@ -17,10 +17,25 @@ import java.io.File
  */
 class WritingRepository(private val api: ApiClient) {
 
-    /** POST /writing/tasks 从自然语言创建任务 */
-    suspend fun createTask(message: String): ApiResult<JsonObject?> =
-        when (val r = api.post(Endpoints.WritingTasks.LIST,
-            mapOf("message" to message), timeoutMs = 120_000)) {
+    /** POST /writing/tasks 从自然语言创建任务；携带 AI 规划结果时一并下发 */
+    suspend fun createTask(message: String, spec: WorkspaceSpec? = null): ApiResult<JsonObject?> {
+        val body = mutableMapOf<String, Any?>("message" to message)
+        if (spec != null) {
+            if (spec.templateId.isNotBlank()) body["template_id"] = spec.templateId
+            if (spec.docType.isNotBlank()) body["document_type"] = spec.docType
+            if (spec.kbIds.isNotEmpty()) body["kb_ids"] = spec.kbIds
+            if (spec.title.isNotBlank()) body["title"] = spec.title
+        }
+        return when (val r = api.post(Endpoints.WritingTasks.LIST, body, timeoutMs = 120_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+    }
+
+    /** POST /writing/tasks/plan 一句话指令 → AI 规划出本次写作的工作台配置 */
+    suspend fun plan(instruction: String): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.PLAN,
+            mapOf("message" to instruction), timeoutMs = 60_000)) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
             is ApiResult.Err -> r
         }

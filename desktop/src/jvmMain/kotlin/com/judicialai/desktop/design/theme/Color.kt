@@ -96,6 +96,47 @@ val LoginGradEnd = PrimaryDeep
 val BannerGradStart = Primary
 val BannerGradEnd = PrimaryDeep
 
+// ============================================================
+// 功能色系（v3.1）：四大生产力入口与对应工作区的完整彩色视觉
+// 每组 4 档：卡片渐变两端 + 浅底（标签/弱化区）+ 深字（浅底上的文字）
+// 饱和度收敛，保证政务办公产品的稳重感
+// ============================================================
+
+// 智能写作 · 蓝紫
+val FeatureWriteStart = Color(0xFF4257C4)
+val FeatureWriteEnd = Color(0xFF5D74DE)
+val FeatureWriteSoft = Color(0xFFEDF1FD)
+val FeatureWriteInk = Color(0xFF33459E)
+
+// 模板中心 · 青绿
+val FeatureTemplateStart = Color(0xFF0F7A63)
+val FeatureTemplateEnd = Color(0xFF1C9C80)
+val FeatureTemplateSoft = Color(0xFFE6F4F0)
+val FeatureTemplateInk = Color(0xFF0A6250)
+
+// PPT 助手 · 靛紫
+val FeaturePptStart = Color(0xFF50429C)
+val FeaturePptEnd = Color(0xFF6E5EC6)
+val FeaturePptSoft = Color(0xFFEFECFA)
+val FeaturePptInk = Color(0xFF413478)
+
+// 格式校验 · 琥珀
+val FeatureCheckStart = Color(0xFFA9660F)
+val FeatureCheckEnd = Color(0xFFC5861F)
+val FeatureCheckSoft = Color(0xFFFBF1E2)
+val FeatureCheckInk = Color(0xFF8A5510)
+
+// ---- 导航 / 画布 ----
+val NavBg = Color(0xFFF7F9FC)
+val NavBorder = Color(0xFFE7EBF1)
+val NavText = Color(0xFF4A5567)
+val NavActiveBg = Color(0xFFFFFFFF)
+val NavActiveFg = Color(0xFF1F3A5F)
+val NavHover = Color(0xFFE9EEF6)
+
+val HomeBg = Color(0xFFF6F8FB)
+val Scrim = Color(0x330F1B2E)
+
 // 首页快捷入口（前景色 / 底色）
 val QuickBlue = Blue;      val QuickBlueBg = BlueSoft
 val QuickPurple = Purple;  val QuickPurpleBg = PurpleSoft

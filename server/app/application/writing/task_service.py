@@ -170,6 +170,158 @@ class WritingTaskService:
         self.db.commit()
         return {**self._to_dict(t), "reply": reply, "content_changed": False}
 
+    # ---------------- 任务规划：AI 构造本次写作的工作环境 ----------------
+
+    def plan_task(self, user_id: str, message: str) -> Dict[str, Any]:
+        """一句话指令 → WorkspaceSpec（左栏分区 / 材料 / 知识 / 模板 / AI 动作）。
+
+        与 create_task 的区别：只做规划，不落库、不生成正文。
+        LLM 不可用或解析失败时降级为规则规划，并在 source 中标注 rule，绝不假装规划过。
+        """
+        ctx = task_parser.empty_context()
+        it = self._interpret(message, ctx, has_draft=False)
+        if it:
+            self._apply_interpretation(ctx, it, message)
+            source = "llm"
+        else:
+            task_parser.merge_context(ctx, task_parser.parse_message(message))
+            source = "rule"
+
+        # 科室 Agent 与知识边界（后端强隔离，前端不参与推导）
+        try:
+            from app.application.organization.service import OrganizationService
+            org = OrganizationService(self.db)
+            org_ctx = org.user_context(user_id)
+        except Exception as e:
+            logger.warning("[写作规划] 科室上下文加载失败: %s", e)
+            org_ctx = {"dept_code": "", "dept_name": "", "short_name": "",
+                       "agent": None, "scopes": ["GLOBAL"]}
+
+        doc_type = ctx.get("document_type") or ""
+        fields: List[Dict[str, str]] = []
+        for key, label in (("document_type", "文种"), ("recipient", "报送对象"),
+                           ("authority", "发文机关"), ("time_range", "时间范围"),
+                           ("purpose", "用途"), ("topic", "主题")):
+            val = ctx.get(key)
+            if val:
+                fields.append({"label": label, "value": str(val)})
+
+        materials = self._plan_materials(ctx, user_id, org_ctx)
+        knowledge = self._plan_knowledge(user_id, org_ctx)
+        template = self._plan_template(doc_type, org_ctx)
+
+        return {
+            "doc_type": doc_type,
+            "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
+            "audience": ctx.get("recipient") or "",
+            "department": org_ctx.get("dept_name") or org_ctx.get("short_name") or "",
+            "agent": (org_ctx.get("agent") or {}).get("name") or "",
+            "title": ctx.get("title") or "",
+            "source": source,
+            "fields": fields,
+            "materials": materials,
+            "knowledge": knowledge,
+            "template_id": template.get("id") or "",
+            "template_name": template.get("name") or "",
+            "scopes": org_ctx.get("scopes") or ["GLOBAL"],
+            "kb_ids": [k["id"] for k in knowledge],
+            "ai_actions": self._plan_actions(doc_type),
+        }
+
+    def _plan_materials(self, ctx: Dict[str, Any], user_id: str,
+                        org_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """按主题检索可参考的范文 / 材料（走同一套科室作用域约束的 RAG）。"""
+        if not self.rag:
+            return []
+        query = " ".join(filter(None, [
+            ctx.get("title"), ctx.get("topic"), ctx.get("time_range"),
+            ctx.get("document_type"),
+        ])).strip()
+        if not query:
+            return []
+        try:
+            dept_code = org_ctx.get("dept_code") or ""
+            scopes = org_ctx.get("scopes")
+            kb_ids = self.rag._get_accessible_kb_ids(
+                user_id, dept_code, bool(org_ctx.get("is_admin")))
+            if not kb_ids:
+                return []
+            query_vec = self.rag.embedder.encode_queries([query])[0]
+            hits = self.rag.vector_store.search(query_vec, kb_ids, top_k=8, scopes=scopes)
+            out, seen = [], set()
+            for h in hits:
+                if h["doc_id"] in seen:
+                    continue
+                seen.add(h["doc_id"])
+                out.append({
+                    "id": h["doc_id"],
+                    "label": h.get("title") or "未命名材料",
+                    "selected": len(out) < 3,
+                    "note": "",
+                })
+            return out
+        except Exception as e:
+            logger.warning("[写作规划] 材料检索失败: %s", e)
+            return []
+
+    def _plan_knowledge(self, user_id: str,
+                        org_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """用户可见知识库：全局公共 + 本人科室（管理员可见全部）。"""
+        from app.infrastructure.database.models.knowledge import KnowledgeBaseModel
+        try:
+            from sqlalchemy import select
+            dept_code = org_ctx.get("dept_code") or ""
+            if org_ctx.get("is_admin"):
+                kbs = self.db.scalars(select(KnowledgeBaseModel)).all()
+            else:
+                kbs = self.db.scalars(
+                    select(KnowledgeBaseModel).where(
+                        (KnowledgeBaseModel.department_code == "")
+                        | (KnowledgeBaseModel.department_code == dept_code)
+                    )).all()
+            return [{
+                "id": kb.id,
+                "label": kb.name,
+                "selected": bool(dept_code and kb.department_code == dept_code),
+                "note": "本科室知识库" if kb.department_code else "全局公共知识库",
+            } for kb in kbs]
+        except Exception as e:
+            logger.warning("[写作规划] 知识库加载失败: %s", e)
+            return []
+
+    @staticmethod
+    def _plan_actions(doc_type: str) -> List[str]:
+        base = ["完善结构", "补充依据", "压缩篇幅", "公文润色"]
+        if doc_type in ("会议纪要", "纪要"):
+            return ["补全参会信息", "整理议定事项", "压缩篇幅", "公文润色"]
+        if doc_type in ("工作总结", "报告", "工作情况报告"):
+            return ["完善结构", "补充数据依据", "提炼成效", "公文润色"]
+        if doc_type in ("请示", "函"):
+            return ["明确请示事项", "补充依据", "压缩篇幅", "公文润色"]
+        return base
+
+    def _plan_template(self, doc_type: str, org_ctx: Dict[str, Any]) -> Dict[str, Any]:
+        """按文种 + 科室推荐模板：本科室模板优先，其次公共模板。"""
+        from app.infrastructure.database.models.templates import WritingTemplateModel
+        if not doc_type:
+            return {}
+        try:
+            from sqlalchemy import select
+            dept_code = org_ctx.get("dept_code") or ""
+            rows = self.db.scalars(
+                select(WritingTemplateModel).where(
+                    WritingTemplateModel.is_active.is_(True),
+                    WritingTemplateModel.category == doc_type,
+                )).all()
+            if not rows:
+                return {}
+            owned = [r for r in rows if (r.department_code or "") == dept_code]
+            picked = (owned or rows)[0]
+            return {"id": picked.id, "name": picked.name}
+        except Exception as e:
+            logger.warning("[写作规划] 模板匹配失败: %s", e)
+            return {}
+
     def get_task(self, task_id: str, user_id: str) -> Dict[str, Any]:
         return self._to_dict(self._get_owned(task_id, user_id))
 
@@ -590,14 +742,24 @@ class WritingTaskService:
             logger.warning("[写作任务] 附件上下文失败: %s", e)
             return None
 
+    def _agent_prompt(self, user_id: str) -> str:
+        """科室 Agent 上下文：让同一底层模型带上本科室的业务口径与知识边界。"""
+        try:
+            from app.application.organization.service import OrganizationService
+            return OrganizationService(self.db).agent_system_prompt(user_id) or ""
+        except Exception as e:
+            logger.warning("[写作任务] 科室 Agent 上下文加载失败: %s", e)
+            return ""
+
     def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id,
                    template: Optional[Dict[str, Any]] = None) -> str:
         if not self.assistant:
             raise HTTPException(status_code=503, detail="模型服务不可用")
-        system = DRAFT_RULES
+        agent = self._agent_prompt(user_id)
+        system = (agent + "\n" if agent else "") + DRAFT_RULES
         # 模板自带系统提示（管理员配置的写作规范）附加在通用起草规则之后
         if template and template.get("system_prompt"):
-            system = DRAFT_RULES + "\n模板附加要求：\n" + str(template["system_prompt"])[:800]
+            system = system + "\n模板附加要求：\n" + str(template["system_prompt"])[:800]
         return self.assistant.chat(
             message=instruction, history=[], sources=sources, user_role="user",
             system_prompt=system, attachment_context=attachment_ctx,
@@ -606,9 +768,11 @@ class WritingTaskService:
     def _llm_revise(self, prompt: str, sources, attachment_ctx, user_id) -> str:
         if not self.assistant:
             raise HTTPException(status_code=503, detail="模型服务不可用")
+        agent = self._agent_prompt(user_id)
+        system = (agent + "\n" if agent else "") + REVISION_RULES
         return self.assistant.chat(
             message=prompt, history=[], sources=sources, user_role="user",
-            system_prompt=REVISION_RULES, attachment_context=attachment_ctx,
+            system_prompt=system, attachment_context=attachment_ctx,
         ) or ""
 
     def _snapshot(self, t, user_id: str, note: str):

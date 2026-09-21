@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.application.ports import Embedder, VectorStore
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.domain.organization.departments import SCOPE_GLOBAL, dept_scope
+from app.infrastructure.database.models.identity import UserModel
 from app.infrastructure.database.models.knowledge import (
     ChunkModel,
     DocumentModel,
@@ -28,25 +30,68 @@ class RagService:
         self.embedder = embedder
         self.vector_store = vector_store
 
-    def _get_accessible_kb_ids(self, user_id: str) -> List[str]:
-        kbs = self.db.scalars(select(KnowledgeBaseModel).where(
+    # ---------------- 组织隔离：作用域解析 ----------------
+
+    def _dept_code_of(self, user_id: str) -> str:
+        user = self.db.get(UserModel, user_id)
+        return getattr(user, "department_code", "") or ""
+
+    def _is_admin(self, user_id: str) -> bool:
+        user = self.db.get(UserModel, user_id)
+        return bool(user and getattr(user, "role", "") == "admin")
+
+    @staticmethod
+    def resolve_scopes(dept_code: str, is_admin: bool = False) -> List[str]:
+        """用户可见作用域：全局公共 + 本人所属科室（管理员可见全部科室）。
+
+        该作用域会下传到 FAISS 召回阶段，越权向量不参与 Top-K 竞争。
+        """
+        if is_admin:
+            return None  # None 表示不限制（仅系统管理员）
+        scopes = [SCOPE_GLOBAL]
+        if dept_code:
+            scopes.append(dept_scope(dept_code))
+        return scopes
+
+    def _get_accessible_kb_ids(self, user_id: str, dept_code: str = "",
+                               is_admin: bool = False) -> List[str]:
+        """可访问知识库：全局公共 + 个人 + 本人科室（管理员全部）。"""
+        if is_admin:
+            kbs = self.db.scalars(select(KnowledgeBaseModel)).all()
+            return [kb.id for kb in kbs]
+
+        conds = [
             (KnowledgeBaseModel.kb_type == "public")
-            | ((KnowledgeBaseModel.kb_type == "personal") & (KnowledgeBaseModel.owner_id == user_id))
-        )).all()
+            & (KnowledgeBaseModel.department_code == ""),
+            (KnowledgeBaseModel.kb_type == "personal")
+            & (KnowledgeBaseModel.owner_id == user_id),
+        ]
+        if dept_code:
+            conds.append(KnowledgeBaseModel.department_code == dept_code)
+        kbs = self.db.scalars(select(KnowledgeBaseModel).where(or_(*conds))).all()
         return [kb.id for kb in kbs]
 
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
                top_k: int = None, min_score: float = None,
-               kb_ids: List[str] = None) -> List[Dict]:
+               kb_ids: List[str] = None, dept_code: str = None,
+               scopes: List[str] = None) -> List[Dict]:
         """向量检索为主；向量库不可用或结果不足时，回退关键词检索（SQL LIKE）。
 
         :param kb_ids: 限定检索的知识库（写作任务关联知识库）；与可访问库取交集，
                        传 None 表示全部可访问库。
+        :param dept_code: 用户所属科室 code；未传时从 users 表解析。
+        :param scopes: 允许的作用域（GLOBAL / DEPT:x），管理员可传 None 放开。
         """
         top_k = top_k or settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
 
-        accessible = self._get_accessible_kb_ids(user_id)
+        if dept_code is None:
+            dept_code = self._dept_code_of(user_id)
+        admin = self._is_admin(user_id)
+        if scopes is None and not admin:
+            scopes = self.resolve_scopes(dept_code, admin)
+
+        accessible = self._get_accessible_kb_ids(user_id, dept_code, admin)
         if kb_ids:
             keep = set(kb_ids)
             accessible = [k for k in accessible if k in keep]
@@ -54,14 +99,15 @@ class RagService:
         if not kb_ids:
             return []
 
-        logger.info("[RAG] 查询: %s", query)
+        logger.info("[RAG] 查询: %s（scope=%s）", query, scopes or "ALL")
 
         # 向量检索（向量库可用时）
         vector_hits = []
         if self.vector_store is not None:
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
-                vector_hits = self.vector_store.search(query_vec, kb_ids, top_k=20)
+                vector_hits = self.vector_store.search(
+                    query_vec, kb_ids, top_k=20, scopes=scopes)
                 logger.info("[RAG] 原始向量命中: %d 个", len(vector_hits))
             except Exception as e:
                 logger.warning("[RAG] 向量检索失败，回退关键词检索: %s", e)
@@ -108,19 +154,23 @@ class RagService:
         return results
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
-                        max_chars: int = 2500) -> list:
+                        max_chars: int = 2500, dept_code: str = None) -> list:
         """检索最相近的完整范文，用于写作模仿（按文档聚合，取整篇）。
 
-        向量库不可用时回退关键词检索。
+        向量库不可用时回退关键词检索。检索范围同样受科室作用域约束。
         """
-        kb_ids = self._get_accessible_kb_ids(user_id)
+        if dept_code is None:
+            dept_code = self._dept_code_of(user_id)
+        admin = self._is_admin(user_id)
+        scopes = self.resolve_scopes(dept_code, admin)
+        kb_ids = self._get_accessible_kb_ids(user_id, dept_code, admin)
         if not kb_ids:
             return []
 
         if self.vector_store is not None:
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
-                hits = self.vector_store.search(query_vec, kb_ids, top_k=30)
+                hits = self.vector_store.search(query_vec, kb_ids, top_k=30, scopes=scopes)
 
                 seen, examples = set(), []
                 for hit in hits:

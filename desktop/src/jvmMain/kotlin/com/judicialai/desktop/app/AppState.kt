@@ -12,10 +12,35 @@ import com.judicialai.desktop.core.storage.ServerConfig
  */
 object AppState {
 
-    var screen by mutableStateOf(AppScreen.DASHBOARD)
+    var screen by mutableStateOf(AppScreen.HOME)
 
     /** 普通聊天中识别到写作意图时，跳转到工作台携带的一句话需求 */
     var pendingWritingIntent by mutableStateOf<String?>(null)
+
+    // ---- 导航形态 ----
+    /** 全局导航抽屉（点击顶部品牌名打开） */
+    var navDrawerOpen by mutableStateOf(false)
+
+    /** 工作区导航是否折叠为图标条 */
+    var navCollapsed by mutableStateOf(false)
+
+    /** 工作区导航宽度（可拖拽调节，范围 180–360dp） */
+    var navWidth by mutableStateOf(236f)
+
+    /** 个人中心抽屉（右上角入口） */
+    var personalCenterOpen by mutableStateOf(false)
+
+    /** 工作区导航是否被固定展开（固定后不随页面切换自动收起） */
+    var navPinned by mutableStateOf(true)
+
+    /** 导航搜索词：仅用于过滤导航项，不做任何假数据搜索 */
+    var navQuery by mutableStateOf("")
+
+    /** 管理后台直达 Tab（对应 AdminScreen 内 TabRow） */
+    var adminTab by mutableStateOf(0)
+
+    /** 待办数量（来自 /approvals/counts，未取到时为 0，前端不臆造） */
+    var todoCount by mutableStateOf(0)
 
     var serverConfig by mutableStateOf(ServerConfig.load())
         private set
@@ -31,6 +56,15 @@ object AppState {
 
     var role by mutableStateOf("user")
         private set
+
+    /** 所属科室名称（来自 /dashboard/summary 或 /organization/me，未取到时为空，UI 不臆造） */
+    var departmentName by mutableStateOf("")
+    /** 所属科室代码（后端下发；用于科室空间与检索范围） */
+    var departmentCode by mutableStateOf("")
+    /** 当前科室 Agent 名称（后端下发，未配置时为空） */
+    var agentName by mutableStateOf("")
+    /** 后端下发的知识作用域（GLOBAL / DEPT:x），仅展示，前端不参与权限判断 */
+    var knowledgeScopes by mutableStateOf(listOf<String>())
 
     /** 全应用唯一网络入口 */
     val api: ApiClient by lazy { ApiClient({ serverConfig }) }
@@ -60,7 +94,8 @@ object AppState {
         this.realName = realName
         this.role = role
         this.loggedIn = true
-        this.screen = AppScreen.DASHBOARD
+        this.screen = AppScreen.HOME
+        this.navDrawerOpen = false
     }
 
     fun logout() {
@@ -69,7 +104,20 @@ object AppState {
         username = ""
         realName = ""
         role = "user"
-        screen = AppScreen.DASHBOARD
+        departmentName = ""
+        departmentCode = ""
+        agentName = ""
+        knowledgeScopes = emptyList()
+        screen = AppScreen.HOME
+        navDrawerOpen = false
+    }
+
+    /** 统一导航入口：设置页面 + 管理后台 Tab + 关闭抽屉 */
+    fun navigate(screen: AppScreen, adminTab: Int = 0) {
+        this.adminTab = adminTab
+        this.screen = screen
+        this.navDrawerOpen = false
+        this.navQuery = ""
     }
 }
 

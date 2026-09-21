@@ -77,6 +77,21 @@ def create_task(req: TaskCreateRequest,
                            template_id=req.template_id, kb_ids=req.kb_ids)
 
 
+class TaskPlanRequest(BaseModel):
+    message: str
+
+
+@router.post("/plan")
+def plan_task(req: TaskPlanRequest,
+              user: User = Depends(get_current_user),
+              svc: WritingTaskService = Depends(get_task_service)):
+    """一句话指令 → 本次写作的工作台配置（WorkspaceSpec）。
+
+    只做规划，不建任务、不生成正文。LLM 不可用时降级为规则规划并在 source 标注 rule。
+    """
+    return svc.plan_task(user.id, req.message)
+
+
 @router.get("")
 def list_tasks(user: User = Depends(get_current_user),
                svc: WritingTaskService = Depends(get_task_service)):

@@ -13,5 +13,7 @@ class UserModel(Base, IdMixin, TimestampMixin):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     real_name: Mapped[str] = mapped_column(String(100), default="")
     department: Mapped[str] = mapped_column(String(100), default="")
+    # v3.1 组织隔离主键：对应 departments.code，空串表示未归口（仅能访问全局公共知识）
+    department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     role: Mapped[str] = mapped_column(String(20), default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

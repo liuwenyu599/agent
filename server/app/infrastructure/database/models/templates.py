@@ -13,6 +13,8 @@ class WritingTemplateModel(Base, IdMixin):
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     category: Mapped[str] = mapped_column(String(50), nullable=False)
+    # v3.1：空串=公共模板；否则为该科室专有模板
+    department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
     icon: Mapped[str] = mapped_column(String(50), default="Document")
     params_schema: Mapped[Optional[list]] = mapped_column(JSON, default=list)

@@ -90,42 +90,85 @@ class FAISSVectorStore:
                 "kb_id": chunk["kb_id"],
                 "content": chunk["content"],
                 "title": chunk["title"],
+                # 科室隔离作用域：GLOBAL 或 DEPT:<code>，缺省为 GLOBAL
+                "scope": chunk.get("scope") or "GLOBAL",
             }
 
         self.next_idx += len(chunks)
         self._save()
         logger.info("[FAISS] 添加 %d 个向量，总计 %d", len(chunks), self.next_idx)
 
-    def search(self, query_embedding: Any, kb_ids: List[str], top_k: int = 20) -> List[Dict]:
+    def search(self, query_embedding: Any, kb_ids: List[str], top_k: int = 20,
+               scopes: List[str] = None) -> List[Dict]:
+        """按知识库 + 作用域检索。
+
+        作用域过滤发生在**召回阶段**（FAISS IDSelector），而不是返回结果之后再过滤：
+        否则其他科室的向量会占满 Top-K，且越权内容会短暂进入内存结果集。
+        """
         if self.index is None or self.index.ntotal == 0:
+            return []
+        if not kb_ids:
             return []
 
         query_vec = query_embedding.reshape(1, -1).astype("float32")
-
         if query_vec.shape[1] != self.dim:
             logger.error("[FAISS] 查询维度 %d != 索引维度 %d", query_vec.shape[1], self.dim)
             return []
 
-        distances, indices = self.index.search(query_vec, min(top_k * 3, self.index.ntotal))
+        kb_set = set(kb_ids)
+        scope_set = set(scopes) if scopes else None
+
+        # 召回前先算出本次允许命中的向量 ID
+        allowed = np.array([
+            idx for idx, meta in self.metadata.items()
+            if meta["kb_id"] in kb_set
+            and meta["doc_id"] not in self._deleted_doc_ids
+            and (scope_set is None or meta.get("scope", "GLOBAL") in scope_set)
+        ], dtype="int64")
+
+        if allowed.size == 0:
+            logger.info("[RAG][FAISS] 作用域内无可用向量（kb=%d, scope=%s）", len(kb_set), scopes)
+            return []
+
+        k = min(top_k * 3, allowed.size)
+        distances, indices = self._scoped_search(query_vec, k, allowed)
 
         results = []
         for dist, idx in zip(distances[0], indices[0]):
+            idx = int(idx)
             if idx < 0 or idx not in self.metadata:
                 continue
             meta = self.metadata[idx]
-            if meta["doc_id"] in self._deleted_doc_ids:
+            # 双重校验：即便 selector 未生效也不越权返回
+            if meta["kb_id"] not in kb_set:
                 continue
-            if meta["kb_id"] in kb_ids:
-                results.append({
-                    "chunk_id": meta["chunk_id"],
-                    "doc_id": meta["doc_id"],
-                    "content": meta["content"],
-                    "title": meta["title"],
-                    "distance": float(dist),
-                })
+            if scope_set is not None and meta.get("scope", "GLOBAL") not in scope_set:
+                continue
+            results.append({
+                "chunk_id": meta["chunk_id"],
+                "doc_id": meta["doc_id"],
+                "content": meta["content"],
+                "title": meta["title"],
+                "distance": float(dist),
+            })
             if len(results) >= top_k:
                 break
         return results
+
+    def _scoped_search(self, query_vec: "np.ndarray", k: int, allowed: "np.ndarray"):
+        """优先用 FAISS IDSelector 做作用域内召回；不支持时退化为全量召回。"""
+        try:
+            import faiss
+
+            sel = faiss.IDSelectorBatch(allowed)
+            # 不同 faiss 版本的参数类名不同：优先 SearchParametersFlat，其次基类 SearchParameters
+            params_cls = getattr(faiss, "SearchParametersFlat", None) or faiss.SearchParameters
+            params = params_cls()
+            params.sel = sel
+            return self.index.search(query_vec, k, params=params)
+        except Exception as e:  # pragma: no cover - 版本差异兜底
+            logger.warning("[FAISS] IDSelector 不可用（%s），退化为全量召回+后置过滤", e)
+            return self.index.search(query_vec, min(k * 3, self.index.ntotal))
 
     def delete_by_document(self, doc_id: str) -> int:
         """标记删除某文档的全部向量（search 时过滤），返回标记数量。"""

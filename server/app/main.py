@@ -99,6 +99,16 @@ async def lifespan(app: FastAPI):
         db.close()
     except Exception as e:
         logger.warning("内置模板初始化警告: %s", e)
+    # v3.1 组织架构：科室字典 / 科室 Agent 默认配置 / 历史用户科室归属回填
+    try:
+        db = SessionLocal()
+        from app.application.organization.service import OrganizationService
+        svc = OrganizationService(db)
+        svc.ensure_seeded()
+        svc.backfill_user_codes()
+        db.close()
+    except Exception as e:
+        logger.warning("组织架构初始化警告: %s", e)
     yield
     # 关闭引擎连接池
     engine.dispose()
@@ -129,13 +139,17 @@ def create_app() -> FastAPI:
 
     # 核心路由：全部挂在 /api/v1
     from app.interfaces import (
+        approvals,
         auth,
         chat,
+        dashboard,
         documents,
         format_check,
         knowledge,
+        organization,
         ppt,
         references,
+        system,
         templates,
         training,
         users,
@@ -156,6 +170,12 @@ def create_app() -> FastAPI:
         writing_tasks.router,
         workflow.router,
         ppt.router,
+        # v3.0 已实现但此前未挂载：审批 / 首页聚合 / 系统配置
+        approvals.router,
+        dashboard.router,
+        system.router,
+        # v3.1 组织架构与科室 Agent
+        organization.router,
     ]
     for r in routers:
         app.include_router(r, prefix="/api/v1")

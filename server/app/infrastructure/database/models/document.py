@@ -16,6 +16,7 @@ class MyDocumentModel(Base, IdMixin):
     __tablename__ = "my_documents"
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     title: Mapped[str] = mapped_column(String(300), nullable=False, default="未命名文档")
     doc_type: Mapped[Optional[str]] = mapped_column(String(50))          # 通知/请示/报告…
     document_number: Mapped[Optional[str]] = mapped_column(String(100))  # 程序生成文号

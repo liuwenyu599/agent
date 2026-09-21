@@ -70,6 +70,18 @@ class WritingViewModel(private val repo: WritingRepository) {
     /** 零门槛入口输入 */
     var entryInput by mutableStateOf("")
 
+    /** AI 规划出的本次写作工作台配置；为空表示尚未规划或后端不支持 */
+    var spec by mutableStateOf<WorkspaceSpec?>(null)
+        private set
+
+    /** 规划中（AI 理解任务 → 生成 WorkspaceSpec） */
+    var planning by mutableStateOf(false)
+        private set
+
+    /** 规划失败原因（后端不支持 / 模型不可用时的真实提示） */
+    var planError by mutableStateOf<String?>(null)
+        private set
+
     val hasTask: Boolean get() = task.taskId != null
     val hasDraft: Boolean get() = content.isNotBlank()
 
@@ -131,6 +143,112 @@ class WritingViewModel(private val repo: WritingRepository) {
             }
             busy = false
         }
+    }
+
+    // ---------------- AI 任务规划 → WorkspaceSpec ----------------
+
+    /**
+     * 一句话指令 → AI 规划工作台 → 创建任务。
+     * 先规划（决定文种/材料/知识范围/模板），再带着规划结果建任务，
+     * 因此左栏不是固定字段，而是本次任务真正需要的参数。
+     */
+    fun planAndStart() {
+        val text = entryInput.trim()
+        if (text.isBlank() || busy) return
+        busy = true
+        planning = true
+        status = null
+        planError = null
+        scope.launch {
+            val planned = runCatching { repo.plan(text) }.getOrNull()
+            val specResult = when (planned) {
+                is ApiResult.Ok -> planned.data?.let { parseSpec(it) }
+                is ApiResult.Err -> {
+                    planError = planned.message
+                    null
+                }
+                else -> null
+            }
+            spec = specResult
+            planning = false
+            // 无论是否规划成功，都按用户的原话创建任务（不阻断写作）
+            when (val r = repo.createTask(text, specResult)) {
+                is ApiResult.Ok -> {
+                    r.data?.let { d ->
+                        applyResponse(d)
+                        d["reply"].str().takeIf { it.isNotBlank() }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                    }
+                    entryInput = ""
+                }
+                is ApiResult.Err -> fail(r.message)
+            }
+            busy = false
+        }
+    }
+
+    /** 未规划直接进入（后端不支持规划接口时的降级路径） */
+    fun startWithoutPlan() {
+        planError = null
+        startFromIntent()
+    }
+
+    /** 返回任务入口（重新描述任务） */
+    fun backToEntry() {
+        newTask()
+        spec = null
+        planError = null
+    }
+
+    private fun parseSpec(d: JsonObject): WorkspaceSpec {
+        val scopeArr = d["scopes"].arr().map { it.str() }.filter { it.isNotBlank() }
+        return WorkspaceSpec(
+            docType = d["doc_type"].str(),
+            target = d["target"].str(),
+            audience = d["audience"].str(),
+            department = d["department"].str(),
+            agent = d["agent"].str(),
+            title = d["title"].str(),
+            source = d["source"].str(),
+            fields = d["fields"].arr().mapNotNull { it.obj() }.map { f ->
+                SpecField(label = f["label"].str(), value = f["value"].str())
+            },
+            materials = d["materials"].arr().mapNotNull { it.obj() }.map { o ->
+                SpecOption(id = o["id"].str(), label = o["label"].str(),
+                    selected = o["selected"].bool(), note = o["note"].str())
+            },
+            knowledge = d["knowledge"].arr().mapNotNull { it.obj() }.map { o ->
+                SpecOption(id = o["id"].str(), label = o["label"].str(),
+                    selected = o["selected"].bool(), note = o["note"].str())
+            },
+            templateId = d["template_id"].str(),
+            templateName = d["template_name"].str(),
+            scopes = scopeArr,
+            kbIds = d["kb_ids"].arr().map { it.str() }.filter { it.isNotBlank() },
+            aiActions = d["ai_actions"].arr().map { it.str() }.filter { it.isNotBlank() },
+        )
+    }
+
+    /** 切换知识来源：影响后续检索范围（写入任务上下文） */
+    fun toggleKnowledge(opt: SpecOption) {
+        val s = spec ?: return
+        spec = s.copy(knowledge = s.knowledge.map {
+            if (it.id == opt.id) it.copy(selected = !it.selected) else it
+        })
+        val id = task.taskId ?: return
+        scope.launch {
+            repo.patchContext(id, mapOf(
+                "kb_ids" to spec!!.knowledge.filter { it.selected }.map { it.id },
+            ))
+        }
+    }
+
+    /** 勾选 / 取消参考材料 */
+    fun toggleMaterial(opt: SpecOption) {
+        val s = spec ?: return
+        spec = s.copy(materials = s.materials.map {
+            if (it.id == opt.id) it.copy(selected = !it.selected) else it
+        })
     }
 
     // ---------------- 任务内对话 ----------------

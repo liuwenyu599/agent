@@ -51,6 +51,8 @@ object Endpoints {
 
     object WritingTasks {
         const val LIST = "/writing/tasks"
+        /** 一句话任务 → AI 规划出本次写作工作台配置（WorkspaceSpec） */
+        const val PLAN = "/writing/tasks/plan"
         fun item(id: String) = "/writing/tasks/$id"
         fun chat(id: String) = "/writing/tasks/$id/chat"
         fun draft(id: String) = "/writing/tasks/$id/draft"
@@ -145,6 +147,18 @@ object Endpoints {
 
     object System {
         const val APPROVAL_CONFIG = "/system/approval-config"
+    }
+
+    /** 组织与科室 Agent：后端强隔离，前端只展示后端下发内容，不自行推导权限 */
+    object Organization {
+        const val LIST = "/organization/departments"
+        const val ME = "/organization/me"
+        fun agent(code: String) = "/organization/agents/$code"
+    }
+
+    /** 首页聚合（v3.0 后端已实现，客户端 v3.1 起使用） */
+    object Dashboard {
+        const val SUMMARY = "/dashboard/summary"
     }
 }
 

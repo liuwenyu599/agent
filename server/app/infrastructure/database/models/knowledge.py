@@ -14,6 +14,8 @@ class KnowledgeBaseModel(Base, IdMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     kb_type: Mapped[str] = mapped_column(String(20), default="public")
+    # v3.1：空串=全局公共知识库；否则为该科室专有知识库
+    department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     owner_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -27,6 +29,7 @@ class DocumentModel(Base, IdMixin, TimestampMixin):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     doc_type: Mapped[Optional[str]] = mapped_column(String(50))
     department: Mapped[Optional[str]] = mapped_column(String(100))
+    department_code: Mapped[str] = mapped_column(String(40), default="", index=True)
     issue_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
     doc_number: Mapped[Optional[str]] = mapped_column(String(100))
     file_path: Mapped[Optional[str]] = mapped_column(String(500))

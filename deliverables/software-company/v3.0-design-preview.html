@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>白云司法局智慧办公平台 · v3.0 设计系统与审批配置效果预览</title>
+<style>
+  :root{
+    /* v3.0 政务设计系统（与 Color.kt 一致） */
+    --appbg:#EEF1F6; --surface:#FFFFFF; --surface-soft:#F7F9FC; --line:#E7EBF1;
+    --navy:#16263D; --primary:#1F3A5F; --primary-deep:#2A4F7D; --primary-soft:#EAF0F7;
+    --accent:#B4231A; --accent-light:#D8543F; --accent-soft:#FBECEB;
+    --ok:#2F7D5B; --ok-soft:#E8F2EC;
+    --warn:#C98A14; --warn-soft:#FBF3E0;
+    --blue:#2F6FD0; --blue-soft:#E9F1FB;
+    --purple:#5A3A8A; --purple-soft:#F1EBF8;
+    --ink:#1A2433; --ink2:#4A5567; --muted:#8B95A6;
+    --rail:#F4F7FB; --rail-border:#E3E9F2;
+    /* 旧版（收敛前）页面内自造色，仅用于对比 */
+    --old-epprimary:#2F54EB; --old-warn:#F9A825; --old-bad:#C62828; --old-text2:#6B7280;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--appbg); color:var(--ink);
+    font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Source Han Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:14px; line-height:1.6;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:24px 20px 56px;}
+  header.hero{
+    background:linear-gradient(135deg,var(--primary) 0%,var(--primary-deep) 100%);
+    color:#fff; border-radius:12px; padding:26px 28px; margin-bottom:22px;
+    box-shadow:0 4px 16px rgba(31,58,95,.18);
+  }
+  header.hero h1{margin:0 0 6px; font-size:22px; font-weight:700; letter-spacing:.3px;}
+  header.hero p{margin:0; font-size:13px; color:rgba(255,255,255,.82);}
+  .badge-row{margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;}
+  .hero-badge{
+    background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28);
+    border-radius:999px; padding:4px 12px; font-size:12px;
+  }
+  section{
+    background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:20px 22px; margin-bottom:20px;
+  }
+  h2{
+    margin:0 0 4px; font-size:16px; font-weight:700; color:var(--ink);
+    display:flex; align-items:center; gap:8px;
+  }
+  h2::before{content:""; width:4px; height:16px; border-radius:2px; background:var(--primary);}
+  .sub{margin:0 0 16px; font-size:12.5px; color:var(--muted);}
+  h3{margin:18px 0 10px; font-size:13.5px; font-weight:600; color:var(--ink2);}
+
+  /* 色板 */
+  .palette{display:grid; grid-template-columns:repeat(auto-fill,minmax(158px,1fr)); gap:12px;}
+  .sw{border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--surface);}
+  .sw .chip{height:56px;}
+  .sw .meta{padding:8px 10px;}
+  .sw .name{font-size:12.5px; font-weight:600; color:var(--ink);}
+  .sw .hex{font-size:11.5px; color:var(--muted); font-family:ui-monospace,Menlo,Consolas,monospace;}
+
+  /* 前后对比 */
+  .cmp{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  @media(max-width:760px){.cmp{grid-template-columns:1fr;}}
+  .cmp-box{border:1px solid var(--line); border-radius:10px; padding:14px; background:var(--surface-soft);}
+  .cmp-box.after{background:var(--ok-soft); border-color:#CFE0D5;}
+  .cmp-title{font-size:13px; font-weight:700; margin-bottom:10px;}
+  .cmp-title.bad{color:var(--accent);} .cmp-title.good{color:var(--ok);}
+  .cmp-item{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:12.5px;}
+  .dot{width:26px; height:26px; border-radius:6px; border:1px solid rgba(0,0,0,.08); flex:none;}
+  .cmp-item code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11.5px; color:var(--ink2);}
+
+  /* 后台外壳 */
+  .shell{display:grid; grid-template-columns:190px 1fr; border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  @media(max-width:760px){.shell{grid-template-columns:1fr;}}
+  .rail{background:var(--rail); border-right:1px solid var(--rail-border); padding:12px 0;}
+  .rail .brand{padding:6px 16px 12px; font-size:14px; font-weight:700; color:var(--primary);}
+  .rail-item{padding:9px 16px; font-size:13px; color:var(--ink2); border-left:3px solid transparent;}
+  .rail-item.active{background:var(--surface); color:var(--primary); border-left-color:var(--primary); font-weight:600;}
+  .rail-item.new::after{content:"新"; margin-left:6px; font-size:10px; background:var(--accent); color:#fff;
+    border-radius:4px; padding:1px 5px; vertical-align:middle;}
+  .pane{background:var(--surface); padding:18px; min-height:280px;}
+  .tabs{display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:16px; flex-wrap:wrap;}
+  .tab{padding:8px 12px; font-size:13px; color:var(--ink2); border-bottom:2px solid transparent; cursor:default;}
+  .tab.on{color:var(--primary); border-bottom-color:var(--primary); font-weight:600;}
+
+  /* 表单 */
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12.5px; color:var(--ink2); margin-bottom:5px; font-weight:600;}
+  .input{
+    width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:6px;
+    font-size:13px; color:var(--ink); background:var(--surface); font-family:inherit;
+  }
+  .input:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft);}
+  .check{display:flex; align-items:center; gap:9px; margin-bottom:10px; font-size:13px; color:var(--ink2);}
+  .check input{width:16px; height:16px; accent-color:var(--primary);}
+  .btn{
+    background:var(--primary); color:#fff; border:none; border-radius:6px;
+    padding:9px 20px; font-size:13px; font-weight:600; cursor:default; font-family:inherit;
+  }
+  .btn.ghost{background:var(--surface); color:var(--primary); border:1px solid var(--line);}
+  .hint{font-size:12px; color:var(--muted); margin-top:8px;}
+
+  /* 状态徽标 */
+  .chips{display:flex; gap:10px; flex-wrap:wrap;}
+  .chip{display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:999px; font-size:12.5px; font-weight:600;}
+  .chip::before{content:""; width:7px; height:7px; border-radius:50%; background:currentColor;}
+  .c-warn{background:var(--warn-soft); color:var(--warn);}
+  .c-ok{background:var(--ok-soft); color:var(--ok);}
+  .c-accent{background:var(--accent-soft); color:var(--accent);}
+  .c-blue{background:var(--blue-soft); color:var(--blue);}
+  .c-mute{background:var(--primary-soft); color:var(--muted);}
+
+  /* 文号预览 */
+  .docnum{
+    margin-top:14px; padding:14px 16px; border:1px dashed var(--line); border-radius:8px;
+    background:var(--surface-soft); font-size:13px; color:var(--ink2);
+  }
+  .docnum b{color:var(--accent); font-size:15px; letter-spacing:.5px;}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);}
+  th{color:var(--muted); font-weight:600; font-size:12px; background:var(--surface-soft);}
+  td code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11.5px;}
+  footer{text-align:center; font-size:12px; color:var(--muted); padding-top:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>v3.0 设计系统收敛 &amp; 公文审批配置 · 效果预览</h1>
+    <p>本页按 <code>Color.kt</code>（v3.0 政务调色板）真实色值渲染，用于确认收敛后的视觉效果</p>
+    <div class="badge-row">
+      <span class="hero-badge">主色 政务蓝 #1F3A5F</span>
+      <span class="hero-badge">强调色 司法红 #B4231A</span>
+      <span class="hero-badge">提交 4b2f0f3</span>
+      <span class="hero-badge">客户端编译 0 errors</span>
+    </div>
+  </header>
+
+  <!-- 1. 设计令牌 -->
+  <section>
+    <h2>一、设计令牌（Color.kt v3.0）</h2>
+    <p class="sub">页面内禁止自造色值，统一引用以下语义色；旧色名保留为兼容别名。</p>
+
+    <h3>主色 · 政务蓝</h3>
+    <div class="palette">
+      <div class="sw"><div class="chip" style="background:#1F3A5F"></div><div class="meta"><div class="name">Primary</div><div class="hex">#1F3A5F</div></div></div>
+      <div class="sw"><div class="chip" style="background:#2A4F7D"></div><div class="meta"><div class="name">PrimaryDeep</div><div class="hex">#2A4F7D</div></div></div>
+      <div class="sw"><div class="chip" style="background:#EAF0F7"></div><div class="meta"><div class="name">PrimarySoft</div><div class="hex">#EAF0F7</div></div></div>
+      <div class="sw"><div class="chip" style="background:#16263D"></div><div class="meta"><div class="name">Navy</div><div class="hex">#16263D</div></div></div>
+    </div>
+
+    <h3>强调色 · 司法红</h3>
+    <div class="palette">
+      <div class="sw"><div class="chip" style="background:#B4231A"></div><div class="meta"><div class="name">Accent</div><div class="hex">#B4231A</div></div></div>
+      <div class="sw"><div class="chip" style="background:#D8543F"></div><div class="meta"><div class="name">AccentLight</div><div class="hex">#D8543F</div></div></div>
+      <div class="sw"><div class="chip" style="background:#FBECEB"></div><div class="meta"><div class="name">AccentSoft</div><div class="hex">#FBECEB</div></div></div>
+    </div>
+
+    <h3>语义色</h3>
+    <div class="palette">
+      <div class="sw"><div class="chip" style="background:#2F7D5B"></div><div class="meta"><div class="name">Ok（正常/就绪）</div><div class="hex">#2F7D5B</div></div></div>
+      <div class="sw"><div class="chip" style="background:#C98A14"></div><div class="meta"><div class="name">Warn（繁忙/提醒）</div><div class="hex">#C98A14</div></div></div>
+      <div class="sw"><div class="chip" style="background:#2F6FD0"></div><div class="meta"><div class="name">Blue（信息/链接）</div><div class="hex">#2F6FD0</div></div></div>
+      <div class="sw"><div class="chip" style="background:#5A3A8A"></div><div class="meta"><div class="name">Purple（知识库/AI）</div><div class="hex">#5A3A8A</div></div></div>
+    </div>
+
+    <h3>文本与骨架</h3>
+    <div class="palette">
+      <div class="sw"><div class="chip" style="background:#1A2433"></div><div class="meta"><div class="name">Ink（主文本）</div><div class="hex">#1A2433</div></div></div>
+      <div class="sw"><div class="chip" style="background:#4A5567"></div><div class="meta"><div class="name">Ink2（次级文本）</div><div class="hex">#4A5567</div></div></div>
+      <div class="sw"><div class="chip" style="background:#8B95A6"></div><div class="meta"><div class="name">Muted（辅助/占位）</div><div class="hex">#8B95A6</div></div></div>
+      <div class="sw"><div class="chip" style="background:#EEF1F6; border-bottom:1px solid #E7EBF1"></div><div class="meta"><div class="name">AppBg / Line</div><div class="hex">#EEF1F6 / #E7EBF1</div></div></div>
+    </div>
+  </section>
+
+  <!-- 2. #12 收敛前后 -->
+  <section>
+    <h2>二、#12 收敛前后对比（WritingScreen 自造色值 → 设计令牌）</h2>
+    <p class="sub">左：页面内 private val 自造色（已删除）；右：统一引用设计系统令牌。</p>
+    <div class="cmp">
+      <div class="cmp-box">
+        <div class="cmp-title bad">收敛前（自造色值）</div>
+        <div class="cmp-item"><span class="dot" style="background:#2F54EB"></span><span>EpPrimary（错误亮蓝）<code>#2F54EB</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#F9A825"></span><span>WarnOrange<code>#F9A825</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#C62828"></span><span>BadRed<code>#C62828</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#6B7280"></span><span>TextSecondary<code>#6B7280</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#2E7D32"></span><span>OkGreen（未使用）<code>#2E7D32</code></span></div>
+      </div>
+      <div class="cmp-box after">
+        <div class="cmp-title good">收敛后（设计令牌）</div>
+        <div class="cmp-item"><span class="dot" style="background:#1F3A5F"></span><span>EpPrimary → Primary<code>#1F3A5F</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#C98A14"></span><span>Warn<code>#C98A14</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#B4231A"></span><span>Accent<code>#B4231A</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:#8B95A6"></span><span>TextSecondary → Muted<code>#8B95A6</code></span></div>
+        <div class="cmp-item"><span class="dot" style="background:repeating-linear-gradient(45deg,#eee,#eee 4px,#fff 4px,#fff 8px)"></span><span>OkGreen 已删除（死代码）</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 审批配置 Tab -->
+  <section>
+    <h2>三、新增「公文与审批配置」Tab（管理后台）</h2>
+    <p class="sub">对应 <code>/system/approval-config</code>；代字改动会经 <code>resolve_daizi()</code> 影响新文号生成。</p>
+    <div class="shell">
+      <aside class="rail">
+        <div class="brand">管理后台</div>
+        <div class="rail-item">数据概览</div>
+        <div class="rail-item">用户管理</div>
+        <div class="rail-item">知识库管理</div>
+        <div class="rail-item">文档审核</div>
+        <div class="rail-item">会话管理</div>
+        <div class="rail-item active new">公文与审批配置</div>
+      </aside>
+      <div class="pane">
+        <div class="tabs">
+          <span class="tab">数据概览</span><span class="tab">用户管理</span><span class="tab">知识库管理</span>
+          <span class="tab">文档审核</span><span class="tab">会话管理</span><span class="tab on">公文与审批配置</span>
+        </div>
+        <div class="field">
+          <label>文号代字</label>
+          <input class="input" value="白云司" readonly>
+        </div>
+        <div class="check"><input type="checkbox" checked> <span>启用会签</span></div>
+        <div class="check"><input type="checkbox"> <span>用印需审批</span></div>
+        <div class="field">
+          <label>业务类型（逗号分隔）</label>
+          <input class="input" value="行政发文, 社区矫正, 法律援助" readonly>
+        </div>
+        <button class="btn">保存配置</button>
+        <span class="btn ghost" style="margin-left:8px">取消</span>
+        <div class="docnum">
+          保存后新公文文号示例：<b>白云司〔2026〕001号</b><br>
+          <span style="font-size:12px;color:var(--muted)">（代字由配置读取，缺省回退 DOC_NUMBER_DEFAULT_DAIZI）</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 审批状态语义色 -->
+  <section>
+    <h2>四、审批流转状态徽标（语义色应用）</h2>
+    <p class="sub">审批列表与详情时间轴统一使用以下语义色，不再各页自定义。</p>
+    <div class="chips">
+      <span class="chip c-mute">草稿</span>
+      <span class="chip c-blue">审核中</span>
+      <span class="chip c-warn">待核稿</span>
+      <span class="chip c-ok">已签发</span>
+      <span class="chip c-accent">已驳回</span>
+    </div>
+  </section>
+
+  <!-- 5. 变更清单 -->
+  <section>
+    <h2>五、本次提交变更清单（4b2f0f3）</h2>
+    <p class="sub">14 files changed, +537 / −95，工作树已干净。</p>
+    <table>
+      <thead><tr><th>文件</th><th>改动</th></tr></thead>
+      <tbody>
+        <tr><td><code>design/theme/Color.kt</code></td><td>恢复 v3.0 政务调色板（含旧名兼容别名，超集）</td></tr>
+        <tr><td><code>features/writing/WritingScreen.kt</code></td><td>删除 5 处自造色值，统一设计令牌（#12）</td></tr>
+        <tr><td><code>core/network/Endpoints.kt</code></td><td>新增 System.APPROVAL_CONFIG 与缺失的 Approvals 全套</td></tr>
+        <tr><td><code>features/admin/*</code>（3 个）</td><td>审批配置读写接口 + 「公文与审批配置」Tab（#11）</td></tr>
+        <tr><td><code>application/system/service.py</code></td><td>补 get_approval_config / upsert_approval_config（#11）</td></tr>
+        <tr><td><code>writing/doc_number_service.py</code></td><td>新增 resolve_daizi() 读取代字配置（#11）</td></tr>
+        <tr><td><code>knowledge/rag_service.py</code></td><td>关键词回退（CJK 二元分词 + SQL LIKE）（#8）</td></tr>
+        <tr><td><code>infrastructure/rag/*</code>（2 个）</td><td>HTTPEmbedder + 向量库失败降级 None（#8）</td></tr>
+        <tr><td><code>core/config.py</code></td><td>EMBEDDING_PROVIDER 新增 http 及连接配置（#8）</td></tr>
+        <tr><td><code>features/approval/ApprovalViewModel.kt</code></td><td>移除不存在的 AppState.refreshCounts() 调用（修复编译）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>静态效果预览 · 数据源自 Color.kt 与本次提交，非运行时截图</footer>
+</div>
+</body>
+</html>
