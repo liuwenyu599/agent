@@ -142,4 +142,10 @@ server/app/infrastructure/database/models/__pycache__/templates.cpython-310.pyc
 server/app/infrastructure/database/models/__pycache__/training.cpython-310.pyc
 server/app/infrastructure/database/models/__pycache__/workflow.cpython-310.pyc
 cmds.txt
-cmds.txt
+
+# =========================
+# 部署产物（不入库）
+# =========================
+deploy/backups/
+deploy/client/dist/
+deploy/.env
