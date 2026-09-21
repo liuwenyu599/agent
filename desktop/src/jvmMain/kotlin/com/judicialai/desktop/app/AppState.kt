@@ -70,14 +70,24 @@ object AppState {
     var departmentCode by mutableStateOf("")
     /** 当前科室 Agent 名称（后端下发，未配置时为空） */
     var agentName by mutableStateOf("")
-    /** 后端下发的知识作用域（GLOBAL / DEPT:x），仅展示，前端不参与权限判断 */
-    var knowledgeScopes by mutableStateOf(listOf<String>())
+    /** 当前科室 Agent 简介（后端下发，展示用） */
+    var agentIntro by mutableStateOf("")
+    /** 本科室推荐任务（后端下发；智能写作入口据此给出本科室常用目标） */
+    var deptTasks by mutableStateOf(listOf<String>())
+    /** 本科室助手配置是否可维护（后端按角色返回，不前端猜测） */
+    var canManageDeptAgent by mutableStateOf(false)
 
     /** 全应用唯一网络入口 */
     val api: ApiClient by lazy { ApiClient({ serverConfig }) }
 
     /** 对应 Web 端 AppLayout.isAdmin：developer / knowledge_admin / admin */
     val isAdmin: Boolean get() = role in setOf("developer", "knowledge_admin", "admin")
+
+    /** 知识管理员：可维护本科室知识、模板与本科室助手业务配置 */
+    val isKnowledgeAdmin: Boolean get() = role == "knowledge_admin"
+
+    /** 系统管理员：可管理全部科室与系统级配置 */
+    val isDeveloper: Boolean get() = role == "developer" || role == "admin"
 
     val displayName: String get() = realName.ifBlank { username.ifBlank { "用户" } }
 
@@ -125,7 +135,9 @@ object AppState {
         departmentName = ""
         departmentCode = ""
         agentName = ""
-        knowledgeScopes = emptyList()
+        agentIntro = ""
+        deptTasks = emptyList()
+        canManageDeptAgent = false
         screen = AppScreen.HOME
         navDrawerOpen = false
     }

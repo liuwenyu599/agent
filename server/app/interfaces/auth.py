@@ -48,7 +48,7 @@ def register(
     svc: AuthService = Depends(get_auth_service),
 ):
     user = svc.register(current_user, req.username, req.email, req.password,
-                        req.real_name, req.department, req.role)
+                        req.real_name, req.department, req.role, req.department_code)
     return {"message": "用户创建成功", "user": user.to_public_dict()}
 
 
@@ -56,7 +56,8 @@ def register(
 def register_first(req: RegisterRequest, svc: AuthService = Depends(get_auth_service)):
     from app.domain.identity.entities import ROLE_DEVELOPER
     token, user = svc.register_first(req.username, req.email, req.password,
-                                     req.real_name, req.department, ROLE_DEVELOPER)
+                                     req.real_name, req.department, ROLE_DEVELOPER,
+                                     getattr(req, "department_code", ""))
     return {"access_token": token, "user": user.to_public_dict()}
 
 

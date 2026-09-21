@@ -27,7 +27,7 @@ import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
@@ -46,7 +46,6 @@ import com.judicialai.desktop.app.AppNav
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.app.NavItem
-import com.judicialai.desktop.design.components.AppNavRail
 import com.judicialai.desktop.design.components.GlobalNavDrawer
 import com.judicialai.desktop.design.components.PersonalCenterDrawer
 import com.judicialai.desktop.features.personal.PersonalViewModel
@@ -56,19 +55,16 @@ import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.Muted
-import com.judicialai.desktop.design.theme.NavBorder
-import com.judicialai.desktop.design.theme.NavHover
 import com.judicialai.desktop.design.theme.OnPrimaryText
 import com.judicialai.desktop.design.theme.Primary
 import com.judicialai.desktop.design.theme.Surface
 
 /**
- * 应用外壳（v3.1）
+ * 应用外壳（v3.2）
  *
- * - HOME 默认不显示侧边导航，页面干净宽阔；
- * - 顶部轻量 Header：品牌名（点击打开全局导航）+ 导航搜索 + 待办 + 用户；
- * - 业务 / 管理页面出现工作区导航，可展开、收起、固定；
- * - 导航是工具，不是产品视觉主体。
+ * - 删除常驻左侧栏：导航统一收进左上角「导航抽屉」，页面内容占满宽度；
+ * - 顶部轻量 Header：品牌名（点击打开全局导航）+ 当前科室/助手 + 搜索 + 待办 + 用户；
+ * - 面包屑只在非 HOME 页面出现，指明当前位置。
  */
 @Composable
 fun AppShell(
@@ -81,7 +77,6 @@ fun AppShell(
     onLogout: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val showNav = current != AppScreen.HOME
     val personalVm: PersonalViewModel = remember { PersonalViewModel() }
 
     Box(Modifier.fillMaxSize().background(AppBg)) {
@@ -89,13 +84,7 @@ fun AppShell(
             AppHeader(current = current, username = username, userRole = userRole,
                 onHome = onHome, onLogout = onLogout)
             Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
-            Row(Modifier.weight(1f).fillMaxWidth()) {
-                if (showNav) {
-                    AppNavRail(current = current, isAdmin = isAdmin, onNavigate = onNavigate)
-                    Box(Modifier.width(1.dp).fillMaxHeight().background(NavBorder))
-                }
-                Box(Modifier.weight(1f).fillMaxHeight()) { content() }
-            }
+            Box(Modifier.weight(1f).fillMaxWidth()) { content() }
         }
 
         if (AppState.navDrawerOpen) {
@@ -149,17 +138,46 @@ private fun AppHeader(
                 tint = Muted, modifier = Modifier.size(18.dp))
         }
 
-        // 当前位置（面包屑）：只在业务 / 管理页出现
-        if (current != AppScreen.HOME && group != null) {
+        // 当前位置（面包屑）：只在非工作台页面出现，指明所在位置
+        if (current != AppScreen.HOME) {
             Spacer(Modifier.width(Dimens.space4))
             Box(Modifier.width(1.dp).height(20.dp).background(Line))
             Spacer(Modifier.width(Dimens.space4))
-            Text(group.title, fontSize = 12.5.sp, color = Muted)
+            Text(group?.title ?: "业务", fontSize = 12.5.sp, color = Muted)
             Spacer(Modifier.width(Dimens.space2))
             Text("›", fontSize = 12.5.sp, color = Muted)
             Spacer(Modifier.width(Dimens.space2))
             Text(current.title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
                 color = Ink)
+        }
+
+        // 当前科室 / 本科室助手：常驻顶栏，说明本次办公所处的科室上下文
+        val dept = AppState.departmentName
+        if (dept.isNotBlank()) {
+            Spacer(Modifier.width(Dimens.space4))
+            Row(
+                Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
+                    .background(com.judicialai.desktop.design.theme.FeatureWriteSoft)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Groups, contentDescription = null,
+                    tint = com.judicialai.desktop.design.theme.FeatureWriteInk,
+                    modifier = Modifier.size(Dimens.iconSm))
+                Spacer(Modifier.width(Dimens.space1))
+                Text(dept, fontSize = 12.sp,
+                    color = com.judicialai.desktop.design.theme.FeatureWriteInk,
+                    fontWeight = FontWeight.Medium)
+                if (AppState.agentName.isNotBlank()) {
+                    Spacer(Modifier.width(Dimens.space2))
+                    Box(Modifier.width(1.dp).height(11.dp)
+                        .background(com.judicialai.desktop.design.theme.FeatureWriteInk
+                            .copy(alpha = 0.3f)))
+                    Spacer(Modifier.width(Dimens.space2))
+                    Text(AppState.agentName, fontSize = 12.sp,
+                        color = com.judicialai.desktop.design.theme.FeatureWriteInk)
+                }
+            }
         }
 
         Spacer(Modifier.weight(1f))

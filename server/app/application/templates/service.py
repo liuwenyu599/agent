@@ -11,12 +11,15 @@ from app.application.templates.builtin_data import (
 )
 from app.application.templates.dto import TemplateCreateRequest, TemplateUpdateRequest
 from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
+from app.core.logging import get_logger
 from app.domain.identity.entities import ADMIN_OR_ABOVE, ROLE_DEVELOPER, User
 from app.domain.templates.entities import TemplateCategory, WritingTemplate
 from app.infrastructure.repositories.templates import (
     SqlAlchemyTemplateCategoryRepository,
     SqlAlchemyWritingTemplateRepository,
 )
+
+logger = get_logger(__name__)
 
 
 class TemplateService:
@@ -98,14 +101,38 @@ class TemplateService:
 
     # ---- 模板 ----
     def list_templates(self, user: User, category: Optional[str] = None) -> List[dict]:
-        templates = self.templates.list_active(category)
-        templates = [t for t in templates
-                     if t.visible_to(user.id, user.role, user.department)]
-        return [self._to_list_dict(t) for t in templates]
+        """模板三层：系统模板 / 本科室模板 / 我的模板。
 
-    def _to_list_dict(self, t: WritingTemplate) -> dict:
+        归属完全由服务端判定：department_code 由登录用户解析，不接受客户端入参。
+        排序：本科室模板优先，其后系统模板，最后我的模板。
+        """
+        dept_code = self._dept_code_of(user)
+        rows = self.templates.list_active(category)
+        visible = []
+        for t in rows:
+            if t.visible_to(user.id, user.role, user.department):
+                visible.append(t)
+            elif dept_code and (t.department_code or "") == dept_code:
+                visible.append(t)
+        ranked = sorted(visible, key=lambda t: self._tier_rank(t, dept_code, user.id))
+        return [self._to_list_dict(t, dept_code, user.id) for t in ranked]
+
+    @staticmethod
+    def _tier_rank(t: WritingTemplate, dept_code: str, user_id: str) -> int:
+        if (t.department_code or "") and dept_code and t.department_code == dept_code:
+            return 0
+        if t.created_by and t.created_by == user_id:
+            return 2
+        return 1
+
+    def _to_list_dict(self, t: WritingTemplate, dept_code: str = "",
+                      user_id: str = "") -> dict:
+        tier = ("department" if (t.department_code or "") and dept_code
+                and t.department_code == dept_code
+                else ("mine" if t.created_by and t.created_by == user_id else "system"))
         return {
             "id": t.id, "name": t.name, "category": t.category, "base_type": t.base_type,
+            "department_code": t.department_code or "", "tier": tier,
             "description": t.description, "icon": t.icon, "params_schema": t.params_schema,
             "is_builtin": t.is_builtin, "use_count": t.use_count,
             "writing_style": t.writing_style, "word_count": t.word_count,
@@ -216,6 +243,175 @@ class TemplateService:
 
         self.templates.update(tmpl)
         return {"message": "Template updated"}
+
+    # ---- 科室模板：AI 按本科室写作习惯调整，人工确认后保存 ----
+
+    def _dept_code_of(self, user: User) -> str:
+        """当前登录用户的科室 code：由服务端从 users 表解析，不接受客户端入参。"""
+        from sqlalchemy import select as _select
+
+        from app.application.organization.service import OrganizationService
+        from app.infrastructure.database.models.identity import UserModel
+
+        row = self.db.scalar(_select(UserModel).where(UserModel.id == user.id))
+        if row is None:
+            return ""
+        return OrganizationService(self.db)._effective_code(row)
+
+    def adapt_for_department(self, user: User, template_id: str,
+                             hints: str = "") -> dict:
+        """基于现有模板生成「本科室版」草案：只做建议，不落库，等人工确认。
+
+        权限：knowledge_admin（本科室）/ developer。LLM 不可用时降级为规则化改写，
+        并在 source 标注 rule，前端据此提示"已按规则生成，请人工校核"。
+        """
+        role = getattr(user, "role", "") or ""
+        if role not in ADMIN_OR_ABOVE:
+            raise PermissionDeniedError("仅知识管理员可调整本科室模板")
+
+        src = self.templates.get(template_id)
+        if not src:
+            raise NotFoundError("Template not found")
+
+        dept_code = self._dept_code_of(user)
+        if not dept_code:
+            raise PermissionDeniedError("当前账号未归属科室，无法生成科室模板")
+
+        org = None
+        try:
+            from app.application.organization.service import OrganizationService
+            org_svc = OrganizationService(self.db)
+            org = org_svc._raw_agent(dept_code)
+        except Exception:
+            org = None
+
+        dept_name = (org or {}).get("dept_name") or dept_code
+        base_content = src.content_template or ""
+        base_guide = src.writing_guide or src.description or ""
+        biz = (org or {}).get("business_prompt") or ""
+        req = (org or {}).get("work_requirements") or ""
+
+        prompt = (
+            "你是司法行政机关的公文模板编写助手。请把下面这份通用模板，"
+            f"改写为「{dept_name}」日常使用的科室模板。\n\n"
+            "要求：\n"
+            "1. 保持公文法定结构与规范用语，不编造制度、数据与文号；\n"
+            "2. 章节顺序贴合该科室实际写作习惯；\n"
+            "3. 输出纯文本模板正文，用【】标注需要填写的占位要素；\n"
+            "4. 不要输出解释性说明。\n\n"
+            f"【本科室业务特点】\n{biz}\n\n"
+            f"【本科室工作要求】\n{req}\n\n"
+            f"【调整重点】\n{hints or '按本科室常见场景优化章节与表述'}\n\n"
+            f"【原模板名称】{src.name}\n"
+            f"【原模板正文】\n{base_content[:4000]}\n"
+            f"【原写作要点】\n{base_guide[:1000]}\n"
+        )
+
+        content, source = "", "rule"
+        try:
+            from app.infrastructure.ai import get_llm_gateway
+            gateway = get_llm_gateway()
+            if gateway is not None:
+                content = (gateway.complete(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.5, max_tokens=4096,
+                ) or "").strip()
+                source = "llm"
+        except Exception as e:
+            logger.warning("[模板] 本科室化改写不可用，降级为规则生成: %s", e)
+        if not content:
+            content = self._rule_adapt(src, dept_name, hints)
+            source = "rule"
+
+        return {
+            "source_template_id": src.id,
+            "source_template_name": src.name,
+            "dept_code": dept_code,
+            "dept_name": dept_name,
+            "name": f"{src.name}（{dept_name}）",
+            "category": src.category,
+            "base_type": src.base_type,
+            "description": f"基于「{src.name}」按{dept_name}写作习惯调整",
+            "content_template": content,
+            "writing_guide": base_guide,
+            "writing_style": src.writing_style,
+            "word_count": src.word_count,
+            "need_red_header": src.need_red_header,
+            "need_signature": src.need_signature,
+            "need_date": src.need_date,
+            "need_doc_number": src.need_doc_number,
+            "params_schema": src.params_schema or [],
+            "structure": src.structure or [],
+            "system_prompt": src.system_prompt or "",
+            "template_kind": src.template_kind,
+            "tags": src.tags or [],
+            "source": source,
+        }
+
+    @staticmethod
+    def _rule_adapt(src, dept_name: str, hints: str) -> str:
+        """LLM 不可用时的规则化改写：保留原结构，补本科室口径说明。"""
+        head = [f"【{dept_name}专用】{src.name}",
+                "",
+                f"编写口径：{hints or '按本科室常用表述与章节顺序撰写'}。",
+                "填写说明：带【】的部分为需补充的要素，请勿留空。",
+                ""]
+        return "\n".join(head) + (src.content_template or "")
+
+    def save_department_template(self, user: User, body: dict) -> dict:
+        """人工确认后保存为本科室模板（服务端强制写入本人所属科室）。"""
+        role = getattr(user, "role", "") or ""
+        if role not in ADMIN_OR_ABOVE:
+            raise PermissionDeniedError("仅知识管理员可保存本科室模板")
+        dept_code = self._dept_code_of(user)
+        if not dept_code:
+            raise PermissionDeniedError("当前账号未归属科室，无法保存科室模板")
+
+        name = str(body.get("name") or "").strip()
+        content = str(body.get("content_template") or "").strip()
+        if not name:
+            raise AppError(400, "模板名称不能为空")
+        if not content:
+            raise AppError(400, "模板正文不能为空")
+
+        tmpl = WritingTemplate(
+            name=name[:100],
+            category=str(body.get("category") or "科室模板")[:50],
+            department_code=dept_code,
+            base_type=str(body.get("base_type") or "公文")[:50],
+            description=str(body.get("description") or ""),
+            icon="Document",
+            params_schema=body.get("params_schema") or [],
+            content_template=content,
+            system_prompt=str(body.get("system_prompt") or ""),
+            writing_style=str(body.get("writing_style") or "正式公文")[:50],
+            word_count=int(body.get("word_count") or 1000),
+            need_red_header=bool(body.get("need_red_header")),
+            need_signature=body.get("need_signature", True) is not False,
+            need_date=body.get("need_date", True) is not False,
+            need_doc_number=bool(body.get("need_doc_number")),
+            is_builtin=False, is_active=True, created_by=user.id,
+            template_kind=str(body.get("template_kind") or "official_doc"),
+            tags=body.get("tags") or [],
+            scene=str(body.get("scene") or ""),
+            writing_guide=str(body.get("writing_guide") or ""),
+            structure=body.get("structure") or [],
+            visibility="department",
+        )
+        tmpl = self.templates.add(tmpl)
+        try:
+            from app.application.audit.service import AuditService
+            AuditService.from_db(self.db).log(
+                action="template_dept_save", resource_type="template",
+                resource_id=tmpl.id,
+                detail={"dept_code": dept_code, "name": tmpl.name,
+                        "source_template_id": body.get("source_template_id") or ""},
+                result="success",
+            )
+        except Exception:
+            pass
+        return {"id": tmpl.id, "message": "科室模板已保存",
+                "department_code": dept_code}
 
     def delete_template(self, user: User, template_id: str) -> dict:
         tmpl = self.templates.get(template_id)

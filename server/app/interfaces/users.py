@@ -33,6 +33,7 @@ def list_users(
             "real_name": u.real_name,
             "email": u.email,
             "department": u.department,
+            "department_code": getattr(u, "department_code", "") or "",
             "role": u.role,
             "is_active": u.is_active,
             "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -48,7 +49,7 @@ def create_user(
     svc: UserService = Depends(get_user_service),
 ):
     user = svc.create_user(admin, req.username, req.email, req.password,
-                           req.real_name, req.department, req.role)
+                           req.real_name, req.department, req.role, req.department_code)
     return {"id": user.id, "message": "User created"}
 
 
@@ -59,7 +60,8 @@ def update_user(
     admin: User = Depends(require_admin_or_above),
     svc: UserService = Depends(get_user_service),
 ):
-    svc.update_user(admin, user_id, req.real_name, req.department, req.is_active, req.role)
+    svc.update_user(admin, user_id, req.real_name, req.department,
+                    req.is_active, req.role, req.department_code)
     return {"message": "User updated"}
 
 

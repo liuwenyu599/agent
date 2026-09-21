@@ -33,6 +33,29 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var result by mutableStateOf("")
         private set
 
+    // ---- 模板三层：系统模板 / 本科室模板 / 我的模板（tier 由后端按归属判定）----
+    var tier by mutableStateOf<String?>(null)
+
+    /**
+     * 系统模板 → 本科室模板的 AI 草案（未落库）。
+     * 知识管理员校核后再保存，保证「AI 建议 + 人工确认」。
+     */
+    var adapting by mutableStateOf(false)
+        private set
+    var adaptError by mutableStateOf<String?>(null)
+        private set
+
+    /** 系统模板 → 本科室模板草案（未落库，AI 建议 + 人工确认后才保存） */
+    var draft by mutableStateOf<Map<String, String>?>(null)
+        private set
+
+    fun tierOf(t: JsonObject): String = t["tier"].str().ifBlank { "system" }
+
+    fun shown(): List<JsonObject> {
+        val base = templates.filter { filterCat == null || it["category"].str() == filterCat }
+        return if (tier == null) base else base.filter { tierOf(it) == tier }
+    }
+
     fun startUse(t: JsonObject) {
         usingTemplate = t
         result = ""
@@ -93,9 +116,6 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 
-    fun shown(): List<JsonObject> =
-        templates.filter { filterCat == null || it["category"].str() == filterCat }
-
     fun initBuiltin() {
         scope.launch {
             when (val r = repo.initBuiltin()) {
@@ -103,6 +123,59 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
                 is ApiResult.Err -> status = r.message
             }
         }
+    }
+
+    /** 把系统模板按本科室写作习惯生成科室模板草案（只返回建议，不落库） */
+    fun adaptForDepartment(t: JsonObject, hints: String) {
+        adapting = true
+        status = null
+        scope.launch {
+            when (val r = repo.adaptForDept(t["id"].str(), hints)) {
+                is ApiResult.Ok -> {
+                    val o = r.data.obj()
+                    draft = if (o == null) null else mapOf(
+                        "source_template_id" to o["source_template_id"].str(),
+                        "name" to o["name"].str(),
+                        "dept_name" to o["dept_name"].str(),
+                        "category" to o["category"].str(),
+                        "content_template" to o["content_template"].str(),
+                        "source" to o["source"].str(),
+                    )
+                    if (draft == null) status = "未生成科室模板草案"
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            adapting = false
+        }
+    }
+
+    /** 人工确认后保存为本科室模板（科室归属由服务端写入） */
+    fun saveDepartmentTemplate(name: String, content: String) {
+        val d = draft ?: return
+        if (name.isBlank() || content.isBlank()) {
+            status = "模板名称与正文不能为空"
+            return
+        }
+        scope.launch {
+            when (val r = repo.saveDeptTemplate(mapOf(
+                "name" to name,
+                "content_template" to content,
+                "category" to d["category"].orEmpty(),
+                "source_template_id" to d["source_template_id"].orEmpty(),
+            ))) {
+                is ApiResult.Ok -> {
+                    status = "已保存为本科室模板"
+                    draft = null
+                    load()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+        }
+    }
+
+    fun cancelDraft() {
+        draft = null
+        status = null
     }
 
     fun save(editing: JsonObject?, body: Map<String, Any?>) {

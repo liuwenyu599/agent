@@ -39,6 +39,8 @@ class WritingTemplate:
     share_departments: List[str] = field(default_factory=list)
     share_roles: List[str] = field(default_factory=list)
     is_draft: bool = False
+    # 科室模板归属：空=系统/通用模板，非空=该科室模板（由服务端写入，客户端不可指定）
+    department_code: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

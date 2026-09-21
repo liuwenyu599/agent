@@ -15,7 +15,41 @@ from app.domain.identity.entities import (
     User,
 )
 from app.domain.identity.repositories import UserRepository
-from app.domain.organization.departments import resolve_code
+from app.domain.organization.departments import (
+    DEPARTMENT_BY_CODE,
+    resolve_code,
+)
+
+# 前端可选角色与后端权限口径一致：只允许这三类，其余一律拒绝
+ASSIGNABLE_ROLES = (ROLE_USER, ROLE_KNOWLEDGE_ADMIN, ROLE_DEVELOPER)
+
+
+def _resolve_department(department: str = "", department_code: str = "") -> tuple[str, str]:
+    """解析所属科室，返回 (科室正式名称, 科室 code)。
+
+    - code 优先，且必须命中科室字典，杜绝前端自由输入；
+    - 兼容旧的按名称传值：同样必须命中字典，未命中直接报错，不做猜测归口；
+    - 两者都为空表示未归口，只允许访问全局公共知识。
+    """
+    code = (department_code or "").strip()
+    if code:
+        if code not in DEPARTMENT_BY_CODE:
+            raise AppError(400, "所属科室无效，请从科室列表中选择")
+        return DEPARTMENT_BY_CODE[code].name, code
+    name = (department or "").strip()
+    if name:
+        resolved = resolve_code(name)
+        if not resolved:
+            raise AppError(400, "所属科室无效，请从科室列表中选择")
+        return DEPARTMENT_BY_CODE[resolved].name, resolved
+    return "", ""
+
+
+def _check_assignable_role(role: str) -> str:
+    role = (role or "").strip()
+    if role not in ASSIGNABLE_ROLES:
+        raise AppError(400, "角色无效，请从角色列表中选择")
+    return role
 
 
 def with_department_code(user: User) -> User:
@@ -90,19 +124,23 @@ class AuthService:
         return self.users.count() == 0
 
     def register_first(self, username: str, email: str, password: str,
-                       real_name: str = "", department: str = "", role: str = ROLE_DEVELOPER) -> Tuple[str, User]:
+                       real_name: str = "", department: str = "", role: str = ROLE_DEVELOPER,
+                       department_code: str = "") -> Tuple[str, User]:
         if not self.is_first_user():
             raise PermissionDeniedError("系统已有用户，请登录后注册")
         if role != ROLE_DEVELOPER:
             raise AppError(400, "首次注册必须是系统管理员(developer)角色")
-        user = self._create_user_checked(username, email, password, real_name, department, ROLE_DEVELOPER)
+        dept_name, dept_code = _resolve_department(department, department_code)
+        user = self._create_user_checked(username, email, password, real_name,
+                                         dept_name, ROLE_DEVELOPER, dept_code)
         token = create_access_token(
             {"sub": user.id, "username": user.username, "role": user.role}
         )
         return token, user
 
     def register(self, actor: User, username: str, email: str, password: str,
-                 real_name: str = "", department: str = "", role: str = ROLE_USER) -> User:
+                 real_name: str = "", department: str = "", role: str = ROLE_USER,
+                 department_code: str = "") -> User:
         if actor.role == ROLE_DEVELOPER:
             allowed = [ROLE_USER, ROLE_KNOWLEDGE_ADMIN, ROLE_DEVELOPER]
         elif actor.role == ROLE_KNOWLEDGE_ADMIN:
@@ -111,17 +149,22 @@ class AuthService:
             raise PermissionDeniedError("普通用户无权注册新用户")
         if role not in allowed:
             raise PermissionDeniedError(f"无权注册该角色，允许: {', '.join(allowed)}")
-        return self._create_user_checked(username, email, password, real_name, department, role)
+        dept_name, dept_code = _resolve_department(department, department_code)
+        return self._create_user_checked(username, email, password, real_name,
+                                         dept_name, role, dept_code)
 
-    def _create_user_checked(self, username, email, password, real_name, department, role) -> User:
+    def _create_user_checked(self, username, email, password, real_name, department, role,
+                             department_code: str = "") -> User:
         if self.users.get_by_username(username):
             raise AppError(400, "用户名已存在")
         if self.users.get_by_email(email):
             raise AppError(400, "邮箱已存在")
-        return self.users.add(with_department_code(User(
+        _check_assignable_role(role)
+        return self.users.add(User(
             username=username, email=email, hashed_password=get_password_hash(password),
             real_name=real_name, department=department, role=role,
-        )))
+            department_code=department_code,
+        ))
 
 
 class UserService:
@@ -136,27 +179,32 @@ class UserService:
         return self.users.list_all()
 
     def create_user(self, actor: User, username: str, email: str, password: str,
-                    real_name: str = "", department: str = "", role: str = ROLE_USER) -> User:
+                    real_name: str = "", department: str = "", role: str = ROLE_USER,
+                    department_code: str = "") -> User:
         if role == ROLE_DEVELOPER and actor.role != ROLE_DEVELOPER:
             raise PermissionDeniedError("只有系统管理员可以创建系统管理员")
         if actor.role == ROLE_KNOWLEDGE_ADMIN and role not in (ROLE_USER, ROLE_KNOWLEDGE_ADMIN):
             raise PermissionDeniedError("知识管理员只能创建普通用户和知识管理员")
+        dept_name, dept_code = _resolve_department(department, department_code)
         if self.users.get_by_username(username):
             raise AppError(400, "Username exists")
         if self.users.get_by_email(email):
             raise AppError(400, "Email exists")
-        return self.users.add(with_department_code(User(
+        return self.users.add(User(
             username=username, email=email, hashed_password=get_password_hash(password),
-            real_name=real_name, department=department, role=role,
-        )))
+            real_name=real_name, department=dept_name, role=_check_assignable_role(role),
+            department_code=dept_code,
+        ))
 
     def update_user(self, actor: User, user_id: str, real_name: Optional[str] = None,
                     department: Optional[str] = None, is_active: Optional[bool] = None,
-                    role: Optional[str] = None) -> User:
+                    role: Optional[str] = None,
+                    department_code: Optional[str] = None) -> User:
         user = self.users.get(user_id)
         if not user:
             raise NotFoundError("User not found")
         if role is not None:
+            role = _check_assignable_role(role)
             if role == ROLE_DEVELOPER and actor.role != ROLE_DEVELOPER:
                 raise PermissionDeniedError("只有系统管理员可以设置系统管理员角色")
             if user.id == actor.id and role != actor.role:
@@ -164,10 +212,10 @@ class UserService:
             user.role = role
         if real_name is not None:
             user.real_name = real_name
-        if department is not None:
-            user.department = department
-            # 科室变更即时重算归属，不依赖启动回填
-            user.department_code = resolve_code(department or "")
+        if department is not None or department_code is not None:
+            dept_name, dept_code = _resolve_department(department or "", department_code or "")
+            user.department = dept_name
+            user.department_code = dept_code
         if is_active is not None:
             user.is_active = is_active
         return self.users.update(user)

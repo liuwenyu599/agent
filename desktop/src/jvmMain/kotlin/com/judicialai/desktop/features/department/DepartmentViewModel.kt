@@ -7,6 +7,7 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
@@ -17,49 +18,83 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * 科室空间：组织架构 + 科室 Agent 配置。
- * 可见科室、Agent 简介、知识范围全部由后端下发（后端按 department_id 强隔离），
- * 前端不做任何本地推导或补白。
+ * 科室空间（v3.2）
+ *
+ * 定位：本科室的「资源空间」，不是 Agent 选择器。
+ * 用户不给选择 Agent，进入即按 department_code 自动绑定本科室助手，
+ * 这里只聚合四块内容：本科室智能助手 / 常用业务 / 知识资源 / 本科室模板。
+ *
+ * 全部由服务端按登录用户解析（/organization/space），客户端不传 dept_code。
+ * 界面不出现模型、检索范围、系统提示等技术概念。
  */
 class DepartmentViewModel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    data class Dept(
-        val code: String,
-        val name: String,          // 正式名称
-        val shortName: String,     // 简称（UI 日常显示）
-        val memberCount: Int = 0,
-        val kbCount: Int = 0,
-        val templateCount: Int = 0,
-        val isMine: Boolean = false,
-    )
-
-    data class Agent(
-        val deptCode: String,
-        val deptName: String,
-        val name: String,            // 如「复议科 Agent」
+    data class AgentInfo(
+        val name: String,
         val intro: String,
-        val model: String,           // 底层模型（统一 Qwen 服务）
-        val scopes: List<String>,    // 允许的知识范围，如 GLOBAL / DEPT:fuli
+        val manager: String,
         val recommendedTasks: List<String>,
         val templates: List<String>,
-        val manager: String,
+        val version: Int,
+        val canManage: Boolean,
+        // 以下仅知识管理员 / 系统管理员可见，用于维护本科室业务层
+        val businessPrompt: String = "",
+        val workRequirements: String = "",
+        val kbIds: List<String> = emptyList(),
+        val editableFields: List<String> = emptyList(),
+    )
+
+    data class BusinessItem(val id: String, val title: String, val hint: String)
+
+    data class KnowledgeItem(
+        val id: String, val name: String, val description: String, val docCount: Int,
+    )
+
+    data class TemplateItem(
+        val id: String, val name: String, val category: String, val description: String,
+    )
+
+    data class VersionItem(
+        val version: Int, val operator: String, val note: String, val createdAt: String,
     )
 
     var loading by mutableStateOf(true)
         private set
     var error by mutableStateOf<String?>(null)
         private set
-
-    var departments by mutableStateOf(listOf<Dept>())
-        private set
-    var agents by mutableStateOf(mapOf<String, Agent>())
-        private set
-    var selectedCode by mutableStateOf<String?>(null)
+    var status by mutableStateOf<String?>(null)
         private set
 
-    val selected: Dept? get() = departments.firstOrNull { it.code == selectedCode }
-    val selectedAgent: Agent? get() = selectedCode?.let { agents[it] }
+    var deptCode by mutableStateOf("")
+        private set
+    var deptName by mutableStateOf("")
+        private set
+
+    var agent by mutableStateOf<AgentInfo?>(null)
+        private set
+    var business by mutableStateOf(listOf<BusinessItem>())
+        private set
+    var knowledge by mutableStateOf(listOf<KnowledgeItem>())
+        private set
+    var templates by mutableStateOf(listOf<TemplateItem>())
+        private set
+
+    /** 维护面板：只有后端下发 can_manage = true 才允许打开 */
+    var maintaining by mutableStateOf(false)
+    var versions by mutableStateOf(listOf<VersionItem>())
+        private set
+    var saving by mutableStateOf(false)
+        private set
+
+    // ---- 维护表单（仅业务层，系统层与安全层由后端保留，前端不可编辑）----
+    var formIntro by mutableStateOf("")
+    var formManager by mutableStateOf("")
+    var formBusinessPrompt by mutableStateOf("")
+    var formRequirements by mutableStateOf("")
+    var formTasks by mutableStateOf("")
+    var formTemplates by mutableStateOf("")
+    var formKbIds by mutableStateOf("")
 
     init { load() }
 
@@ -67,53 +102,131 @@ class DepartmentViewModel {
         loading = true
         error = null
         scope.launch {
-            when (val r = AppState.api.get(Endpoints.Organization.LIST)) {
-                is ApiResult.Ok -> {
-                    departments = r.data.items().map { o ->
-                        Dept(
-                            code = o["code"].str(),
-                            name = o["name"].str(),
-                            shortName = o["short_name"].str().ifBlank { o["name"].str() },
-                            memberCount = o["member_count"].int(),
-                            kbCount = o["kb_count"].int(),
-                            templateCount = o["template_count"].int(),
-                            isMine = o["is_mine"].str() == "true" || o["is_mine"].int() == 1,
-                        )
-                    }.sortedWith(compareBy({ !it.isMine }, { it.code }))
-                    val mine = departments.firstOrNull { it.isMine } ?: departments.firstOrNull()
-                    selectedCode = mine?.code ?: selectedCode
-                    if (selectedCode != null) loadAgent(selectedCode!!)
-                }
+            when (val r = AppState.api.get(Endpoints.Organization.SPACE)) {
+                is ApiResult.Ok -> apply(r.data.obj())
                 is ApiResult.Err -> error = r.message
             }
             loading = false
         }
     }
 
-    fun select(code: String) {
-        selectedCode = code
-        if (!agents.containsKey(code)) loadAgent(code)
+    private fun apply(o: kotlinx.serialization.json.JsonObject?) {
+        if (o == null) return
+        deptCode = o["dept_code"].str()
+        deptName = o["dept_name"].str().ifBlank { o["short_name"].str() }
+        AppState.departmentCode = deptCode
+        if (deptName.isNotBlank()) AppState.departmentName = deptName
+
+        business = o["business"].arr().mapNotNull { it.obj() }.map { b ->
+            BusinessItem(
+                id = b["id"].str(),
+                title = b["title"].str(),
+                hint = b["hint"].str(),
+            )
+        }
+        knowledge = o["knowledge"].arr().mapNotNull { it.obj() }.map { k ->
+            KnowledgeItem(
+                id = k["id"].str(),
+                name = k["name"].str(),
+                description = k["description"].str(),
+                docCount = k["doc_count"].int(),
+            )
+        }
+        templates = o["templates"].arr().mapNotNull { it.obj() }.map { t ->
+            TemplateItem(
+                id = t["id"].str(),
+                name = t["name"].str(),
+                category = t["category"].str(),
+                description = t["description"].str(),
+            )
+        }
+
+        val a = o["agent"].obj()
+        agent = if (a == null) null else AgentInfo(
+            name = a["name"].str().ifBlank { "${deptName}智能助手".trim() },
+            intro = a["intro"].str(),
+            manager = a["manager"].str(),
+            recommendedTasks = a["recommended_tasks"].arr().map { it.str() }
+                .filter { it.isNotBlank() },
+            templates = a["templates"].arr().map { it.str() }.filter { it.isNotBlank() },
+            version = a["version"].int(),
+            canManage = a["can_manage"].bool(),
+            businessPrompt = a["business_prompt"].str(),
+            workRequirements = a["work_requirements"].str(),
+            kbIds = a["kb_ids"].arr().map { it.str() }.filter { it.isNotBlank() },
+            editableFields = a["editable_fields"].arr().map { it.str() },
+        )
+        AppState.agentName = agent?.name.orEmpty()
+        AppState.agentIntro = agent?.intro.orEmpty()
+        AppState.deptTasks = agent?.recommendedTasks.orEmpty()
+        AppState.canManageDeptAgent = agent?.canManage ?: false
+        resetForm()
     }
 
-    private fun loadAgent(code: String) {
+    private fun resetForm() {
+        val a = agent ?: return
+        formIntro = a.intro
+        formManager = a.manager
+        formBusinessPrompt = a.businessPrompt
+        formRequirements = a.workRequirements
+        formTasks = a.recommendedTasks.joinToString("\n")
+        formTemplates = a.templates.joinToString("\n")
+        formKbIds = a.kbIds.joinToString("\n")
+    }
+
+    fun openMaintain() {
+        resetForm()
+        maintaining = true
+        loadVersions()
+    }
+
+    fun closeMaintain() {
+        maintaining = false
+        status = null
+    }
+
+    private fun loadVersions() {
+        if (deptCode.isBlank()) return
         scope.launch {
-            when (val r = AppState.api.get(Endpoints.Organization.agent(code))) {
-                is ApiResult.Ok -> {
-                    val o = r.data.obj() ?: return@launch
-                    agents = agents + (code to Agent(
-                        deptCode = code,
-                        deptName = o["dept_name"].str(),
-                        name = o["name"].str().ifBlank { "科室 Agent" },
-                        intro = o["intro"].str(),
-                        model = o["model"].str(),
-                        scopes = o["scopes"].arr().map { it.str() },
-                        recommendedTasks = o["recommended_tasks"].arr().map { it.str() },
-                        templates = o["templates"].arr().map { it.str() },
-                        manager = o["manager"].str(),
-                    ))
+            when (val r = AppState.api.get(Endpoints.Organization.agentVersions(deptCode))) {
+                is ApiResult.Ok -> versions = r.data.items().map { v ->
+                    VersionItem(
+                        version = v["version"].int(),
+                        operator = v["operator_name"].str(),
+                        note = v["change_note"].str(),
+                        createdAt = v["created_at"].str(),
+                    )
                 }
-                is ApiResult.Err -> Unit // 未配置 Agent 时不阻塞展示科室列表
+                is ApiResult.Err -> Unit
             }
+        }
+    }
+
+    /** 保存本科室业务配置：只提交业务层字段，系统层与安全层由后端保留 */
+    fun save() {
+        val code = deptCode
+        if (code.isBlank()) return
+        saving = true
+        status = null
+        val body = mapOf(
+            "intro" to formIntro,
+            "manager" to formManager,
+            "business_prompt" to formBusinessPrompt,
+            "work_requirements" to formRequirements,
+            "tasks" to formTasks.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
+            "templates" to formTemplates.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
+            "kb_ids" to formKbIds.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
+        )
+        scope.launch {
+            when (val r = AppState.api.put(Endpoints.Organization.agent(code), body)) {
+                is ApiResult.Ok -> {
+                    status = "已保存，本科室助手已按新配置生效"
+                    load()
+                    loadVersions()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            saving = false
         }
     }
 }

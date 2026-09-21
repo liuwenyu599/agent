@@ -146,8 +146,9 @@ private fun UsersTab(vm: AdminViewModel) {
             rows = vm.users.mapIndexed { i, u ->
                 listOf(
                     "${i + 1}", u["username"].str(), u["real_name"].str(),
-                    u["email"].str(), u["department"].str(),
-                    roleText(u["role"].str()),
+                    u["email"].str(),
+                    vm.deptLabel(u["department_code"].str()).ifBlank { u["department"].str() },
+                    vm.roleLabel(u["role"].str()),
                     if (u["is_active"].bool()) "正常" else "禁用",
                     u["created_at"].str().take(10),
                     "ops",
@@ -169,15 +170,15 @@ private fun UsersTab(vm: AdminViewModel) {
         }
     }
 
-    if (showCreate) UserDialog("新建用户", null,
-        onSubmit = { name, email, pwd, real, dept, role ->
-            vm.createUser(name, email, pwd, real, dept, role); showCreate = false
+    if (showCreate) UserDialog("新建用户", null, vm,
+        onSubmit = { name, email, pwd, real, deptCode, role ->
+            vm.createUser(name, email, pwd, real, deptCode, role); showCreate = false
         }) { showCreate = false }
 
     editUser?.let { u ->
-        UserDialog("编辑用户", u,
-            onSubmit = { _, _, _, real, dept, role ->
-                vm.updateUser(u["id"].str(), real, dept, role); editUser = null
+        UserDialog("编辑用户", u, vm,
+            onSubmit = { _, _, _, real, deptCode, role ->
+                vm.updateUser(u["id"].str(), real, deptCode, role); editUser = null
             }) { editUser = null }
     }
 
@@ -205,7 +206,7 @@ private fun UsersTab(vm: AdminViewModel) {
 
 @Composable
 private fun UserDialog(
-    title: String, user: JsonObject?,
+    title: String, user: JsonObject?, vm: AdminViewModel,
     onSubmit: (String, String, String, String, String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -213,9 +214,17 @@ private fun UserDialog(
     var email by remember { mutableStateOf(user?.get("email").str()) }
     var password by remember { mutableStateOf("") }
     var realName by remember { mutableStateOf(user?.get("real_name").str()) }
-    var department by remember { mutableStateOf(user?.get("department").str()) }
-    var role by remember { mutableStateOf(user?.get("role").str().ifBlank { "user" }) }
+    // 所属科室只允许从科室字典下拉选择，不接受任何自由输入
+    var departmentCode by remember { mutableStateOf(user?.get("department_code").str()) }
+    var deptMenu by remember { mutableStateOf(false) }
+    val roleOptions = vm.roleOptions(com.judicialai.desktop.app.AppState.role)
+    var role by remember {
+        mutableStateOf(user?.get("role").str().ifBlank { "user" }.let {
+            it.takeIf { r -> roleOptions.any { o -> o.first == r } } ?: "user"
+        })
+    }
     var roleMenu by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     val isEdit = user != null
 
     AlertDialog(
@@ -233,40 +242,71 @@ private fun UserDialog(
                 }
                 OutlinedTextField(value = realName, onValueChange = { realName = it },
                     label = { Text("真实姓名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = department, onValueChange = { department = it },
-                    label = { Text("部门") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+
+                // 所属科室：下拉选择，数据来自 /organization/departments
                 Box {
-                    OutlinedTextField(value = roleText(role), onValueChange = {},
-                        label = { Text("角色") }, readOnly = true,
-                        modifier = Modifier.fillMaxWidth().clickable { roleMenu = true })
-                    DropdownMenu(expanded = roleMenu, onDismissRequest = { roleMenu = false }) {
-                        listOf("user", "knowledge_admin", "admin", "developer").forEach { r ->
-                            DropdownMenuItem(onClick = { role = r; roleMenu = false }) {
-                                Text(roleText(r))
+                    OutlinedTextField(
+                        value = vm.deptLabel(departmentCode).ifBlank { "请选择所属科室" },
+                        onValueChange = {}, label = { Text("所属科室") }, readOnly = true,
+                        modifier = Modifier.fillMaxWidth().clickable { deptMenu = true })
+                    DropdownMenu(expanded = deptMenu, onDismissRequest = { deptMenu = false }) {
+                        if (vm.departments.isEmpty()) {
+                            DropdownMenuItem(onClick = { deptMenu = false }, enabled = false) {
+                                Text("暂无可用科室", fontSize = 13.sp)
+                            }
+                        }
+                        vm.departments.forEach { d ->
+                            val code = d["code"].str()
+                            val shortName = d["short_name"].str()
+                            DropdownMenuItem(onClick = { departmentCode = code; deptMenu = false }) {
+                                Text(buildString {
+                                    append(d["name"].str())
+                                    if (shortName.isNotBlank() && shortName != d["name"].str())
+                                        append("（$shortName）")
+                                }, fontSize = 13.sp)
                             }
                         }
                     }
                 }
+
+                // 角色：下拉三选一，与后端 assignable 角色保持一致
+                Box {
+                    OutlinedTextField(
+                        value = roleOptions.firstOrNull { it.first == role }?.second ?: "普通用户",
+                        onValueChange = {}, label = { Text("角色") }, readOnly = true,
+                        enabled = roleOptions.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth().clickable(enabled = roleOptions.isNotEmpty()) {
+                            roleMenu = true
+                        })
+                    DropdownMenu(expanded = roleMenu, onDismissRequest = { roleMenu = false }) {
+                        roleOptions.forEach { (value, label) ->
+                            DropdownMenuItem(onClick = { role = value; roleMenu = false }) {
+                                Text(label, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                error?.let { Text(it, fontSize = 11.5.sp, color = EpDanger) }
             }
         },
         confirmButton = {
             Button(onClick = {
-                if (isEdit || (username.isNotBlank() && password.isNotBlank()))
-                    onSubmit(username, email, password, realName, department, role)
+                when {
+                    departmentCode.isBlank() -> error = "请选择所属科室"
+                    role.isBlank() -> error = "请选择角色"
+                    isEdit || (username.isNotBlank() && password.isNotBlank()) -> {
+                        error = null
+                        onSubmit(username, email, password, realName, departmentCode, role)
+                    }
+                    else -> error = "请填写用户名与密码"
+                }
             }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
                 Text("确定", color = Color.White)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
-}
-
-private fun roleText(role: String) = when (role) {
-    "developer" -> "系统管理员"
-    "knowledge_admin" -> "知识管理员"
-    "admin" -> "管理员"
-    "user" -> "普通用户"
-    else -> role
 }
 
 @Composable

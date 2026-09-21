@@ -1,7 +1,7 @@
 """写作模板路由。路径与响应结构与旧系统一致。"""
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 
 from app.application.templates.dto import (
     CategoryCreateRequest,
@@ -78,3 +78,23 @@ def delete_template(template_id: str, admin: User = Depends(require_admin_or_abo
 def use_template(template_id: str, user: User = Depends(get_current_user),
                  svc: TemplateService = Depends(get_template_service)):
     return svc.record_use(template_id)
+
+
+@router.post("/{template_id}/adapt")
+def adapt_for_department(template_id: str,
+                         hints: str = Body("", embed=True),
+                         user: User = Depends(get_current_user),
+                         svc: TemplateService = Depends(get_template_service)):
+    """基于现有模板生成「本科室版」草案（AI 按本科室写作习惯调整）。
+
+    只返回草案，不落库；科室由服务端解析。需人工确认后调用 /templates/department 保存。
+    """
+    return svc.adapt_for_department(user, template_id, hints)
+
+
+@router.post("/department")
+def save_department_template(payload: dict = Body(...),
+                             user: User = Depends(get_current_user),
+                             svc: TemplateService = Depends(get_template_service)):
+    """人工确认后保存为本科室模板（department_code 由服务端写入）。"""
+    return svc.save_department_template(user, payload)

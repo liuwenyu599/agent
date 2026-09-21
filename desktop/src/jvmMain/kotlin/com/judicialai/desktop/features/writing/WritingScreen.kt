@@ -159,11 +159,46 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
         }
 
         Spacer(Modifier.height(18.dp))
-        // 上下文条：科室 / Agent / 知识范围（真实取自后端，缺失则不显示）
+        // 上下文条：当前科室与可依据的资料（真实取自后端，缺失则不显示）
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            ContextTag("当前科室：${com.judicialai.desktop.app.AppState.departmentName.ifBlank { "未设置" }}")
-            ContextTag("可用知识：全局公共 + 本科室")
+            val dept = com.judicialai.desktop.app.AppState.departmentName.ifBlank { "未设置" }
+            ContextTag("当前科室：$dept")
+            ContextTag("可依据资料：公共资料 + ${dept}资料")
+        }
+
+        // 本科室常用任务：由本科室助手下发，点击直接进入本次写作
+        val deptTasks = com.judicialai.desktop.app.AppState.deptTasks
+        if (deptTasks.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Text("本科室常用任务", fontSize = 12.sp,
+                color = com.judicialai.desktop.design.theme.Muted)
+            Spacer(Modifier.height(8.dp))
+            Column(
+                Modifier.fillMaxWidth(0.62f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                deptTasks.take(4).forEach { task ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White)
+                            .clickable {
+                                vm.entryInput = task
+                                vm.planAndStart()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(task, fontSize = 12.5.sp,
+                            color = com.judicialai.desktop.design.theme.Ink,
+                            modifier = Modifier.weight(1f), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        Text("开始 →", fontSize = 11.5.sp,
+                            color = com.judicialai.desktop.design.theme.Muted)
+                    }
+                }
+            }
         }
 
         if (vm.planning) {
@@ -286,11 +321,7 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                         if (opt.note.isNotBlank()) Text(opt.note, fontSize = 10.5.sp, color = Warn)
                     }
                 }
-                if (spec.scopes.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
-                    Text("检索范围：" + spec.scopes.joinToString(" + "),
-                        fontSize = 10.5.sp, color = TextSecondary)
-                }
+                // 检索范围由后端按科室权限强制，界面只说明可依据哪些资料，不显示技术范围
             }
 
             // 模板

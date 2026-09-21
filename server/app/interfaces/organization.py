@@ -21,18 +21,36 @@ router = APIRouter(prefix="/organization", tags=["组织架构"])
 
 
 class AgentUpdate(BaseModel):
-    name: str | None = None
+    # 业务层（knowledge_admin 可维护本科室）
     intro: str | None = None
     manager: str | None = None
-    system_prompt: str | None = None
+    business_prompt: str | None = None
+    work_requirements: str | None = None
     tasks: list | None = None
     templates: list | None = None
+    kb_ids: list | None = None
+    # 系统层（仅 developer 可维护）
+    name: str | None = None
+    system_prompt: str | None = None
+    safety_prompt: str | None = None
+    model: str | None = None
 
 
 @router.get("/departments")
 def list_departments(db: Session = Depends(get_db),
                      user: User = Depends(get_current_user)):
+    """科室字典：普通用户只用于展示本科室，系统管理员可用于全局管理。"""
     return {"items": OrganizationService(db).list_departments(user.id)}
+
+
+@router.get("/space")
+def my_department_space(db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """本科室空间：助手 + 常用业务 + 知识资源 + 本科室模板。
+
+    科室完全由服务端按登录用户解析，不接受任何 dept_code 入参。
+    """
+    return OrganizationService(db).dept_space(user.id)
 
 
 @router.get("/me")
@@ -49,24 +67,38 @@ def my_context(db: Session = Depends(get_db),
 @router.get("/agents/{dept_code}")
 def get_agent(dept_code: str, db: Session = Depends(get_db),
               user: User = Depends(get_current_user)):
-    """查看科室 Agent：系统管理员可看全部，其余只能看本人所属科室。"""
+    """查看科室助手：系统管理员可看全部，其余只能看本人所属科室。"""
     svc = OrganizationService(db)
     ctx = svc.user_context(user.id)
     admin = ctx.get("is_admin")
     # 非本科室且非系统管理员：直接 403，不泄漏任何他科室配置
     if not admin and ctx.get("dept_code") != dept_code:
-        raise HTTPException(status_code=403, detail="无权查看该科室 Agent")
-    agent = svc.agent_of(dept_code)
+        raise HTTPException(status_code=403, detail="无权查看该科室助手")
+    agent = svc.agent_of(dept_code, db.get(UserModel, user.id))
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent 未配置")
+        raise HTTPException(status_code=404, detail="该科室尚未配置助手")
     return agent
+
+
+@router.get("/agents/{dept_code}/versions")
+def list_agent_versions(dept_code: str, limit: int = 20,
+                        db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    """助手配置变更版本记录（审计与追溯）。"""
+    row = db.get(UserModel, user.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    try:
+        return {"items": OrganizationService(db).list_agent_versions(row, dept_code, limit)}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 @router.put("/agents/{dept_code}")
 def update_agent(dept_code: str, payload: AgentUpdate,
                  db: Session = Depends(get_db),
                  user: User = Depends(get_current_user)):
-    """维护本科室 Agent 的业务配置。scopes 与权限不可修改。"""
+    """维护本科室助手。业务层 knowledge_admin 可改，系统层仅 developer 可改。"""
     row = db.get(UserModel, user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="用户不存在")

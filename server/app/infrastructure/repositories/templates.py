@@ -21,7 +21,7 @@ _ENTITY_FIELDS = [
     "keywords", "is_active", "is_builtin", "created_by", "sort_order", "use_count",
     "template_kind", "tags", "scene", "writing_guide", "structure", "kb_ids",
     "visibility", "share_scope", "share_departments", "share_roles", "is_draft",
-    "created_at", "updated_at",
+    "department_code", "created_at", "updated_at",
 ]
 
 

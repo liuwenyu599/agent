@@ -81,6 +81,10 @@ object Endpoints {
         const val INIT = "/templates/init"
         fun item(id: String) = "/templates/$id"
         fun use(id: String) = "/templates/$id/use"
+        /** 系统模板 → 本科室模板草案（AI 按本科室写作习惯调整，不落库） */
+        fun adapt(id: String) = "/templates/$id/adapt"
+        /** 人工确认后保存为本科室模板 */
+        const val DEPARTMENT_SAVE = "/templates/department"
     }
 
     object FormatCheck {
@@ -155,7 +159,10 @@ object Endpoints {
     object Organization {
         const val LIST = "/organization/departments"
         const val ME = "/organization/me"
+        /** 本科室空间：助手 + 常用业务 + 知识资源 + 本科室模板（服务端按登录用户解析） */
+        const val SPACE = "/organization/space"
         fun agent(code: String) = "/organization/agents/$code"
+        fun agentVersions(code: String) = "/organization/agents/$code/versions"
     }
 
     /** 首页聚合（v3.0 后端已实现，客户端 v3.1 起使用） */

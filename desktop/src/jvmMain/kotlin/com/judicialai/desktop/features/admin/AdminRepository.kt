@@ -26,6 +26,13 @@ class AdminRepository(private val api: ApiClient) {
 
     suspend fun createUser(body: Map<String, Any?>) = api.post(Endpoints.Users.CREATE, body)
 
+    /** 科室字典：直接取自现有科室接口，禁止前端自由输入科室 */
+    suspend fun departments(): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.Organization.LIST)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+            is ApiResult.Err -> r
+        }
+
     suspend fun updateUser(id: String, body: Map<String, Any?>) =
         api.put(Endpoints.Users.item(id), body)
 

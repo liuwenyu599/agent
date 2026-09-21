@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,6 +27,9 @@ class AdminViewModel(private val repo: AdminRepository) {
     var rejectedDocs by mutableStateOf(listOf<JsonObject>()); private set
     var sessions by mutableStateOf(listOf<JsonObject>()); private set
     var approvalConfig by mutableStateOf<JsonObject?>(null); private set
+
+    /** 科室字典：来自 /organization/departments，只允许下拉选择 */
+    var departments by mutableStateOf(listOf<JsonObject>()); private set
 
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false); private set
@@ -80,6 +84,13 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
     }
 
+    fun loadDepartments() = scope.launch {
+        when (val r = repo.departments()) {
+            is ApiResult.Ok -> departments = r.data
+            is ApiResult.Err -> status = r.message
+        }
+    }
+
     fun loadApprovalConfig() = scope.launch {
         when (val r = repo.approvalConfig()) {
             is ApiResult.Ok -> approvalConfig = r.data
@@ -98,7 +109,28 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
 
     fun loadAll() {
-        loadStats(); loadUsers(); loadKbs(); loadDocs(); loadSessions(); loadApprovalConfig()
+        loadStats(); loadUsers(); loadKbs(); loadDocs(); loadSessions()
+        loadApprovalConfig(); loadDepartments()
+    }
+
+    /** 可选角色：与后端 assignable 角色一致（user / knowledge_admin / developer） */
+    fun roleOptions(actorRole: String): List<Pair<String, String>> = when (actorRole) {
+        "developer" -> listOf("user" to "普通用户", "knowledge_admin" to "知识管理员",
+            "developer" to "系统管理员")
+        "knowledge_admin" -> listOf("user" to "普通用户", "knowledge_admin" to "知识管理员")
+        else -> emptyList()
+    }
+
+    fun roleLabel(role: String) = when (role) {
+        "developer" -> "系统管理员"
+        "knowledge_admin" -> "知识管理员"
+        "user" -> "普通用户"
+        else -> "普通用户"
+    }
+
+    fun deptLabel(code: String): String {
+        val d = departments.firstOrNull { it["code"].str() == code }
+        return d?.get("name").str().ifBlank { d?.get("short_name").str() }
     }
 
     private fun act(message: String = "操作成功", block: suspend () -> ApiResult<*>) {
@@ -112,15 +144,17 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
     }
 
-    fun createUser(username: String, email: String, password: String, realName: String, department: String, role: String) =
+    fun createUser(username: String, email: String, password: String, realName: String,
+                   departmentCode: String, role: String) =
         act("创建成功") {
             repo.createUser(mapOf("username" to username, "email" to email, "password" to password,
-                "real_name" to realName, "department" to department, "role" to role))
+                "real_name" to realName, "department_code" to departmentCode, "role" to role))
         }
 
-    fun updateUser(id: String, realName: String, department: String, role: String) =
+    fun updateUser(id: String, realName: String, departmentCode: String, role: String) =
         act("修改成功") {
-            repo.updateUser(id, mapOf("real_name" to realName, "department" to department, "role" to role))
+            repo.updateUser(id, mapOf("real_name" to realName,
+                "department_code" to departmentCode, "role" to role))
         }
 
     fun toggleUser(id: String, active: Boolean) =

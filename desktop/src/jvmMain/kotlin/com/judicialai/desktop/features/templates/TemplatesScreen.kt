@@ -32,6 +32,7 @@ import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
@@ -108,6 +109,7 @@ private fun TemplateCenter(vm: TemplatesViewModel) {
 
     val filtered = vm.templates.filter { t ->
         (vm.filterCat == null || t["category"].str() == vm.filterCat) &&
+            (vm.tier == null || (t["tier"].str().ifBlank { "system" }) == vm.tier) &&
             (search.isBlank() || t["name"].str().contains(search, true) ||
                 t["description"].str().contains(search, true))
     }
@@ -152,6 +154,18 @@ private fun TemplateCenter(vm: TemplatesViewModel) {
             }
         }
 
+        // 模板归属：系统模板 / 我的模板（本科室模板由服务端按科室判定后下发）
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("归属", fontSize = 12.sp, color = TextSecondary)
+            TierChip("全部", vm.tier == null) { vm.tier = null }
+            TierChip("系统模板", vm.tier == "system") { vm.tier = "system" }
+            TierChip("本科室模板", vm.tier == "department") { vm.tier = "department" }
+            TierChip("我的模板", vm.tier == "mine") { vm.tier = "mine" }
+        }
+
         // 列表 + 预览
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             // 左：模板列表
@@ -190,6 +204,7 @@ private fun TemplateCenter(vm: TemplatesViewModel) {
                                             .padding(horizontal = 6.dp, vertical = 1.dp)) {
                                             Text(t["category"].str(), fontSize = 10.sp, color = fg)
                                         }
+                                        TierBadge(t["tier"].str().ifBlank { "system" })
                                     }
                                     Text(t["description"].str()
                                         .ifBlank { t["base_type"].str() + "类材料" },
@@ -202,6 +217,14 @@ private fun TemplateCenter(vm: TemplatesViewModel) {
                                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                                         horizontal = 12.dp, vertical = 4.dp)) {
                                     Text("使用模板", color = Color.White, fontSize = 12.sp)
+                                }
+                                // 知识管理员：把系统模板按本科室写作习惯调整为科室模板（AI 草案 + 人工确认）
+                                if ((AppState.isKnowledgeAdmin || AppState.isDeveloper) &&
+                                    t["tier"].str().ifBlank { "system" } == "system") {
+                                    TextButton(onClick = { vm.adaptForDepartment(t, "") }) {
+                                        Icon(Icons.Default.AutoAwesome, null, tint = EpPrimary,
+                                            modifier = Modifier.size(16.dp))
+                                    }
                                 }
                                 if (AppState.isAdmin) {
                                     TextButton(onClick = { vm.delete(t["id"].str()) }) {
@@ -281,7 +304,91 @@ private fun TemplateCenter(vm: TemplatesViewModel) {
             }
         }
         vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
+
+        // AI 生成的科室模板草案：人工确认后才落库
+        if (vm.draft != null) DeptTemplateDraftDialog(vm)
+        if (vm.adapting) Text("正在按本科室写作习惯调整模板…", fontSize = 12.sp,
+            color = TextSecondary)
     }
+}
+
+/** 归属筛选片 */
+@Composable
+private fun TierChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(16.dp))
+            .background(if (active) EpPrimary else Color.White)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    ) {
+        Text(label, fontSize = 12.5.sp, color = if (active) Color.White else TextRegular)
+    }
+}
+
+/** 列表归属徽标：系统 / 我的 */
+@Composable
+private fun TierBadge(tier: String) {
+    val (fg, bg, text) = when (tier) {
+        "department" -> Triple(QuickOrange, QuickOrangeBg, "本科室")
+        "mine" -> Triple(QuickGreen, QuickGreenBg, "我的")
+        else -> Triple(QuickBlue, QuickBlueBg, "系统")
+    }
+    Box(Modifier.clip(RoundedCornerShape(3.dp)).background(bg)
+        .padding(horizontal = 6.dp, vertical = 1.dp)) {
+        Text(text, fontSize = 10.sp, color = fg)
+    }
+}
+
+/**
+ * 科室模板确认：AI 生成的草案必须先经人工校核再保存，
+ * 保存后归属本科室，其他科室不可见。
+ */
+@Composable
+private fun DeptTemplateDraftDialog(vm: TemplatesViewModel) {
+    val d = vm.draft ?: return
+    var name by remember(d) { mutableStateOf(d["name"].orEmpty()) }
+    var content by remember(d) { mutableStateOf(d["content_template"].orEmpty()) }
+
+    AlertDialog(
+        onDismissRequest = { vm.cancelDraft() },
+        title = {
+            Text("确认为${d["dept_name"].orEmpty()}模板", fontSize = 16.sp,
+                fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (d["source"].orEmpty() == "rule") {
+                    Text("当前为规则生成的草案，请人工校核后再保存。",
+                        fontSize = 12.sp, color = EpWarning)
+                } else {
+                    Text("已按本科室写作习惯调整，请核校后再保存为本科室模板。",
+                        fontSize = 12.sp, color = TextSecondary)
+                }
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("模板名称", fontSize = 12.sp) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                )
+                OutlinedTextField(
+                    value = content, onValueChange = { content = it },
+                    label = { Text("模板正文", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { vm.saveDepartmentTemplate(name, content) }) {
+                Text("保存为本科室模板", color = EpPrimary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { vm.cancelDraft() }) { Text("取消", color = TextSecondary) }
+        },
+    )
 }
 
 @Composable

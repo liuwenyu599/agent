@@ -176,18 +176,45 @@ def test_department_code_persisted_on_create(users):
     db.close()
 
 
-def test_unknown_department_stays_empty(users, client):
+def test_unknown_department_is_rejected(users, client):
+    """v3.2：所属科室只能从科室字典选择，未命中字典的名称一律拒绝，不猜测归口。"""
     r = client.post(f"{BASE}/auth/register", json={
         "username": "nodept_user", "email": "nodept@test.local",
         "password": "Passw0rd!2026", "department": "不存在的科室", "role": "user",
+    }, headers=_hdr(users["developer"]))
+    assert r.status_code == 400
+    db = SessionLocal()
+    from sqlalchemy import select
+    from app.infrastructure.database.models.identity import UserModel
+    row = db.scalar(select(UserModel).where(UserModel.username == "nodept_user"))
+    assert row is None
+    db.close()
+
+
+def test_department_code_selected_from_dictionary(users, client):
+    """前端按科室 code 提交，服务端落库 department_code 与正式名称。"""
+    r = client.post(f"{BASE}/auth/register", json={
+        "username": "coded_user", "email": "coded@test.local",
+        "password": "Passw0rd!2026", "department_code": "renshi", "role": "user",
     }, headers=_hdr(users["developer"]))
     assert r.status_code == 200
     db = SessionLocal()
     from sqlalchemy import select
     from app.infrastructure.database.models.identity import UserModel
-    row = db.scalar(select(UserModel).where(UserModel.username == "nodept_user"))
-    assert row.department_code == ""
+    row = db.scalar(select(UserModel).where(UserModel.username == "coded_user"))
+    assert row is not None
+    assert row.department_code == "renshi"
+    assert row.department == "人事科"
     db.close()
+
+
+def test_unknown_role_is_rejected(users, client):
+    """角色必须与前端下拉一致：普通用户 / 知识管理员 / 系统管理员。"""
+    r = client.post(f"{BASE}/auth/register", json={
+        "username": "bad_role_user", "email": "badrole@test.local",
+        "password": "Passw0rd!2026", "department_code": "fuyi", "role": "super_admin",
+    }, headers=_hdr(users["developer"]))
+    assert r.status_code in (400, 403)
 
 
 # ---------------------------------------------------------------- 3. 知识库可见性

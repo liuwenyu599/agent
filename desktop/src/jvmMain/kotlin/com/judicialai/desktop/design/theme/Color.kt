@@ -12,42 +12,47 @@ import androidx.compose.ui.graphics.Color
  */
 
 // ---- 布局骨架 ----
-val AppBg = Color(0xFFEEF1F6)        // --bg 应用底色
+val AppBg = Color(0xFFF1F4F9)        // --bg 应用底色
 val Surface = Color(0xFFFFFFFF)      // --surface 卡片/面板
 val SurfaceSoft = Color(0xFFF7F9FC)  // 次级面板（会话栏、页面底）
-val Line = Color(0xFFE7EBF1)         // --line 分隔线/描边
-val LineSoft = Color(0xFFEEF1F6)     // --line-2 浅分隔
+val Line = Color(0xFFE1E7F0)         // --line 分隔线/描边
+val LineSoft = Color(0xFFECF0F6)     // --line-2 浅分隔
 
 // ---- 主色：政务蓝 ----
-val Navy = Color(0xFF16263D)         // --navy 深色头图/侧栏强调
-val Primary = Color(0xFF1F3A5F)      // --primary
-val PrimaryDeep = Color(0xFF2A4F7D)  // 渐变深端（按钮/头图）
-val PrimarySoft = Color(0xFFEAF0F7)  // --primary-soft 选中底/标签底
+val Navy = Color(0xFF11243C)         // --navy 深色头图/侧栏强调
+val Primary = Color(0xFF1B3B62)      // --primary
+val PrimaryDeep = Color(0xFF2C5C90)  // 渐变深端（按钮/头图）
+val PrimarySoft = Color(0xFFE6EEF8)  // --primary-soft 选中底/标签底
+
+// ---- 政务金：点缀色，用于提升政务质感（细线 / 徽标 / 强调）----
+val Gold = Color(0xFFC29A4A)
+val GoldLight = Color(0xFFDDBE77)
+val GoldSoft = Color(0xFFF8F1E2)
 
 // ---- 强调色：司法红 ----
-val Accent = Color(0xFFB4231A)       // --accent 徽标/红头/关键操作
-val AccentLight = Color(0xFFD8543F)  // 徽标渐变亮端
-val AccentSoft = Color(0xFFFBECEB)   // --accent-soft
+val Accent = Color(0xFFA8231B)       // --accent 徽标/红头/关键操作
+val AccentLight = Color(0xFFD0503C)  // 徽标渐变亮端
+val AccentSoft = Color(0xFFFBEBEA)   // --accent-soft
 
 // ---- 语义色 ----
-val Ok = Color(0xFF2F7D5B)           // 正常/就绪
-val OkSoft = Color(0xFFE8F2EC)
-val Warn = Color(0xFFC98A14)         // 繁忙/提醒
-val WarnSoft = Color(0xFFFBF3E0)
-val Blue = Color(0xFF2F6FD0)         // 信息/链接
-val BlueSoft = Color(0xFFE9F1FB)
-val Purple = Color(0xFF5A3A8A)       // 知识库/AI
-val PurpleSoft = Color(0xFFF1EBF8)
+val Ok = Color(0xFF2A7355)           // 正常/就绪
+val OkSoft = Color(0xFFE6F1EB)
+val Warn = Color(0xFFC0821A)         // 繁忙/提醒
+val WarnSoft = Color(0xFFFCF3E2)
+val Blue = Color(0xFF2A69C9)         // 信息/链接
+val BlueSoft = Color(0xFFE8F0FB)
+val Purple = Color(0xFF543780)       // 知识库/AI
+val PurpleSoft = Color(0xFFF0EAF7)
 
 // ---- 文本 ----
-val Ink = Color(0xFF1A2433)          // --ink 主文本
-val Ink2 = Color(0xFF4A5567)         // --ink-2 次级文本
-val Muted = Color(0xFF8B95A6)        // --muted 占位/辅助
+val Ink = Color(0xFF16202F)          // --ink 主文本
+val Ink2 = Color(0xFF46536A)         // --ink-2 次级文本
+val Muted = Color(0xFF8693A8)        // --muted 占位/辅助
 
 // ---- 侧栏（浅色政务栏）----
 val RailBg = Color(0xFFF4F7FB)       // 侧栏底
 val RailBorder = Color(0xFFE3E9F2)
-val RailText = Color(0xFF4A5567)     // 未选中菜单文字
+val RailText = Color(0xFF46536A)     // 未选中菜单文字
 val RailActiveBg = Color(0xFFFFFFFF)
 val RailActiveFg = Primary
 val RailHoverBg = Color(0xFFE9EEF6)
@@ -55,6 +60,11 @@ val RailHoverBg = Color(0xFFE9EEF6)
 // ---- 顶栏 ----
 val TopbarBg = Color(0xFFFFFFFF)
 val TopbarBorder = Line
+
+// ---- 首页主视觉（政务蓝深渐变 + 金线点缀）----
+val HeroStart = Color(0xFF10223A)
+val HeroMid = Color(0xFF1B3B62)
+val HeroEnd = Color(0xFF2C5C90)
 
 // ============================================================
 // 以下为兼容旧引用的别名（历史代码不动也能跟着换肤）
@@ -97,34 +107,38 @@ val BannerGradStart = Primary
 val BannerGradEnd = PrimaryDeep
 
 // ============================================================
-// 功能色系（v3.1）：四大生产力入口与对应工作区的完整彩色视觉
-// 每组 4 档：卡片渐变两端 + 浅底（标签/弱化区）+ 深字（浅底上的文字）
-// 饱和度收敛，保证政务办公产品的稳重感
+// 功能色系（v3.2）：四大生产力入口与对应工作区的完整彩色视觉
+// 每组 6 档：深端 + 渐变亮端 + 浅底 + 深字 + 描边，
+// 低明度深色主色 + 金色细节，兼顾政务庄重与现代质感
 // ============================================================
 
-// 智能写作 · 蓝紫
-val FeatureWriteStart = Color(0xFF4257C4)
-val FeatureWriteEnd = Color(0xFF5D74DE)
-val FeatureWriteSoft = Color(0xFFEDF1FD)
-val FeatureWriteInk = Color(0xFF33459E)
+// 智能写作 · 政务靛蓝
+val FeatureWriteStart = Color(0xFF173E70)
+val FeatureWriteEnd = Color(0xFF2F6BA4)
+val FeatureWriteSoft = Color(0xFFE7EFF9)
+val FeatureWriteInk = Color(0xFF143563)
+val FeatureWriteLine = Color(0xFF0F2F59)
 
-// 模板中心 · 青绿
-val FeatureTemplateStart = Color(0xFF0F7A63)
-val FeatureTemplateEnd = Color(0xFF1C9C80)
-val FeatureTemplateSoft = Color(0xFFE6F4F0)
-val FeatureTemplateInk = Color(0xFF0A6250)
+// 模板中心 · 松柏绿
+val FeatureTemplateStart = Color(0xFF0C5341)
+val FeatureTemplateEnd = Color(0xFF17795B)
+val FeatureTemplateSoft = Color(0xFFE4F1EC)
+val FeatureTemplateInk = Color(0xFF0A4737)
+val FeatureTemplateLine = Color(0xFF083D30)
 
-// PPT 助手 · 靛紫
-val FeaturePptStart = Color(0xFF50429C)
-val FeaturePptEnd = Color(0xFF6E5EC6)
-val FeaturePptSoft = Color(0xFFEFECFA)
-val FeaturePptInk = Color(0xFF413478)
+// PPT 助手 · 紫檀
+val FeaturePptStart = Color(0xFF3E2C6E)
+val FeaturePptEnd = Color(0xFF5E4796)
+val FeaturePptSoft = Color(0xFFECE8F6)
+val FeaturePptInk = Color(0xFF34245C)
+val FeaturePptLine = Color(0xFF2A1D4C)
 
-// 格式校验 · 琥珀
-val FeatureCheckStart = Color(0xFFA9660F)
-val FeatureCheckEnd = Color(0xFFC5861F)
-val FeatureCheckSoft = Color(0xFFFBF1E2)
-val FeatureCheckInk = Color(0xFF8A5510)
+// 格式校验 · 赭金
+val FeatureCheckStart = Color(0xFF7E4F0E)
+val FeatureCheckEnd = Color(0xFFAE7720)
+val FeatureCheckSoft = Color(0xFFFAF1E1)
+val FeatureCheckInk = Color(0xFF6E450C)
+val FeatureCheckLine = Color(0xFF5C3908)
 
 // ---- 导航 / 画布 ----
 val NavBg = Color(0xFFF7F9FC)

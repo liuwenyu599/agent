@@ -71,9 +71,12 @@ class HomeViewModel {
                 val o = r.data.obj() ?: return
                 AppState.departmentCode = o["dept_code"].str()
                 AppState.departmentName = o["dept_name"].str().ifBlank { o["short_name"].str() }
-                AppState.agentName = o["agent"].obj()?.get("name").str()
-                AppState.knowledgeScopes =
-                    o["scopes"].arr().map { it.str() }.filter { it.isNotBlank() }
+                val agent = o["agent"].obj()
+                AppState.agentName = agent?.get("name").str()
+                AppState.agentIntro = agent?.get("intro").str()
+                AppState.deptTasks = agent?.get("recommended_tasks").arr()
+                    .map { it.str() }.filter { it.isNotBlank() }
+                AppState.canManageDeptAgent = agent?.get("can_manage").bool()
                 if (AppState.departmentName.isNotBlank()) department = AppState.departmentName
             }
             is ApiResult.Err -> Unit // 组织服务不可用时首页仍可用，不打断办公

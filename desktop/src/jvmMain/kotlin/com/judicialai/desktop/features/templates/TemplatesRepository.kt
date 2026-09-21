@@ -45,6 +45,14 @@ class TemplatesRepository(private val api: ApiClient) {
     /** 记录使用次数 */
     suspend fun markUsed(id: String) = api.post(Endpoints.Templates.use(id), emptyMap<String, String>())
 
+    /** 系统模板 → 本科室模板草案（AI 按本科室写作习惯调整，不落库） */
+    suspend fun adaptForDept(id: String, hints: String) =
+        api.post(Endpoints.Templates.adapt(id), mapOf("hints" to hints), timeoutMs = 180_000)
+
+    /** 人工确认后保存为本科室模板（department_code 由服务端写入） */
+    suspend fun saveDeptTemplate(body: Map<String, Any?>) =
+        api.post(Endpoints.Templates.DEPARTMENT_SAVE, body)
+
     /** 生成结果导出 Word（走 /chat/export/docx） */
     suspend fun exportResult(title: String, content: String, target: java.io.File) =
         api.downloadPost(Endpoints.Chat.EXPORT_DOCX,

@@ -15,6 +15,7 @@ class RegisterRequest(BaseModel):
     password: str
     real_name: str = ""
     department: str = ""
+    department_code: str = ""
     role: str = "user"
 
 
@@ -24,12 +25,15 @@ class UserCreateRequest(BaseModel):
     password: str
     real_name: str = ""
     department: str = ""
+    # 所属科室只能用科室字典 code（前端下拉），不再接受自由输入的名称
+    department_code: str = ""
     role: str = "user"
 
 
 class UserUpdateRequest(BaseModel):
     real_name: Optional[str] = None
     department: Optional[str] = None
+    department_code: Optional[str] = None
     is_active: Optional[bool] = None
     role: Optional[str] = None
 

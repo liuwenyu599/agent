@@ -33,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -136,20 +135,15 @@ fun GlobalNavDrawer(
 
                 DrawerHomeRow(onHome = onHome)
 
-                for (group in AppNav.drawerGroups) {
-                    val items = group.items.filter { it.screen != AppScreen.ADMIN || isAdmin }
-                        .filter(match)
+                for (group in AppNav.drawerGroups()) {
+                    val items = group.items.filter(match)
                     if (items.isEmpty()) continue
                     Spacer(Modifier.height(Dimens.space5))
                     DrawerGroupTitle(group)
                     Spacer(Modifier.height(Dimens.space3))
-                    if (group.key == "core") {
-                        DrawerCoreGrid(items, onNavigate)
-                    } else {
-                        items.forEach { item ->
-                            DrawerRow(item = item, onNavigate = onNavigate)
-                            Spacer(Modifier.height(Dimens.space1))
-                        }
+                    items.forEach { item ->
+                        DrawerRow(item = item, onNavigate = onNavigate)
+                        Spacer(Modifier.height(Dimens.space1))
                     }
                 }
                 Spacer(Modifier.height(Dimens.space5))
@@ -181,38 +175,6 @@ private fun DrawerHomeRow(onHome: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text("工作台", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Text("今天可以做什么", fontSize = 11.5.sp, color = Muted)
-        }
-    }
-}
-
-@Composable
-private fun DrawerCoreGrid(items: List<NavItem>, onNavigate: (NavItem) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
-        items.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
-                row.forEach { item ->
-                    val p = paletteOf(item.screen)
-                    Box(
-                        Modifier.weight(1f).height(84.dp)
-                            .clip(RoundedCornerShape(Dimens.radiusMd))
-                            .background(Brush.linearGradient(listOf(p.start, p.end)))
-                            .clickable { onNavigate(item) }
-                            .padding(Dimens.space4),
-                    ) {
-                        Column {
-                            Icon(item.icon, contentDescription = null, tint = Color.White,
-                                modifier = Modifier.size(Dimens.iconLg))
-                            Spacer(Modifier.height(Dimens.space2))
-                            Text(item.label, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
-                                color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(item.desc, fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.85f),
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
-            }
         }
     }
 }
