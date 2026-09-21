@@ -42,6 +42,46 @@ class BGEEmbedder:
         return self.encode(queries)
 
 
+class HTTPEmbedder:
+    """OpenAI 兼容 /embeddings 远程向量化（stdlib urllib，无额外依赖）。
+
+    未配置 EMBEDDING_HTTP_URL 时 __init__ 抛 RuntimeError，由上层回退关键词检索。
+    """
+
+    DIM = 384
+
+    def __init__(self) -> None:
+        self.url = settings.EMBEDDING_HTTP_URL
+        self.model = settings.EMBEDDING_HTTP_MODEL
+        if not self.url:
+            raise RuntimeError("[Embedder] EMBEDDING_HTTP_URL 未配置，无法使用 http embedder")
+
+    def _post(self, texts):
+        body = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        req = urllib.request.Request(
+            self.url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=settings.EMBEDDING_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data
+
+    @staticmethod
+    def _normalize(vec):
+        arr = np.asarray(vec, dtype=np.float32)
+        norm = np.linalg.norm(arr)
+        if norm > 0:
+            arr = arr / norm
+        return arr
+
+    def encode(self, texts: List[str], normalize: bool = True) -> np.ndarray:
+        data = self._post(texts)
+        out = [self._normalize(item["embedding"]) for item in data["data"]]
+        return np.vstack(out)
+
+    def encode_queries(self, queries: List[str]) -> np.ndarray:
+        return self.encode(queries)
+
+
 class MockEmbedder:
     """确定性 hash 向量（384 维，L2 归一化），不依赖 torch。"""
 

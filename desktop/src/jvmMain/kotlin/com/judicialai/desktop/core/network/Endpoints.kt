@@ -132,5 +132,19 @@ object Endpoints {
         fun modelPublish(id: String) = "/training/models/$id/publish"
         fun modelArchive(id: String) = "/training/models/$id/archive"
     }
+
+    object Approvals {
+        const val CREATE = "/approvals"          // POST 提交审核
+        const val LIST = "/approvals"            // GET 列表
+        const val COUNTS = "/approvals/counts"
+        fun item(id: String) = "/approvals/$id"
+        fun actions(id: String) = "/approvals/$id/actions"
+        fun action(id: String) = "/approvals/$id/action"
+        fun number(id: String) = "/approvals/$id/number"
+    }
+
+    object System {
+        const val APPROVAL_CONFIG = "/system/approval-config"
+    }
 }
 

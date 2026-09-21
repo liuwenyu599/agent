@@ -19,6 +19,7 @@ import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
+import androidx.compose.material.Checkbox
 import androidx.compose.material.Divider
 import androidx.compose.material.DropdownMenu
 import androidx.compose.material.DropdownMenuItem
@@ -70,7 +71,7 @@ fun AdminScreen() {
             Column {
                 TabRow(selectedTabIndex = tab, backgroundColor = Color.White,
                     contentColor = EpPrimary) {
-                    listOf("数据概览", "用户管理", "知识库管理", "文档审核", "会话管理")
+                    listOf("数据概览", "用户管理", "知识库管理", "文档审核", "会话管理", "公文与审批配置")
                         .forEachIndexed { i, t ->
                             Tab(selected = tab == i, onClick = { tab = i }) {
                                 Text(t, fontSize = 14.sp,
@@ -84,7 +85,8 @@ fun AdminScreen() {
                         1 -> UsersTab(vm)
                         2 -> KbTab(vm)
                         3 -> DocsTab(vm)
-                        else -> SessionsTab(vm)
+                        4 -> SessionsTab(vm)
+                        5 -> ApprovalConfigTab(vm)
                     }
                 }
             }
@@ -339,6 +341,44 @@ private fun SessionsTab(vm: AdminViewModel) {
     ) { idx, _ ->
         TextButton(onClick = { vm.deleteSession(vm.sessions[idx]["id"].str()) }) {
             Text("删除", color = EpDanger, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun ApprovalConfigTab(vm: AdminViewModel) {
+    val cfg = vm.approvalConfig
+    var daizi by remember { mutableStateOf("") }
+    var countersign by remember { mutableStateOf(false) }
+    var seal by remember { mutableStateOf(false) }
+    var businessTypes by remember { mutableStateOf("") }
+
+    LaunchedEffect(cfg) {
+        cfg?.let {
+            daizi = it["doc_number_daizi"].str()
+            countersign = it["countersign_enabled"].str() == "true"
+            seal = it["seal_required"].str() == "true"
+            businessTypes = it["business_types"].str()
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("公文与审批配置", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        OutlinedTextField(daizi, { daizi = it },
+            label = { Text("文号代字（如 白云司）") }, modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = countersign, onCheckedChange = { countersign = it })
+            Text("启用会签", color = TextRegular, fontSize = 13.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = seal, onCheckedChange = { seal = it })
+            Text("用印需审批", color = TextRegular, fontSize = 13.sp)
+        }
+        OutlinedTextField(businessTypes, { businessTypes = it },
+            label = { Text("业务类型（逗号分隔）") }, modifier = Modifier.fillMaxWidth())
+        Button(onClick = { vm.saveApprovalConfig(daizi, countersign, seal, businessTypes) },
+            colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+            Text("保存配置", color = Color.White)
         }
     }
 }

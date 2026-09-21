@@ -25,7 +25,7 @@ class DocNumberService:
 
     def next_number(self, daizi: Optional[str] = None) -> str:
         """生成下一个文号，如 粤府办〔2026〕001号。"""
-        daizi = daizi or settings.DOC_NUMBER_DEFAULT_DAIZI
+        daizi = daizi or resolve_daizi(self.db)
         year = date.today().year
         seq = self._next_seq(daizi, year)
         return f"{daizi}〔{year}〕{seq:03d}号"
@@ -55,3 +55,22 @@ class DocNumberService:
             logger.warning("[文号] 序号服务降级: %s", e)
             self.db.rollback()
             return 1
+
+
+def resolve_daizi(db) -> str:
+    """从系统配置读取文号代字；缺省回退 settings.DOC_NUMBER_DEFAULT_DAIZI。
+
+    供审批流 assign_number 与 DocNumberService.next_number 共用。
+    """
+    if db is None:
+        return settings.DOC_NUMBER_DEFAULT_DAIZI
+    try:
+        from app.infrastructure.database.models.system import SystemConfigModel
+        row = db.scalars(
+            select(SystemConfigModel).where(SystemConfigModel.key == "doc_number_daizi")
+        ).first()
+        if row and row.value:
+            return row.value
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[文号] 读取代字配置失败，回退默认: %s", e)
+    return settings.DOC_NUMBER_DEFAULT_DAIZI

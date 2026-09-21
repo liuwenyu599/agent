@@ -13,9 +13,13 @@ def get_embedder() -> Embedder:
     global _embedder
     if _embedder is not None:
         return _embedder
-    if settings.EMBEDDING_PROVIDER == "mock":
+    provider = settings.EMBEDDING_PROVIDER
+    if provider == "mock":
         from app.infrastructure.rag.embedder import MockEmbedder
         _embedder = MockEmbedder()
+    elif provider == "http":
+        from app.infrastructure.rag.embedder import HTTPEmbedder
+        _embedder = HTTPEmbedder()
     else:
         from app.infrastructure.rag.embedder import BGEEmbedder
         _embedder = BGEEmbedder()
@@ -27,8 +31,12 @@ def get_vector_store() -> VectorStore:
     global _vector_store
     if _vector_store is not None:
         return _vector_store
-    from app.infrastructure.rag.vector_store import FAISSVectorStore
-    _vector_store = FAISSVectorStore()
+    try:
+        from app.infrastructure.rag.vector_store import FAISSVectorStore
+        _vector_store = FAISSVectorStore()
+    except Exception as e:
+        logger.warning("[RAG] 向量库初始化失败，回退关键词检索: %s", e)
+        _vector_store = None
     return _vector_store
 
 

@@ -52,12 +52,11 @@ import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppCard
 import com.judicialai.desktop.design.components.ErrorText
+import com.judicialai.desktop.design.theme.Accent
+import com.judicialai.desktop.design.theme.EpPrimary
+import com.judicialai.desktop.design.theme.TextSecondary
+import com.judicialai.desktop.design.theme.Warn
 
-private val EpPrimary = Color(0xFF2F54EB)
-private val OkGreen = Color(0xFF2E7D32)
-private val WarnOrange = Color(0xFFF9A825)
-private val BadRed = Color(0xFFC62828)
-private val TextSecondary = Color(0xFF6B7280)
 private val Pending = "待补充"
 
 /** 智能写作工作台：一个持续的 Writing Task（对话 + 文档 + 版本）。 */
@@ -111,7 +110,7 @@ private fun EntryView(vm: WritingViewModel) {
         }
         vm.status?.let {
             Spacer(Modifier.height(8.dp))
-            Text(it, fontSize = 12.sp, color = BadRed)
+            Text(it, fontSize = 12.sp, color = Accent)
         }
     }
 }
@@ -165,7 +164,7 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
                 Divider()
                 Text("还需要的信息", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 vm.task.missingFields.forEach {
-                    Text("○ $it", fontSize = 12.sp, color = WarnOrange)
+                    Text("○ $it", fontSize = 12.sp, color = Warn)
                 }
             }
 
@@ -239,7 +238,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 明确标注：这是初稿，待完善
                 Text("V${maxOf(vm.versionNo, 1)} 初稿", fontSize = 11.sp, color = Color.White,
-                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(WarnOrange)
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Warn)
                         .padding(horizontal = 6.dp, vertical = 2.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("待完善", fontSize = 11.sp, color = TextSecondary)

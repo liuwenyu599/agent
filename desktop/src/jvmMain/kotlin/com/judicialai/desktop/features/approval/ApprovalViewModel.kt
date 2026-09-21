@@ -205,7 +205,6 @@ class ApprovalViewModel {
             when (val r = repo.act(id, action.action, comment.trim())) {
                 is ApiResult.Ok -> {
                     actionDone = "已${action.name}"
-                    AppState.refreshCounts()
                     closeDetail()
                     load()
                 }
@@ -220,7 +219,6 @@ class ApprovalViewModel {
         scope.launch {
             when (val r = repo.submit(documentId)) {
                 is ApiResult.Ok -> {
-                    AppState.refreshCounts()
                     load()
                     onResult(true, "已提交送审")
                 }

@@ -25,6 +25,7 @@ class AdminViewModel(private val repo: AdminRepository) {
     var publishedDocs by mutableStateOf(listOf<JsonObject>()); private set
     var rejectedDocs by mutableStateOf(listOf<JsonObject>()); private set
     var sessions by mutableStateOf(listOf<JsonObject>()); private set
+    var approvalConfig by mutableStateOf<JsonObject?>(null); private set
 
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false); private set
@@ -79,8 +80,25 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
     }
 
+    fun loadApprovalConfig() = scope.launch {
+        when (val r = repo.approvalConfig()) {
+            is ApiResult.Ok -> approvalConfig = r.data
+            is ApiResult.Err -> status = r.message
+        }
+    }
+
+    fun saveApprovalConfig(daizi: String, countersign: Boolean, seal: Boolean, businessTypes: String) =
+        act("配置已保存") {
+            repo.saveApprovalConfig(mapOf(
+                "doc_number_daizi" to daizi,
+                "countersign_enabled" to countersign,
+                "seal_required" to seal,
+                "business_types" to businessTypes,
+            ))
+        }
+
     fun loadAll() {
-        loadStats(); loadUsers(); loadKbs(); loadDocs(); loadSessions()
+        loadStats(); loadUsers(); loadKbs(); loadDocs(); loadSessions(); loadApprovalConfig()
     }
 
     private fun act(message: String = "操作成功", block: suspend () -> ApiResult<*>) {

@@ -13,6 +13,21 @@ from app.infrastructure.repositories.system import (
     SqlAlchemySystemConfigRepository,
 )
 
+# 公文与审批配置键与默认值（代字 / 会签 / 用印 / 业务类型）
+APPROVAL_CONFIG_KEYS = ("doc_number_daizi", "countersign_enabled", "seal_required", "business_types")
+APPROVAL_CONFIG_DEFAULTS = {
+    "doc_number_daizi": settings.DOC_NUMBER_DEFAULT_DAIZI,
+    "countersign_enabled": "false",
+    "seal_required": "false",
+    "business_types": "",
+}
+_APPROVAL_DESC = {
+    "doc_number_daizi": "公文文号代字",
+    "countersign_enabled": "是否启用会签",
+    "seal_required": "用印是否需审批",
+    "business_types": "业务类型（逗号分隔）",
+}
+
 
 class SystemService:
     def __init__(self, db: Session) -> None:
@@ -114,3 +129,33 @@ class SystemService:
             "updated_by": cfg.updated_by,
             "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
         }
+
+    # ---- 公文与审批配置 ----
+    def get_approval_config(self) -> Dict[str, Any]:
+        result = dict(APPROVAL_CONFIG_DEFAULTS)
+        for key in APPROVAL_CONFIG_KEYS:
+            cfg = self.cfg_repo.get_by_key(key)
+            if cfg is not None and cfg.value is not None:
+                result[key] = cfg.value
+        return result
+
+    def upsert_approval_config(self, actor: User, data: Dict[str, Any]) -> Dict[str, Any]:
+        if actor.role not in ADMIN_OR_ABOVE:
+            raise PermissionDeniedError("仅管理员可修改公文与审批配置")
+        for key in APPROVAL_CONFIG_KEYS:
+            if key not in data:
+                continue
+            raw = data[key]
+            # 布尔 -> "true"/"false"，其余转字符串（None -> 空串）
+            value = (
+                "true" if raw is True
+                else "false" if raw is False
+                else "" if raw is None
+                else str(raw)
+            )
+            cfg = SystemConfig(
+                key=key, value=value, category="approval",
+                description=_APPROVAL_DESC.get(key, ""), updated_by=actor.id,
+            )
+            self.cfg_repo.upsert(cfg)
+        return self.get_approval_config()

@@ -3,63 +3,108 @@ package com.judicialai.desktop.design.theme
 import androidx.compose.ui.graphics.Color
 
 /**
- * 调色板：1:1 取自 Web 端（AppLayout.vue / DashboardView.vue / Element Plus）。
- * 不允许自造色值，新增颜色必须能对应到 Web 端某个 CSS 值。
+ * 调色板：统一取自司法局政务前端设计稿（浅色政务风）。
+ *
+ * 约定：
+ * 1. 页面内禁止自造色值，一律引用本文件；
+ * 2. 文件下半部分的「兼容别名」仅供历史代码引用，新代码请使用设计稿语义色名；
+ * 3. 主色为政务蓝 #1f3a5f，强调色为司法红 #b4231a（红头 / 徽标 / 关键操作）。
  */
-// ---- 布局骨架 ----
-val SidebarBg = Color(0xFF16223F)          // .sidebar background
-val SidebarText = Color(0xFFB0C4DE)        // el-menu text-color
-val SidebarActive = Color(0xFF2F5CFF)      // .el-menu-item.is-active background
-val SidebarHover = Color(0x14FFFFFF)       // rgba(255,255,255,0.08)
-val SidebarBorder = Color(0x14FFFFFF)      // rgba(255,255,255,0.08)
-val SidebarSubText = Color(0x80FFFFFF)     // rgba(255,255,255,0.5)
-val MainBg = Color(0xFFF0F2F5)             // .main-content background
-val TopbarBorder = Color(0xFFEBEEF5)       // .topbar border-bottom
 
-// ---- Element Plus 主色 ----
-val EpPrimary = Color(0xFF409EFF)
-val EpPrimaryDark = Color(0xFF1A5FB4)      // 登录渐变/用户气泡
-val EpSuccess = Color(0xFF67C23A)
-val EpWarning = Color(0xFFE6A23C)
-val EpDanger = Color(0xFFF56C6C)
-val EpInfo = Color(0xFF909399)
+// ---- 布局骨架 ----
+val AppBg = Color(0xFFEEF1F6)        // --bg 应用底色
+val Surface = Color(0xFFFFFFFF)      // --surface 卡片/面板
+val SurfaceSoft = Color(0xFFF7F9FC)  // 次级面板（会话栏、页面底）
+val Line = Color(0xFFE7EBF1)         // --line 分隔线/描边
+val LineSoft = Color(0xFFEEF1F6)     // --line-2 浅分隔
+
+// ---- 主色：政务蓝 ----
+val Navy = Color(0xFF16263D)         // --navy 深色头图/侧栏强调
+val Primary = Color(0xFF1F3A5F)      // --primary
+val PrimaryDeep = Color(0xFF2A4F7D)  // 渐变深端（按钮/头图）
+val PrimarySoft = Color(0xFFEAF0F7)  // --primary-soft 选中底/标签底
+
+// ---- 强调色：司法红 ----
+val Accent = Color(0xFFB4231A)       // --accent 徽标/红头/关键操作
+val AccentLight = Color(0xFFD8543F)  // 徽标渐变亮端
+val AccentSoft = Color(0xFFFBECEB)   // --accent-soft
+
+// ---- 语义色 ----
+val Ok = Color(0xFF2F7D5B)           // 正常/就绪
+val OkSoft = Color(0xFFE8F2EC)
+val Warn = Color(0xFFC98A14)         // 繁忙/提醒
+val WarnSoft = Color(0xFFFBF3E0)
+val Blue = Color(0xFF2F6FD0)         // 信息/链接
+val BlueSoft = Color(0xFFE9F1FB)
+val Purple = Color(0xFF5A3A8A)       // 知识库/AI
+val PurpleSoft = Color(0xFFF1EBF8)
 
 // ---- 文本 ----
-val TextPrimary = Color(0xFF303133)
-val TextRegular = Color(0xFF606266)
-val TextSecondary = Color(0xFF909399)
-val TextPlaceholder = Color(0xFFC0C4CC)
+val Ink = Color(0xFF1A2433)          // --ink 主文本
+val Ink2 = Color(0xFF4A5567)         // --ink-2 次级文本
+val Muted = Color(0xFF8B95A6)        // --muted 占位/辅助
 
-// ---- 表面 ----
-val Surface = Color(0xFFFFFFFF)
-val SurfaceSoft = Color(0xFFF5F7FA)        // 会话侧栏/知识库页底
-val DividerColor = Color(0xFFE4E7ED)
-val BorderLight = Color(0xFFEBEEF5)
-val HoverBlue = Color(0xFFECF5FF)          // session-item hover
+// ---- 侧栏（浅色政务栏）----
+val RailBg = Color(0xFFF4F7FB)       // 侧栏底
+val RailBorder = Color(0xFFE3E9F2)
+val RailText = Color(0xFF4A5567)     // 未选中菜单文字
+val RailActiveBg = Color(0xFFFFFFFF)
+val RailActiveFg = Primary
+val RailHoverBg = Color(0xFFE9EEF6)
 
-// ---- 登录页渐变 ----
-val LoginGradStart = Color(0xFF1A5FB4)
-val LoginGradEnd = Color(0xFF4A90D9)
+// ---- 顶栏 ----
+val TopbarBg = Color(0xFFFFFFFF)
+val TopbarBorder = Line
 
-// ---- 首页 Banner 渐变 ----
-val BannerGradStart = Color(0xFF1C4F9E)
-val BannerGradEnd = Color(0xFF3182CE)
+// ============================================================
+// 以下为兼容旧引用的别名（历史代码不动也能跟着换肤）
+// ============================================================
+val MainBg = AppBg
+val Background = AppBg
 
-// ---- 首页快速入口（前景色 / 底色）----
-val QuickBlue = Color(0xFF2B6CB0);   val QuickBlueBg = Color(0xFFE8F0FE)
-val QuickPurple = Color(0xFF7C5CD6); val QuickPurpleBg = Color(0xFFF3EAFD)
-val QuickGreen = Color(0xFF38A169);  val QuickGreenBg = Color(0xFFE6F7EE)
-val QuickOrange = Color(0xFFDD6B20); val QuickOrangeBg = Color(0xFFFDEEE4)
-val QuickCyan = Color(0xFF3182CE);   val QuickCyanBg = Color(0xFFE3F2FD)
-val QuickTeal = Color(0xFF2C9A8A);   val QuickTealBg = Color(0xFFE6FFFA)
+val TextPrimary = Ink
+val TextRegular = Ink2
+val TextSecondary = Muted
+val TextPlaceholder = Muted
+val BodyText = Ink
+val SecondaryText = Ink2
 
-// ---- 兼容旧引用（逐步替换后删除）----
-val Primary = EpPrimary
-val PrimaryVariant = EpPrimaryDark
-val Secondary = EpInfo
-val Background = MainBg
-val ErrorColor = EpDanger
+val DividerColor = Line
+val BorderLight = Line
+val HoverBlue = PrimarySoft
+
+val EpPrimary = Primary
+val EpPrimaryDark = PrimaryDeep
+val EpSuccess = Ok
+val EpWarning = Warn
+val EpDanger = Accent
+val EpInfo = Muted
+
+val SidebarBg = RailBg
+val SidebarText = RailText
+val SidebarActive = Primary           // 头像/选中块底色（配白字）
+val SidebarActiveFg = RailActiveFg
+val SidebarHover = Color(0x1A1F3A5F)
+val SidebarBorder = RailBorder
+val SidebarSubText = Muted
+
+// 登录页深色头图
+val LoginGradStart = Navy
+val LoginGradEnd = PrimaryDeep
+
+// 首页 Banner 渐变
+val BannerGradStart = Primary
+val BannerGradEnd = PrimaryDeep
+
+// 首页快捷入口（前景色 / 底色）
+val QuickBlue = Blue;      val QuickBlueBg = BlueSoft
+val QuickPurple = Purple;  val QuickPurpleBg = PurpleSoft
+val QuickGreen = Ok;       val QuickGreenBg = OkSoft
+val QuickOrange = Warn;    val QuickOrangeBg = WarnSoft
+val QuickCyan = Blue;      val QuickCyanBg = BlueSoft
+val QuickTeal = Ok;        val QuickTealBg = OkSoft
+
+val PrimaryVariant = PrimaryDeep
+val Secondary = Muted
+val ErrorColor = Accent
 val OnPrimaryText = Color.White
-val BodyText = TextPrimary
-val SecondaryText = TextRegular
-

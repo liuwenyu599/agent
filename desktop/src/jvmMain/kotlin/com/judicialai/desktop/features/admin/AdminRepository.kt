@@ -71,5 +71,16 @@ class AdminRepository(private val api: ApiClient) {
         }
 
     suspend fun deleteSession(id: String) = api.del(Endpoints.Chat.adminSessionDelete(id))
+
+    suspend fun approvalConfig(): ApiResult<JsonObject> =
+        when (val r = api.get(Endpoints.System.APPROVAL_CONFIG)) {
+            is ApiResult.Ok -> r.data.obj().let {
+                if (it != null) ApiResult.Ok(it) else ApiResult.Err(null, "返回数据为空")
+            }
+            is ApiResult.Err -> r
+        }
+
+    suspend fun saveApprovalConfig(body: Map<String, Any?>) =
+        api.put(Endpoints.System.APPROVAL_CONFIG, body)
 }
 
