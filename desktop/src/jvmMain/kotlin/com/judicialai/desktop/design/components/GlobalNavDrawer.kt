@@ -39,9 +39,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppNav
@@ -119,8 +117,7 @@ fun GlobalNavDrawer(
                 ) {
                     val query = AppState.navQuery.trim()
                     val match: (NavItem) -> Boolean = {
-                        query.isBlank() || it.label.contains(query, true) ||
-                            it.desc.contains(query, true)
+                        query.isBlank() || it.label.contains(query, true)
                     }
 
                     DrawerHomeRow(onHome = onHome)
@@ -209,9 +206,6 @@ private fun DrawerGroupTitle(group: NavGroup) {
         Box(Modifier.width(3.dp).height(14.dp).clip(CircleShape).background(AiIndigo))
         Spacer(Modifier.width(Dimens.space2))
         Text(group.title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-        Spacer(Modifier.width(Dimens.space2))
-        Text(group.desc, fontSize = 11.sp, color = Muted,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -238,10 +232,8 @@ private fun DrawerHomeRow(onHome: () -> Unit) {
                 modifier = Modifier.size(Dimens.iconMd))
         }
         Spacer(Modifier.width(Dimens.space3))
-        Column(Modifier.weight(1f)) {
-            Text("工作台", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-            Text("今天可以做什么", fontSize = 11.5.sp, color = Muted)
-        }
+        Text("工作台", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+            modifier = Modifier.weight(1f))
         Text("进入 →", fontSize = 11.5.sp, color = Primary)
     }
 }
@@ -284,14 +276,8 @@ private fun DrawerRow(item: NavItem, onNavigate: (NavItem) -> Unit) {
                 modifier = Modifier.size(Dimens.iconSm))
         }
         Spacer(Modifier.width(Dimens.space3))
-        Column(Modifier.weight(1f)) {
-            Text(item.label, fontSize = 13.sp,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (active) Primary else Ink)
-            if (item.desc.isNotBlank()) {
-                Text(item.desc, fontSize = 11.5.sp, color = Muted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
+        Text(item.label, fontSize = 13.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (active) Primary else Ink)
     }
 }

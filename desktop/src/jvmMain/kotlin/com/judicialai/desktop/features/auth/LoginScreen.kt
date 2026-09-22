@@ -74,10 +74,13 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(20.dp))
-                val tabs = listOf(
-                    "登录",
-                    "首次注册（系统管理员）",
-                )
+                // 「首次注册」入口仅在系统还没有系统管理员时出现（由后端 check-first-user 判定）；
+                // 已有管理员时只保留登录，不再显示一个点了没反应的 Tab
+                val tabs = if (vm.isFirstUser) {
+                    listOf("登录", "首次注册（系统管理员）")
+                } else {
+                    listOf("登录")
+                }
 
                 var tab by remember {
                     mutableStateOf(if (vm.isFirstUser) 1 else 0)
@@ -91,10 +94,7 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     tabs.forEachIndexed { i, title ->
                         Tab(
                             selected = tab == i,
-                            onClick = {
-                                if (i == 1 && !vm.isFirstUser) return@Tab
-                                tab = i
-                            },
+                            onClick = { tab = i },
                         ) {
                             Text(
                                 title,
@@ -218,4 +218,3 @@ private fun SubmitButton(text: String, color: Color, busy: Boolean, onClick: () 
         }
     }
 }
-

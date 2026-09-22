@@ -8,7 +8,6 @@ import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
-import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
@@ -18,8 +17,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 工作台（HOME）数据源：
- * - /dashboard/summary：真实姓名、部门、角色、待办数、AI 在线状态、最近文档
- * - /approvals?view=todo：待我审批的公文（前 5 条）
+ * - /dashboard/summary：真实姓名、部门、角色、AI 在线状态、最近文档
  * 全部来自后端；无任何本地假数据。
  */
 class HomeViewModel {
@@ -37,8 +35,6 @@ class HomeViewModel {
     var roleName by mutableStateOf("")
         private set
     var aiOnline by mutableStateOf(false)
-        private set
-    var todoCount by mutableStateOf(0)
         private set
 
     /** 问候语按本地时间段生成（纯展示，不涉及业务数据） */
@@ -93,8 +89,6 @@ class HomeViewModel {
                 AppState.departmentCode = o["department_code"].str()
                 roleName = o["role_name"].str()
                 aiOnline = o["ai_online"].bool()
-                todoCount = o["todo_count"].int()
-                AppState.todoCount = todoCount
             }
             is ApiResult.Err -> error = r.message
         }

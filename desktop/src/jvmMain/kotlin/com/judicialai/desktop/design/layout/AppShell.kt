@@ -54,7 +54,6 @@ import com.judicialai.desktop.design.theme.BrandEnd
 import com.judicialai.desktop.design.theme.BrandStart
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.FeatureWriteInk
-import com.judicialai.desktop.design.theme.FeatureWriteSoft
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
@@ -74,7 +73,7 @@ import com.judicialai.desktop.features.personal.PersonalViewModel
  * Header 是稳定的品牌框架，不再是「一堆文字横向排开的后台导航条」：
  * - 左：品牌徽标 + 平台名（第一层）→ 当前业务位置（第二层）；
  * - 中：全局搜索（胶囊、弱底，不抢主权重）；
- * - 右：必要状态 → 用户身份（第三层；个人中心收在头像下拉里）。
+ * - 右：用户身份（第三层；个人中心收在头像下拉里）。
  * 导航只保留左上角抽屉，且与 Header 共用同一套视觉语言。
  */
 @Composable
@@ -195,7 +194,7 @@ private fun AppHeader(
             AppSearchField(
                 value = AppState.navQuery,
                 onValueChange = { AppState.navQuery = it },
-                placeholder = "搜索功能，例如：模板、审批、PPT",
+                placeholder = "搜索功能，例如：模板、知识库、PPT",
                 modifier = Modifier.width(260.dp),
                 onFocusOpen = { AppState.navDrawerOpen = true },
             )
@@ -203,12 +202,6 @@ private fun AppHeader(
             Spacer(Modifier.width(Dimens.space4))
             Box(Modifier.width(1.dp).height(24.dp).background(Line))
             Spacer(Modifier.width(Dimens.space4))
-
-            // ---- 必要状态：待办 ----
-            if (AppState.todoCount > 0) {
-                HeaderStatusPill("${AppState.todoCount} 项待办")
-                Spacer(Modifier.width(Dimens.space2))
-            }
 
             // ---- 用户身份 ----
             Box {
@@ -278,21 +271,5 @@ private fun HeaderIconButton(
     ) {
         Icon(icon, contentDescription = description, tint = Ink2,
             modifier = Modifier.size(Dimens.iconMd))
-    }
-}
-
-@Composable
-private fun HeaderStatusPill(text: String) {
-    Box(
-        Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
-            .background(com.judicialai.desktop.design.theme.AmberSoft)
-            .border(1.dp, com.judicialai.desktop.design.theme.AmberLine,
-                RoundedCornerShape(Dimens.radiusPill))
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text, fontSize = 11.5.sp,
-            color = com.judicialai.desktop.design.theme.AmberInk,
-            fontWeight = FontWeight.Medium)
     }
 }

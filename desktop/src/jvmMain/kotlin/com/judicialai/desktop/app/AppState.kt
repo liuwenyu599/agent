@@ -45,9 +45,6 @@ object AppState {
      */
     var pendingDocumentId by mutableStateOf<String?>(null)
 
-    /** 待办数量（来自 /approvals/counts，未取到时为 0，前端不臆造） */
-    var todoCount by mutableStateOf(0)
-
     /**
      * 管理员重置过密码 → true。后端会在改密前拦截业务接口，
      * 客户端据此引导用户到个人中心「账号安全」修改密码。
@@ -80,7 +77,7 @@ object AppState {
     var agentIntro by mutableStateOf("")
     /** 本科室推荐任务（后端下发；智能写作入口据此给出本科室常用目标） */
     var deptTasks by mutableStateOf(listOf<String>())
-    /** 本科室助手配置是否可维护（后端按角色返回，不前端猜测） */
+    /** 智能助手配置是否可维护（后端按角色返回，不前端猜测） */
     var canManageDeptAgent by mutableStateOf(false)
 
     /** 全应用唯一网络入口 */
@@ -89,7 +86,7 @@ object AppState {
     /** 对应 Web 端 AppLayout.isAdmin：developer / knowledge_admin / admin */
     val isAdmin: Boolean get() = role in setOf("developer", "knowledge_admin", "admin")
 
-    /** 知识管理员：可维护本科室知识、模板与本科室助手业务配置 */
+    /** 科室管理员：可维护本科室知识、模板与智能助手业务配置 */
     val isKnowledgeAdmin: Boolean get() = role == "knowledge_admin"
 
     /** 系统管理员：可管理全部科室与系统级配置 */
@@ -101,7 +98,7 @@ object AppState {
     val roleText: String
         get() = when (role) {
             "developer" -> "系统管理员"
-            "knowledge_admin" -> "知识管理员"
+            "knowledge_admin" -> "科室管理员"
             "admin" -> "管理员"
             "user" -> "普通用户"
             else -> role
@@ -156,4 +153,3 @@ object AppState {
         this.navQuery = ""
     }
 }
-

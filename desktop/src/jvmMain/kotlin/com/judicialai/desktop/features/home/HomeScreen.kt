@@ -59,7 +59,6 @@ import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.Muted
 import com.judicialai.desktop.design.theme.Ok
 import com.judicialai.desktop.design.theme.Surface as SurfaceColor
-import com.judicialai.desktop.design.theme.Warn
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -105,9 +104,6 @@ private fun WelcomeBand(vm: HomeViewModel) {
             Text("${vm.greeting}，${vm.realName.ifBlank { AppState.displayName }}",
                 fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Ink,
                 letterSpacing = (-0.3).sp)
-            Spacer(Modifier.height(Dimens.space1))
-            Text("今天有什么需要处理？我已按你的所属科室准备就绪。",
-                fontSize = 14.sp, color = Muted)
             Spacer(Modifier.height(Dimens.space4))
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
@@ -121,10 +117,6 @@ private fun WelcomeBand(vm: HomeViewModel) {
                     Spacer(Modifier.width(Dimens.space2))
                     Text(if (vm.aiOnline) "AI 助手在线" else "AI 助手离线 · 基础功能正常",
                         fontSize = 12.sp, color = Muted)
-                }
-                if (vm.todoCount > 0) {
-                    Text("${vm.todoCount} 项待办", fontSize = 12.sp,
-                        color = Warn, fontWeight = FontWeight.Medium)
                 }
             }
         }
