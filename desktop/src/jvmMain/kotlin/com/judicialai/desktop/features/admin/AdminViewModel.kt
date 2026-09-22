@@ -25,7 +25,6 @@ class AdminViewModel(private val repo: AdminRepository) {
     var pendingDocs by mutableStateOf(listOf<JsonObject>()); private set
     var publishedDocs by mutableStateOf(listOf<JsonObject>()); private set
     var rejectedDocs by mutableStateOf(listOf<JsonObject>()); private set
-    var approvalConfig by mutableStateOf<JsonObject?>(null); private set
 
     /** 科室字典：来自 /organization/departments，只允许下拉选择 */
     var departments by mutableStateOf(listOf<JsonObject>()); private set
@@ -83,39 +82,22 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
     }
 
-    fun loadApprovalConfig() = scope.launch {
-        when (val r = repo.approvalConfig()) {
-            is ApiResult.Ok -> approvalConfig = r.data
-            is ApiResult.Err -> status = r.message
-        }
-    }
-
-    fun saveApprovalConfig(daizi: String, countersign: Boolean, seal: Boolean, businessTypes: String) =
-        act("配置已保存") {
-            repo.saveApprovalConfig(mapOf(
-                "doc_number_daizi" to daizi,
-                "countersign_enabled" to countersign,
-                "seal_required" to seal,
-                "business_types" to businessTypes,
-            ))
-        }
-
     fun loadAll() {
         loadStats(); loadUsers(); loadKbs(); loadDocs()
-        loadApprovalConfig(); loadDepartments()
+        loadDepartments()
     }
 
     /** 可选角色：与后端 assignable 角色一致（user / knowledge_admin / developer） */
     fun roleOptions(actorRole: String): List<Pair<String, String>> = when (actorRole) {
-        "developer" -> listOf("user" to "普通用户", "knowledge_admin" to "知识管理员",
+        "developer" -> listOf("user" to "普通用户", "knowledge_admin" to "科室管理员",
             "developer" to "系统管理员")
-        "knowledge_admin" -> listOf("user" to "普通用户", "knowledge_admin" to "知识管理员")
+        "knowledge_admin" -> listOf("user" to "普通用户", "knowledge_admin" to "科室管理员")
         else -> emptyList()
     }
 
     fun roleLabel(role: String) = when (role) {
         "developer" -> "系统管理员"
-        "knowledge_admin" -> "知识管理员"
+        "knowledge_admin" -> "科室管理员"
         "user" -> "普通用户"
         else -> "普通用户"
     }
@@ -164,4 +146,3 @@ class AdminViewModel(private val repo: AdminRepository) {
 
     fun archive(docId: String) = act("已归档") { repo.archive(docId) }
 }
-

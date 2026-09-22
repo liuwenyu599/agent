@@ -73,8 +73,8 @@ import com.judicialai.desktop.features.personal.PersonalSection
 import com.judicialai.desktop.features.personal.PersonalViewModel
 
 /**
- * 个人中心：承载全部「我的工作」，使 HOME 只保留四大生产力入口。
- * 我的待办 / 最近使用 / 我的文档 / 我的审批 / 我的收藏 / 个人设置。
+ * 个人中心：承载「我的工作」与账号设置，使 HOME 只保留四大生产力入口。
+ * 最近使用 / 我的文档 / 我的收藏 / 账号安全 / 个人设置 / 个性化。
  */
 @Composable
 fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
@@ -126,9 +126,6 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                             color = if (selected) Primary else Ink2,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             modifier = Modifier.weight(1f))
-                        if (s == PersonalSection.TODO && vm.todoCount > 0) {
-                            Text("${vm.todoCount}", fontSize = 11.sp, color = Muted)
-                        }
                     }
                     Spacer(Modifier.height(Dimens.space1))
                 }
@@ -153,10 +150,6 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                 SectionTitle(title = vm.section.title)
                 Spacer(Modifier.height(Dimens.space3))
                 when (vm.section) {
-                    PersonalSection.TODO -> TodoList(vm.todos, "当前没有待你审批的公文",
-                        "公文送审后会在这里出现")
-                    PersonalSection.MY_APPROVALS -> TodoList(vm.mine, "你还没有发起过审批",
-                        "在智能写作工作台提交审批后会出现在这里")
                     PersonalSection.RECENT -> DocList(vm.recent)
                     PersonalSection.DOCS -> DocList(vm.docs)
                     PersonalSection.FAVORITES -> FavoritesPanel()
@@ -166,41 +159,6 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun TodoList(items: List<PersonalViewModel.TodoItem>, emptyText: String, hint: String) {
-    if (items.isEmpty()) {
-        EmptyState(emptyText, hint = hint, modifier = Modifier.padding(vertical = Dimens.space8))
-        return
-    }
-    items.forEach { t ->
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
-                .clickable { AppState.navigate(AppScreen.APPROVAL) }
-                .padding(vertical = Dimens.space2 + 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(t.title, fontSize = 13.sp, color = Ink, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(2.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (t.stepName.isNotBlank()) {
-                        Text(t.stepName, fontSize = 11.5.sp, color = Ink2)
-                        Spacer(Modifier.width(Dimens.space2))
-                    }
-                    Text(t.submitter.ifBlank { t.submittedAt }, fontSize = 11.5.sp, color = Muted)
-                    Spacer(Modifier.width(Dimens.space2))
-                    Text(t.submittedAt, fontSize = 11.5.sp, color = Muted)
-                }
-            }
-            Spacer(Modifier.width(Dimens.space3))
-            StatusChip(text = t.statusName.ifBlank { "流转中" }, fg = Warn, bg = WarnSoft)
-        }
-        Spacer(Modifier.height(Dimens.space1))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
     }
 }
 
@@ -332,7 +290,7 @@ private fun SecurityPanel(vm: PersonalViewModel) {
         Spacer(Modifier.height(Dimens.space3))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         Text(
-            "忘记密码请联系本科室系统管理员重置；政务内网短信验证码功能尚未开放。",
+            "忘记密码请联系系统管理员重置；政务内网短信验证码功能尚未开放。",
             fontSize = 11.5.sp, color = Muted,
         )
     }
@@ -395,7 +353,7 @@ private fun PersonalizationPanel(vm: PersonalViewModel) {
                 label = "你希望助手怎么称呼你",
                 placeholder = "如：小司、小李、助手",
                 singleLine = true,
-                hint = "设置后我会在回应中使用该称呼；它只影响回应中的自称，不影响科室助手的正式名称（由系统管理员维护）。",
+                hint = "设置后我会在回应中使用该称呼；它只影响回应中的自称，不影响智能助手的正式名称（由系统管理员维护）。",
             )
         }
 

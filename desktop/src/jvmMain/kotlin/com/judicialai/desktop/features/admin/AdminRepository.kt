@@ -70,16 +70,4 @@ class AdminRepository(private val api: ApiClient) {
 
     suspend fun archive(docId: String) =
         api.post(Endpoints.Knowledge.documentArchive(docId), emptyMap<String, String>())
-
-    suspend fun approvalConfig(): ApiResult<JsonObject> =
-        when (val r = api.get(Endpoints.System.APPROVAL_CONFIG)) {
-            is ApiResult.Ok -> r.data.obj().let {
-                if (it != null) ApiResult.Ok(it) else ApiResult.Err(null, "返回数据为空")
-            }
-            is ApiResult.Err -> r
-        }
-
-    suspend fun saveApprovalConfig(body: Map<String, Any?>) =
-        api.put(Endpoints.System.APPROVAL_CONFIG, body)
 }
-

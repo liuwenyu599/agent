@@ -1,7 +1,6 @@
 package com.judicialai.desktop.features.admin
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -10,11 +9,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,9 +23,7 @@ import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,16 +43,13 @@ import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
-import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppCardRaised
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.AppSegmentedTabs
 import com.judicialai.desktop.design.components.AppSelect
 import com.judicialai.desktop.design.components.AppTextField
-import com.judicialai.desktop.design.components.AppCardTonal
 import com.judicialai.desktop.design.components.Eyebrow
 import com.judicialai.desktop.design.components.FieldError
-import com.judicialai.desktop.design.components.FilterChip
 import com.judicialai.desktop.design.components.SelectOption
 import com.judicialai.desktop.design.components.TagChip
 import com.judicialai.desktop.design.theme.AiSoft
@@ -65,11 +57,8 @@ import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.DangerSoft
 import com.judicialai.desktop.design.theme.Dimens
-import com.judicialai.desktop.design.theme.EmeraldSoft
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
-import com.judicialai.desktop.design.theme.Line
-import com.judicialai.desktop.design.theme.LineStrong
 import com.judicialai.desktop.design.theme.LineSubtle
 import com.judicialai.desktop.design.theme.Muted
 import com.judicialai.desktop.design.theme.Muted2
@@ -80,10 +69,9 @@ import com.judicialai.desktop.design.theme.Surface
 import com.judicialai.desktop.design.theme.SurfaceTonal
 import com.judicialai.desktop.design.theme.SurfaceDeep
 import com.judicialai.desktop.design.theme.Warn
-import com.judicialai.desktop.design.theme.WarnSoft
 import kotlinx.serialization.json.JsonObject
 
-/** 管理后台：数据概览 / 用户管理 / 知识库管理 / 文档审核 / 公文与审批配置 */
+/** 管理后台：数据概览 / 用户管理 / 知识库管理 / 文档审核 */
 @Composable
 fun AdminScreen() {
     val vm = remember { AdminViewModel(Repositories.admin) }
@@ -103,17 +91,16 @@ fun AdminScreen() {
             }
         }
         AppSegmentedTabs(
-            tabs = listOf("数据概览", "用户管理", "知识库管理", "文档审核", "公文与审批配置"),
-            selectedIndex = tab,
+            tabs = listOf("数据概览", "用户管理", "知识库管理", "文档审核"),
+            selectedIndex = tab.coerceIn(0, 3),
             onSelect = { tab = it },
         )
         Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-            when (tab) {
+            when (tab.coerceIn(0, 3)) {
                 0 -> StatsTab(vm)
                 1 -> UsersTab(vm)
                 2 -> KbTab(vm)
-                3 -> DocsTab(vm)
-                4 -> ApprovalConfigTab(vm)
+                else -> DocsTab(vm)
             }
         }
         vm.status?.let {
@@ -223,7 +210,7 @@ private fun UsersTab(vm: AdminViewModel) {
             width = 460.dp,
             actions = {
                 AppButton("取消", onClick = { resetUser = null },
-                    kind = AppButtonKind.SECONDARY)
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
                 Spacer(Modifier.width(Dimens.space2))
                 AppButton("确定重置", onClick = {
                     if (pwd.length >= 6) {
@@ -288,7 +275,8 @@ private fun UserDialog(
         icon = Icons.Default.Group,
         width = 560.dp,
         actions = {
-            AppButton("取消", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            AppButton("取消", onClick = onDismiss,
+                kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
             Spacer(Modifier.width(Dimens.space2))
             AppButton(if (isEdit) "保存修改" else "创建用户", onClick = {
                 error = when {
@@ -345,7 +333,7 @@ private fun UserDialog(
 
 private fun roleRoleDesc(role: String): String = when (role) {
     "developer" -> "可管理全部科室与系统配置"
-    "knowledge_admin" -> "可维护本科室知识、模板与助手"
+    "knowledge_admin" -> "可维护本科室知识、模板与智能助手配置"
     else -> "使用本科室能力完成日常办公"
 }
 
@@ -356,7 +344,11 @@ private fun KbTab(vm: AdminViewModel) {
             "文档数" to 90, "创建时间" to 140, "操作" to 120),
         rows = vm.kbs.mapIndexed { i, kb ->
             listOf("${i + 1}", kb["name"].str(),
-                if (kb["type"].str() == "public") "公共" else "个人",
+                when {
+                    kb["department_code"].str().isNotBlank() -> "科室"
+                    kb["type"].str() == "public" -> "公共"
+                    else -> "个人"
+                },
                 "${kb["doc_count"].int()}", kb["created_at"].str().take(10), "ops")
         },
     ) { idx, _ ->
@@ -399,69 +391,6 @@ private fun DocsTab(vm: AdminViewModel) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ApprovalConfigTab(vm: AdminViewModel) {
-    val cfg = vm.approvalConfig
-    var daizi by remember { mutableStateOf("") }
-    var countersign by remember { mutableStateOf(false) }
-    var seal by remember { mutableStateOf(false) }
-    var businessTypes by remember { mutableStateOf("") }
-
-    LaunchedEffect(cfg) {
-        cfg?.let {
-            daizi = it["doc_number_daizi"].str()
-            countersign = it["countersign_enabled"].str() == "true"
-            seal = it["seal_required"].str() == "true"
-            businessTypes = it["business_types"].str()
-        }
-    }
-
-    AppCardRaised(Modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
-            com.judicialai.desktop.design.components.SectionTitle("公文与审批配置")
-            AppTextField(daizi, { daizi = it }, label = "文号代字",
-                placeholder = "例如：白云司")
-            AppTextField(businessTypes, { businessTypes = it }, label = "业务类型",
-                placeholder = "多个类型用逗号分隔")
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space4)) {
-                ToggleRow("启用会签", countersign) { countersign = it }
-                ToggleRow("用印需审批", seal) { seal = it }
-            }
-            Row {
-                Spacer(Modifier.weight(1f))
-                AppButton("保存配置", onClick = {
-                    vm.saveApprovalConfig(daizi, countersign, seal, businessTypes)
-                })
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val shape = RoundedCornerShape(Dimens.radiusControl)
-    Row(
-        Modifier.clip(shape)
-            .background(if (checked) AiSoft else SurfaceDeep)
-            .border(1.dp, if (checked) Primary.copy(alpha = 0.35f) else Line, shape)
-            .clickable { onChange(!checked) }
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(18.dp).clip(RoundedCornerShape(Dimens.radiusXs))
-                .background(if (checked) Primary else Surface)
-                .border(1.dp, if (checked) Primary else LineStrong,
-                    RoundedCornerShape(Dimens.radiusXs)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (checked) Text("✓", fontSize = 11.sp, color = androidx.compose.ui.graphics.Color.White)
-        }
-        Spacer(Modifier.width(Dimens.space2))
-        Text(text, fontSize = 13.sp, color = if (checked) Primary else Ink2)
     }
 }
 
