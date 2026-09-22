@@ -12,18 +12,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Icon
-import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
-import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
@@ -63,7 +59,6 @@ import com.judicialai.desktop.design.components.DocumentSurface
 import com.judicialai.desktop.design.components.EmptyState
 import com.judicialai.desktop.design.components.FieldError
 import com.judicialai.desktop.design.components.FilterChip
-import com.judicialai.desktop.design.components.Hairline
 import com.judicialai.desktop.design.components.InlineNotice
 import com.judicialai.desktop.design.components.PageHeader
 import com.judicialai.desktop.design.components.SectionTitle
@@ -80,8 +75,6 @@ import com.judicialai.desktop.design.theme.FeatureTemplateSoft
 import com.judicialai.desktop.design.theme.FeatureTemplateStart
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
-import com.judicialai.desktop.design.theme.Line
-import com.judicialai.desktop.design.theme.LineStrong
 import com.judicialai.desktop.design.theme.LineSubtle
 import com.judicialai.desktop.design.theme.Muted
 import com.judicialai.desktop.design.theme.Muted2
@@ -517,6 +510,8 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
     val draft = vm.draft
     var name by remember { mutableStateOf(draft?.get("name").orEmpty()) }
     var content by remember { mutableStateOf(draft?.get("content_template").orEmpty()) }
+    // 科室管理员 / 系统管理员保存为科室模板，普通用户保存为我的模板
+    val asDept = vm.canSaveDeptTemplate
 
     LaunchedEffect(draft?.get("content_template")) {
         name = draft?.get("name").orEmpty()
@@ -526,7 +521,9 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
     AppDialog(
         onDismissRequest = onDismiss,
         title = "AI 调整模板",
-        subtitle = "基于当前模板，按${AppState.departmentName.ifBlank { "本科室" }}写作习惯给出修改结果，确认后保存为科室模板",
+        subtitle = if (asDept)
+            "基于当前模板，按${AppState.departmentName.ifBlank { "本科室" }}写作习惯给出修改结果，确认后保存为科室模板"
+        else "基于当前模板给出修改结果，确认后保存为我的模板（仅本人可见）",
         icon = Icons.Default.AutoAwesome,
         width = 720.dp,
         actions = {
@@ -540,7 +537,8 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
             } else {
                 AppButton("放弃", onClick = { vm.cancelDraft() }, kind = AppButtonKind.TEXT)
                 Spacer(Modifier.width(Dimens.space2))
-                AppButton("保存为科室模板", onClick = { vm.saveDepartmentTemplate(name, content) },
+                AppButton(if (asDept) "保存为科室模板" else "保存为我的模板",
+                    onClick = { vm.saveAdaptedTemplate(name, content) },
                     kind = AppButtonKind.PRIMARY)
             }
         },
@@ -569,7 +567,10 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
                 singleLine = false,
                 minLines = 10,
             )
-            InlineNotice("确认无误后保存；科室归属由服务端写入，不会保存到其他科室")
+            InlineNotice(
+                if (asDept) "确认无误后保存；科室归属由服务端写入，不会保存到其他科室"
+                else "确认无误后保存为我的模板，仅本人可见"
+            )
         }
     }
 }
