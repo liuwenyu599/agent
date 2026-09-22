@@ -1,5 +1,7 @@
-"""文本向量化：BGE 实现（懒加载重依赖）+ Mock 实现（测试用）。"""
+"""文本向量化：BGE 实现（懒加载重依赖）+ HTTP 远程实现 + Mock 实现（测试用）。"""
 import hashlib
+import json
+import urllib.request
 from typing import List
 
 import numpy as np
@@ -8,6 +10,9 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# BGE v1.5 中文模型官方推荐的查询侧检索指令（仅加在 query 上，文档侧不加）
+BGE_QUERY_INSTRUCTION = "为这个句子生成表示以用于检索相关文章："
 
 
 class BGEEmbedder:
@@ -39,7 +44,8 @@ class BGEEmbedder:
         )
 
     def encode_queries(self, queries: List[str]) -> np.ndarray:
-        return self.encode(queries)
+        # 检索场景：查询加指令前缀可显著提升 BGE v1.5 召回质量
+        return self.encode([BGE_QUERY_INSTRUCTION + q for q in queries])
 
 
 class HTTPEmbedder:

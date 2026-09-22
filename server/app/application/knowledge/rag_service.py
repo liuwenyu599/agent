@@ -1,7 +1,9 @@
-"""RAG 检索服务（移植自旧 services/rag_service.py）。
+"""RAG 检索服务（v2：混合检索）。
 
-向量检索 + 阈值过滤；范文检索按文档聚合取整篇。
-chat 模块通过本服务检索知识库，不直接访问向量库。
+召回：向量检索 + 关键词检索双路并行，RRF（Reciprocal Rank Fusion）融合排序；
+过滤：向量侧按阈值门控，文档级多样性上限（默认每篇最多 2 块）；
+扩展：命中块自动拼接前后相邻块作为上下文（总长受 RAG_EXPAND_BUDGET 约束）。
+范文检索 search_examples 按文档聚合取整篇。
 """
 import re
 
@@ -102,11 +104,13 @@ class RagService:
         ).all()
         return [kb.id for kb in kbs]
 
+    # ---------------- 混合检索 ----------------
+
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
                top_k: int = None, min_score: float = None,
                kb_ids: List[str] = None, dept_code: str = None,
                scopes: List[str] = None) -> List[Dict]:
-        """向量检索为主；向量库不可用或结果不足时，回退关键词检索（SQL LIKE）。
+        """向量 + 关键词双路召回，RRF 融合；权限范围一律由服务端解析。
 
         :param kb_ids: 限定检索的知识库（写作任务关联知识库）；与可访问库取交集，
                        传 None 表示全部可访问库。
@@ -142,56 +146,79 @@ class RagService:
 
         logger.info("[RAG] 查询: %s（scope=%s）", query, scopes or "ALL")
 
-        # 向量检索（向量库可用时）
+        candidates = settings.RAG_VECTOR_CANDIDATES
+
+        # 1) 向量召回（阈值门控；向量库不可用时为空，纯关键词兜底）
         vector_hits = []
         if self.vector_store is not None:
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
-                vector_hits = self.vector_store.search(
-                    query_vec, kb_ids, top_k=20, scopes=scopes)
-                logger.info("[RAG] 原始向量命中: %d 个", len(vector_hits))
+                raw_hits = self.vector_store.search(
+                    query_vec, kb_ids, top_k=candidates, scopes=scopes)
+                vector_hits = [h for h in raw_hits if h["distance"] >= min_score]
+                logger.info("[RAG] 向量命中: %d（阈值过滤后 %d）",
+                            len(raw_hits), len(vector_hits))
             except Exception as e:
-                logger.warning("[RAG] 向量检索失败，回退关键词检索: %s", e)
+                logger.warning("[RAG] 向量检索失败，仅关键词召回: %s", e)
                 vector_hits = []
 
-        results = []
-        seen_chunks = set()
+        # 2) 关键词召回（始终执行，与向量互补：专有名词/文号/人名靠它兜底）
+        keyword_hits = self._keyword_search(query, kb_ids, candidates)
 
-        for hit in vector_hits:
-            if hit["distance"] < min_score:
-                logger.info("[RAG] 过滤低分: score=%.3f < %.3f", hit["distance"], min_score)
+        # 3) RRF 融合
+        rrf_k = settings.RAG_RRF_K
+        fused: Dict[str, Dict] = {}
+        for rank, h in enumerate(vector_hits):
+            e = fused.setdefault(h["chunk_id"], {"rrf": 0.0, "v": None, "k": None})
+            e["v"] = h
+            e["rrf"] += 1.0 / (rrf_k + rank + 1)
+        for rank, r in enumerate(keyword_hits):
+            cid = r.get("chunk_id")
+            if not cid:
                 continue
+            e = fused.setdefault(cid, {"rrf": 0.0, "v": None, "k": None})
+            e["k"] = r
+            e["rrf"] += 1.0 / (rrf_k + rank + 1)
+        ranked = sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)
 
-            chunk_id = hit["chunk_id"]
-            if chunk_id in seen_chunks:
+        # 4) 文档级多样性上限 + 邻块上下文扩展
+        results: List[Dict] = []
+        per_doc: Dict[str, int] = {}
+        doc_cap = settings.RAG_PER_DOC_CAP
+        for e in ranked:
+            hit, kw = e["v"], e["k"]
+            if hit is not None:
+                chunk_id, doc_id, score = hit["chunk_id"], hit["doc_id"], hit["distance"]
+            else:
+                chunk_id, doc_id, score = kw["chunk_id"], kw["doc_id"], kw["score"]
+
+            if per_doc.get(doc_id, 0) >= doc_cap:
                 continue
-            seen_chunks.add(chunk_id)
-
             chunk = self.db.get(ChunkModel, chunk_id)
-            if chunk:
-                meta = (chunk.document.doc_metadata or {}) if chunk.document else {}
-                src_type = meta.get("source_type", "file")
-                results.append({
-                    "content": chunk.content,
-                    "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
-                    "score": hit["distance"],
-                    "match_type": "vector",
-                    "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
-                    "source_url": meta.get("source_url"),
-                    "source_name": meta.get("source_name"),
-                })
+            if not chunk:
+                continue
+            per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
 
+            content = chunk.content
+            if settings.RAG_NEIGHBOR_EXPAND:
+                content = self._expand_neighbors(chunk)
+
+            meta = (chunk.document.doc_metadata or {}) if chunk.document else {}
+            src_type = meta.get("source_type", "file")
+            results.append({
+                "content": content,
+                "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
+                "score": score,
+                "match_type": "hybrid" if (hit and kw) else ("vector" if hit else "keyword"),
+                "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
+                "source_url": meta.get("source_url"),
+                "source_name": meta.get("source_name"),
+            })
             if len(results) >= top_k:
                 break
 
-        # 向量结果不足时，用关键词检索补充
-        if len(results) < top_k:
-            existing = {x["content"] for x in results}
-            for r in self._keyword_search(query, kb_ids, top_k - len(results)):
-                if r["content"] not in existing:
-                    results.append(r)
-
-        logger.info("[RAG] 最终返回: %d 个（阈值 %.2f）", len(results), min_score)
+        logger.info("[RAG] 最终返回: %d 个（向量 %d / 关键词 %d，融合 top_k=%d）",
+                    len(results), len(vector_hits), len(keyword_hits), top_k)
         return results
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
@@ -227,13 +254,35 @@ class RagService:
                     examples.append({"title": doc.title, "content": doc.content[:max_chars]})
                     if len(examples) >= top_k:
                         break
-                return examples
+                if examples:
+                    return examples
             except Exception as e:
                 logger.warning("[RAG] 向量范文检索失败，回退关键词: %s", e)
 
         return self._keyword_examples(query, kb_ids, top_k, max_chars)
 
-    # ---------------- 关键词回退（无需向量） ----------------
+    # ---------------- 邻块上下文扩展 ----------------
+
+    @staticmethod
+    def _expand_neighbors(chunk: ChunkModel) -> str:
+        """把同一文档前后各一块拼入命中内容，总长不超 RAG_EXPAND_BUDGET 才扩展。"""
+        content = chunk.content
+        budget = settings.RAG_EXPAND_BUDGET
+        if len(content) >= budget:
+            return content
+        rows = chunk.document.chunks if chunk.document else []
+        prev_c = next((c for c in rows if c.chunk_index == chunk.chunk_index - 1), None)
+        next_c = next((c for c in rows if c.chunk_index == chunk.chunk_index + 1), None)
+        parts = []
+        if prev_c is not None:
+            parts.append(prev_c.content)
+        parts.append(content)
+        if next_c is not None:
+            parts.append(next_c.content)
+        merged = "\n".join(parts)
+        return merged if len(merged) <= budget else content
+
+    # ---------------- 关键词召回（与向量路并行） ----------------
 
     @staticmethod
     def _tokenize(query: str) -> List[str]:
@@ -268,6 +317,8 @@ class RagService:
                 continue
             score = min(1.0, cnt / len(tokens))
             scored.append({
+                "chunk_id": c.id,
+                "doc_id": c.doc_id,
                 "content": c.content,
                 "source": f"{c.document.title}（第{c.chunk_index}段）",
                 "score": score,
