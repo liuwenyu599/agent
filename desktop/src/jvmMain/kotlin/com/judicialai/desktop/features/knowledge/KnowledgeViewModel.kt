@@ -5,7 +5,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.int
-import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,30 +22,27 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         private set
     var docs by mutableStateOf(listOf<JsonObject>())
         private set
+    /** 顶部统计条：公共 / 科室 / 个人知识库数目 + 文档总数（由可见知识库列表计算，不走管理员统计接口） */
     var stats by mutableStateOf(listOf<Pair<String, String>>())
         private set
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
 
-    /** 顶部统计条（对应 Web /knowledge/stats） */
-    fun loadStats() {
-        scope.launch {
-            when (val r = repo.stats()) {
-                is ApiResult.Ok -> {
-                    val o = r.data.obj()
-                    if (o != null) stats = listOf(
-                        "知识库数" to o["kb_count"].int().toString(),
-                        "文档总数" to o["doc_count"].int().toString(),
-                        "已发布" to o["published"].int().toString(),
-                        "待审核" to o["pending"].int().toString(),
-                        "会话总数" to o["session_count"].int().toString(),
-                        "总用户数" to o["user_count"].int().toString(),
-                    )
-                }
-                is ApiResult.Err -> Unit
-            }
-        }
+    /** 知识库分类：科室库 = public 且带 department_code */
+    private fun kindOf(kb: JsonObject): String = when {
+        kb["department_code"].str().isNotBlank() -> "department"
+        kb["type"].str() == "public" -> "public"
+        else -> "personal"
+    }
+
+    private fun computeStats() {
+        stats = listOf(
+            "公共知识库" to kbs.count { kindOf(it) == "public" }.toString(),
+            "科室知识库" to kbs.count { kindOf(it) == "department" }.toString(),
+            "个人知识库" to kbs.count { kindOf(it) == "personal" }.toString(),
+            "文档总数" to kbs.sumOf { it["doc_count"].int() }.toString(),
+        )
     }
 
     fun back() {
@@ -57,7 +53,10 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun loadKbs() {
         scope.launch {
             when (val r = repo.listKb()) {
-                is ApiResult.Ok -> kbs = r.data
+                is ApiResult.Ok -> {
+                    kbs = r.data
+                    computeStats()
+                }
                 is ApiResult.Err -> status = r.message
             }
         }
@@ -78,9 +77,10 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         }
     }
 
-    fun create(name: String, desc: String) {
+    /** kbType：public（仅系统管理员）/ department（科室管理员）/ personal（普通用户） */
+    fun create(name: String, desc: String, kbType: String) {
         scope.launch {
-            when (val r = repo.createKb(name, desc)) {
+            when (val r = repo.createKb(name, desc, kbType)) {
                 is ApiResult.Ok -> loadKbs()
                 is ApiResult.Err -> status = r.message
             }
@@ -125,4 +125,3 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         }
     }
 }
-

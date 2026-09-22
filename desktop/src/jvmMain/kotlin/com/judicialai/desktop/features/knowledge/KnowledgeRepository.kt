@@ -15,8 +15,10 @@ class KnowledgeRepository(private val api: ApiClient) {
         is ApiResult.Err -> r
     }
 
-    suspend fun createKb(name: String, description: String) =
-        api.post(Endpoints.Knowledge.CREATE, mapOf("name" to name, "description" to description))
+    /** kbType：public / department / personal，服务端按角色校验 */
+    suspend fun createKb(name: String, description: String, kbType: String) =
+        api.post(Endpoints.Knowledge.CREATE, mapOf(
+            "name" to name, "description" to description, "kb_type" to kbType))
 
     suspend fun deleteKb(id: String) = api.del(Endpoints.Knowledge.kb(id))
 
@@ -33,7 +35,4 @@ class KnowledgeRepository(private val api: ApiClient) {
             api.upload(Endpoints.Knowledge.BATCH_UPLOAD, "files", files, mapOf("kb_id" to kbId))
 
     suspend fun deleteDocument(docId: String) = api.del(Endpoints.Knowledge.document(docId))
-
-    suspend fun stats() = api.get(Endpoints.Knowledge.STATS)
 }
-
