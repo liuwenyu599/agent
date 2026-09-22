@@ -23,6 +23,8 @@ import androidx.compose.material.Card
 import androidx.compose.material.Divider
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
+import androidx.compose.material.RadioButton
+import androidx.compose.material.RadioButtonDefaults
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.TextFieldDefaults
@@ -47,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
@@ -60,11 +63,11 @@ import com.judicialai.desktop.design.theme.TextPrimary
 import com.judicialai.desktop.design.theme.TextRegular
 import com.judicialai.desktop.design.theme.TextSecondary
 
-/** 知识库：1:1 还原 Web KnowledgeView（统计条 + 筛选 + 表格）+ 详情视图 */
+/** 知识库：统计条（公共/科室/个人/文档总数）+ 筛选 + 表格 + 详情视图 */
 @Composable
 fun KnowledgeScreen() {
     val vm = remember { KnowledgeViewModel(Repositories.knowledge) }
-    LaunchedEffect(Unit) { vm.loadKbs(); vm.loadStats() }
+    LaunchedEffect(Unit) { vm.loadKbs() }
 
     val current = vm.currentKb
     if (current != null) {
@@ -72,6 +75,13 @@ fun KnowledgeScreen() {
     } else {
         KnowledgeList(vm)
     }
+}
+
+/** 知识库分类标签：科室库 = public 且带 department_code */
+private fun kbTypeLabel(kb: kotlinx.serialization.json.JsonObject): Pair<String, Boolean> = when {
+    kb["department_code"].str().isNotBlank() -> "科室" to true
+    kb["type"].str() == "public" -> "公共" to true
+    else -> "个人" to false
 }
 
 @Composable
@@ -83,7 +93,7 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // 统计条
+        // 统计条：公共 / 科室 / 个人知识库数目 + 文档总数
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             vm.stats.forEach { (label, value) ->
                 Card(Modifier.weight(1f), shape = RoundedCornerShape(8.dp), elevation = 0.dp) {
@@ -173,8 +183,8 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                             }
                         }
                         Box(Modifier.width(90.dp)) {
-                            KbTag(if (kb["type"].str() == "public") "公共" else "个人",
-                                kb["type"].str() == "public")
+                            val (label, green) = kbTypeLabel(kb)
+                            KbTag(label, green)
                         }
                         Text("${kb["doc_count"].int()}", Modifier.width(90.dp),
                             fontSize = 13.sp, color = EpSuccess)
@@ -199,6 +209,14 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
     if (showCreate) {
         var name by remember { mutableStateOf("") }
         var desc by remember { mutableStateOf("") }
+        // 可选类型按角色给出：公共（系统管理员）/ 科室（科室管理员）/ 个人（所有人）
+        val typeOptions = buildList {
+            if (AppState.isDeveloper) add("public" to "公共知识库（全员可见）")
+            if (AppState.isKnowledgeAdmin || AppState.isDeveloper)
+                add("department" to "科室知识库（本科室可见）")
+            add("personal" to "个人知识库（仅自己可见）")
+        }
+        var kbType by remember { mutableStateOf(typeOptions.last().first) }
         AlertDialog(
             onDismissRequest = { showCreate = false },
             title = { Text("新建知识库") },
@@ -210,11 +228,30 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = desc, onValueChange = { desc = it },
                         label = { Text("描述") }, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(12.dp))
+                    Text("类型", fontSize = 13.sp, color = TextRegular)
+                    Spacer(Modifier.height(4.dp))
+                    typeOptions.forEach { (value, label) ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { kbType = value }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = kbType == value,
+                                onClick = { kbType = value },
+                                colors = RadioButtonDefaults.colors(selectedColor = EpPrimary),
+                            )
+                            Text(label, fontSize = 13.sp, color = TextPrimary)
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    if (name.isNotBlank()) { vm.create(name, desc); showCreate = false }
+                    if (name.isNotBlank()) { vm.create(name, desc, kbType); showCreate = false }
                 }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
                     Text("创建", color = Color.White)
                 }
@@ -239,6 +276,8 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
             }
             Text(kb["name"].str(), fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                 color = TextPrimary)
+            val (label, green) = kbTypeLabel(kb)
+            KbTag(label, green)
             Spacer(Modifier.weight(1f))
             Button(
                 onClick = { vm.upload(pickFiles("上传文档", multi = true)) },
@@ -315,4 +354,3 @@ private fun KbTag(text: String, green: Boolean) {
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) { Text(text, fontSize = 11.sp, color = color) }
 }
-
