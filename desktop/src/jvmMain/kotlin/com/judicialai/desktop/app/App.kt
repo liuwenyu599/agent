@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import com.judicialai.desktop.design.layout.AppShell
 import com.judicialai.desktop.design.theme.AppTheme
 import com.judicialai.desktop.features.admin.AdminScreen
-import com.judicialai.desktop.features.approval.ApprovalScreen
 import com.judicialai.desktop.features.auth.LoginScreen
 import com.judicialai.desktop.features.chat.ChatScreen
 import com.judicialai.desktop.features.department.DepartmentScreen
@@ -47,7 +46,6 @@ fun App() {
                 AppScreen.TEMPLATES -> TemplatesScreen()
                 AppScreen.PPT -> PptScreen()
                 AppScreen.FORMAT_CHECK -> FormatCheckScreen()
-                AppScreen.APPROVAL -> ApprovalScreen()
                 AppScreen.KNOWLEDGE -> KnowledgeScreen()
                 AppScreen.DOCUMENTS -> DocumentsScreen()
                 AppScreen.CHAT -> ChatScreen()

@@ -1,13 +1,11 @@
 package com.judicialai.desktop.app
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryBooks
@@ -25,7 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
  * v3.2 信息架构：
  * - Agent 不再是独立导航项，而是按 department_code 自动绑定的能力层，
  *   只服务于智能写作 / 模板中心 / 知识检索 / PPT 等具体任务；
- * - 业务导航固定 9 项，管理入口按角色出现。
+ * - 业务导航固定 8 项，管理入口按角色出现。
  * SETTINGS 不进入导航，由用户菜单进入。
  */
 enum class AppScreen(val title: String, val icon: ImageVector) {
@@ -37,7 +35,6 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
 
     DEPARTMENT("科室空间", Icons.Default.Groups),
     KNOWLEDGE("知识库", Icons.Default.LibraryBooks),
-    APPROVAL("审批", Icons.Default.Assignment),
     CHAT("历史记录", Icons.Default.History),
 
     // 以下两个页面保留实现，入口收在「个人中心」，不占用主导航
@@ -52,7 +49,6 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
 /**
  * 导航项：一个具体落点。
  * adminTab 仅在 screen = ADMIN 时生效，用于直达管理后台对应 Tab（Tab 全部为后端真实能力）。
- * agentTab：仅在 screen = DEPARTMENT 时生效，用于直达本科室维护面板。
  */
 data class NavItem(
     val screen: AppScreen,
@@ -80,35 +76,33 @@ object AppNav {
         NavItem(AppScreen.FORMAT_CHECK, desc = "公文规范逐条检查"),
     )
 
-    /** 科室空间：本科室资源空间（本科室助手 + 常用业务 + 知识 + 模板），不是 Agent 选择器 */
+    /** 科室空间：本科室资源空间（智能助手 + 常用业务 + 知识 + 模板），不是 Agent 选择器 */
     val departmentItems: List<NavItem> = listOf(
-        NavItem(AppScreen.DEPARTMENT, desc = "本科室助手、常用业务、知识与模板"),
+        NavItem(AppScreen.DEPARTMENT, desc = "智能助手、常用业务、知识与模板"),
     )
 
     val businessItems: List<NavItem> = listOf(
         NavItem(AppScreen.KNOWLEDGE, desc = "公共 + 本科室 + 个人知识"),
-        NavItem(AppScreen.APPROVAL, desc = "待办、我发起的、已处理"),
         NavItem(AppScreen.CHAT, desc = "我生成的对话、文档与 PPT"),
     )
 
-    /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档 / 4 审批配置） */
+    /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档） */
     val adminItems: List<NavItem> = listOf(
         NavItem(AppScreen.ADMIN, "用户与组织", Icons.Default.Group, "账号、科室与角色", adminTab = 1),
-        NavItem(AppScreen.ADMIN, "公文与审批配置", Icons.Default.Tune, "流转环节与规则", adminTab = 4),
         NavItem(AppScreen.TRAINING, desc = "语料、样本与数据集"),
     )
 
-    /** 知识管理员：只暴露本科室范围内的维护入口 */
+    /** 科室管理员：只暴露本科室范围内的维护入口 */
     val knowledgeAdminItems: List<NavItem> = listOf(
-        NavItem(AppScreen.DEPARTMENT, "本科室助手配置", Icons.Default.Tune,
+        NavItem(AppScreen.DEPARTMENT, "智能助手配置", Icons.Default.Tune,
             "业务口径、工作要求、推荐任务与知识模板关联"),
     )
 
     /** 全局导航抽屉分组 */
     val groups: List<NavGroup> = listOf(
         NavGroup("core", "核心生产力", "日常公文办公的主入口", coreItems),
-        NavGroup("dept", "科室空间", "本科室助手、知识与模板", departmentItems),
-        NavGroup("business", "知识与流转", "资料、审批与归档", businessItems),
+        NavGroup("dept", "科室空间", "智能助手、知识与模板", departmentItems),
+        NavGroup("business", "知识与记录", "资料与归档", businessItems),
     )
 
     /** 抽屉分组 = 业务分组 + 角色化管理分组 */
