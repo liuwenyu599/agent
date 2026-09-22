@@ -118,18 +118,26 @@ class TemplateService:
         return [self._to_list_dict(t, dept_code, user.id) for t in ranked]
 
     @staticmethod
-    def _tier_rank(t: WritingTemplate, dept_code: str, user_id: str) -> int:
+    def _tier_of(t: WritingTemplate, dept_code: str, user_id: str) -> str:
+        """归属判定：
+
+        - department：显式归属本科室（department_code 匹配）；
+        - mine：个人模板（visibility=personal 且本人创建）；
+        - system：其余一律为系统模板（含内置 / 官方模板，即使是本人创建）。
+        """
         if (t.department_code or "") and dept_code and t.department_code == dept_code:
-            return 0
-        if t.created_by and t.created_by == user_id:
-            return 2
-        return 1
+            return "department"
+        if (t.visibility or "") == "personal" and t.created_by and t.created_by == user_id:
+            return "mine"
+        return "system"
+
+    @classmethod
+    def _tier_rank(cls, t: WritingTemplate, dept_code: str, user_id: str) -> int:
+        return {"department": 0, "system": 1, "mine": 2}[cls._tier_of(t, dept_code, user_id)]
 
     def _to_list_dict(self, t: WritingTemplate, dept_code: str = "",
                       user_id: str = "") -> dict:
-        tier = ("department" if (t.department_code or "") and dept_code
-                and t.department_code == dept_code
-                else ("mine" if t.created_by and t.created_by == user_id else "system"))
+        tier = self._tier_of(t, dept_code, user_id)
         return {
             "id": t.id, "name": t.name, "category": t.category, "base_type": t.base_type,
             "department_code": t.department_code or "", "tier": tier,
@@ -260,22 +268,20 @@ class TemplateService:
 
     def adapt_for_department(self, user: User, template_id: str,
                              hints: str = "") -> dict:
-        """基于现有模板生成「本科室版」草案：只做建议，不落库，等人工确认。
+        """基于现有模板生成调整草案：只做建议，不落库，等人工确认。
 
-        权限：knowledge_admin（本科室）/ developer。LLM 不可用时降级为规则化改写，
-        并在 source 标注 rule，前端据此提示"已按规则生成，请人工校核"。
+        权限：任何登录用户都可生成草案（草案本身不落库、不影响任何数据）；
+        落库环节另有限制——科室管理员保存为科室模板（save_department_template），
+        普通用户保存为个人模板（create_template + visibility=personal）。
+        LLM 不可用时降级为规则化改写，并在 source 标注 rule，前端据此提示"已按规则生成，请人工校核"。
         """
-        role = getattr(user, "role", "") or ""
-        if role not in ADMIN_OR_ABOVE:
-            raise PermissionDeniedError("仅知识管理员可调整本科室模板")
-
         src = self.templates.get(template_id)
         if not src:
             raise NotFoundError("Template not found")
 
         dept_code = self._dept_code_of(user)
         if not dept_code:
-            raise PermissionDeniedError("当前账号未归属科室，无法生成科室模板")
+            raise PermissionDeniedError("当前账号未归属科室，无法生成调整草案")
 
         org = None
         try:
@@ -293,7 +299,7 @@ class TemplateService:
 
         prompt = (
             "你是司法行政机关的公文模板编写助手。请把下面这份通用模板，"
-            f"改写为「{dept_name}」日常使用的科室模板。\n\n"
+            f"改写为「{dept_name}」日常使用的模板。\n\n"
             "要求：\n"
             "1. 保持公文法定结构与规范用语，不编造制度、数据与文号；\n"
             "2. 章节顺序贴合该科室实际写作习惯；\n"
@@ -362,7 +368,7 @@ class TemplateService:
         """人工确认后保存为本科室模板（服务端强制写入本人所属科室）。"""
         role = getattr(user, "role", "") or ""
         if role not in ADMIN_OR_ABOVE:
-            raise PermissionDeniedError("仅知识管理员可保存本科室模板")
+            raise PermissionDeniedError("仅科室管理员可保存本科室模板")
         dept_code = self._dept_code_of(user)
         if not dept_code:
             raise PermissionDeniedError("当前账号未归属科室，无法保存科室模板")
