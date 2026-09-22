@@ -14,7 +14,11 @@ from app.application.knowledge.access import KnowledgeAccessPolicy
 from app.application.knowledge.document_service import DocumentService
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.domain.identity.authorization import is_system_admin, is_knowledge_admin
-from app.domain.knowledge.entities import KB_TYPE_PUBLIC, KnowledgeBase
+from app.domain.knowledge.entities import (
+    KB_TYPE_PERSONAL,
+    KB_TYPE_PUBLIC,
+    KnowledgeBase,
+)
 from app.infrastructure.database.models.knowledge import (
     DocumentModel,
     KnowledgeBaseModel,
@@ -24,7 +28,7 @@ from app.infrastructure.repositories.knowledge import (
     SqlAlchemyKnowledgeBaseRepository,
 )
 
-REVIEW_ROLES = ("knowledge_admin",)  # 仅知识管理员可审核（旧规则：系统管理员不参与审核流程）
+REVIEW_ROLES = ("knowledge_admin",)  # 仅科室管理员可审核（旧规则：系统管理员不参与审核流程）
 
 
 class KnowledgeService:
@@ -37,7 +41,7 @@ class KnowledgeService:
     # ---- 权限小工具 ----
 
     def _can_review(self, user) -> bool:
-        """审核权限：系统管理员 + 知识管理员（知识管理员仅限本科室内容，由调用点校验）。"""
+        """审核权限：系统管理员 + 科室管理员（科室管理员仅限本科室内容，由调用点校验）。"""
         return is_knowledge_admin(user) or is_system_admin(user)
 
     def _get_kb(self, kb_id: str):
@@ -61,7 +65,6 @@ class KnowledgeService:
     def get_or_create_personal_kb(self, user_id: str):
         kb = self.kbs.get_personal_kb(user_id)
         if not kb:
-            from app.domain.knowledge.entities import KB_TYPE_PERSONAL
             kb = self.kbs.add(KnowledgeBase(
                 name="个人知识库", description="用户个人上传的文档",
                 kb_type=KB_TYPE_PERSONAL, owner_id=user_id,
@@ -70,27 +73,34 @@ class KnowledgeService:
 
     def create_kb(self, user, name: str, description: str = "",
                   kb_type: Optional[str] = None) -> dict:
-        """创建知识库。
+        """创建知识库，按 kb_type 分为三类：
 
-        - 系统管理员：可创建全局公共知识库（department_code 为空）；
-        - 知识管理员：可创建本科室知识库；
-        - 普通用户：只能维护自己的个人知识库。
+        - public：全局公共知识库，仅系统管理员可创建；
+        - department：本科室知识库，科室管理员 / 系统管理员可创建（科室归属由服务端写入）；
+        - personal（默认）：个人知识库，任何登录用户可创建，仅本人可见。
         """
+        kind = (kb_type or "personal").strip().lower()
         dept_code = self.access.dept_code_of(user)
-        wants_public = (kb_type or "public") == "public"
-        if wants_public and is_system_admin(user):
-            # 全局公共知识库只有系统管理员可建
+
+        if kind == "public":
+            if not is_system_admin(user):
+                raise PermissionDeniedError("公共知识库仅系统管理员可创建")
             kb = self.kbs.add(KnowledgeBase(
                 name=name, description=description, kb_type=KB_TYPE_PUBLIC))
             return {"id": kb.id, "name": kb.name, "type": "public"}
-        if wants_public and is_knowledge_admin(user) and dept_code:
-            # 知识管理员只能建本科室知识库
+
+        if kind == "department":
+            if not (is_knowledge_admin(user) or is_system_admin(user)):
+                raise PermissionDeniedError("科室知识库仅科室管理员可创建")
+            if not dept_code:
+                raise PermissionDeniedError("当前账号未归属科室，无法创建科室知识库")
             return self._create_dept_kb(name, description, dept_code)
-        # 其余：退化为个人知识库
-        kb = self.get_or_create_personal_kb(user.id)
-        kb.name = name or kb.name
-        kb.description = description or kb.description
-        kb = self.kbs.update(kb)
+
+        # 个人知识库：每次创建都是新库，归属本人
+        kb = self.kbs.add(KnowledgeBase(
+            name=name or "个人知识库", description=description,
+            kb_type=KB_TYPE_PERSONAL, owner_id=user.id,
+        ))
         return {"id": kb.id, "name": kb.name, "type": "personal"}
 
     def _create_dept_kb(self, name: str, description: str, dept_code: str) -> dict:
@@ -243,7 +253,7 @@ class KnowledgeService:
                 "data": [self.docs._display_dict(m) for m in rows]}
 
     def list_pending(self, user) -> List[dict]:
-        """待审队列：知识管理员仅看本科室，系统管理员看全部。"""
+        """待审队列：科室管理员仅看本科室，系统管理员看全部。"""
         allowed = set(self.access.accessible_kb_ids(user))
         result = []
         for d in self.docs.list_by_status("pending"):
@@ -262,9 +272,9 @@ class KnowledgeService:
         return result
 
     def assert_can_review(self, doc_id: str, user):
-        """审核前置校验：必须是知识管理员/系统管理员，且文档在本人可管理范围内。"""
+        """审核前置校验：必须是科室管理员/系统管理员，且文档在本人可管理范围内。"""
         if not self._can_review(user):
-            raise PermissionDeniedError("仅知识管理员可执行审核操作")
+            raise PermissionDeniedError("仅科室管理员可执行审核操作")
         doc = self.get_document_checked(doc_id, user)
         if not self.access.can_manage_doc(doc, user):
             raise PermissionDeniedError("无权审核该科室的文档")
