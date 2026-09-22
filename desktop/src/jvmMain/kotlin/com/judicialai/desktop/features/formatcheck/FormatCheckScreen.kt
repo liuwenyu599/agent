@@ -6,33 +6,26 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
 import androidx.compose.material.Checkbox
 import androidx.compose.material.Divider
-import androidx.compose.material.Icon
-import androidx.compose.material.OutlinedButton
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.icons.Icons
@@ -51,10 +44,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.core.platform.pickFiles
@@ -97,7 +90,6 @@ import com.judicialai.desktop.design.theme.TextRegular
 import com.judicialai.desktop.design.theme.TextSecondary
 import com.judicialai.desktop.design.theme.Warn
 import com.judicialai.desktop.design.theme.WarnSoft
-import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -107,16 +99,18 @@ import java.io.File
 /**
  * 公文格式审校工作台（三栏）
  *
- * 左：校验记录（上传 / 打开 / 删除）  中：文档预览（版本切换 / 缩放 / 定位高亮）
+ * 左：校验记录（上传 / 打开 / 删除）  中：连续文本编辑器（版本切换 / 缩放 / 问题定位）
  * 右：校验结果（修改前后对照 / 应用 / 撤销 / 重新校验 / 导出）
  *
- * 红线：不虚构任何数据，不做页码分页（后端无页码数据，分页会是假功能）。
+ * 中栏说明：整篇文档是一个连续可编辑的 BasicTextField，段落间用单个换行连接，
+ * 不再按段落分块渲染（旧实现里空段落 + 段前段后距叠加，视觉上「全是换行」）。
+ * 「修改前」只读，「当前版本」可编辑；手动编辑只影响本地预览，不写回服务端，
+ * 也不进入导出稿 —— 导出仍以「应用修改」产生的自动修正为准（不伪造持久化）。
  */
 @Composable
 fun FormatCheckScreen() {
     val vm = remember { FormatCheckViewModel(Repositories.formatCheck) }
     var showRules by remember { mutableStateOf(false) }
-    val docListState = rememberLazyListState()
 
     LaunchedEffect(Unit) { vm.loadRecords() }
     LaunchedEffect(showRules) { if (showRules) vm.loadRules() }
@@ -145,7 +139,7 @@ fun FormatCheckScreen() {
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 RecordsColumn(vm, Modifier.width(260.dp).fillMaxHeight())
                 Box(Modifier.width(1.dp).fillMaxHeight().background(Line))
-                DocumentColumn(vm, docListState, Modifier.weight(0.55f).fillMaxHeight())
+                DocumentColumn(vm, Modifier.weight(0.55f).fillMaxHeight())
                 Box(Modifier.width(1.dp).fillMaxHeight().background(Line))
                 IssuesColumn(vm, Modifier.weight(0.35f).fillMaxHeight())
             }
@@ -281,51 +275,28 @@ private fun RecordRow(
 }
 
 // ============================================================
-// 中栏：文档预览
+// 中栏：连续文本编辑器
 // ============================================================
 
 @Composable
-private fun DocumentColumn(
-    vm: FormatCheckViewModel,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    modifier: Modifier = Modifier,
-) {
-    val paragraphs = if (vm.version == DocVersion.ORIGINAL) vm.paragraphsOriginal
-    else vm.paragraphsCurrent
-    var flashIndex by remember { mutableStateOf<Int?>(null) }
-
-    /** 段落下标 → 命中的问题下标列表（用于段落上的问题徽标） */
-    val issuesByPara: Map<Int, List<Int>> = remember(vm.issues) {
-        val map = mutableMapOf<Int, MutableList<Int>>()
-        vm.issues.forEachIndexed { i, issue ->
-            val pi = paraIndexOf(issue)
-            if (pi != null) map.getOrPut(pi) { mutableListOf() }.add(i)
-        }
-        map
-    }
-
-    // 选中问题 → 滚动到对应段落并短暂高亮；无 paragraph_index 时不滚动（由右栏提示）
-    LaunchedEffect(vm.selectedIssueId) {
-        val idx = vm.selectedIssueId?.let { paraIndexOf(vm.issues.getOrNull(it)) }
-        if (idx == null) {
-            flashIndex = null
-            return@LaunchedEffect
-        }
-        listState.animateScrollToItem(idx)
-        flashIndex = idx
-        delay(2500)
-        flashIndex = null
-    }
+private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
+    val scrollState = rememberScrollState()
+    val fontSize = vm.zoom.baseSp.sp
+    // 有手动编辑后切版本会丢弃编辑内容，先确认
+    var pendingVersion by remember { mutableStateOf<DocVersion?>(null) }
 
     Column(modifier.background(Surface)) {
-        // 工具条
+        // 工具条：版本切换 + 缩放
         Row(
             Modifier.fillMaxWidth().background(Surface).padding(horizontal = Dimens.space4,
                 vertical = Dimens.space3),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             DocVersion.values().forEach { v ->
-                FilterChip(v.label, selected = vm.version == v, onClick = { vm.version = v })
+                FilterChip(v.label, selected = vm.version == v, onClick = {
+                    if (vm.editorDirty && v != vm.version) pendingVersion = v
+                    else vm.setVersion(v)
+                })
                 Spacer(Modifier.width(Dimens.space2))
             }
             Spacer(Modifier.weight(1f))
@@ -336,6 +307,7 @@ private fun DocumentColumn(
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
 
+        // 文件名 + 状态行
         Row(
             Modifier.fillMaxWidth().background(SurfaceTonal)
                 .padding(horizontal = Dimens.space4, vertical = Dimens.space2),
@@ -344,8 +316,17 @@ private fun DocumentColumn(
             Text(vm.currentRecord?.get("filename")?.str().orEmpty().ifBlank { "未选择文档" },
                 fontSize = 12.sp, color = Ink2, modifier = Modifier.weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("已修改 ${vm.appliedCount} 处", fontSize = 12.sp, color = Ok,
-                fontWeight = FontWeight.Medium)
+            if (vm.editorDirty) {
+                Text("已手动编辑（仅预览，不影响导出）", fontSize = 12.sp, color = Warn,
+                    fontWeight = FontWeight.Medium)
+                Spacer(Modifier.width(Dimens.space2))
+                Text("恢复", fontSize = 12.sp, color = Primary,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable { vm.resetEditor() })
+            } else {
+                Text("已修改 ${vm.appliedCount} 处", fontSize = 12.sp, color = Ok,
+                    fontWeight = FontWeight.Medium)
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(LineSubtle))
 
@@ -358,8 +339,8 @@ private fun DocumentColumn(
                     modifier = Modifier.padding(Dimens.space5),
                 )
             }
-            vm.busy && paragraphs.isEmpty() -> LoadingBlock("正在读取文档内容…")
-            paragraphs.isEmpty() -> {
+            vm.busy && vm.editorText.text.isEmpty() -> LoadingBlock("正在读取文档内容…")
+            vm.editorText.text.isEmpty() -> {
                 EmptyState(
                     text = "没有读到文档内容",
                     hint = "服务端未返回段落数据，可能是源文件已过期，请重新上传校验",
@@ -367,129 +348,41 @@ private fun DocumentColumn(
                     modifier = Modifier.padding(Dimens.space5),
                 )
             }
-            else -> SelectionContainer(
-                modifier = Modifier.fillMaxWidth().weight(1f),
-            ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth().background(Surface)
-                        .padding(horizontal = Dimens.space6, vertical = Dimens.space4),
-                    verticalArrangement = Arrangement.spacedBy(Dimens.space2),
-                ) {
-                    itemsIndexed(paragraphs) { index, p ->
-                        ParagraphBlock(
-                            vm = vm,
-                            p = p,
-                            index = index,
-                            zoom = vm.zoom,
-                            flashing = flashIndex == index,
-                            issueIndexesOnPara = issuesByPara[index] ?: emptyList(),
-                        )
-                    }
-                }
-            }
+            else -> BasicTextField(
+                value = vm.editorText,
+                onValueChange = { vm.onEditorChange(it) },
+                readOnly = vm.version == DocVersion.ORIGINAL,
+                textStyle = TextStyle(
+                    fontSize = fontSize,
+                    lineHeight = (vm.zoom.baseSp * 1.6f).sp,
+                    color = Ink,
+                ),
+                cursorBrush = SolidColor(Primary),
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = Dimens.space6, vertical = Dimens.space4),
+            )
         }
     }
-}
 
-/** 单段渲染：只按后端真实属性呈现，属性缺失则按默认，不伪造排版 */
-@Composable
-private fun ParagraphBlock(
-    vm: FormatCheckViewModel,
-    p: JsonObject,
-    index: Int,
-    zoom: DocZoom,
-    flashing: Boolean,
-    issueIndexesOnPara: List<Int>,
-) {
-    val text = p["text"].str()
-    val fontPt = doubleOf(p["font_pt"]) ?: 16.0
-    val fontSize = (zoom.baseSp * (fontPt / 16.0)).toFloat().coerceIn(8f, 40f).sp
-    // pt → dp：1pt = 160/72 dp（与 Android 的 pt→dp 换算一致）
-    val spaceBefore = (doubleOf(p["space_before_pt"]) ?: 0.0) * 160f / 72f
-    val spaceAfter = (doubleOf(p["space_after_pt"]) ?: 0.0) * 160f / 72f
-    val lineSpacing = doubleOf(p["line_spacing"])
-    val indentChars = doubleOf(p["indent_chars"]) ?: 0.0
-    val bold = p["bold"].bool(false)
-    val align = when (p["align"].str().lowercase()) {
-        "center" -> TextAlign.Center
-        "right" -> TextAlign.Right
-        "justify" -> TextAlign.Justify
-        else -> TextAlign.Start
-    }
-    val isHeading = p["is_heading"].bool(false)
-    val shape = RoundedCornerShape(Dimens.radiusSm)
-
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(shape)
-            .background(if (flashing) PrimarySoft else Color.Transparent)
-            .border(1.dp, if (flashing) Primary else Color.Transparent, shape)
-            .padding(
-                top = spaceBefore.dp,
-                bottom = spaceAfter.dp,
-                start = Dimens.space2,
-                end = Dimens.space2,
-            )
-            .padding(vertical = 2.dp),
-    ) {
-        // 段落序号（朴素灰，与「有问题」的彩色徽标在视觉上明确区分）
-        Text(
-            "${index + 1}",
-            fontSize = 11.sp,
-            color = if (flashing) Primary else Muted2,
-            fontWeight = if (flashing) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.width(26.dp).padding(top = 2.dp),
-            textAlign = TextAlign.End,
-        )
-        Spacer(Modifier.width(Dimens.space2))
-        Column(Modifier.weight(1f)) {
-            if (issueIndexesOnPara.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(Dimens.space1),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    issueIndexesOnPara.forEach { issueIndex ->
-                        val sev = severityOf(vm.issues.getOrNull(issueIndex) ?: JsonObject(emptyMap()))
-                        // 已修正 → ✓✓；已应用 → ✓；未处理 → !
-                        val mark = when {
-                            vm.isResolved(issueIndex) -> "✓✓"
-                            vm.isApplied(issueIndex) -> "✓"
-                            else -> "!"
-                        }
-                        Box(
-                            Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
-                                .background(severityBg(sev))
-                                .padding(horizontal = 6.dp, vertical = 1.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                mark,
-                                fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
-                                color = severityFg(sev),
-                            )
-                        }
-                    }
-                }
-            }
-            if (text.isBlank()) {
-                // 空段落保留占位高度，避免正文结构看起来塌陷
-                Text("", fontSize = fontSize, modifier = Modifier.fillMaxWidth().height(8.dp))
-            } else {
-                Text(
-                    text,
-                    fontSize = fontSize,
-                    fontWeight = if (bold || isHeading) FontWeight.Bold else FontWeight.Normal,
-                    color = Ink,
-                    textAlign = align,
-                    // line_spacing 缺失时不设 lineHeight，交给字体默认行高（不伪造行距）
-                    lineHeight = if (lineSpacing != null && lineSpacing > 0.0)
-                        (fontSize.value * lineSpacing).toFloat().sp else TextUnit.Unspecified,
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(start = (indentChars * fontSize.value).dp),
-                )
-            }
+    // 有未保存的手动编辑时，切换版本前确认
+    pendingVersion?.let { target ->
+        AppDialog(
+            onDismissRequest = { pendingVersion = null },
+            title = "切换文档版本",
+            width = 440.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingVersion = null },
+                    kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("切换", onClick = {
+                    vm.setVersion(target)
+                    pendingVersion = null
+                }, kind = AppButtonKind.PRIMARY)
+            },
+        ) {
+            Text("当前有手动编辑的内容（仅本地预览），切换到「${target.label}」后将丢弃。",
+                fontSize = 13.sp, color = Ink2)
         }
     }
 }
@@ -615,7 +508,7 @@ private fun IssueCard(
             .clip(shape)
             .background(if (selected) PrimarySoft else Surface)
             .border(1.dp, if (selected) Primary else Line, shape)
-            .clickable { vm.selectedIssueId = index }
+            .clickable { vm.focusIssue(index) }
             .padding(Dimens.space3),
         verticalArrangement = Arrangement.spacedBy(Dimens.space1),
     ) {
@@ -734,11 +627,8 @@ private fun hasFixHint(issue: JsonObject): Boolean {
     return v != null && v !is JsonNull
 }
 
-private fun doubleOf(el: kotlinx.serialization.json.JsonElement?): Double? =
-    (el as? JsonPrimitive)?.content?.toDoubleOrNull()
-
 // ============================================================
-// 规则管理（沿用既有实现，不在三栏内）
+// 规则管理
 // ============================================================
 
 private val RULE_TARGETS = listOf(
@@ -763,6 +653,12 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                 colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
                 Text("新建规则", color = Color.White, fontSize = 13.sp)
             }
+        }
+        vm.error?.let {
+            NoticeBar(it, Danger, DangerSoft, Modifier.fillMaxWidth())
+        }
+        vm.status?.let {
+            NoticeBar(it, Ok, OkSoft, Modifier.fillMaxWidth())
         }
         Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
             modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -820,6 +716,14 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
     }
 }
 
+/**
+ * 规则编辑器。
+ *
+ * 修复：旧版在「外层 verticalScroll 的 Column」里又嵌了一个
+ * 「verticalScroll + heightIn 的 Row」（校验对象单选组），Compose 会直接抛
+ * “Vertically scrollable component was measured with an infinite height” 崩溃，
+ * 表现为点「编辑」就报错。现在单选组改成固定的两列布局，整页只保留外层一个滚动容器。
+ */
 @Composable
 private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modifier = Modifier) {
     var name by remember { mutableStateOf(form.name) }
@@ -839,17 +743,18 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                 name, { name = it }, label = { Text("规则名称") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                // 校验对象：固定两列，不滚动（避免与外层滚动容器嵌套崩溃）
                 Column(Modifier.weight(1f)) {
                     Text("校验对象", fontSize = 12.sp, color = TextSecondary)
-                    Row(Modifier.verticalScroll(rememberScrollState()).heightIn(max = 120.dp)) {
-                        Column {
-                            RULE_TARGETS.forEach { (key, label) ->
-                                Row(verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.clickable { target = key }) {
-                                    androidx.compose.material.RadioButton(
-                                        selected = target == key, onClick = { target = key })
-                                    Text(label, fontSize = 12.sp)
-                                }
+                    Row(Modifier.fillMaxWidth()) {
+                        Column(Modifier.weight(1f)) {
+                            RULE_TARGETS.take(4).forEach { (key, label) ->
+                                RuleRadio(label, selected = target == key) { target = key }
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            RULE_TARGETS.drop(4).forEach { (key, label) ->
+                                RuleRadio(label, selected = target == key) { target = key }
                             }
                         }
                     }
@@ -857,12 +762,7 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                 Column(Modifier.weight(1f)) {
                     Text("严重程度", fontSize = 12.sp, color = TextSecondary)
                     RULE_SEVERITIES.forEach { (key, label) ->
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { severity = key }) {
-                            androidx.compose.material.RadioButton(
-                                selected = severity == key, onClick = { severity = key })
-                            Text(label, fontSize = 12.sp)
-                        }
+                        RuleRadio(label, selected = severity == key) { severity = key }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(isDefault, { isDefault = it })
@@ -881,6 +781,9 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
             androidx.compose.material.OutlinedTextField(
                 remark, { remark = it }, label = { Text("备注") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true)
+            vm.error?.let {
+                NoticeBar(it, Danger, DangerSoft, Modifier.fillMaxWidth())
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(enabled = !vm.busy, onClick = {
                     vm.editingRule = form.copy(name = name, target = target, severity = severity,
@@ -890,9 +793,21 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                 }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
                     Text("保存", color = Color.White)
                 }
-                OutlinedButton(onClick = { vm.editingRule = null }) { Text("取消") }
+                androidx.compose.material.OutlinedButton(onClick = {
+                    vm.editingRule = null
+                    vm.clearError()
+                }) { Text("取消") }
             }
         }
+    }
+}
+
+@Composable
+private fun RuleRadio(label: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable { onSelect() }) {
+        androidx.compose.material.RadioButton(selected = selected, onClick = onSelect)
+        Text(label, fontSize = 12.sp)
     }
 }
 
