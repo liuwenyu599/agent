@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.Checkbox
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
@@ -83,9 +84,9 @@ import com.judicialai.desktop.design.theme.SurfaceTonal
 /**
  * 科室空间（v4.0）
  *
- * 普通用户进入即本科室：身份 → 本科室智能助手 → 常用业务 → 知识资源 → 科室模板。
+ * 普通用户进入即本科室：身份 → 智能助手 → 常用业务 → 知识资源 → 科室模板。
  * 不复制 HOME 的四大功能，也不让用户选择其他科室。
- * knowledge_admin 在此基础上多一个「维护本科室助手」入口（仅业务层）。
+ * 科室管理员在此基础上多一个「维护智能助手」入口（仅业务层）。
  */
 @Composable
 fun DepartmentScreen() {
@@ -108,11 +109,11 @@ fun DepartmentScreen() {
         ) {
             PageHeader(
                 title = vm.deptName.ifBlank { "本科室空间" },
-                subtitle = "本科室助手、常用业务、知识资源与科室模板",
+                subtitle = "常用业务、知识资源与科室模板",
                 eyebrow = "科室空间",
                 actions = {
                     if (vm.agent?.canManage == true) {
-                        AppButton("维护本科室助手", onClick = { vm.openMaintain() },
+                        AppButton("维护智能助手配置", onClick = { vm.openMaintain() },
                             kind = AppButtonKind.PRIMARY, icon = Icons.Default.Settings)
                     }
                 },
@@ -180,7 +181,7 @@ private fun IdentityStrip(vm: DepartmentViewModel) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     buildString {
-                        append("已自动绑定本科室助手")
+                        append("已绑定智能助手")
                         vm.agent?.name?.takeIf { it.isNotBlank() }?.let { append("：$it") }
                         val v = vm.agent?.version ?: 0
                         if (v > 0) append(" · 配置版本 v$v")
@@ -194,14 +195,14 @@ private fun IdentityStrip(vm: DepartmentViewModel) {
                     .background(OnPrimaryText.copy(alpha = 0.16f))
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                Text(if (canManage) "本科室管理员" else "本科室成员", fontSize = 12.sp,
+                Text(if (canManage) "科室管理员" else "本科室成员", fontSize = 12.sp,
                     color = OnPrimaryText)
             }
         }
     }
 }
 
-// ---------------- 本科室智能助手 ----------------
+// ---------------- 智能助手 ----------------
 
 @Composable
 private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
@@ -224,9 +225,9 @@ private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
             }
             Spacer(Modifier.width(Dimens.space3))
             Column(Modifier.weight(1f)) {
-                Text("本科室智能助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                Text("智能助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
                     color = Ink)
-                Text(a?.name.orEmpty().ifBlank { "${vm.deptName}助手" }, fontSize = 11.5.sp,
+                Text(a?.name.orEmpty().ifBlank { "智能助手" }, fontSize = 11.5.sp,
                     color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -238,7 +239,7 @@ private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
         }
         a?.manager?.takeIf { it.isNotBlank() }?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TagChip("本科室维护人", fg = Primary, bg = PrimarySoft)
+                TagChip("维护人", fg = Primary, bg = PrimarySoft)
                 Spacer(Modifier.width(Dimens.space2))
                 Text(it, fontSize = 12.sp, color = Ink2)
             }
@@ -251,7 +252,7 @@ private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
         Spacer(Modifier.height(Dimens.space2))
         val tasks = a?.recommendedTasks.orEmpty()
         if (tasks.isEmpty()) {
-            EmptyLine("本科室暂未配置推荐任务")
+            EmptyLine("暂未配置推荐任务")
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
                 tasks.forEach { t ->
@@ -398,14 +399,53 @@ private fun PanelCard(
     }
 }
 
-// ---------------- 维护面板（knowledge_admin）----------------
+// ---------------- 维护面板（科室管理员）----------------
+
+/** 勾选项：value 为提交值，label 为展示文案。注意：不可嵌套滚动（对话框内容区已自带滚动）。 */
+@Composable
+private fun MultiSelectField(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, fontSize = 12.5.sp, color = Ink2, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(Dimens.space2))
+        if (options.isEmpty()) {
+            EmptyLine("暂无可选项")
+        } else {
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusMd))
+                    .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusMd))
+                    .background(Surface)
+                    .padding(vertical = Dimens.space1),
+            ) {
+                options.forEach { (value, text) ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { onToggle(value) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = value in selected, onCheckedChange = null)
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text(text, fontSize = 12.5.sp, color = Ink,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun MaintainDialog(vm: DepartmentViewModel) {
     val editable = vm.agent?.editableFields.orEmpty()
     AppDialog(
         onDismissRequest = { vm.closeMaintain() },
-        title = "维护本科室助手",
+        title = "维护智能助手",
         subtitle = "仅可维护本科室业务配置；系统基础与安全权限由平台统一控制",
         icon = Icons.Default.Settings,
         width = 760.dp,
@@ -418,7 +458,7 @@ private fun MaintainDialog(vm: DepartmentViewModel) {
     ) {
         InlineNotice("保存后将生成新的配置版本，本科室所有成员立即按新配置使用")
         AppTextField(value = vm.formManager, onValueChange = { vm.formManager = it },
-            label = "本科室维护人")
+            label = "维护人")
         AppTextField(value = vm.formIntro, onValueChange = { vm.formIntro = it },
             label = "助手简介", singleLine = false, minLines = 2)
 
@@ -435,16 +475,23 @@ private fun MaintainDialog(vm: DepartmentViewModel) {
                 label = "工作要求", singleLine = false, minLines = 3)
         }
         if (editable.isEmpty() || editable.contains("tasks")) {
-            AppTextField(value = vm.formTasks, onValueChange = { vm.formTasks = it },
-                label = "推荐任务（每行一条）", singleLine = false, minLines = 3)
+            // 可选项 = 常用业务标题 + 当前已选（兼容历史值，便于取消勾选）
+            val options = (vm.business.map { it.title to it.title } +
+                vm.formTasksSel.map { it to it }).distinctBy { it.first }
+            MultiSelectField(label = "推荐任务（勾选）", options = options,
+                selected = vm.formTasksSel, onToggle = { vm.toggleTask(it) })
         }
         if (editable.isEmpty() || editable.contains("templates")) {
-            AppTextField(value = vm.formTemplates, onValueChange = { vm.formTemplates = it },
-                label = "关联模板（每行一个模板名称）", singleLine = false, minLines = 2)
+            val options = (vm.templates.map { it.name to it.name } +
+                vm.formTemplatesSel.map { it to it }).distinctBy { it.first }
+            MultiSelectField(label = "关联模板（勾选）", options = options,
+                selected = vm.formTemplatesSel, onToggle = { vm.toggleTemplate(it) })
         }
         if (editable.isEmpty() || editable.contains("kb_ids")) {
-            AppTextField(value = vm.formKbIds, onValueChange = { vm.formKbIds = it },
-                label = "关联知识资源（每行一个知识库 ID）", singleLine = false, minLines = 2)
+            val options = (vm.knowledge.map { it.id to "${it.name}（${it.docCount} 篇）" } +
+                vm.formKbIdsSel.map { it to it }).distinctBy { it.first }
+            MultiSelectField(label = "关联知识资源（勾选）", options = options,
+                selected = vm.formKbIdsSel, onToggle = { vm.toggleKb(it) })
         }
 
         vm.status?.let { FieldError(it) }
@@ -466,7 +513,7 @@ private fun MaintainDialog(vm: DepartmentViewModel) {
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.width(38.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(v.note.ifBlank { "更新本科室业务配置" }, fontSize = 12.sp,
+                            Text(v.note.ifBlank { "更新业务配置" }, fontSize = 12.sp,
                                 color = Ink)
                             Text("${v.operator.ifBlank { "系统" }} · ${v.createdAt}",
                                 fontSize = 11.sp, color = Muted)

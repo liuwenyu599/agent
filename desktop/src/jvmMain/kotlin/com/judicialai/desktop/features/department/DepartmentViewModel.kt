@@ -21,8 +21,8 @@ import kotlinx.coroutines.launch
  * 科室空间（v3.2）
  *
  * 定位：本科室的「资源空间」，不是 Agent 选择器。
- * 用户不给选择 Agent，进入即按 department_code 自动绑定本科室助手，
- * 这里只聚合四块内容：本科室智能助手 / 常用业务 / 知识资源 / 本科室模板。
+ * 用户不给选择 Agent，进入即按 department_code 自动绑定智能助手，
+ * 这里只聚合四块内容：智能助手 / 常用业务 / 知识资源 / 本科室模板。
  *
  * 全部由服务端按登录用户解析（/organization/space），客户端不传 dept_code。
  * 界面不出现模型、检索范围、系统提示等技术概念。
@@ -38,7 +38,7 @@ class DepartmentViewModel {
         val templates: List<String>,
         val version: Int,
         val canManage: Boolean,
-        // 以下仅知识管理员 / 系统管理员可见，用于维护本科室业务层
+        // 以下仅科室管理员 / 系统管理员可见，用于维护本科室业务层
         val businessPrompt: String = "",
         val workRequirements: String = "",
         val kbIds: List<String> = emptyList(),
@@ -92,9 +92,10 @@ class DepartmentViewModel {
     var formManager by mutableStateOf("")
     var formBusinessPrompt by mutableStateOf("")
     var formRequirements by mutableStateOf("")
-    var formTasks by mutableStateOf("")
-    var formTemplates by mutableStateOf("")
-    var formKbIds by mutableStateOf("")
+    // 推荐任务 / 关联模板 / 关联资源：勾选选择（值为任务文案 / 模板名称 / 知识库 ID）
+    var formTasksSel by mutableStateOf(setOf<String>())
+    var formTemplatesSel by mutableStateOf(setOf<String>())
+    var formKbIdsSel by mutableStateOf(setOf<String>())
 
     init { load() }
 
@@ -143,7 +144,7 @@ class DepartmentViewModel {
 
         val a = o["agent"].obj()
         agent = if (a == null) null else AgentInfo(
-            name = a["name"].str().ifBlank { "${deptName}智能助手".trim() },
+            name = a["name"].str().ifBlank { "智能助手" },
             intro = a["intro"].str(),
             manager = a["manager"].str(),
             recommendedTasks = a["recommended_tasks"].arr().map { it.str() }
@@ -169,9 +170,21 @@ class DepartmentViewModel {
         formManager = a.manager
         formBusinessPrompt = a.businessPrompt
         formRequirements = a.workRequirements
-        formTasks = a.recommendedTasks.joinToString("\n")
-        formTemplates = a.templates.joinToString("\n")
-        formKbIds = a.kbIds.joinToString("\n")
+        formTasksSel = a.recommendedTasks.toSet()
+        formTemplatesSel = a.templates.toSet()
+        formKbIdsSel = a.kbIds.toSet()
+    }
+
+    fun toggleTask(v: String) {
+        formTasksSel = if (v in formTasksSel) formTasksSel - v else formTasksSel + v
+    }
+
+    fun toggleTemplate(v: String) {
+        formTemplatesSel = if (v in formTemplatesSel) formTemplatesSel - v else formTemplatesSel + v
+    }
+
+    fun toggleKb(v: String) {
+        formKbIdsSel = if (v in formKbIdsSel) formKbIdsSel - v else formKbIdsSel + v
     }
 
     fun openMaintain() {
@@ -213,14 +226,14 @@ class DepartmentViewModel {
             "manager" to formManager,
             "business_prompt" to formBusinessPrompt,
             "work_requirements" to formRequirements,
-            "tasks" to formTasks.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
-            "templates" to formTemplates.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
-            "kb_ids" to formKbIds.split("\n").map { it.trim() }.filter { it.isNotEmpty() },
+            "tasks" to formTasksSel.toList(),
+            "templates" to formTemplatesSel.toList(),
+            "kb_ids" to formKbIdsSel.toList(),
         )
         scope.launch {
             when (val r = AppState.api.put(Endpoints.Organization.agent(code), body)) {
                 is ApiResult.Ok -> {
-                    status = "已保存，本科室助手已按新配置生效"
+                    status = "已保存，智能助手配置已生效"
                     load()
                     loadVersions()
                 }
