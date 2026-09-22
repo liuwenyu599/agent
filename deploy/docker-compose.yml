@@ -1,0 +1,45 @@
+# ============================================================
+# judicial-ai 后端一键部署（镜像构建 + 运行）
+# 用法：
+#   cp deploy/.env.example deploy/.env   # 首次，然后编辑 .env
+#   cd deploy && docker compose up -d --build
+# 说明：
+#   - 数据库默认 SQLite（落盘在 ${HOST_DATA_DIR}），单机部署无需 PostgreSQL；
+#     需要 PostgreSQL 时启用下方 postgres 服务并设置 DATABASE_URL。
+#   - 向量模型目录通过 ${HOST_MODEL_DIR} 只读挂载到容器 /models，
+#     .env 里 EMBED_MODEL_PATH 指向容器内路径（如 /models/Qwen3-Embedding-0.6B）。
+# ============================================================
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: judicial-ai-server:latest
+    container_name: judicial-ai-api
+    env_file: .env
+    environment:
+      # 容器内固定路径：数据 /data、模型 /models
+      DATA_DIR: /data
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ${HOST_DATA_DIR:-../data}:/data
+      - ${HOST_MODEL_DIR:-/data/justice/models}:/models:ro
+    restart: unless-stopped
+
+  # ---- 可选：PostgreSQL（默认不启用；启用后取消注释并在 .env 设置 DATABASE_URL）----
+  # postgres:
+  #   image: postgres:16
+  #   container_name: judicial-ai-pg
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB:-justice}
+  #     POSTGRES_USER: ${POSTGRES_USER:-justice}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set-in-.env}
+  #   volumes:
+  #     - ${HOST_DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  # 然后在 .env 中加：
+  #   DATABASE_URL=postgresql+psycopg2://justice:<密码>@postgres:5432/justice
+  # 并在 Dockerfile 的 pip install 行追加 psycopg2-binary。
