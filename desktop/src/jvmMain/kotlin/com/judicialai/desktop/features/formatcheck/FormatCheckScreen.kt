@@ -295,7 +295,7 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
             DocVersion.values().forEach { v ->
                 FilterChip(v.label, selected = vm.version == v, onClick = {
                     if (vm.editorDirty && v != vm.version) pendingVersion = v
-                    else vm.setVersion(v)
+                    else vm.switchVersion(v)
                 })
                 Spacer(Modifier.width(Dimens.space2))
             }
@@ -376,7 +376,7 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
                     kind = AppButtonKind.SECONDARY)
                 Spacer(Modifier.width(Dimens.space2))
                 AppButton("切换", onClick = {
-                    vm.setVersion(target)
+                    vm.switchVersion(target)
                     pendingVersion = null
                 }, kind = AppButtonKind.PRIMARY)
             },
