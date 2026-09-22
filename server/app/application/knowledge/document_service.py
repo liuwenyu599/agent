@@ -1,6 +1,7 @@
 """文档入库服务（移植自旧 services/document_service.py）。
 
 分块 → 建 Document/Chunk → 向量化。文件上传与网页导入共用同一流程。
+分块时把文档标题传入，块内容自动带「《标题》」面包屑，检索可区分不同文档的雷同章节。
 """
 import re
 import uuid
@@ -64,9 +65,9 @@ class DocumentService:
         final_doc_type = doc_type if doc_type else auto_doc_type
 
         if final_doc_type == "法规":
-            chunks = self.legal_chunker.chunk(text, doc_id)
+            chunks = self.legal_chunker.chunk(text, doc_id, title=title)
         else:
-            chunks = self.official_chunker.chunk(text, doc_id)
+            chunks = self.official_chunker.chunk(text, doc_id, title=title)
 
         # 初始状态：管理员/知识管理员直接发布；个人库直接发布；公共库待审核
         kb = db.get(KnowledgeBaseModel, kb_id)

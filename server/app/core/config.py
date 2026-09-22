@@ -54,6 +54,18 @@ class Settings:
         self.EMBEDDING_HTTP_TIMEOUT = int(os.getenv("EMBEDDING_HTTP_TIMEOUT", "30"))
         self.RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
         self.RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.5"))
+        # 分块：结构段再按句子边界约束到 MAX_CHARS，块间保留 OVERLAP 重叠，
+        # 过短碎块（< MIN_CHARS）并入前一块
+        self.RAG_CHUNK_MAX_CHARS = int(os.getenv("RAG_CHUNK_MAX_CHARS", "500"))
+        self.RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "80"))
+        self.RAG_CHUNK_MIN_CHARS = int(os.getenv("RAG_CHUNK_MIN_CHARS", "30"))
+        # 混合检索：向量 + 关键词双路召回 RRF 融合；单文档最多贡献 PER_DOC_CAP 块
+        self.RAG_VECTOR_CANDIDATES = int(os.getenv("RAG_VECTOR_CANDIDATES", "30"))
+        self.RAG_RRF_K = int(os.getenv("RAG_RRF_K", "60"))
+        self.RAG_PER_DOC_CAP = int(os.getenv("RAG_PER_DOC_CAP", "2"))
+        # 命中块上下文扩展：拼接前后相邻块（总长不超 EXPAND_BUDGET）
+        self.RAG_NEIGHBOR_EXPAND = _bool(os.getenv("RAG_NEIGHBOR_EXPAND", "true"), True)
+        self.RAG_EXPAND_BUDGET = int(os.getenv("RAG_EXPAND_BUDGET", "1500"))
 
         # 上传
         self.UPLOAD_MAX_SIZE = int(os.getenv("UPLOAD_MAX_SIZE", str(50 * 1024 * 1024)))
