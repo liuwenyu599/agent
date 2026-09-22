@@ -71,14 +71,6 @@ class AdminRepository(private val api: ApiClient) {
     suspend fun archive(docId: String) =
         api.post(Endpoints.Knowledge.documentArchive(docId), emptyMap<String, String>())
 
-    suspend fun adminSessions(): ApiResult<List<JsonObject>> =
-        when (val r = api.get(Endpoints.Chat.ADMIN_SESSIONS)) {
-            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
-            is ApiResult.Err -> r
-        }
-
-    suspend fun deleteSession(id: String) = api.del(Endpoints.Chat.adminSessionDelete(id))
-
     suspend fun approvalConfig(): ApiResult<JsonObject> =
         when (val r = api.get(Endpoints.System.APPROVAL_CONFIG)) {
             is ApiResult.Ok -> r.data.obj().let {

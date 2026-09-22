@@ -113,6 +113,21 @@ class DocumentService:
         self.db.commit()
         return self.get_document(doc.id, user_id)
 
+    def rename_document(self, doc_id: str, user_id: str, title: str) -> dict:
+        """只改标题，**不产生新版本**（区别于 save_version）。
+
+        返回与列表项同构的摘要，便于前端直接用返回值刷新行。
+        """
+        doc = self._get_owned(doc_id, user_id)
+        name = (title or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="文档标题不能为空")
+        if len(name) > 200:
+            raise HTTPException(status_code=422, detail="文档标题不能超过 200 字")
+        doc.title = name
+        self.db.commit()
+        return self._summary(doc)
+
     def delete_document(self, doc_id: str, user_id: str) -> None:
         doc = self._get_owned(doc_id, user_id)
         self.db.delete(doc)

@@ -185,8 +185,14 @@ class WritingAssistant:
              attachment_context: str = None,
              reference_template: Dict = None,
              task_reference_context: str = None,
-             template_reference_context: str = None) -> str:
-        """主对话入口（签名与旧 LLMService.chat 完全一致）。"""
+             template_reference_context: str = None,
+             user_preference: str = None) -> str:
+        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference）。
+
+        ⚠️ `user_preference` 必须是**独立参数**：若把偏好块拼进 `system_prompt`
+        传入，会命中 `if system_prompt:` 分支，短路 `_build_writing_prompt()`
+        的 7 条写作硬规则，造成公文质量回归。
+        """
         intent = self._detect_intent(message)
 
         sources_block = ""
@@ -217,6 +223,11 @@ class WritingAssistant:
             )
         else:
             system_prompt = self._default_prompt(sources=sources)
+
+        # 第 5 层【用户个人偏好】：恒在基础规则（含写作硬规则与安全要求）之后、
+        # 参考模板 / 参考材料 / 附件等上下文之前，因此无法覆盖前四层。
+        if user_preference:
+            system_prompt = (system_prompt or "") + "\n\n" + user_preference
 
         if reference_template:
             system_prompt += "\n\n" + self._build_reference_template_context(reference_template)

@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>白云司法局智慧办公平台 · 工作台（首页重设计稿 v5 · 1440×900）</title>
+<!--
+  ============================================================================
+  白云司法局智慧办公平台 · 工作台首页重设计稿 v5
+  ----------------------------------------------------------------------------
+  静态高保真稿：1440×900（Desktop 逻辑分辨率首屏）。
+  所有文案与配色均取自仓库真实源码，未编造功能与业务数据：
+
+    design/layout/AppShell.kt          → AppHeader 结构、文案、hover 取值
+    features/home/HomeScreen.kt        → WelcomeBand / FeatureGrid / DeptTasksBlock
+    design/theme/Color.kt              → 全部配色令牌
+    design/theme/Dimens.kt             → 间距 / 圆角 / 控件高 / 阴影
+    app/AppNavigation.kt               → AppNav.coreItems 四卡标题与描述
+    app/AppState.kt                    → displayName 兜底值、roleText
+    design/components/GlobalNavDrawer.kt → paletteOf() 功能色渐变
+    server/app/domain/.../departments.py → 科室正式名（办公室）
+    server/app/domain/.../roles.py     → 角色显示名（拟稿人）
+
+  占位说明（非业务臆造，仅为静态稿可读）：
+    1. 姓名取 AppState.displayName 兜底值「用户」（AppState.kt:92）；
+    2. 待办数「3」仅为排版占位，真实值来自 /dashboard/summary；
+    3. 「本科室常用任务」条目由后端 organization.me 的 recommended_tasks 下发，
+       默认种子为空列表（organization/service.py:124 → tasks_json=[]），
+       源码中无文案可引，故以骨架占位呈现，不做编造。
+  ============================================================================
+-->
+<style>
+/* ------------------------------------------------------------------ *
+ * 1. 令牌层 —— 与 design/theme/Color.kt 一一对应，禁止自造色值
+ * ------------------------------------------------------------------ */
+:root{
+  /* 品牌锚点：深海军蓝 */
+  --navy:#0E1F38;            /* Navy          */
+  --primary:#1B3B62;         /* Primary       */
+  --primary-deep:#2C5C90;    /* PrimaryDeep   */
+  --brand-start:#0F2138;     /* BrandStart    */
+  --brand-mid:#1B3B62;       /* BrandMid      */
+  --brand-end:#2E5C8A;       /* BrandEnd      */
+
+  /* 表面层级：由深到浅的四层 surface */
+  --app-bg:#F3F6FA;          /* AppBg         */
+  --surface-deep:#EDF1F7;    /* SurfaceDeep   */
+  --surface-sunken:#F1F4F9;  /* SurfaceSunken */
+  --surface-tonal:#F7F9FD;   /* SurfaceTonal  */
+  --surface:#FFFFFF;         /* Surface       */
+
+  /* 描边层级 */
+  --line-subtle:#F0F3F8;     /* LineSubtle    */
+  --line:#E2E8F0;            /* Line          */
+  --line-strong:#CBD5E1;     /* LineStrong    */
+
+  /* 文本层级 */
+  --ink:#101C2E;             /* Ink           */
+  --ink2:#43536B;            /* Ink2          */
+  --muted:#78859A;           /* Muted         */
+  --muted2:#9BA6B8;          /* Muted2        */
+  --on-dark:rgba(255,255,255,.902); /* OnDark (0xE6FFFFFF)  */
+  --on-dark-muted:rgba(255,255,255,.651); /* OnDarkMuted (0xA6FFFFFF) */
+
+  /* AI / 智能 */
+  --ai-indigo:#2F4E9E;       /* AiIndigo      */
+
+  /* 提醒 / 状态 */
+  --amber-soft:#FDF2E3;      /* AmberSoft     */
+  --amber-line:#F0DCBC;      /* AmberLine     */
+  --amber-ink:#7C4708;       /* AmberInk      */
+  --ok:#1F7A54;              /* Ok            */
+
+  /* 功能色：智能写作（靛蓝） */
+  --write-start:#17386B;     /* FeatureWriteStart */
+  --write-end:#3C61A8;       /* FeatureWriteEnd   */
+  --write-soft:#E8EEF9;      /* FeatureWriteSoft  */
+  --write-ink:#153565;       /* FeatureWriteInk   */
+
+  /* 功能色：模板中心（松柏绿） */
+  --tpl-start:#0B4E3D;       /* FeatureTemplateStart */
+  --tpl-end:#17876A;         /* FeatureTemplateEnd   */
+  --tpl-soft:#E3F1EC;        /* FeatureTemplateSoft  */
+  --tpl-ink:#0A4737;         /* FeatureTemplateInk   */
+
+  /* 功能色：PPT 助手（紫檀） */
+  --ppt-start:#3B2A6B;       /* FeaturePptStart */
+  --ppt-end:#6A51A8;         /* FeaturePptEnd   */
+  --ppt-soft:#EDE9F7;        /* FeaturePptSoft  */
+  --ppt-ink:#34245C;         /* FeaturePptInk   */
+
+  /* 功能色：格式校验（赭金） */
+  --chk-start:#7A4C0D;       /* FeatureCheckStart */
+  --chk-end:#B07C22;         /* FeatureCheckEnd   */
+  --chk-soft:#FAF1E1;        /* FeatureCheckSoft  */
+  --chk-ink:#6E450C;         /* FeatureCheckInk   */
+
+  /* 政务金：仅作细线点缀 */
+  --gold:#C29A4A;            /* Gold           */
+  --gold-light:#DDBE77;      /* GoldLight      */
+
+  /* HomeScreen.kt 内联值（建议后续收进 Color.kt） */
+  --online-dot:#6EE7B7;      /* 在线状态点 */
+  --todo-on-dark:#FFD9A8;    /* 深底待办文字 */
+
+  /* -------------------------------------------------------------- *
+   * 2. 尺寸层 —— 对齐 design/theme/Dimens.kt
+   * -------------------------------------------------------------- */
+  --r-sm:8px;      /* radiusSm      */
+  --r-control:10px;/* radiusControl */
+  --r-md:12px;     /* radiusMd      */
+  --r-lg:16px;     /* radiusLg      */
+  --r-xl:20px;     /* radiusXl      */
+  --r-sheet:24px;  /* radiusSheet   */
+  --r-pill:999px;  /* radiusPill    */
+
+  --sp-1:4px;  --sp-2:8px;  --sp-3:12px; --sp-4:16px;
+  --sp-5:20px; --sp-6:24px; --sp-8:32px;
+
+  --h-control:40px;    /* hControl     */
+  --header-h:64px;     /* headerHeight */
+  --home-max:1160px;   /* homeMaxWidth */
+
+  /* 字号层级（6 档） */
+  --fs-hero:26px;   /* 欢迎主标题   */
+  --fs-title:20px;  /* 卡片标题     */
+  --fs-body:14px;   /* 副文案       */
+  --fs-item:13px;   /* 列表正文     */
+  --fs-desc:12.5px; /* 卡片描述     */
+  --fs-meta:12px;   /* 元信息       */
+  --fs-tiny:11.5px; /* 次级说明     */
+}
+
+/* ------------------------------------------------------------------ *
+ * 3. 基础层
+ * ------------------------------------------------------------------ */
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+
+body{
+  width:1440px;
+  height:900px;
+  overflow:hidden;
+  background:var(--app-bg);
+  font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+/* 应用窗口：首屏 1440×900 */
+.app{
+  position:relative;
+  width:1440px;
+  height:900px;
+  overflow:hidden;
+  /* 极弱的顶部光源，给 app-bg 一点空气感（禁止满屏渐变） */
+  background:
+    radial-gradient(1200px 420px at 16% -12%, rgba(255,255,255,.92), rgba(255,255,255,0) 68%),
+    var(--app-bg);
+}
+
+.ico{width:20px;height:20px;fill:currentColor;flex:none;display:block;}
+.sprite{position:absolute;width:0;height:0;overflow:hidden;}
+
+/* ------------------------------------------------------------------ *
+ * 4. Header —— AppShell.kt / AppHeader
+ *    调整：内层与首页内容同列宽 1160（homeMaxWidth），让品牌栏与内容左边界对齐
+ * ------------------------------------------------------------------ */
+.header{
+  position:relative;
+  height:var(--header-h);
+  background:var(--surface);
+  box-shadow:
+    0 1px 2px rgba(16,28,46,.04),
+    0 8px 20px -16px rgba(16,28,46,.22);
+}
+.header::after{                       /* 1dp 底部分隔线 → Line */
+  content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--line);
+}
+.header-inner{
+  width:var(--home-max);height:var(--header-h);margin:0 auto;
+  display:flex;align-items:center;gap:var(--sp-2);
+}
+
+/* 品牌区 */
+.brand{
+  display:flex;align-items:center;gap:var(--sp-3);
+  padding:6px var(--sp-2);border-radius:var(--r-md);cursor:pointer;
+  transition:background .16s ease;
+}
+.brand:hover{background:var(--surface-deep);}
+.logo{
+  width:36px;height:36px;border-radius:var(--r-control);flex:none;
+  background:linear-gradient(135deg,var(--brand-start),var(--brand-end));
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 10px -6px rgba(15,33,56,.55);
+}
+.brand-title{
+  font-size:14.5px;font-weight:600;color:var(--ink);
+  letter-spacing:.1px;line-height:17px;
+}
+.crumb{display:flex;align-items:center;gap:var(--sp-2);margin-top:3px;}
+.crumb-pos{font-size:11.5px;color:var(--muted);line-height:14px;}
+.crumb-dot{width:3px;height:3px;border-radius:50%;background:var(--line-strong);}
+.crumb-dept{
+  display:flex;align-items:center;gap:3px;
+  font-size:11.5px;font-weight:500;color:var(--write-ink);line-height:14px;
+}
+.crumb-dept .ico{width:12px;height:12px;}
+.brand-arrow{width:24px;height:24px;color:var(--muted);}
+
+/* 图标按钮 —— HeaderIconButton：hover 态取自源码 real values */
+.icon-btn{
+  width:36px;height:36px;border-radius:var(--r-control);flex:none;
+  background:var(--surface-tonal);border:1px solid var(--line);
+  color:var(--ink2);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;transition:background .16s ease,border-color .16s ease;
+}
+.icon-btn:hover,.icon-btn.is-hover{
+  background:var(--surface-deep);border-color:var(--line-strong);
+}
+
+.spacer{flex:1 1 auto;}
+
+/* 全局搜索 —— AppControls.kt / AppSearchField */
+.search{
+  width:260px;height:var(--h-control);display:flex;align-items:center;gap:var(--sp-2);
+  padding:0 var(--sp-3);border-radius:var(--r-pill);
+  background:var(--surface-deep);border:1px solid var(--line);
+  color:var(--muted);transition:border-color .16s ease,background .16s ease;
+}
+.search:hover{border-color:var(--line-strong);background:var(--surface-sunken);}
+.search-input{
+  flex:1 1 auto;min-width:0;border:0;outline:none;background:transparent;
+  font-family:inherit;font-size:13px;color:var(--ink);
+}
+.search-input::placeholder{color:var(--muted2);font-size:12.5px;}
+
+.h-divider{width:1px;height:24px;background:var(--line);flex:none;}
+
+/* 待办状态 pill —— HeaderStatusPill */
+.pill-todo{
+  height:26px;padding:0 10px;display:inline-flex;align-items:center;
+  border-radius:var(--r-pill);background:var(--amber-soft);
+  border:1px solid var(--amber-line);color:var(--amber-ink);
+  font-size:11.5px;font-weight:500;white-space:nowrap;
+}
+
+/* 个人中心 */
+.personal{
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3);border-radius:var(--r-control);
+  color:var(--ink2);font-size:13px;cursor:pointer;
+  transition:background .16s ease,color .16s ease;
+}
+.personal:hover{background:var(--surface-deep);color:var(--ink);}
+
+/* 用户身份 */
+.user{
+  display:flex;align-items:center;gap:var(--sp-2);
+  padding:6px var(--sp-2);border-radius:var(--r-control);cursor:pointer;
+  transition:background .16s ease;
+}
+.user:hover{background:var(--surface-deep);}
+.avatar{
+  width:32px;height:32px;border-radius:50%;flex:none;
+  background:linear-gradient(135deg,var(--ai-indigo),var(--primary));
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22);
+}
+.user-name{font-size:13px;font-weight:500;color:var(--ink);line-height:16px;}
+.user-role{font-size:11px;color:var(--muted);line-height:14px;}
+.user-arrow{width:20px;height:20px;color:var(--muted2);}
+
+/* ------------------------------------------------------------------ *
+ * 5. 内容区 —— HomeScreen：padding 20 / max width 1160
+ * ------------------------------------------------------------------ */
+.main{height:836px;padding:var(--sp-5) 0;}
+.home-col{
+  width:var(--home-max);height:100%;margin:0 auto;
+  display:flex;flex-direction:column;gap:var(--sp-5);
+}
+
+/* ---------- 5.1 欢迎条 WelcomeBand ---------- */
+.hero{
+  position:relative;height:180px;flex:none;
+  border-radius:var(--r-sheet);overflow:hidden;
+  background:linear-gradient(122deg,var(--brand-start) 0%,var(--brand-mid) 48%,var(--brand-end) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.10),
+    0 18px 40px -22px rgba(14,31,56,.55),
+    0 2px 6px rgba(14,31,56,.10);
+}
+/* HomeScreen.kt drawBehind 的几何装饰：转译为极低透明度圆形 */
+.hero-wash{
+  position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(680px 280px at 6% -10%, rgba(255,255,255,.09), rgba(255,255,255,0) 70%);
+}
+.hero-circle-a{
+  position:absolute;top:-34px;right:-20px;width:260px;height:260px;border-radius:50%;
+  background:rgba(255,255,255,.07);pointer-events:none;
+}
+.hero-circle-b{
+  position:absolute;bottom:-48px;right:-26px;width:152px;height:152px;border-radius:50%;
+  background:rgba(255,255,255,.05);pointer-events:none;
+}
+.hero-inner{
+  position:relative;height:100%;padding:0 var(--sp-8);
+  display:flex;align-items:center;gap:var(--sp-8);
+}
+.hero-left{flex:1 1 auto;min-width:0;}
+.gold-rule{
+  width:36px;height:2px;border-radius:2px;margin-bottom:14px;
+  background:linear-gradient(90deg,var(--gold),var(--gold-light));
+}
+.hero-title{
+  font-size:var(--fs-hero);font-weight:600;color:var(--on-dark);
+  letter-spacing:-.4px;line-height:34px;
+}
+.hero-sub{
+  margin-top:10px;font-size:var(--fs-body);line-height:22px;
+  color:var(--on-dark-muted);letter-spacing:.1px;
+}
+.hero-metas{margin-top:18px;display:flex;align-items:center;gap:var(--sp-3);}
+.meta-pill{
+  height:30px;padding:0 11px;display:inline-flex;align-items:center;
+  border-radius:var(--r-pill);
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.18);
+  color:var(--on-dark);font-size:var(--fs-meta);font-weight:500;white-space:nowrap;
+}
+.meta-pill.is-active{              /* 选中态：稍亮底 + 实边，表达当前上下文 */
+  background:rgba(255,255,255,.20);border-color:rgba(255,255,255,.30);
+}
+.hero-rule{width:1px;height:104px;background:rgba(255,255,255,.14);flex:none;}
+.hero-right{width:264px;flex:none;}
+.status-row{
+  display:flex;align-items:center;gap:10px;height:34px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.status-row:last-child{border-bottom:0;}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--online-dot);flex:none;}
+.status-text{font-size:13px;font-weight:500;color:var(--on-dark);}
+.status-label{font-size:11px;color:var(--on-dark-muted);width:60px;flex:none;letter-spacing:.3px;}
+.status-value{font-size:12.5px;color:var(--on-dark);}
+.status-todo{font-size:12.5px;font-weight:500;color:var(--todo-on-dark);}
+
+/* ---------- 5.2 功能卡 FeatureGrid ---------- */
+.grid{
+  flex:none;
+  display:grid;grid-template-columns:repeat(2,1fr);gap:var(--sp-4);
+}
+.card{
+  position:relative;height:188px;padding:22px;overflow:hidden;
+  border-radius:var(--r-xl);cursor:pointer;
+  display:flex;flex-direction:column;
+  border:1px solid transparent;
+  transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;
+}
+/* 功能左上角柔光洗色：由 family ink 极低透明度雾化而来，非对比色块 */
+.card::before{
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:radial-gradient(170px 150px at calc(100% - 6px) -14px,var(--fwash),rgba(255,255,255,0) 72%);
+}
+.card-inner{position:relative;display:flex;flex-direction:column;height:100%;}
+
+/* 四大功能配色 —— GlobalNavDrawer.kt / paletteOf() 同色系 */
+.c-write{ /* 智能写作 */
+  --fs:var(--write-start); --fe:var(--write-end);
+  --fsoft:var(--write-soft); --fink:var(--write-ink);
+  --frest:rgba(21,53,101,.10);  /* FeatureWriteInk @10% */
+  --fhover:rgba(21,53,101,.26); /* FeatureWriteInk @26% */
+  --fshadow:rgba(21,53,101,.28);
+  --fwash:rgba(21,53,101,.055);
+}
+.c-tpl{   /* 模板中心 */
+  --fs:var(--tpl-start); --fe:var(--tpl-end);
+  --fsoft:var(--tpl-soft); --fink:var(--tpl-ink);
+  --frest:rgba(10,71,55,.10);  --fhover:rgba(10,71,55,.26);
+  --fshadow:rgba(10,71,55,.26); --fwash:rgba(10,71,55,.055);
+}
+.c-ppt{   /* PPT 助手 */
+  --fs:var(--ppt-start); --fe:var(--ppt-end);
+  --fsoft:var(--ppt-soft); --fink:var(--ppt-ink);
+  --frest:rgba(52,36,92,.10);  --fhover:rgba(52,36,92,.26);
+  --fshadow:rgba(52,36,92,.28); --fwash:rgba(52,36,92,.055);
+}
+.c-chk{   /* 格式校验 */
+  --fs:var(--chk-start); --fe:var(--chk-end);
+  --fsoft:var(--chk-soft); --fink:var(--chk-ink);
+  --frest:rgba(110,69,12,.10); --fhover:rgba(110,69,12,.26);
+  --fshadow:rgba(110,69,12,.26); --fwash:rgba(110,69,12,.055);
+}
+
+/* 静止态：tonal 浅底（由 fsoft 向 Surface 过渡），功能色只留在图标块与文字 */
+.card{
+  background:linear-gradient(158deg,var(--fsoft) 0%, #FFFFFF 54%);
+  border-color:var(--frest);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.60),
+    0 1px 2px rgba(16,28,46,.05),
+    0 6px 14px -12px rgba(16,28,46,.16);
+}
+/* hover / selected：抬升 3dp（elevFloat）+ 功能色实边 + 染色投影 */
+.card:hover,.card.is-hover{
+  transform:translateY(-3px);
+  border-color:var(--fhover);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.75),
+    0 2px 4px rgba(16,28,46,.05),
+    0 14px 28px -14px var(--fshadow);
+}
+
+.tile{
+  width:46px;height:46px;border-radius:var(--r-lg);flex:none;
+  background:linear-gradient(135deg,var(--fs),var(--fe));
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.26), 0 6px 14px -8px var(--fshadow);
+}
+.card-title{
+  margin-top:auto;                     /* 对应 Spacer(weight 1f) */
+  font-size:var(--fs-title);font-weight:600;color:var(--fink);
+  letter-spacing:-.2px;line-height:26px;
+}
+.card-desc{
+  margin-top:6px;font-size:var(--fs-desc);line-height:18px;color:var(--ink2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.card-foot{margin-top:12px;height:24px;display:flex;align-items:center;gap:var(--sp-2);}
+.cta{
+  height:26px;padding:0 10px;display:inline-flex;align-items:center;
+  border-radius:var(--r-pill);background:var(--fsoft);
+  color:var(--fink);font-size:var(--fs-meta);font-weight:500;
+  transition:background .18s ease;
+}
+.card:hover .cta,.card.is-hover .cta{background:#FFFFFF;box-shadow:0 0 0 1px var(--frest) inset;}
+.card-arrow{font-size:14px;color:var(--fink);transition:transform .18s ease;}
+.card:hover .card-arrow,.card.is-hover .card-arrow{transform:translateX(6px);}
+
+/* ---------- 5.3 本科室常用任务 DeptTasksBlock ---------- */
+.tasks{
+  flex:none;height:184px;padding:var(--sp-4) var(--sp-5);
+  background:var(--surface);border:1px solid var(--line-subtle);
+  border-radius:var(--r-lg);
+  box-shadow:0 1px 2px rgba(16,28,46,.04), 0 8px 20px -18px rgba(16,28,46,.22);
+}
+.tasks-head{height:18px;display:flex;align-items:center;gap:var(--sp-2);}
+.tasks-bar{width:3px;height:14px;border-radius:var(--r-pill);background:var(--ok);flex:none;}
+.tasks-title{font-size:var(--fs-item);font-weight:600;color:var(--ink);line-height:18px;}
+.tasks-note{font-size:var(--fs-tiny);color:var(--muted);line-height:18px;}
+.tasks-list{margin-top:10px;display:flex;flex-direction:column;gap:var(--sp-2);}
+.task-row{
+  height:36px;padding:0 var(--sp-4);display:flex;align-items:center;gap:var(--sp-3);
+  border-radius:var(--r-md);cursor:pointer;
+  background:var(--surface-tonal);border:1px solid var(--line-subtle);
+  transition:background .16s ease,border-color .16s ease;
+}
+.task-row:hover,.task-row.is-hover{   /* HomeScreen.kt 中的 hover 取值 */
+  background:var(--write-soft);border-color:var(--line);
+}
+.task-dot{width:6px;height:6px;border-radius:50%;background:var(--write-ink);flex:none;}
+/* 条目文案由后端下发，此处以骨架占位，不臆造 */
+.task-skeleton{height:10px;border-radius:5px;background:var(--line-strong);flex:none;}
+.task-go{margin-left:auto;font-size:var(--fs-tiny);color:var(--write-ink);flex:none;}
+</style>
+</head>
+
+<body>
+<!-- 图标：全部内联 SVG -->
+<svg class="sprite" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-bank" viewBox="0 0 24 24"><path d="M4 10v7h3v-7H4zm6 0v7h3v-7h-3zM2 22h19v-3H2v3zm14-12v7h3v-7h-3zm-4.5-9L2 6v2h19V6l-9.5-5z"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></symbol>
+  <symbol id="i-groups" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05.02.01.03.03.04.04 1.14.83 1.93 1.94 1.93 3.41V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.9959.9959 0 0 0 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></symbol>
+</defs></svg>
+
+<div class="app">
+
+  <!-- ======================= Header（AppHeader） ======================= -->
+  <header class="header">
+    <div class="header-inner">
+
+      <!-- 品牌区：徽标 + 平台名 + 当前业务位置 -->
+      <div class="brand">
+        <div class="logo"><svg class="ico"><use href="#i-bank"/></svg></div>
+        <div>
+          <div class="brand-title">白云司法局智慧办公平台</div>
+          <div class="crumb">
+            <span class="crumb-pos">工作台</span>
+            <span class="crumb-dot"></span>
+            <span class="crumb-dept">
+              <svg class="ico"><use href="#i-groups"/></svg>办公室
+            </span>
+          </div>
+        </div>
+        <svg class="ico brand-arrow"><use href="#i-chevron"/></svg>
+      </div>
+
+      <!-- 导航入口按钮：静态呈现 hover 态（取自 HeaderIconButton 的 hover 取值） -->
+      <div class="icon-btn is-hover"><svg class="ico"><use href="#i-menu"/></svg></div>
+
+      <div class="spacer"></div>
+
+      <!-- 全局搜索 -->
+      <div class="search">
+        <svg class="ico"><use href="#i-search"/></svg>
+        <input class="search-input" placeholder="搜索功能，例如：模板、审批、PPT" />
+      </div>
+
+      <div class="spacer"></div>
+
+      <!-- 待办状态 -->
+      <div class="pill-todo">3 项待办</div>
+
+      <!-- 个人中心 -->
+      <div class="personal">
+        <svg class="ico"><use href="#i-person"/></svg>个人中心
+      </div>
+
+      <div class="h-divider"></div>
+
+      <!-- 用户身份 -->
+      <div class="user">
+        <div class="avatar">用</div>
+        <div>
+          <div class="user-name">用户</div>
+          <div class="user-role">拟稿人</div>
+        </div>
+        <svg class="ico user-arrow"><use href="#i-chevron"/></svg>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ======================= 内容区（HomeScreen） ======================= -->
+  <main class="main">
+    <div class="home-col">
+
+      <!-- ---------- 欢迎条 WelcomeBand ---------- -->
+      <section class="hero">
+        <div class="hero-wash"></div>
+        <div class="hero-circle-a"></div>
+        <div class="hero-circle-b"></div>
+
+        <div class="hero-inner">
+          <div class="hero-left">
+            <div class="gold-rule"></div>
+            <div class="hero-title">下午好，用户</div>
+            <div class="hero-sub">今天有什么需要处理？本科室助手已按你的所属科室准备就绪。</div>
+            <div class="hero-metas">
+              <span class="meta-pill is-active">2026年9月22日&nbsp;&nbsp;星期二</span>
+              <span class="meta-pill">办公室</span>
+              <span class="meta-pill">拟稿人</span>
+            </div>
+          </div>
+
+          <div class="hero-rule"></div>
+
+          <div class="hero-right">
+            <div class="status-row">
+              <span class="status-dot"></span>
+              <span class="status-text">AI 助手在线</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">本科室助手</span>
+              <span class="status-value">办公室助手</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">待办</span>
+              <span class="status-todo">3 项待办</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- 2×2 四大功能卡 FeatureGrid ---------- -->
+      <section class="grid">
+
+        <!-- 智能写作：静态呈现 hover 态 -->
+        <article class="card c-write is-hover">
+          <div class="card-inner">
+            <div class="tile"><svg class="ico" style="width:24px;height:24px"><use href="#i-edit"/></svg></div>
+            <h3 class="card-title">智能写作</h3>
+            <p class="card-desc">描述工作，助手按本科室口径成稿</p>
+            <div class="card-foot">
+              <span class="cta">开始使用</span>
+              <span class="card-arrow">→</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- 模板中心 -->
+        <article class="card c-tpl">
+          <div class="card-inner">
+            <div class="tile"><svg class="ico" style="width:24px;height:24px"><use href="#i-star"/></svg></div>
+            <h3 class="card-title">模板中心</h3>
+            <p class="card-desc">系统模板 · 科室模板 · 我的模板</p>
+            <div class="card-foot">
+              <span class="cta">开始使用</span>
+              <span class="card-arrow">→</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- PPT 助手 -->
+        <article class="card c-ppt">
+          <div class="card-inner">
+            <div class="tile"><svg class="ico" style="width:24px;height:24px"><use href="#i-play"/></svg></div>
+            <h3 class="card-title">PPT 助手</h3>
+            <p class="card-desc">从材料生成汇报演示文稿</p>
+            <div class="card-foot">
+              <span class="cta">开始使用</span>
+              <span class="card-arrow">→</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- 格式校验 -->
+        <article class="card c-chk">
+          <div class="card-inner">
+            <div class="tile"><svg class="ico" style="width:24px;height:24px"><use href="#i-check"/></svg></div>
+            <h3 class="card-title">格式校验</h3>
+            <p class="card-desc">公文规范逐条检查</p>
+            <div class="card-foot">
+              <span class="cta">开始使用</span>
+              <span class="card-arrow">→</span>
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- ---------- 本科室常用任务 DeptTasksBlock ---------- -->
+      <section class="tasks">
+        <div class="tasks-head">
+          <span class="tasks-bar"></span>
+          <span class="tasks-title">本科室常用任务</span>
+          <span class="tasks-note">由本科室助手下发</span>
+        </div>
+        <div class="tasks-list">
+          <div class="task-row">
+            <span class="task-dot"></span>
+            <span class="task-skeleton" style="width:46%"></span>
+            <span class="task-go">开始 →</span>
+          </div>
+          <!-- 静态呈现 hover 态（取自 HomeScreen.kt 的 hover 取值） -->
+          <div class="task-row is-hover">
+            <span class="task-dot"></span>
+            <span class="task-skeleton" style="width:34%"></span>
+            <span class="task-go">开始 →</span>
+          </div>
+          <div class="task-row">
+            <span class="task-dot"></span>
+            <span class="task-skeleton" style="width:52%"></span>
+            <span class="task-go">开始 →</span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

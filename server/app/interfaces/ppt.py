@@ -10,6 +10,7 @@ from app.application.ppt.dto import (
     BlankIn,
     CloudCfgIn,
     CloudGenIn,
+    DocRenameIn,
     DraftIn,
     GenerateIn,
     ImportUrlIn,
@@ -189,6 +190,14 @@ def copy_document(doc_id: str, user: User = Depends(get_current_user),
 def toggle_doc_favorite(doc_id: str, user: User = Depends(get_current_user),
                       svc: PPTService = Depends(get_ppt_service)):
     return svc.toggle_doc_favorite(doc_id, user)
+
+
+@router.patch("/documents/{doc_id}")
+def rename_document(doc_id: str, body: DocRenameIn,
+                    user: User = Depends(get_current_user),
+                    svc: PPTService = Depends(get_ppt_service)):
+    """重命名自己的 PPT 文档；他人的一律 404。"""
+    return svc.rename_document(doc_id, user, body.title)
 
 
 @router.delete("/documents/{doc_id}")

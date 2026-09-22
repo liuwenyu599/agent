@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.application.chat.attachment_service import AttachmentService
 from app.application.chat.docx_export import generate_official_document, markdown_to_docx
-from app.application.chat.dto import ChatRequest, ChatResponse, ExportRequest, OfficialExportRequest
+from app.application.chat.dto import (
+    ChatRequest,
+    ChatResponse,
+    ExportRequest,
+    OfficialExportRequest,
+    SessionRenameRequest,
+)
 from app.application.chat.service import ChatService
 from app.application.knowledge.rag_service import RagService
 from app.application.shared.writing_assistant import WritingAssistant
@@ -153,6 +159,37 @@ def get_messages(session_id: str, user: User = Depends(get_current_user),
         "sources": m.sources, "attachments": m.attachments or [],
         "created_at": m.created_at,
     } for m in messages]
+
+
+@router.patch("/sessions/{session_id}")
+def rename_session(session_id: str, req: SessionRenameRequest,
+                   user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """重命名自己的会话；他人的会话一律 404（不泄露存在性）。"""
+    sessions = SqlAlchemyChatSessionRepository(db)
+    if not sessions.get_for_user(session_id, user.id):
+        raise NotFoundError("会话不存在")
+    title = (req.title or "").strip()
+    if not title:
+        raise AppError(422, "会话标题不能为空")
+    if len(title) > 200:
+        raise AppError(422, "会话标题不能超过 200 字")
+    row = sessions.get_model(session_id)
+    row.title = title
+    db.commit()
+    return {"id": row.id, "title": row.title, "created_at": row.created_at}
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """删除自己的会话（级联删除其消息与附件由 ORM 关系负责）。"""
+    sessions = SqlAlchemyChatSessionRepository(db)
+    session = sessions.get_for_user(session_id, user.id)
+    if not session:
+        raise NotFoundError("会话不存在")
+    sessions.delete(session)
+    return {"ok": True}
 
 
 # ========== 管理员接口 ==========

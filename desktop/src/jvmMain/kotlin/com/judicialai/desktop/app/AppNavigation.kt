@@ -88,14 +88,13 @@ object AppNav {
     val businessItems: List<NavItem> = listOf(
         NavItem(AppScreen.KNOWLEDGE, desc = "公共 + 本科室 + 个人知识"),
         NavItem(AppScreen.APPROVAL, desc = "待办、我发起的、已处理"),
-        NavItem(AppScreen.CHAT, desc = "历史对话与写作记录"),
+        NavItem(AppScreen.CHAT, desc = "我生成的对话、文档与 PPT"),
     )
 
-    /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档 / 4 会话 / 5 审批配置） */
+    /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档 / 4 审批配置） */
     val adminItems: List<NavItem> = listOf(
         NavItem(AppScreen.ADMIN, "用户与组织", Icons.Default.Group, "账号、科室与角色", adminTab = 1),
-        NavItem(AppScreen.ADMIN, "公文与审批配置", Icons.Default.Tune, "流转环节与规则", adminTab = 5),
-        NavItem(AppScreen.ADMIN, "审计与统计", Icons.Default.History, "会话与文档台账", adminTab = 4),
+        NavItem(AppScreen.ADMIN, "公文与审批配置", Icons.Default.Tune, "流转环节与规则", adminTab = 4),
         NavItem(AppScreen.TRAINING, desc = "语料、样本与数据集"),
     )
 

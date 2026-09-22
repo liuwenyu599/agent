@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.arr
@@ -45,7 +46,14 @@ import com.judicialai.desktop.design.components.LoadingView
 @Composable
 fun DocumentsScreen() {
     val vm = remember { DocumentsViewModel(Repositories.documents) }
-    LaunchedEffect(Unit) { vm.refresh() }
+    LaunchedEffect(Unit) {
+        vm.refresh()
+        // 历史记录「继续」带过来的文档 id：打开这一条后用完即清，避免下次进页面又自动打开
+        AppState.pendingDocumentId?.let { id ->
+            AppState.pendingDocumentId = null
+            vm.open(id)
+        }
+    }
 
     Row(Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         // 左：文档列表

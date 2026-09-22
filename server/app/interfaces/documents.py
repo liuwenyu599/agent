@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.application.chat.docx_export import generate_official_document
 from app.application.documents.dto import (
     DocumentCreateRequest,
+    DocumentRenameRequest,
     DocumentSaveRequest,
 )
 from app.application.documents.service import DocumentService
@@ -62,6 +63,17 @@ def save_document_version(
     svc: DocumentService = Depends(get_document_service),
 ):
     return svc.save_version(doc_id, user.id, req)
+
+
+@router.patch("/{doc_id}")
+def rename_document(
+    doc_id: str,
+    req: DocumentRenameRequest,
+    user: User = Depends(get_current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """重命名自己的文档：只改标题，不产生新版本。"""
+    return svc.rename_document(doc_id, user.id, req.title)
 
 
 @router.get("/{doc_id}/versions/{version_no}")

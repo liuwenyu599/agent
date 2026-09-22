@@ -41,6 +41,17 @@ class ChatService:
         self.memory = MemoryService(assistant)
         self.intent = IntentService(assistant)
 
+    def _user_preference_block(self, user_id: str) -> Optional[str]:
+        """读取用户个人偏好块；无偏好或解析异常时返回 None（不阻断对话）。"""
+        if not user_id:
+            return None
+        try:
+            from app.application.shared.user_preference import UserPreferenceService
+            return UserPreferenceService(self.db).prompt_block_of(user_id) or None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[对话] 读取用户偏好失败，已跳过该层: %s", e)
+            return None
+
     def _load_reference_template(self, template_id: Optional[str]) -> Optional[dict]:
         """加载对话中选择的参考模板。找不到/已停用则返回 None。"""
         if not template_id:
@@ -104,6 +115,11 @@ class ChatService:
 
         history_messages = self.memory.get_session_context(session.id, self.db)
 
+        # 第 5 层【用户个人偏好】：服务端按登录用户读取，不接受客户端传值。
+        # 对话链路只在此注入一次；写作工作台链路经 agent_system_prompt() 注入，
+        # 两条链路互不叠加。
+        user_preference = self._user_preference_block(user.id)
+
         # 写作类请求的信息完整度判断（模板表单模式跳过）
         clarify_reply = None
         if not system_prompt:
@@ -150,6 +166,7 @@ class ChatService:
                 reference_template=reference_template,
                 task_reference_context=task_reference_context,
                 template_reference_context=template_reference_context,
+                user_preference=user_preference,
             )
 
         # ---- 智能写作流水线（仅写作类请求，自动质检，不影响普通问答）----
@@ -177,6 +194,7 @@ class ChatService:
                     task_reference_context=task_reference_context,
                     template_reference_context=template_reference_context,
                     user=user,
+                    user_preference=user_preference,
                 )
             # 自动落草稿：生成结果即成为"我的文档"中的版本 1，可在线编辑/存版本/导出
             document_id = self._auto_save_draft(
@@ -224,7 +242,8 @@ class ChatService:
                           system_prompt, template_category,
                           attachment_context, reference_template,
                           task_reference_context,
-                          template_reference_context, user: User) -> tuple:
+                          template_reference_context, user: User,
+                          user_preference: Optional[str] = None) -> tuple:
         """后处理 → 质量门 → 内容校验 → D 级自动重试一次。
 
         返回 (最终文本, 文号, 成文日期, quality, content_check, events)。
@@ -271,6 +290,7 @@ class ChatService:
                     reference_template=reference_template,
                     task_reference_context=task_reference_context,
                     template_reference_context=template_reference_context,
+                    user_preference=user_preference,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[写作流水线] 重试生成失败: %s", e)

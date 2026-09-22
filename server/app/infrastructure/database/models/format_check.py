@@ -13,6 +13,9 @@ class FormatRuleModel(Base, IdMixin):
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     target: Mapped[str] = mapped_column(String(30), nullable=False)
+    # 规则集标识：由 004 upgrade 建列（String(30) nullable server_default='gb9704'），
+    # ORM 必须有映射，否则 seed_v3 传 ruleset= 会 AttributeError 并被 run_all 静默吞掉。
+    ruleset: Mapped[Optional[str]] = mapped_column(String(30), server_default="gb9704")
     checks: Mapped[dict] = mapped_column(JSON, nullable=False)
     severity: Mapped[str] = mapped_column(String(10), default="error")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -35,3 +38,6 @@ class FormatCheckRecordModel(Base, IdMixin):
     rule_issue_count: Mapped[int] = mapped_column(Integer, default=0)
     ai_issue_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # 审校工作台状态（迁移 009 新增 TEXT 列，内容存 JSON 整数数组，如 "[1,3]"）
+    applied_ids: Mapped[Optional[str]] = mapped_column(Text)
+    resolved_ids: Mapped[Optional[str]] = mapped_column(Text)

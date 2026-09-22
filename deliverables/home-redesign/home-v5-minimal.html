@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>工作台 · 首页重设计（简化 2×2）</title>
+<!--
+  白云司法局智慧办公平台 · 工作台首页 v5 重设计稿（网页预览）
+
+  设计纪律：页面上只有三样东西
+    1) Header 品牌栏
+    2) 欢迎语（一句主标题 + 一句弱副句）
+    3) 2×2 四大功能卡
+  其余一律删除：无日期 Chip、无科室/角色 Pill、无 Agent 状态、无待办数、无常用任务块。
+  底部大面积留白是设计意图，不是未完成。
+
+  配色全部取自 design/theme/Color.kt，尺寸取自 design/theme/Dimens.kt。
+-->
+<style>
+:root{
+  /* 品牌锚点 —— Color.kt */
+  --navy:#0E1F38; --primary:#1B3B62; --primary-deep:#2C5C90;
+  --brand-start:#0F2138; --brand-mid:#1B3B62; --brand-end:#2E5C8A;
+  /* 表面层级 */
+  --app-bg:#F3F6FA; --surface-deep:#EDF1F7; --surface-tonal:#F7F9FD; --surface:#FFFFFF;
+  /* 描边层级 */
+  --line-subtle:#F0F3F8; --line:#E2E8F0; --line-strong:#CBD5E1;
+  /* 文本层级 */
+  --ink:#101C2E; --ink2:#43536B; --muted:#78859A; --muted2:#9BA6B8;
+  /* 功能色（soft 底 / ink 字 / accent 线）—— Color.kt Feature* */
+  --write-soft:#E8EEF9; --write-ink:#153565; --write-accent:#3C61A8;
+  --tpl-soft:#E3F1EC;   --tpl-ink:#0A4737;   --tpl-accent:#17876A;
+  --ppt-soft:#EDE9F7;   --ppt-ink:#34245C;   --ppt-accent:#6A51A8;
+  --chk-soft:#FAF1E1;   --chk-ink:#6E450C;   --chk-accent:#B07C22;
+  /* 尺寸 —— Dimens.kt */
+  --header-h:64px;
+  --r-md:12px; --r-lg:16px; --r-sheet:24px; --r-pill:999px;
+  --home-max:1160px;
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  min-height:100vh;
+  background:var(--app-bg);
+  color:var(--ink);
+  font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  letter-spacing:.1px;
+}
+/* 顶部极淡的品牌光晕：不是 Banner，只是让白底有纵深 */
+body::before{
+  content:""; position:fixed; inset:0 0 auto 0; height:260px; pointer-events:none;
+  background:linear-gradient(180deg, rgba(27,59,98,.05) 0%, rgba(27,59,98,.015) 45%, rgba(243,246,250,0) 100%);
+}
+
+/* ============================ Header ============================ */
+.header{
+  position:relative; height:var(--header-h); background:var(--surface);
+  border-bottom:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(15,27,46,.03);
+}
+.header-inner{
+  max-width:1440px; height:100%; margin:0 auto; padding:0 40px;
+  display:flex; align-items:center; gap:16px;
+}
+.brand{display:flex; align-items:center; gap:12px; padding:6px 8px; border-radius:var(--r-md); cursor:pointer;}
+.brand:hover{background:var(--surface-deep);}
+.logo{
+  width:36px; height:36px; border-radius:var(--r-md); flex:none;
+  background:linear-gradient(135deg,var(--brand-start),var(--brand-end));
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 2px 6px rgba(14,31,56,.18);
+}
+.logo svg{width:20px;height:20px;fill:#fff;}
+.brand-title{font-size:14.5px; font-weight:600; letter-spacing:.3px;}
+.crumb{margin-top:2px; display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--muted);}
+.crumb-dept{display:flex; align-items:center; gap:3px; color:var(--write-ink); font-weight:500;}
+.crumb-dept svg{width:12px;height:12px;fill:var(--write-ink);}
+.crumb-dot{width:3px;height:3px;border-radius:50%;background:var(--line-strong);}
+.ico{width:18px;height:18px;fill:var(--ink2);display:block;}
+
+.spacer{flex:1;}
+
+.search{
+  display:flex; align-items:center; gap:8px; width:280px; height:36px;
+  padding:0 14px; border-radius:var(--r-pill);
+  background:var(--surface-tonal); border:1px solid var(--line);
+  transition:border-color .18s, background .18s, box-shadow .18s;
+}
+.search:hover{border-color:var(--line-strong);}
+.search:focus-within{
+  background:#fff; border-color:var(--primary-deep);
+  box-shadow:0 0 0 3px rgba(44,92,144,.10);
+}
+.search svg{width:16px;height:16px;fill:var(--muted);flex:none;}
+.search input{
+  flex:1; min-width:0; border:0; outline:0; background:transparent;
+  font:12.5px/1 inherit; color:var(--ink);
+}
+.search input::placeholder{color:var(--muted2);}
+
+.personal{
+  display:flex; align-items:center; gap:6px; height:36px; padding:0 12px;
+  border-radius:var(--r-pill); border:1px solid var(--line); background:#fff;
+  font-size:12.5px; color:var(--ink2); cursor:pointer;
+  transition:border-color .18s, color .18s, background .18s;
+}
+.personal:hover{border-color:var(--line-strong); color:var(--primary); background:var(--surface-tonal);}
+.personal svg{width:16px;height:16px;fill:currentColor;}
+
+.h-divider{width:1px;height:24px;background:var(--line);}
+
+.user{display:flex; align-items:center; gap:10px; padding:4px 8px 4px 4px; border-radius:var(--r-pill); cursor:pointer;}
+.user:hover{background:var(--surface-deep);}
+.avatar{
+  width:32px;height:32px;border-radius:50%;flex:none;
+  background:linear-gradient(135deg,var(--brand-mid),var(--brand-end));
+  color:#fff; font-size:13px; font-weight:600;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 1px 3px rgba(14,31,56,.20);
+}
+.user-name{font-size:13px;font-weight:500;line-height:1.2;}
+.user-role{font-size:11px;color:var(--muted);line-height:1.2;margin-top:2px;}
+
+/* ============================ 内容区 ============================ */
+.main{
+  position:relative; max-width:var(--home-max); margin:0 auto;
+  padding:72px 24px 0;
+}
+
+/* 欢迎语：页面上第二项，之后什么都没有 */
+.greet-title{
+  margin:0; font-size:30px; font-weight:600; color:var(--ink);
+  letter-spacing:-.2px; line-height:1.25;
+}
+.greet-sub{
+  margin:10px 0 0; font-size:13px; color:var(--muted); line-height:1.6;
+}
+
+/* 2×2 */
+.grid{
+  margin-top:56px; display:grid; grid-template-columns:repeat(2,1fr); gap:24px;
+}
+.card{
+  position:relative; height:210px; padding:28px; overflow:hidden;
+  background:linear-gradient(180deg,#FFFFFF 0%, var(--surface-tonal) 100%);
+  border:1px solid var(--line); border-radius:var(--r-sheet);
+  cursor:pointer;
+  display:flex; flex-direction:column;
+  transition:transform .22s cubic-bezier(.2,.7,.3,1), box-shadow .22s cubic-bezier(.2,.7,.3,1), border-color .22s;
+  box-shadow:0 1px 2px rgba(15,27,46,.04);
+}
+/* 卡片顶部那条彩色细线 —— 唯一的显性彩色，其余全灰 */
+.card::before{
+  content:""; position:absolute; top:0; left:0; right:0; height:3px;
+  background:var(--accent); border-radius:var(--r-sheet) var(--r-sheet) 0 0; opacity:.85;
+  transition:opacity .22s;
+}
+.card:hover{
+  transform:translateY(-3px);
+  border-color:var(--line-strong);
+  box-shadow:0 8px 24px rgba(15,27,46,.10), 0 2px 6px rgba(15,27,46,.05);
+}
+.card:hover::before{opacity:1;}
+
+.tile{
+  width:46px; height:46px; border-radius:var(--r-lg); flex:none;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--soft);
+}
+.tile svg{width:24px;height:24px;fill:var(--inkc);}
+
+.card-title{margin:20px 0 0; font-size:18px; font-weight:600; letter-spacing:.2px;}
+.card-desc{margin:8px 0 0; font-size:12.5px; color:var(--ink2); line-height:1.5;}
+
+.card-foot{margin-top:auto; display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:var(--inkc);}
+.card-foot .arrow{transition:transform .22s cubic-bezier(.2,.7,.3,1);}
+.card:hover .card-foot .arrow{transform:translateX(5px);}
+
+.c-write{--soft:var(--write-soft); --inkc:var(--write-ink); --accent:var(--write-accent);}
+.c-tpl  {--soft:var(--tpl-soft);   --inkc:var(--tpl-ink);   --accent:var(--tpl-accent);}
+.c-ppt  {--soft:var(--ppt-soft);   --inkc:var(--ppt-ink);   --accent:var(--ppt-accent);}
+.c-chk  {--soft:var(--chk-soft);   --inkc:var(--chk-ink);   --accent:var(--chk-accent);}
+
+/* 底部留白：刻意不做任何东西 */
+.tail{height:176px;}
+
+@media (max-width:1160px){
+  .grid{grid-template-columns:1fr;}
+  .main{padding-top:56px;}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-bank" viewBox="0 0 24 24"><path d="M4 10v7h3v-7H4zm6 0v7h3v-7H9zm-4.5-9L2 6v2h19V6l-9.5-5zM2 22h19v-3H2v3zm14-12v7h3v-7h-3z"/></symbol>
+  <symbol id="i-groups" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05.02.01.03.03.04.04 1.14.83 1.93 1.94 1.93 3.41V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></symbol>
+</defs></svg>
+
+<header class="header">
+  <div class="header-inner">
+    <div class="brand">
+      <div class="logo"><svg><use href="#i-bank"/></svg></div>
+      <div>
+        <div class="brand-title">白云司法局智慧办公平台</div>
+        <div class="crumb">
+          <span>工作台</span>
+          <span class="crumb-dot"></span>
+          <span class="crumb-dept"><svg><use href="#i-groups"/></svg>行政复议应诉综合科</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input placeholder="搜索功能，例如：模板、审批、PPT" />
+    </div>
+
+    <div class="personal"><svg><use href="#i-person"/></svg>个人中心</div>
+    <div class="h-divider"></div>
+
+    <div class="user">
+      <div class="avatar">验</div>
+      <div>
+        <div class="user-name">UI验收</div>
+        <div class="user-role">系统管理员</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="main">
+  <h1 class="greet-title">下午好，UI验收</h1>
+  <p class="greet-sub">今天有什么需要处理？本科室助手已按你的所属科室准备就绪。</p>
+
+  <section class="grid">
+    <article class="card c-write">
+      <div class="tile"><svg><use href="#i-edit"/></svg></div>
+      <h3 class="card-title">智能写作</h3>
+      <p class="card-desc">描述工作，助手按本科室口径成稿</p>
+      <div class="card-foot">开始使用<span class="arrow"><svg style="width:14px;height:14px;fill:currentColor"><use href="#i-arrow"/></svg></span></div>
+    </article>
+
+    <article class="card c-tpl">
+      <div class="tile"><svg><use href="#i-star"/></svg></div>
+      <h3 class="card-title">模板中心</h3>
+      <p class="card-desc">系统模板 · 科室模板 · 我的模板</p>
+      <div class="card-foot">开始使用<span class="arrow"><svg style="width:14px;height:14px;fill:currentColor"><use href="#i-arrow"/></svg></span></div>
+    </article>
+
+    <article class="card c-ppt">
+      <div class="tile"><svg><use href="#i-play"/></svg></div>
+      <h3 class="card-title">PPT 助手</h3>
+      <p class="card-desc">从材料生成汇报演示文稿</p>
+      <div class="card-foot">开始使用<span class="arrow"><svg style="width:14px;height:14px;fill:currentColor"><use href="#i-arrow"/></svg></span></div>
+    </article>
+
+    <article class="card c-chk">
+      <div class="tile"><svg><use href="#i-check"/></svg></div>
+      <h3 class="card-title">格式校验</h3>
+      <p class="card-desc">公文规范逐条检查</p>
+      <div class="card-foot">开始使用<span class="arrow"><svg style="width:14px;height:14px;fill:currentColor"><use href="#i-arrow"/></svg></span></div>
+    </article>
+  </section>
+
+  <div class="tail"></div>
+</main>
+
+</body>
+</html>

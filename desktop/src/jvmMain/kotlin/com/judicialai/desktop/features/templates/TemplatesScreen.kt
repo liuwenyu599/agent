@@ -1,6 +1,7 @@
 package com.judicialai.desktop.features.templates
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,29 +16,20 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
-import androidx.compose.material.Button
-import androidx.compose.material.ButtonDefaults
-import androidx.compose.material.Card
-import androidx.compose.material.CircularProgressIndicator
-import androidx.compose.material.Divider
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
-import androidx.compose.material.TextButton
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,456 +52,622 @@ import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
-import com.judicialai.desktop.design.theme.EpDanger
-import com.judicialai.desktop.design.theme.EpPrimary
-import com.judicialai.desktop.design.theme.EpWarning
-import com.judicialai.desktop.design.theme.HoverBlue
-import com.judicialai.desktop.design.theme.QuickBlue
-import com.judicialai.desktop.design.theme.QuickBlueBg
-import com.judicialai.desktop.design.theme.QuickGreen
-import com.judicialai.desktop.design.theme.QuickGreenBg
-import com.judicialai.desktop.design.theme.QuickOrange
-import com.judicialai.desktop.design.theme.QuickOrangeBg
-import com.judicialai.desktop.design.theme.QuickPurple
-import com.judicialai.desktop.design.theme.QuickPurpleBg
-import com.judicialai.desktop.design.theme.QuickTeal
-import com.judicialai.desktop.design.theme.QuickTealBg
-import com.judicialai.desktop.design.theme.TextPrimary
-import com.judicialai.desktop.design.theme.TextRegular
-import com.judicialai.desktop.design.theme.TextSecondary
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.AppIconButton
+import com.judicialai.desktop.design.components.AppSearchField
+import com.judicialai.desktop.design.components.AppTextField
+import com.judicialai.desktop.design.components.ContextBlock
+import com.judicialai.desktop.design.components.DocumentSurface
+import com.judicialai.desktop.design.components.EmptyState
+import com.judicialai.desktop.design.components.FieldError
+import com.judicialai.desktop.design.components.FilterChip
+import com.judicialai.desktop.design.components.Hairline
+import com.judicialai.desktop.design.components.InlineNotice
+import com.judicialai.desktop.design.components.PageHeader
+import com.judicialai.desktop.design.components.SectionTitle
+import com.judicialai.desktop.design.components.TagChip
+import com.judicialai.desktop.design.theme.AiIndigo
+import com.judicialai.desktop.design.theme.AiSoft
+import com.judicialai.desktop.design.theme.AppBg
+import com.judicialai.desktop.design.theme.Dimens
+import com.judicialai.desktop.design.theme.EmeraldInk
+import com.judicialai.desktop.design.theme.EmeraldSoft
+import com.judicialai.desktop.design.theme.FeatureTemplateEnd
+import com.judicialai.desktop.design.theme.FeatureTemplateInk
+import com.judicialai.desktop.design.theme.FeatureTemplateSoft
+import com.judicialai.desktop.design.theme.FeatureTemplateStart
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.LineStrong
+import com.judicialai.desktop.design.theme.LineSubtle
+import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.Muted2
+import com.judicialai.desktop.design.theme.OnPrimaryText
+import com.judicialai.desktop.design.theme.Primary
+import com.judicialai.desktop.design.theme.PrimarySoft
+import com.judicialai.desktop.design.theme.Surface
+import com.judicialai.desktop.design.theme.SurfaceTonal
+import com.judicialai.desktop.design.theme.VioletInk
+import com.judicialai.desktop.design.theme.VioletSoft
 import kotlinx.serialization.json.JsonObject
 
-/** 公文助手（模板中心）：1:1 还原 Web TemplatesView + TemplateView */
+/**
+ * 模板中心（v4.0）
+ *
+ * 强化「系统模板 → 科室模板 → 我的模板」三层资产关系：
+ * 三层用可点击的资产卡表达，列表行带类型 / 归属 / 说明 / 使用情况，
+ * 右侧是真实模板结构预览，「AI 调整模板」是模板中心的重要能力而非重新生成。
+ */
 @Composable
 fun TemplatesScreen() {
     val vm = remember { TemplatesViewModel(Repositories.templates) }
     LaunchedEffect(Unit) { vm.load() }
 
-    val using = vm.usingTemplate
-    if (using != null) {
-        TemplateUseView(vm, using)
-    } else {
-        TemplateCenter(vm)
+    var search by remember { mutableStateOf("") }
+    var showCreate by remember { mutableStateOf(false) }
+    var showAdapt by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<JsonObject?>(null) }
+
+    val all = vm.shown()
+    val filtered = all.filter { t ->
+        search.isBlank() || t["name"].str().contains(search, true) ||
+            t["description"].str().contains(search, true) ||
+            t["category"].str().contains(search, true)
     }
+
+    Box(Modifier.fillMaxSize().background(AppBg)) {
+        Column(
+            Modifier.fillMaxSize()
+                .padding(horizontal = Dimens.space6, vertical = Dimens.space5),
+        ) {
+            PageHeader(
+                title = "模板中心",
+                subtitle = "系统模板为统一口径，科室模板按本科室写作习惯调整，我的模板为个人常用",
+                eyebrow = "写作资产",
+                actions = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                        AppButton("初始化内置模板", onClick = { vm.initBuiltin() },
+                            kind = AppButtonKind.SECONDARY)
+                        AppButton("新建模板", onClick = { showCreate = true },
+                            kind = AppButtonKind.PRIMARY)
+                    }
+                },
+            )
+
+            // 三层资产关系
+            TierRow(vm)
+
+            Spacer(Modifier.height(Dimens.space4))
+
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+                // 左：模板列表
+                Column(Modifier.weight(1f).fillMaxHeight()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                    ) {
+                        AppSearchField(
+                            value = search,
+                            onValueChange = { search = it },
+                            placeholder = "搜索模板名称 / 类型 / 说明",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Spacer(Modifier.height(Dimens.space3))
+                    if (vm.categories.isNotEmpty()) {
+                        Row(
+                            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                        ) {
+                            FilterChip("全部类型", vm.filterCat == null, onClick = { vm.filterCat = null })
+                            vm.categories.forEach { c ->
+                                FilterChip(c, vm.filterCat == c, onClick = { vm.filterCat = c })
+                            }
+                        }
+                        Spacer(Modifier.height(Dimens.space3))
+                    }
+                    if (filtered.isEmpty()) {
+                        EmptyState(
+                            text = "没有符合条件的模板",
+                            hint = "换个类型或关键词，或从内置模板初始化",
+                            icon = Icons.Default.LibraryBooks,
+                        )
+                    } else {
+                        Column(
+                            Modifier.fillMaxWidth().weight(1f)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(Dimens.space3),
+                        ) {
+                            filtered.forEach { t -> TemplateRow(vm, t, onAdapt = { showAdapt = true },
+                                onEdit = { editing = t }) }
+                            Spacer(Modifier.height(Dimens.space4))
+                        }
+                    }
+                }
+
+                // 右：结构预览
+                PreviewPane(vm, Modifier.width(420.dp).fillMaxHeight(),
+                    onAdapt = { showAdapt = true })
+            }
+        }
+    }
+
+    vm.status?.let {
+        Box(Modifier.padding(horizontal = Dimens.space6)) { FieldError(it) }
+    }
+
+    if (showCreate || editing != null) {
+        TemplateEditDialog(
+            editing = editing,
+            onDismiss = { showCreate = false; editing = null },
+            onSubmit = { body ->
+                vm.save(editing, body)
+                showCreate = false
+                editing = null
+            },
+        )
+    }
+
+    if (showAdapt) {
+        AdaptDialog(
+            vm = vm,
+            onDismiss = { showAdapt = false; vm.cancelDraft() },
+        )
+    }
+
+    vm.usingTemplate?.let { t -> UseDialog(vm, t) { vm.cancelUse() } }
 }
 
-/** 分类配色（对应 Web iconColor） */
-private fun catColor(cat: String): Pair<Color, Color> = when {
-    cat.contains("法定") || cat.contains("公文") -> QuickBlue to QuickBlueBg
-    cat.contains("工作") -> QuickGreen to QuickGreenBg
-    cat.contains("会议") -> QuickOrange to QuickOrangeBg
-    cat.contains("信息") || cat.contains("宣传") -> QuickPurple to QuickPurpleBg
-    else -> QuickTeal to QuickTealBg
+// ---------------- 三层资产 ----------------
+
+@Composable
+private fun TierRow(vm: TemplatesViewModel) {
+    val all = vm.templates
+    val counts = mapOf(
+        null to all.size,
+        "system" to all.count { vm.tierOf(it) == "system" },
+        "department" to all.count { vm.tierOf(it) == "department" },
+        "mine" to all.count { vm.tierOf(it) == "mine" },
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+        TierCard(
+            title = "系统模板", hint = "全局统一口径，所有科室可用",
+            count = counts["system"] ?: 0,
+            start = FeatureTemplateStart, end = FeatureTemplateEnd,
+            selected = vm.tier == "system",
+            modifier = Modifier.weight(1f),
+        ) { vm.tier = if (vm.tier == "system") null else "system" }
+        TierCard(
+            title = "科室模板", hint = "按${AppState.departmentName.ifBlank { "本科室" }}写作习惯调整",
+            count = counts["department"] ?: 0,
+            start = AiIndigo, end = Primary,
+            selected = vm.tier == "department",
+            modifier = Modifier.weight(1f),
+        ) { vm.tier = if (vm.tier == "department") null else "department" }
+        TierCard(
+            title = "我的模板", hint = "个人常用，仅本人可见",
+            count = counts["mine"] ?: 0,
+            start = VioletInk, end = VioletInk,
+            selected = vm.tier == "mine",
+            modifier = Modifier.weight(1f),
+        ) { vm.tier = if (vm.tier == "mine") null else "mine" }
+    }
+    if (vm.tier != null) {
+        Spacer(Modifier.height(Dimens.space2))
+        InlineNotice(
+            text = "已按「${
+                when (vm.tier) {
+                    "system" -> "系统模板"; "department" -> "科室模板"; else -> "我的模板"
+                }
+            }」筛选，点击该卡可取消",
+        )
+    }
 }
 
 @Composable
-private fun TemplateCenter(vm: TemplatesViewModel) {
-    var search by remember { mutableStateOf("") }
-    var onlyMine by remember { mutableStateOf(false) }
-    var selectedId by remember { mutableStateOf<String?>(null) }
-
-    val filtered = vm.templates.filter { t ->
-        (vm.filterCat == null || t["category"].str() == vm.filterCat) &&
-            (vm.tier == null || (t["tier"].str().ifBlank { "system" }) == vm.tier) &&
-            (search.isBlank() || t["name"].str().contains(search, true) ||
-                t["description"].str().contains(search, true))
+private fun TierCard(
+    title: String,
+    hint: String,
+    count: Int,
+    start: Color,
+    end: Color,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(Dimens.radiusLg)
+    Column(
+        modifier.clip(shape)
+            .background(if (selected) FeatureTemplateSoft else Surface)
+            .border(
+                1.dp,
+                if (selected) start.copy(alpha = 0.35f) else LineSubtle,
+                shape,
+            )
+            .clickable { onClick() }
+            .padding(Dimens.space4),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(30.dp).clip(RoundedCornerShape(Dimens.radiusSm))
+                    .background(Brush.linearGradient(listOf(start, end))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.LibraryBooks, null, tint = OnPrimaryText,
+                    modifier = Modifier.size(Dimens.iconSm))
+            }
+            Spacer(Modifier.width(Dimens.space2))
+            Text(title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+                modifier = Modifier.weight(1f))
+            Text("$count", fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                color = if (selected) FeatureTemplateInk else Ink)
+        }
+        Spacer(Modifier.height(Dimens.space2))
+        Text(hint, fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
     }
-    val selected = filtered.firstOrNull { it["id"].str() == selectedId }
+}
 
-    Column(Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        // 页头
+// ---------------- 列表行 ----------------
+
+@Composable
+private fun TemplateRow(
+    vm: TemplatesViewModel,
+    t: JsonObject,
+    onAdapt: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    val tier = vm.tierOf(t)
+    val selected = vm.selectedId == t["id"].str()
+    val (tierFg, tierBg, tierText) = when (tier) {
+        "department" -> Triple(AiIndigo, AiSoft, "科室模板")
+        "mine" -> Triple(VioletInk, VioletSoft, "我的模板")
+        else -> Triple(EmeraldInk, EmeraldSoft, "系统模板")
+    }
+    val shape = RoundedCornerShape(Dimens.radiusLg)
+
+    Column(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(if (selected) PrimarySoft else Surface)
+            .border(1.dp, if (selected) Primary.copy(alpha = 0.4f) else LineSubtle, shape)
+            .clickable { vm.select(t) }
+            .padding(Dimens.space4),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("模板中心", fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                    color = TextPrimary)
-                Text("选择合适的模板，作为智能写作和公文起草的格式参考。",
-                    fontSize = 13.sp, color = TextSecondary)
-            }
-            if (AppState.isAdmin) {
-                TextButton(onClick = { vm.initBuiltin() }) {
-                    Icon(Icons.Default.Refresh, null, tint = EpPrimary,
-                        modifier = Modifier.size(16.dp))
-                    Text("初始化内置模板", color = EpPrimary, fontSize = 13.sp)
-                }
-            }
-        }
-
-        // 搜索
-        OutlinedTextField(
-            value = search, onValueChange = { search = it },
-            placeholder = { Text("搜索模板名称或关键词，例如：请示、工作总结、会议通知…",
-                fontSize = 13.sp, color = TextSecondary) },
-            leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            colors = TextFieldDefaults.outlinedTextFieldColors(
-                focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
-        )
-
-        // 一级分类
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CategoryChip("全部", vm.filterCat == null) { vm.filterCat = null }
-            vm.categories.forEach { c ->
-                CategoryChip(c, vm.filterCat == c) { vm.filterCat = c }
-            }
-        }
-
-        // 模板归属：系统模板 / 我的模板（本科室模板由服务端按科室判定后下发）
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("归属", fontSize = 12.sp, color = TextSecondary)
-            TierChip("全部", vm.tier == null) { vm.tier = null }
-            TierChip("系统模板", vm.tier == "system") { vm.tier = "system" }
-            TierChip("本科室模板", vm.tier == "department") { vm.tier = "department" }
-            TierChip("我的模板", vm.tier == "mine") { vm.tier = "mine" }
-        }
-
-        // 列表 + 预览
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            // 左：模板列表
-            Card(Modifier.weight(1.2f).fillMaxHeight(), shape = RoundedCornerShape(8.dp),
-                elevation = 0.dp) {
-                Column {
-                    Text("模板列表（共 ${filtered.size} 个）",
-                        fontSize = 13.sp, color = TextSecondary,
-                        modifier = Modifier.padding(14.dp))
-                    Divider(color = Color(0xFFF2F4F8))
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        filtered.forEach { t ->
-                            val active = selectedId == t["id"].str()
-                            val (fg, bg) = catColor(t["category"].str())
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .background(if (active) HoverBlue else Color.Transparent)
-                                    .clickable { selectedId = t["id"].str() }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Box(Modifier.size(40.dp).clip(RoundedCornerShape(8.dp))
-                                    .background(bg), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Default.Star, null, tint = fg,
-                                        modifier = Modifier.size(20.dp))
-                                }
-                                Column(Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text(t["name"].str(), fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium, color = TextPrimary,
-                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Box(Modifier.clip(RoundedCornerShape(3.dp))
-                                            .background(bg)
-                                            .padding(horizontal = 6.dp, vertical = 1.dp)) {
-                                            Text(t["category"].str(), fontSize = 10.sp, color = fg)
-                                        }
-                                        TierBadge(t["tier"].str().ifBlank { "system" })
-                                    }
-                                    Text(t["description"].str()
-                                        .ifBlank { t["base_type"].str() + "类材料" },
-                                        fontSize = 12.sp, color = TextSecondary,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                                Button(onClick = { vm.startUse(t) },
-                                    colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-                                    shape = RoundedCornerShape(6.dp),
-                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                        horizontal = 12.dp, vertical = 4.dp)) {
-                                    Text("使用模板", color = Color.White, fontSize = 12.sp)
-                                }
-                                // 知识管理员：把系统模板按本科室写作习惯调整为科室模板（AI 草案 + 人工确认）
-                                if ((AppState.isKnowledgeAdmin || AppState.isDeveloper) &&
-                                    t["tier"].str().ifBlank { "system" } == "system") {
-                                    TextButton(onClick = { vm.adaptForDepartment(t, "") }) {
-                                        Icon(Icons.Default.AutoAwesome, null, tint = EpPrimary,
-                                            modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                                if (AppState.isAdmin) {
-                                    TextButton(onClick = { vm.delete(t["id"].str()) }) {
-                                        Icon(Icons.Default.Delete, null, tint = EpDanger,
-                                            modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            }
-                            Divider(color = Color(0xFFF2F4F8))
-                        }
-                        if (filtered.isEmpty()) {
-                            Box(Modifier.fillMaxWidth().padding(40.dp),
-                                contentAlignment = Alignment.Center) {
-                                Text("没有符合条件的模板", color = TextSecondary, fontSize = 13.sp)
-                            }
-                        }
+                Text(t["name"].str(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TagChip(tierText, fg = tierFg, bg = tierBg)
+                    val cat = t["category"].str()
+                    if (cat.isNotBlank()) {
+                        Spacer(Modifier.width(Dimens.space1))
+                        TagChip(cat, fg = Ink2, bg = SurfaceTonal)
+                    }
+                    val base = t["base_type"].str()
+                    if (base.isNotBlank()) {
+                        Spacer(Modifier.width(Dimens.space1))
+                        TagChip(base, fg = Muted, bg = SurfaceTonal)
                     }
                 }
             }
-
-            // 右：模板预览
-            Card(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(8.dp),
-                elevation = 0.dp) {
-                if (selected == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("点击左侧模板查看预览", color = TextSecondary, fontSize = 13.sp)
-                    }
-                } else {
-                    Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
-                        Text("模板预览", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary)
-                        Spacer(Modifier.height(16.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            val (fg, bg) = catColor(selected["category"].str())
-                            Box(Modifier.size(48.dp).clip(RoundedCornerShape(10.dp))
-                                .background(bg), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Star, null, tint = fg,
-                                    modifier = Modifier.size(24.dp))
-                            }
-                            Column {
-                                Text(selected["name"].str(), fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold, color = TextPrimary)
-                                Text(selected["description"].str(), fontSize = 12.sp,
-                                    color = TextSecondary)
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PreviewTag(selected["base_type"].str().ifBlank { "公文" })
-                            PreviewTag(selected["category"].str())
-                            PreviewTag("约 ${selected["word_count"].int().let { if (it > 0) it else 1000 }} 字")
-                            PreviewTag(selected["writing_style"].str().ifBlank { "正式公文" })
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        Text("填写要素", fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary)
-                        Spacer(Modifier.height(8.dp))
-                        selected["params_schema"].arr().mapNotNull { it.obj() }.forEach { f ->
-                            Row(Modifier.padding(vertical = 3.dp)) {
-                                Text("· ${f["label"].str()}",
-                                    fontSize = 13.sp, color = TextRegular)
-                                if (f["required"].str() == "true") {
-                                    Text("（必填）", fontSize = 12.sp, color = EpDanger)
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(20.dp))
-                        Button(onClick = { vm.startUse(selected) },
-                            colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier.fillMaxWidth()) {
-                            Text("使用模板", color = Color.White, fontSize = 14.sp)
-                        }
-                    }
-                }
-            }
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton("使用", onClick = { vm.startUse(t) }, kind = AppButtonKind.PRIMARY)
         }
-        vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
 
-        // AI 生成的科室模板草案：人工确认后才落库
-        if (vm.draft != null) DeptTemplateDraftDialog(vm)
-        if (vm.adapting) Text("正在按本科室写作习惯调整模板…", fontSize = 12.sp,
-            color = TextSecondary)
-    }
-}
+        val desc = t["description"].str()
+        if (desc.isNotBlank()) {
+            Spacer(Modifier.height(Dimens.space2))
+            Text(desc, fontSize = 12.sp, color = Ink2, lineHeight = 18.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis)
+        }
 
-/** 归属筛选片 */
-@Composable
-private fun TierChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(16.dp))
-            .background(if (active) EpPrimary else Color.White)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-    ) {
-        Text(label, fontSize = 12.5.sp, color = if (active) Color.White else TextRegular)
-    }
-}
-
-/** 列表归属徽标：系统 / 我的 */
-@Composable
-private fun TierBadge(tier: String) {
-    val (fg, bg, text) = when (tier) {
-        "department" -> Triple(QuickOrange, QuickOrangeBg, "本科室")
-        "mine" -> Triple(QuickGreen, QuickGreenBg, "我的")
-        else -> Triple(QuickBlue, QuickBlueBg, "系统")
-    }
-    Box(Modifier.clip(RoundedCornerShape(3.dp)).background(bg)
-        .padding(horizontal = 6.dp, vertical = 1.dp)) {
-        Text(text, fontSize = 10.sp, color = fg)
-    }
-}
-
-/**
- * 科室模板确认：AI 生成的草案必须先经人工校核再保存，
- * 保存后归属本科室，其他科室不可见。
- */
-@Composable
-private fun DeptTemplateDraftDialog(vm: TemplatesViewModel) {
-    val d = vm.draft ?: return
-    var name by remember(d) { mutableStateOf(d["name"].orEmpty()) }
-    var content by remember(d) { mutableStateOf(d["content_template"].orEmpty()) }
-
-    AlertDialog(
-        onDismissRequest = { vm.cancelDraft() },
-        title = {
-            Text("确认为${d["dept_name"].orEmpty()}模板", fontSize = 16.sp,
-                fontWeight = FontWeight.Bold)
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (d["source"].orEmpty() == "rule") {
-                    Text("当前为规则生成的草案，请人工校核后再保存。",
-                        fontSize = 12.sp, color = EpWarning)
-                } else {
-                    Text("已按本科室写作习惯调整，请核校后再保存为本科室模板。",
-                        fontSize = 12.sp, color = TextSecondary)
-                }
-                OutlinedTextField(
-                    value = name, onValueChange = { name = it },
-                    label = { Text("模板名称", fontSize = 12.sp) },
-                    singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
-                )
-                OutlinedTextField(
-                    value = content, onValueChange = { content = it },
-                    label = { Text("模板正文", fontSize = 12.sp) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { vm.saveDepartmentTemplate(name, content) }) {
-                Text("保存为本科室模板", color = EpPrimary)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { vm.cancelDraft() }) { Text("取消", color = TextSecondary) }
-        },
-    )
-}
-
-@Composable
-private fun CategoryChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(16.dp))
-            .background(if (active) EpPrimary else Color.White)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 7.dp),
-    ) {
-        Text(label, fontSize = 13.sp,
-            color = if (active) Color.White else TextRegular)
-    }
-}
-
-@Composable
-private fun PreviewTag(text: String) {
-    if (text.isBlank()) return
-    Box(Modifier.clip(RoundedCornerShape(4.dp)).background(HoverBlue)
-        .padding(horizontal = 8.dp, vertical = 3.dp)) {
-        Text(text, fontSize = 11.sp, color = EpPrimary)
-    }
-}
-
-/** 模板使用视图：对应 Web TemplateView（要素填写 → 生成 → 结果导出） */
-@Composable
-private fun TemplateUseView(vm: TemplatesViewModel, t: JsonObject) {
-    val fields = t["params_schema"].arr().mapNotNull { it.obj() }
-    var values by remember { mutableStateOf(fields.associate { it["name"].str() to "" }) }
-
-    Column(Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Spacer(Modifier.height(Dimens.space3))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { vm.cancelUse() }) {
-                Icon(Icons.Default.ArrowBack, null, tint = EpPrimary,
-                    modifier = Modifier.size(16.dp))
-                Text("返回模板中心", color = EpPrimary)
+            MetaText("使用 ${t["use_count"].int()} 次")
+            Spacer(Modifier.width(Dimens.space3))
+            t["created_by_name"].str().takeIf { it.isNotBlank() }?.let {
+                MetaText("创建：$it")
+                Spacer(Modifier.width(Dimens.space3))
+            }
+            t["created_at"].str().takeIf { it.length >= 10 }?.let {
+                MetaText("更新：${it.substring(0, 10)}")
             }
             Spacer(Modifier.weight(1f))
-        }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            // 左：要素表单
-            Card(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(8.dp),
-                elevation = 0.dp) {
-                Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
-                    Text(t["name"].str(), fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                        color = TextPrimary)
-                    Text(t["description"].str(), fontSize = 12.sp, color = TextSecondary)
-                    Spacer(Modifier.height(16.dp))
-                    fields.forEach { f ->
-                        val name = f["name"].str()
-                        val label = f["label"].str().ifBlank { name } +
-                            if (f["required"].str() == "true") " *" else ""
-                        val isArea = f["type"].str() == "textarea"
-                        Text(label, fontSize = 13.sp, color = TextRegular)
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = values[name] ?: "",
-                            onValueChange = { values = values + (name to it) },
-                            placeholder = {
-                                Text(f["placeholder"].str(), fontSize = 12.sp,
-                                    color = TextSecondary)
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                                .then(if (isArea) Modifier.heightIn(min = 90.dp) else Modifier),
-                            colors = TextFieldDefaults.outlinedTextFieldColors(
-                                focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    Button(
-                        onClick = {
-                            vm.generate(values.mapKeys { it.key }
-                                .mapValues { it.key to it.value })
-                        },
-                        enabled = !vm.generating,
-                        colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
-                        shape = RoundedCornerShape(6.dp),
-                    ) {
-                        if (vm.generating) {
-                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp,
-                                modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("生成中…", color = Color.White)
-                        } else Text("生成公文", color = Color.White, fontSize = 15.sp)
-                    }
-                }
-            }
-            // 右：生成结果
-            Card(Modifier.weight(1.2f).fillMaxHeight(), shape = RoundedCornerShape(8.dp),
-                elevation = 0.dp) {
-                Column(Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("生成结果", fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                            color = TextPrimary, modifier = Modifier.weight(1f))
-                        if (vm.result.isNotBlank()) {
-                            TextButton(onClick = {
-                                val target = pickSaveFile("${t["name"].str()}.docx")
-                                    ?: return@TextButton
-                                vm.exportResult(t["name"].str(), target)
-                            }) { Text("导出 Word", color = EpPrimary, fontSize = 13.sp) }
-                        }
-                    }
-                    Divider(color = Color(0xFFF2F4F8))
-                    Box(Modifier.weight(1f).verticalScroll(rememberScrollState())
-                        .padding(vertical = 12.dp)) {
-                        when {
-                            vm.generating -> Text("正在生成，请稍候…", color = TextSecondary,
-                                fontSize = 14.sp)
-                            vm.result.isBlank() -> Text("填写左侧要素后点击「生成公文」",
-                                color = TextSecondary, fontSize = 14.sp)
-                            else -> Text(vm.result, fontSize = 15.sp, lineHeight = 28.sp,
-                                color = TextPrimary)
-                        }
-                    }
-                }
+            AppButton("AI 调整", onClick = { vm.select(t); onAdapt() },
+                kind = AppButtonKind.SECONDARY, icon = Icons.Default.AutoAwesome)
+            if (AppState.isAdmin || tier == "mine") {
+                Spacer(Modifier.width(Dimens.space1))
+                AppIconButton(Icons.Default.Edit, "编辑", onClick = onEdit)
+                Spacer(Modifier.width(Dimens.space1))
+                AppIconButton(Icons.Default.Delete, "删除",
+                    onClick = { vm.delete(t["id"].str()) })
             }
         }
-        vm.status?.let { Text(it, fontSize = 12.sp, color = EpDanger) }
     }
 }
 
+@Composable
+private fun MetaText(text: String) {
+    Text(text, fontSize = 11.sp, color = Muted)
+}
+
+// ---------------- 右侧预览 ----------------
+
+@Composable
+private fun PreviewPane(
+    vm: TemplatesViewModel,
+    modifier: Modifier,
+    onAdapt: () -> Unit,
+) {
+    val t = vm.preview
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space5)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        if (t == null) {
+            EmptyState(
+                text = "选择左侧模板查看结构",
+                hint = "预览会展示模板的章节结构、要素与正文骨架，可直接用于写作",
+                icon = Icons.Default.Description,
+            )
+            return
+        }
+
+        SectionTitle(t["name"].str(), icon = Icons.Default.Description)
+        Spacer(Modifier.height(Dimens.space2))
+        t["description"].str().takeIf { it.isNotBlank() }?.let {
+            Text(it, fontSize = 12.5.sp, color = Ink2, lineHeight = 19.sp)
+            Spacer(Modifier.height(Dimens.space3))
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space1)) {
+            TagChip(
+                when (vm.tierOf(t)) {
+                    "department" -> "科室模板"; "mine" -> "我的模板"; else -> "系统模板"
+                },
+                fg = FeatureTemplateInk, bg = FeatureTemplateSoft,
+            )
+            t["category"].str().takeIf { it.isNotBlank() }?.let {
+                TagChip(it, fg = Ink2, bg = SurfaceTonal)
+            }
+            t["writing_style"].str().takeIf { it.isNotBlank() }?.let {
+                TagChip(it, fg = Muted, bg = SurfaceTonal)
+            }
+            val wc = t["word_count"].int()
+            if (wc > 0) TagChip("约 $wc 字", fg = Muted, bg = SurfaceTonal)
+        }
+
+        Spacer(Modifier.height(Dimens.space4))
+
+        // 章节结构
+        val structure = t["structure"].arr().map { it.str() }.filter { it.isNotBlank() }
+        if (structure.isNotEmpty()) {
+            ContextBlock(title = "章节结构") {
+                structure.forEachIndexed { i, s ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.Top) {
+                        Box(
+                            Modifier.size(18.dp).clip(RoundedCornerShape(Dimens.radiusXs))
+                                .background(FeatureTemplateSoft),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("${i + 1}", fontSize = 10.sp, color = FeatureTemplateInk,
+                                fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text(s, fontSize = 12.5.sp, color = Ink, lineHeight = 19.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(Dimens.space3))
+        }
+
+        // 待填要素
+        val params = t["params_schema"].arr().mapNotNull { it.obj() }
+        if (params.isNotEmpty()) {
+            ContextBlock(title = "待填要素（${params.size}）") {
+                params.forEach { f ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                        Text(f["label"].str().ifBlank { f["name"].str() }, fontSize = 12.sp,
+                            color = Ink2, modifier = Modifier.weight(1f), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        Text("待填写", fontSize = 11.sp, color = Muted2)
+                    }
+                }
+            }
+            Spacer(Modifier.height(Dimens.space3))
+        }
+
+        // 正文骨架
+        val content = t["content_template"].str()
+        if (content.isNotBlank()) {
+            SectionTitle("正文骨架")
+            Spacer(Modifier.height(Dimens.space2))
+            DocumentSurface(padding = Dimens.space4) {
+                Text(content, fontSize = 12.5.sp, color = Ink, lineHeight = 22.sp)
+            }
+        } else {
+            EmptyState("暂无正文骨架", hint = "该模板仅提供要素与结构，正文由助手生成",
+                icon = Icons.Default.Description)
+        }
+
+        Spacer(Modifier.height(Dimens.space4))
+        AppButton("使用此模板生成公文", onClick = { vm.startUse(t) },
+            kind = AppButtonKind.AI, fill = true, icon = Icons.Default.AutoAwesome)
+        Spacer(Modifier.height(Dimens.space2))
+        AppButton("AI 调整此模板", onClick = onAdapt, kind = AppButtonKind.SECONDARY, fill = true)
+    }
+}
+
+// ---------------- AI 调整模板 ----------------
+
+@Composable
+private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
+    val base = vm.preview
+    var hints by remember { mutableStateOf("") }
+    val draft = vm.draft
+    var name by remember { mutableStateOf(draft?.get("name").orEmpty()) }
+    var content by remember { mutableStateOf(draft?.get("content_template").orEmpty()) }
+
+    LaunchedEffect(draft?.get("content_template")) {
+        name = draft?.get("name").orEmpty()
+        content = draft?.get("content_template").orEmpty()
+    }
+
+    AppDialog(
+        onDismissRequest = onDismiss,
+        title = "AI 调整模板",
+        subtitle = "基于当前模板，按${AppState.departmentName.ifBlank { "本科室" }}写作习惯给出修改结果，确认后保存为科室模板",
+        icon = Icons.Default.AutoAwesome,
+        width = 720.dp,
+        actions = {
+            if (draft == null) {
+                AppButton("取消", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("生成调整结果", onClick = {
+                    base?.let { vm.adaptForDepartment(it, hints) }
+                }, kind = AppButtonKind.AI, enabled = !vm.adapting && base != null,
+                    loading = vm.adapting)
+            } else {
+                AppButton("放弃", onClick = { vm.cancelDraft() }, kind = AppButtonKind.TEXT)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("保存为科室模板", onClick = { vm.saveDepartmentTemplate(name, content) },
+                    kind = AppButtonKind.PRIMARY)
+            }
+        },
+    ) {
+        InlineNotice(
+            text = "当前模板：${base?.get("name").str().ifBlank { "未选择" }}",
+            icon = Icons.Default.Description,
+        )
+        if (draft == null) {
+            AppTextField(
+                value = hints,
+                onValueChange = { hints = it },
+                label = "调整要求",
+                placeholder = "例如：把报送对象改为区政府，篇幅压到 1200 字，增加存在问题与下一步措施",
+                singleLine = false,
+                minLines = 3,
+            )
+            vm.adaptError?.let { FieldError(it) }
+        } else {
+            AppTextField(value = name, onValueChange = { name = it }, label = "模板名称")
+            AppTextField(
+                value = content,
+                onValueChange = { content = it },
+                label = "模板正文（可继续手工调整）",
+                placeholder = "AI 调整结果",
+                singleLine = false,
+                minLines = 10,
+            )
+            InlineNotice("确认无误后保存；科室归属由服务端写入，不会保存到其他科室")
+        }
+    }
+}
+
+// ---------------- 使用模板生成 ----------------
+
+@Composable
+private fun UseDialog(vm: TemplatesViewModel, t: JsonObject, onDismiss: () -> Unit) {
+    val fields = t["params_schema"].arr().mapNotNull { it.obj() }
+    var values by remember { mutableStateOf(fields.associate {
+        it["name"].str() to (it["label"].str().ifBlank { it["name"].str() } to "")
+    }) }
+
+    AppDialog(
+        onDismissRequest = onDismiss,
+        title = "使用模板",
+        subtitle = t["name"].str(),
+        icon = Icons.Default.Description,
+        width = 680.dp,
+        actions = {
+            AppButton("关闭", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton(if (vm.result.isBlank()) "生成正文" else "重新生成",
+                onClick = { vm.generate(values) },
+                kind = AppButtonKind.AI, enabled = !vm.generating, loading = vm.generating)
+        },
+    ) {
+        if (fields.isEmpty()) {
+            InlineNotice("该模板无需填写要素，可直接生成正文")
+        } else {
+            fields.forEach { f ->
+                val n = f["name"].str()
+                val label = f["label"].str().ifBlank { n }
+                AppTextField(
+                    value = values[n]?.second.orEmpty(),
+                    onValueChange = { values = values + (n to (label to it)) },
+                    label = label,
+                    placeholder = f["placeholder"].str().ifBlank { "请填写$label" },
+                )
+            }
+        }
+        if (vm.result.isNotBlank()) {
+            Spacer(Modifier.height(Dimens.space2))
+            SectionTitle("生成结果")
+            DocumentSurface(padding = Dimens.space4) {
+                Text(vm.result, fontSize = 13.sp, color = Ink, lineHeight = 22.sp)
+            }
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("导出 Word", onClick = {
+                pickSaveFile("${t["name"].str().ifBlank { "公文" }}.docx")?.let {
+                    vm.exportResult(t["name"].str().ifBlank { "公文" }, it)
+                }
+            }, kind = AppButtonKind.SECONDARY)
+        }
+        vm.status?.let { FieldError(it) }
+    }
+}
+
+// ---------------- 新建 / 编辑 ----------------
+
+@Composable
+private fun TemplateEditDialog(
+    editing: JsonObject?,
+    onDismiss: () -> Unit,
+    onSubmit: (Map<String, Any?>) -> Unit,
+) {
+    var name by remember { mutableStateOf(editing?.get("name").str()) }
+    var category by remember { mutableStateOf(editing?.get("category").str()) }
+    var description by remember { mutableStateOf(editing?.get("description").str()) }
+    var content by remember { mutableStateOf(editing?.get("content_template").str()) }
+
+    AppDialog(
+        onDismissRequest = onDismiss,
+        title = if (editing == null) "新建模板" else "编辑模板",
+        subtitle = "保存后按归属进入系统 / 科室 / 我的模板",
+        icon = Icons.Default.Edit,
+        actions = {
+            AppButton("取消", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton("保存", onClick = {
+                onSubmit(
+                    mapOf(
+                        "name" to name,
+                        "category" to category,
+                        "description" to description,
+                        "content_template" to content,
+                    )
+                )
+            }, kind = AppButtonKind.PRIMARY, enabled = name.isNotBlank())
+        },
+    ) {
+        AppTextField(value = name, onValueChange = { name = it }, label = "模板名称",
+            placeholder = "例如：行政复议工作情况报告")
+        AppTextField(value = category, onValueChange = { category = it }, label = "类型",
+            placeholder = "例如：报告")
+        AppTextField(value = description, onValueChange = { description = it },
+            label = "简短说明", singleLine = false, minLines = 2)
+        AppTextField(value = content, onValueChange = { content = it }, label = "正文骨架",
+            placeholder = "可用占位符，如 {{时间范围}}", singleLine = false, minLines = 8)
+    }
+}

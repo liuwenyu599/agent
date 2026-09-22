@@ -91,7 +91,15 @@ object Endpoints {
         const val CHECK = "/format-check/check"
         const val RECORDS = "/format-check/records"
         fun record(id: String) = "/format-check/records/$id"
-        fun paragraphs(recordId: String) = "/format-check/records/$recordId/paragraphs"
+        /** version=original|current，分别取源文档与已应用修改后的段落 */
+        fun paragraphs(recordId: String, version: String = "original") =
+            "/format-check/records/$recordId/paragraphs?version=$version"
+        /** 应用单条修改；响应回传 applied_ids / resolved_ids 与最新 current 段落 */
+        fun apply(recordId: String) = "/format-check/records/$recordId/apply"
+        /** 撤销单条修改；响应同上 */
+        fun undo(recordId: String) = "/format-check/records/$recordId/undo"
+        /** 重新校验：返回与 check 相同的结构（含 id） */
+        fun recheck(recordId: String) = "/format-check/records/$recordId/recheck"
         const val PREVIEW_FIX = "/format-check/preview-fix"
         const val FIX = "/format-check/fix"
         const val RULES = "/format-check/rules"
@@ -168,6 +176,14 @@ object Endpoints {
     /** 首页聚合（v3.0 后端已实现，客户端 v3.1 起使用） */
     object Dashboard {
         const val SUMMARY = "/dashboard/summary"
+    }
+
+    /**
+     * 个人偏好（v3.3）：只影响 AI 的表达方式、写作习惯与称呼，
+     * 不含任何科室 / 权限 / 角色语义，且只能读写当前登录用户本人。
+     */
+    object Preferences {
+        const val ME = "/preferences/me"
     }
 }
 

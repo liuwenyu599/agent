@@ -495,10 +495,15 @@ class OrganizationService:
 
     @staticmethod
     def build_prompt(agent: Optional[Dict[str, Any]], task_hint: str = "",
-                     rag_context: str = "") -> str:
-        """系统基础 Prompt + 安全约束 + 科室业务 Prompt + 工作要求 + 任务/RAG 上下文。
+                     rag_context: str = "", user_preference: str = "") -> str:
+        """系统基础 + 安全约束 + 科室业务 + 工作要求 + 用户个人偏好 + 任务/RAG。
 
-        顺序固定：安全层始终位于业务层之前，业务配置无法覆盖安全约束。
+        顺序固定（v3.3 新增第 5 层）：
+        1 系统基础 → 2 安全与权限约束 → 3 科室业务 → 4 工作要求
+        → 5 用户个人偏好 → 6 当前任务 → 7 参考资料。
+
+        偏好块位于安全层与科室业务层之后、任务与 RAG 之前：
+        它只能补充表达风格，既不能撤销安全约束，也不能覆盖科室口径。
         """
         if not agent:
             return ""
@@ -515,6 +520,8 @@ class OrganizationService:
         req = agent.get("work_requirements") or ""
         if req:
             blocks.append("【工作要求】\n" + req)
+        if user_preference:
+            blocks.append(user_preference)
         if task_hint:
             blocks.append("【当前任务】\n" + task_hint)
         if rag_context:
@@ -522,17 +529,32 @@ class OrganizationService:
         return "\n\n".join(blocks).strip()
 
     def agent_system_prompt(self, user_id: str) -> str:
-        """供写作/问答链路注入的科室上下文提示（服务端内部使用）。"""
+        """供写作/问答链路注入的科室上下文提示（服务端内部使用）。
+
+        v3.3：在此读取用户个人偏好并作为第 5 层注入；写作工作台的
+        draft/revise 通过本方法自动拿到偏好块，**不要再单独拼接**。
+        """
         ctx = self.user_context(user_id)
         agent = self._raw_agent(ctx.get("dept_code") or "")
         if not agent:
             return ""
         dept = ctx.get("dept_name") or ctx.get("short_name")
         intro = agent.get("intro") or ""
+        pref = self._user_preference_block(user_id)
         return self.build_prompt(
             agent,
             task_hint=f"当前使用科室：{dept}（{agent.get('name') or ''}）",
+            user_preference=pref,
         ) if not intro else "\n".join([
             f"【当前科室助手】{agent['name']}（{dept}）", intro,
-            self.build_prompt(agent),
+            self.build_prompt(agent, user_preference=pref),
         ]).strip()
+
+    def _user_preference_block(self, user_id: str) -> str:
+        """读取当前用户偏好块（第 5 层）；无偏好或异常时返回空串，不阻断生成。"""
+        try:
+            from app.application.shared.user_preference import UserPreferenceService
+            return UserPreferenceService(self.db).prompt_block_of(user_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[组织] 读取用户偏好失败，已跳过该层: %s", e)
+            return ""

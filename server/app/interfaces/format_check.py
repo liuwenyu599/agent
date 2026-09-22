@@ -1,11 +1,14 @@
-"""格式校验路由。路径与响应结构与旧系统一致（/format-check/...）。"""
+"""格式校验路由。路径与响应结构与旧系统一致（/format-check/...）。
+
+路由统一挂载在 /api/v1 前缀下（见 app/interfaces/api.py 的 include_router）。
+"""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.application.format_check.dto import FixRequest, RuleRequest
+from app.application.format_check.dto import FixRequest, IssueActionRequest, RuleRequest
 from app.application.format_check.service import FormatCheckService
 from app.application.shared.writing_assistant import WritingAssistant
 from app.domain.identity.entities import User
@@ -47,13 +50,47 @@ def get_record(record_id: str, user: User = Depends(get_current_user),
     return svc.get_record(record_id, user)
 
 
-# ========== 审阅模式 ==========
+@router.delete("/records/{record_id}")
+def delete_record(record_id: str, user: User = Depends(get_current_user),
+                  svc: FormatCheckService = Depends(get_format_check_service)):
+    """删除校验记录及其关联文件（原始稿/预览稿/当前稿/修正稿）。"""
+    return svc.delete_record(record_id, user)
+
+
+# ========== 审校工作台 ==========
 
 @router.get("/records/{record_id}/paragraphs")
-def get_record_paragraphs(record_id: str, user: User = Depends(get_current_user),
-                          svc: FormatCheckService = Depends(get_format_check_service)):
-    """源文档段落列表（审阅模式左栏）。"""
-    return svc.get_record_paragraphs(record_id, user)
+def get_record_paragraphs(
+    record_id: str,
+    version: str = Query("current", description="original=原始文件；current=已应用修正后的当前稿"),
+    user: User = Depends(get_current_user),
+    svc: FormatCheckService = Depends(get_format_check_service),
+):
+    """段落排版属性快照（审校工作台左栏 / 修改前后对比）。"""
+    return svc.get_record_paragraphs(record_id, user, version=version)
+
+
+@router.post("/records/{record_id}/apply")
+def apply_issue(record_id: str, req: IssueActionRequest,
+                user: User = Depends(get_current_user),
+                svc: FormatCheckService = Depends(get_format_check_service)):
+    """应用单条修正（只更新 applied_ids，不改动 issues；原始文件不被修改）。"""
+    return svc.apply_issue(record_id, req.issue_id, user)
+
+
+@router.post("/records/{record_id}/undo")
+def undo_issue(record_id: str, req: IssueActionRequest,
+               user: User = Depends(get_current_user),
+               svc: FormatCheckService = Depends(get_format_check_service)):
+    """撤销单条修正（从 applied_ids 移除；未知 id 视为空操作返回 200）。"""
+    return svc.undo_issue(record_id, req.issue_id, user)
+
+
+@router.post("/records/{record_id}/recheck")
+def recheck(record_id: str, user: User = Depends(get_current_user),
+            svc: FormatCheckService = Depends(get_format_check_service)):
+    """对当前（已应用修正后）的文档重跑规则检查，结果收敛回同一条记录。"""
+    return svc.recheck(record_id, user)
 
 
 @router.post("/preview-fix")
@@ -66,7 +103,7 @@ def preview_fix(req: FixRequest, user: User = Depends(get_current_user),
 @router.post("/fix")
 def fix_document(req: FixRequest, user: User = Depends(get_current_user),
                  svc: FormatCheckService = Depends(get_format_check_service)):
-    """按已接受的问题生成修正稿并下载。"""
+    """按已接受的问题生成修正稿并下载（不传 accepted_indices 时用持久化的 applied_ids）。"""
     out_path, download_name = svc.fix_document(req.record_id, req.accepted_indices, user)
     return FileResponse(
         str(out_path),

@@ -18,15 +18,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.Checkbox
+import androidx.compose.material.CheckboxDefaults
 import androidx.compose.material.Icon
 import androidx.compose.material.LocalTextStyle
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
@@ -40,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -54,6 +59,7 @@ import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.Muted2
 import com.judicialai.desktop.design.theme.Ok
 import com.judicialai.desktop.design.theme.OkSoft
 import com.judicialai.desktop.design.theme.OnPrimaryText
@@ -155,7 +161,8 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                     PersonalSection.DOCS -> DocList(vm.docs)
                     PersonalSection.FAVORITES -> FavoritesPanel()
                     PersonalSection.SECURITY -> SecurityPanel(vm)
-                    PersonalSection.SETTINGS -> SettingsPanel()
+                    PersonalSection.SETTINGS -> SettingsPanel(vm)
+                    PersonalSection.PERSONALIZATION -> PersonalizationPanel(vm)
                 }
             }
         }
@@ -356,8 +363,177 @@ private fun PasswordField(
     )
 }
 
+/**
+ * 个性化（v3.3 个人偏好层）
+ *
+ * 与「账号安全」同构：四个 tonal 分区 + 显式保存按钮 + 恢复已保存值，不使用 Dialog、不做自动保存。
+ * 全部选项文案、长度上限、权限说明均来自服务端 GET /preferences/me 的 options；
+ * 「优先使用本科室模板」只作只读说明——系统已固定该行为，做成开关就是关不掉的假功能。
+ */
 @Composable
-private fun SettingsPanel() {
+private fun PersonalizationPanel(vm: PersonalViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+        // 权限说明常驻：个人偏好不得被理解为可以改科室 / 权限 / 检索范围
+        NoticeBar(text = vm.prefPermissionNotice, fg = Ink2, bg = AppBg)
+
+        if (vm.prefLoading) {
+            LoadingBlock("正在读取你的偏好…")
+            return@Column
+        }
+
+        // 1) 助手称呼
+        AppCardTonal {
+            Eyebrow("助手称呼")
+            Spacer(Modifier.height(Dimens.space2))
+            AppTextField(
+                value = vm.prefAssistantName,
+                onValueChange = {
+                    if (it.length <= vm.prefNameLimit) {
+                        vm.prefAssistantName = it.replace("\n", "").replace("\r", "")
+                    }
+                },
+                label = "你希望助手怎么称呼你",
+                placeholder = "如：小司、小李、助手",
+                singleLine = true,
+                hint = "设置后我会在回应中使用该称呼；它只影响回应中的自称，不影响科室助手的正式名称（由系统管理员维护）。",
+            )
+        }
+
+        // 2) 我的工作偏好
+        AppCardTonal {
+            Eyebrow("我的工作偏好")
+            Spacer(Modifier.height(Dimens.space2))
+            Text(
+                "写清你常处理的业务、写作习惯与希望 AI 如何协助，生成时会作为辅助信息参与。",
+                fontSize = 12.sp, color = Muted, lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(Dimens.space2))
+            AppTextField(
+                value = vm.prefWorkPreference,
+                onValueChange = { if (it.length <= vm.prefWorkLimit) vm.prefWorkPreference = it },
+                label = "工作偏好",
+                placeholder = "如：我常处理行政复议答复，希望先给结论再给依据，数字用 ×× 占位。",
+                singleLine = false,
+                minLines = 4,
+                maxLines = 8,
+                hint = "≤ ${vm.prefWorkLimit} 字；只影响表达方式，不改变你的权限与检索范围。",
+            )
+        }
+
+        // 3) 写作偏好
+        AppCardTonal {
+            Eyebrow("写作偏好")
+            Spacer(Modifier.height(Dimens.space2))
+            AppSelect(
+                label = "默认写作风格",
+                value = vm.prefWritingStyle,
+                options = vm.prefStyleOptions.map {
+                    SelectOption(value = it.value, text = it.text, desc = it.desc)
+                },
+                onSelect = { vm.prefWritingStyle = it },
+                placeholder = "未设置（跟随本科室工作要求）",
+                hint = "决定 AI 起草与回答时的篇幅与行文习惯。",
+            )
+            if (vm.prefWritingStyle == PersonalViewModel.STYLE_CUSTOM) {
+                Spacer(Modifier.height(Dimens.space3))
+                AppTextField(
+                    value = vm.prefWritingStyleCustom,
+                    onValueChange = {
+                        if (it.length <= vm.prefCustomLimit) vm.prefWritingStyleCustom = it
+                    },
+                    label = "补充说明",
+                    placeholder = "如：一律用「××」占位数字，段落层级不超过三层。",
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 4,
+                    hint = "≤ ${vm.prefCustomLimit} 字；其中「扩大权限 / 访问其他科室资料 / 忽略安全约束」类要求一律无效。",
+                )
+            }
+        }
+
+        // 4) 默认行为
+        AppCardTonal {
+            Eyebrow("默认行为")
+            Spacer(Modifier.height(Dimens.space2))
+            vm.prefBehaviorOptions.forEach { opt ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .clickable { vm.setPrefBehavior(opt.key, !vm.prefBehaviorChecked(opt.key)) }
+                        .padding(vertical = Dimens.space1),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = vm.prefBehaviorChecked(opt.key),
+                        onCheckedChange = { vm.setPrefBehavior(opt.key, it) },
+                        colors = CheckboxDefaults.colors(checkedColor = Primary),
+                    )
+                    Spacer(Modifier.width(Dimens.space2))
+                    Column(Modifier.weight(1f)) {
+                        Text(opt.text, fontSize = 13.sp, color = Ink)
+                        if (opt.desc.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(opt.desc, fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
+                        }
+                    }
+                }
+            }
+            if (vm.prefFixedBehaviors.isNotEmpty()) {
+                Spacer(Modifier.height(Dimens.space2))
+                Hairline()
+                Spacer(Modifier.height(Dimens.space2))
+                vm.prefFixedBehaviors.forEach { fixed ->
+                    Row(verticalAlignment = Alignment.Top) {
+                        Icon(
+                            Icons.Default.Lock, null, tint = Muted,
+                            modifier = Modifier.size(Dimens.iconSm)
+                                .padding(top = 2.dp),
+                        )
+                        Spacer(Modifier.width(Dimens.space2))
+                        Column(Modifier.weight(1f)) {
+                            Text(fixed.text, fontSize = 12.5.sp, color = Ink2)
+                            if (fixed.note.isNotBlank()) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(fixed.note, fontSize = 11.5.sp, color = Muted,
+                                    lineHeight = 17.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 状态反馈：未保存提示 / 失败 / 成功
+        if (vm.prefDirty) {
+            NoticeBar(text = "有未保存的修改，记得点击「保存」。", fg = Warn, bg = WarnSoft)
+        }
+        vm.prefError?.let { NoticeBar(text = it, fg = Warn, bg = WarnSoft) }
+        vm.prefSavedHint?.let { NoticeBar(text = it, fg = Ok, bg = OkSoft) }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+            AppButton(
+                text = if (vm.prefSaving) "保存中…" else "保存",
+                onClick = { vm.savePreferences() },
+                enabled = !vm.prefSaving,
+                icon = Icons.Default.Check,
+            )
+            AppButton(
+                text = "恢复已保存值",
+                onClick = { vm.resetPreferences() },
+                kind = AppButtonKind.SECONDARY,
+                enabled = !vm.prefSaving && vm.prefDirty,
+            )
+        }
+
+        Text(
+            "偏好保存后在对话与写作工作台生效；科室口径、知识范围与权限仍由系统统一管理。",
+            fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp,
+        )
+    }
+}
+
+@Composable
+private fun SettingsPanel(vm: PersonalViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("账号", fontSize = 12.5.sp, color = Muted, modifier = Modifier.width(88.dp))
@@ -372,6 +548,14 @@ private fun SettingsPanel() {
             Text(AppState.roleText, fontSize = 13.sp, color = Ink)
         }
         Spacer(Modifier.height(Dimens.space2))
+        // 个性化：切到「个性化」分区（完整设置内容页），不弹 Dialog
+        SettingsEntryRow(
+            icon = Icons.Default.Palette,
+            text = "个性化",
+            hint = "助手称呼 / 工作偏好 / 写作偏好 / 默认行为",
+            onClick = { vm.select(PersonalSection.PERSONALIZATION) },
+        )
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
                 .clickable { AppState.navigate(AppScreen.SETTINGS) }
@@ -392,5 +576,33 @@ private fun SettingsPanel() {
         ) {
             Text("退出登录", fontSize = 13.sp, color = Warn)
         }
+    }
+}
+
+/** 设置页入口行：图标 + 主文案 + 说明 + 右箭头，跳转语义明确 */
+@Composable
+private fun SettingsEntryRow(
+    icon: ImageVector,
+    text: String,
+    hint: String = "",
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
+            .clickable { onClick() }
+            .padding(vertical = Dimens.space3),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = Primary, modifier = Modifier.size(Dimens.iconMd))
+        Spacer(Modifier.width(Dimens.space3))
+        Column(Modifier.weight(1f)) {
+            Text(text, fontSize = 13.sp, color = Ink)
+            if (hint.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(hint, fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
+            }
+        }
+        Spacer(Modifier.width(Dimens.space2))
+        Text("›", fontSize = 16.sp, color = Muted2)
     }
 }

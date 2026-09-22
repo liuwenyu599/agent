@@ -25,6 +25,10 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# 段落字号兜底值（磅）：run / 段落样式都取不到字号时使用（Word 默认小四号）。
+# 该常量只作最后兜底，检测与修正共用，避免两处各写一套换算系数导致单位不一致。
+_DEFAULT_FONT_PT = 12.0
+
 # 对齐方式映射
 _ALIGN_MAP = {
     "left": WD_ALIGN_PARAGRAPH.LEFT,
@@ -54,6 +58,83 @@ def _run_font_name(run) -> Optional[str]:
             if ascii_f:
                 return ascii_f
     return run.font.name
+
+
+def _style_font_pt(style) -> Optional[float]:
+    """沿段落样式链向上查找显式字号（磅）。"""
+    seen = 0
+    while style is not None and seen < 10:
+        seen += 1
+        try:
+            size = style.font.size
+        except Exception:
+            return None
+        if size is not None:
+            try:
+                return float(size.pt)
+            except (TypeError, ValueError):
+                return None
+        try:
+            style = style.base_style
+        except Exception:
+            return None
+    return None
+
+
+def _effective_font_pt(p) -> Optional[float]:
+    """段落的显式字号（磅）：run → 段落样式链；两者都没有则返回 ``None``。"""
+    for r in p.runs:
+        try:
+            size = r.font.size
+        except Exception:
+            continue
+        if size is not None:
+            try:
+                return float(size.pt)
+            except (TypeError, ValueError):
+                continue
+    try:
+        return _style_font_pt(p.style)
+    except Exception:
+        return None
+
+
+def _paragraph_font_pt(p) -> float:
+    """检测与修正共用的**换算字号**（磅）。
+
+    优先级：run 显式字号 → 段落样式链字号 → 模块级兜底字号。
+    检测与修正共用同一实现，保证「多少磅 = 1 字符」的换算系数永远一致。
+    """
+    return _effective_font_pt(p) or _DEFAULT_FONT_PT
+
+
+def _first_line_indent_chars(p) -> Optional[float]:
+    """段落首行缩进的**字符数**（检测 / 修正 / 段落属性读取三处共用的唯一换算入口）。
+
+    取值优先级：
+    1. Word 原生 ``w:firstLineChars``（以 1/100 字符为单位存储，权威字符值）；
+    2. 无该属性时，用 ``首行缩进磅值 ÷ 段落实际字号磅值`` 反算
+       （中文排版下 1 个字符宽度 ≈ 1 个字号磅值）。
+
+    :return: 首行缩进字符数；未设置任何首行缩进时返回 ``None``。
+    """
+    ppr = p._p.pPr
+    if ppr is not None:
+        ind = ppr.find(qn('w:ind'))
+        if ind is not None:
+            raw = ind.get(qn('w:firstLineChars'))
+            if raw:
+                try:
+                    return round(int(raw) / 100.0, 2)
+                except (TypeError, ValueError):
+                    pass
+    pf = p.paragraph_format
+    if pf.first_line_indent is None:
+        return None
+    font_pt = _paragraph_font_pt(p)
+    if not font_pt:
+        return None
+    return round(pf.first_line_indent.pt / font_pt, 2)
 
 
 def _fmt_value(kind: str, value) -> str:
@@ -278,18 +359,13 @@ class FormatCheckEngine:
 
         if "first_line_indent_chars" in checks:
             expected_chars = float(checks["first_line_indent_chars"])
-            # docx 中缩进以长度存储；按正文字号估算字符宽度
-            font_pt = None
-            if run is not None and run.font.size:
-                font_pt = run.font.size.pt
-            if font_pt is None and "font_size_pt" in checks:
-                font_pt = float(checks["font_size_pt"])
-            cur_chars = None
-            if pf.first_line_indent is not None and font_pt:
-                # 1 字符 ≈ 字号磅值
-                cur_chars = round(pf.first_line_indent.pt / font_pt, 1)
-            if cur_chars is None or abs(cur_chars - expected_chars) > 0.3:
-                add("首行缩进", "first_line_indent_chars", cur_chars if cur_chars is not None else 0,
+            # 与修正侧共用 _first_line_indent_chars：优先 Word 原生字符单位，
+            # 读不到再按「磅值 ÷ 段落实际字号」反算，避免两侧换算系数不一致。
+            cur_chars = _first_line_indent_chars(p)
+            if cur_chars is None:
+                cur_chars = 0.0
+            if abs(cur_chars - expected_chars) > 0.3:
+                add("首行缩进", "first_line_indent_chars", cur_chars,
                     expected_chars,
                     f"应设置首行缩进{expected_chars:g}字符。")
 
@@ -526,13 +602,18 @@ class FormatCheckEngine:
             pf.line_spacing = Pt(float(value))
         elif field == "first_line_indent_chars":
             chars = float(value)
-            pf.first_line_indent = Pt(12 * chars)  # 兜底近似
+            # 与检测侧共用字号换算：w:firstLine = 段落实际字号 × 字符数，
+            # 同时写入权威字符单位 w:firstLineChars（1/100 字符）。
+            # 二者必须一致，否则应用后重新校验仍会命中同一问题。
+            font_pt = _paragraph_font_pt(para)
+            pf.first_line_indent = Pt(font_pt * chars)
             ppr = para._p.get_or_add_pPr()
             ind = ppr.find(qn("w:ind"))
             if ind is None:
                 ind = ppr.makeelement(qn("w:ind"), {})
                 ppr.append(ind)
-            ind.set(qn("w:firstLineChars"), str(int(chars * 100)))
+            ind.set(qn("w:firstLine"), str(int(round(font_pt * chars * 20))))
+            ind.set(qn("w:firstLineChars"), str(int(round(chars * 100))))
         elif field == "space_before_pt":
             pf.space_before = Pt(float(value))
         elif field == "space_after_pt":
@@ -550,3 +631,101 @@ class FormatCheckEngine:
                     setattr(sec, attr, Cm(float(value)))
             except Exception:
                 pass
+
+
+# ========================================================================
+# 段落 / 页面排版属性快照（「修改前 vs 当前」对比用）
+#
+# 12 项检查里有 9 项的修正不改变文本（字号、对齐、缩进、行距、段间距…），
+# 只回文本拿不到真数据，因此单独导出排版属性。
+# indent_chars 复用 _first_line_indent_chars，与检测/修正同一套换算逻辑。
+# ========================================================================
+def extract_page_properties(doc) -> Dict:
+    """页面级属性快照（页边距 / 页面尺寸，单位厘米）。"""
+    try:
+        section = doc.sections[0]
+    except IndexError:
+        return {
+            "top_margin_cm": None, "bottom_margin_cm": None,
+            "left_margin_cm": None, "right_margin_cm": None,
+            "page_width_cm": None, "page_height_cm": None,
+        }
+    return {
+        "top_margin_cm": section.top_margin.cm if section.top_margin else None,
+        "bottom_margin_cm": section.bottom_margin.cm if section.bottom_margin else None,
+        "left_margin_cm": section.left_margin.cm if section.left_margin else None,
+        "right_margin_cm": section.right_margin.cm if section.right_margin else None,
+        "page_width_cm": section.page_width.cm if section.page_width else None,
+        "page_height_cm": section.page_height.cm if section.page_height else None,
+    }
+
+
+def _paragraph_align(p) -> Optional[str]:
+    """段落对齐方式：与检测侧取值口径一致（未显式设置时按 Word 默认左对齐）。"""
+    return _ALIGN_NAME.get(p.alignment, "left")
+
+
+def _paragraph_is_heading(p) -> bool:
+    """是否层次序号标题：与检测侧同一套正则 + 样式名兜底。"""
+    text = (p.text or "").strip()
+    if _RE_H1.match(text) or _RE_H2.match(text):
+        return True
+    try:
+        style_name = (p.style.name or "") if p.style is not None else ""
+    except Exception:
+        style_name = ""
+    return style_name.lower().startswith("heading") or style_name.startswith("标题")
+
+
+def _paragraph_line_spacing(p) -> Optional[float]:
+    """行距：固定值取磅值；倍数行距（如 1.5）取倍数。"""
+    pf = p.paragraph_format
+    ls = pf.line_spacing
+    if ls is None:
+        return None
+    if hasattr(ls, "pt"):
+        try:
+            return round(float(ls.pt), 2)
+        except (TypeError, ValueError):
+            return None
+    try:
+        return round(float(ls), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _paragraph_pt(value) -> Optional[float]:
+    """把 Length/None 转成磅值浮点数。"""
+    if value is None:
+        return None
+    try:
+        return round(float(value.pt), 2)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def extract_paragraph_properties(doc) -> List[Dict]:
+    """逐段导出排版属性（供审校工作台做「修改前 / 当前」对比）。"""
+    result: List[Dict] = []
+    for i, p in enumerate(doc.paragraphs):
+        run = next((r for r in p.runs if r.text.strip()), None)
+        pf = p.paragraph_format
+        try:
+            style_name = p.style.name if p.style is not None else None
+        except Exception:
+            style_name = None
+        result.append({
+            "index": i,
+            "text": p.text,
+            "style": style_name,
+            "align": _paragraph_align(p),
+            "indent_chars": _first_line_indent_chars(p),
+            "is_heading": _paragraph_is_heading(p),
+            "bold": (bool(run.bold) if run is not None and run.bold is not None else None),
+            "font_name": (_run_font_name(run) if run is not None else None),
+            "font_pt": _effective_font_pt(p),
+            "line_spacing": _paragraph_line_spacing(p),
+            "space_before_pt": _paragraph_pt(pf.space_before),
+            "space_after_pt": _paragraph_pt(pf.space_after),
+        })
+    return result

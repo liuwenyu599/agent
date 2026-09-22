@@ -1,0 +1,144 @@
+classDiagram
+    direction LR
+
+    %% ---------- 既有 ORM（不改动） ----------
+    class UserModel {
+        <<ORM: users>>
+        +String id
+        +String username
+        +String email
+        +String real_name
+        +String department
+        +String department_code
+        +String role
+        +bool is_active
+        +bool must_change_password
+    }
+
+    class AgentConfigModel {
+        <<ORM: agent_configs>>
+        +String dept_code
+        +String system_prompt
+        +String safety_prompt
+        +String business_prompt
+        +String work_requirements
+        +String scopes_json
+        +int version
+    }
+
+    %% ---------- 本轮新增 ----------
+    class UserPreferenceModel {
+        <<ORM: user_preferences [NEW]>>
+        +String user_id
+        +String assistant_name
+        +String work_preference
+        +String writing_style
+        +String writing_style_custom
+        +String behaviors_json
+        +datetime updated_at
+    }
+
+    class UserPreferenceService {
+        <<application/shared/user_preference.py [NEW]>>
+        -Session db
+        +get(user_id) Dict
+        +upsert(user_id, payload) Dict
+        +build_prompt_block(user_id) str
+        -_sanitize_free_text(text, limit) str
+        -_style_line(style, custom) str
+        -_behavior_line(behaviors) str
+    }
+
+    class PreferenceRouter {
+        <<interfaces/preferences.py [NEW]>>
+        +get_me(user) Dict
+        +put_me(payload, user) Dict
+    }
+
+    %% ---------- 既有服务（改动） ----------
+    class OrganizationService {
+        <<application/organization/service.py [MOD]>>
+        +build_prompt(agent, task_hint, rag_context, user_preference) str
+        +agent_system_prompt(user_id) str
+        +user_context(user_id) Dict
+        +update_agent(user, dept_code, payload) Dict
+        -_effective_code(user) str
+    }
+
+    class WritingAssistant {
+        <<application/shared/writing_assistant.py [MOD]>>
+        +chat(message, history, sources, user_role, ..., user_preference) str
+        -_build_writing_prompt(topic, examples) str
+    }
+
+    class ChatService {
+        <<application/chat/service.py [MOD]>>
+        +send_message(user, message, ...) Dict
+    }
+
+    class WritingTaskService {
+        <<application/writing/task_service.py [MOD]>>
+        -_agent_prompt(user_id) str
+        -_llm_draft(...) str
+    }
+
+    class RagService {
+        <<application/knowledge/rag_service.py>>
+        +search(query, user_id, ...) List
+        +resolve_scopes(dept_code, is_admin, user_id) List
+        -_dept_code_of(user_id) str
+    }
+
+    %% ---------- 桌面端 ----------
+    class PersonalViewModel {
+        <<features/personal/PersonalViewModel.kt [MOD]>>
+        +PersonalSection section
+        +String prefAssistantName
+        +String prefWorkPreference
+        +String prefWritingStyle
+        +String prefWritingStyleCustom
+        +bool prefCiteSources
+        +bool prefConfirmStructure
+        +bool prefDirty
+        +loadPreferences()
+        +savePreferences()
+        +resetPreferences()
+    }
+
+    class PersonalCenterDrawer {
+        <<design/components/PersonalCenterDrawer.kt [MOD]>>
+        +PersonalCenterDrawer(vm, onDismiss)
+        -PersonalizationPanel(vm)
+        -SettingsPanel()
+    }
+
+    class Endpoints {
+        <<core/network/Endpoints.kt [MOD]>>
+        +Preferences.ME : String
+    }
+
+    %% ---------- 关系 ----------
+    UserModel "1" --> "0..1" UserPreferenceModel : 拥有偏好（PK=uid）
+    UserPreferenceService ..> UserPreferenceModel : 读写
+    UserPreferenceService ..> UserModel : 仅校验存在性
+    PreferenceRouter ..> UserPreferenceService : 依赖
+    PreferenceRouter ..> UserModel : get_current_user
+
+    OrganizationService ..> UserPreferenceService : build_prompt_block()
+    OrganizationService ..> AgentConfigModel : 读取四层配置
+    OrganizationService ..> UserModel : _effective_code()
+
+    ChatService ..> WritingAssistant : chat(..., user_preference)
+    ChatService ..> UserPreferenceService : build_prompt_block()
+    ChatService ..> RagService : search()（scope 由服务端定）
+
+    WritingTaskService ..> OrganizationService : agent_system_prompt()
+    RagService ..> UserModel : 只从 UserModel 解析 scope
+
+    PersonalCenterDrawer ..> PersonalViewModel : 渲染 + 事件
+    PersonalViewModel ..> Endpoints : /preferences/me
+    Endpoints ..> PreferenceRouter : HTTP GET/PUT
+
+    note for UserPreferenceModel "刻意不含 department_code / scope / role / 权限位 / theme"
+    note for RagService "★ 权限隔离落点：不读 user_preferences"
+    note for OrganizationService "★ 分层装配：系统基础 → 安全 → 科室业务 → 工作要求 → 个人偏好 → 任务 → RAG"

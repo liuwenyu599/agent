@@ -1,7 +1,13 @@
 """对话请求/响应模型（与旧系统一致）。"""
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class SessionRenameRequest(BaseModel):
+    """重命名会话。只改标题，不产生任何新的会话或消息。"""
+
+    title: str = Field(min_length=1, max_length=200)
 
 
 class ChatRequest(BaseModel):

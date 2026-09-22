@@ -24,6 +24,15 @@ class DocumentSaveRequest(BaseModel):
     status: Optional[str] = Field(default=None, pattern="^(draft|final)$")
 
 
+class DocumentRenameRequest(BaseModel):
+    """重命名文档：只改标题，**不产生新版本**（与 DocumentSaveRequest 的区别）。
+
+    标题长度上限与文档表 title 列一致（200）。
+    """
+
+    title: str = Field(min_length=1, max_length=200)
+
+
 class DocumentSummary(BaseModel):
     id: str
     title: str

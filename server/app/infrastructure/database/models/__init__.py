@@ -15,6 +15,7 @@ from app.infrastructure.database.models import (  # noqa: F401
     system,
     templates,
     training,
+    user_preference,
     workflow,
     writing_task,
 )

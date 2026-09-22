@@ -1,7 +1,7 @@
 """PPT 助手 DTO。"""
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TemplateIn(BaseModel):
@@ -24,6 +24,12 @@ class DraftIn(BaseModel):
     subtitle: Optional[str] = None
     outline: Optional[dict] = None
     template_id: Optional[str] = None
+
+
+class DocRenameIn(BaseModel):
+    """重命名 PPT 文档：只改标题，不改变内容与状态。"""
+
+    title: str = Field(min_length=1, max_length=200)
 
 
 class OutlineIn(BaseModel):

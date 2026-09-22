@@ -41,3 +41,8 @@ class FormatCheckRecord:
     rule_issue_count: int = 0
     ai_issue_count: int = 0
     created_at: Optional[datetime] = None
+    # 审校工作台状态（迁移 009 新增列）：
+    # applied_ids  —— 用户已「应用」的 issue id（每次 recheck 后重置为 []）
+    # resolved_ids —— 经复检确认已修正的 issue id（累计保留）
+    applied_ids: List[int] = field(default_factory=list)
+    resolved_ids: List[int] = field(default_factory=list)

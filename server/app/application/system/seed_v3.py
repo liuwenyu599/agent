@@ -220,11 +220,15 @@ def run_all(db: Session) -> dict:
         try:
             result[name] = fn(db)
         except Exception as e:
-            logger.warning("种子 %s 执行失败（不影响启动）: %s", name, e)
+            # 禁止静默吞异常：种子失败必须留下完整堆栈，且返回值带 error 供调用方感知。
+            logger.exception("种子 %s 执行失败（已回滚该段事务）: %s", name, e)
             db.rollback()
-            result[name] = {"error": str(e)}
+            result[name] = {"error": f"{type(e).__name__}: {e}"}
+            result.setdefault("_errors", []).append(name)
     try:
         result["user_data_scope_synced"] = sync_user_data_scope(db)
     except Exception as e:
-        result["user_data_scope_synced"] = {"error": str(e)}
+        logger.exception("同步用户数据范围失败: %s", e)
+        result["user_data_scope_synced"] = {"error": f"{type(e).__name__}: {e}"}
+        result.setdefault("_errors", []).append("user_data_scope_synced")
     return result

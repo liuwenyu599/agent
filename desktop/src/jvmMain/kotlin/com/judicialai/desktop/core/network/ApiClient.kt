@@ -15,6 +15,7 @@ import io.ktor.client.request.forms.submitFormWithBinaryData
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -97,8 +98,24 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
     private fun errMsg(status: Int?, body: String?, e: Throwable?): String {
         if (e != null) return friendlyMessage(e)
         val detail = runCatching {
-            body?.let { (json.parseToJsonElement(it) as? JsonObject) }
-                ?.get("detail")?.jsonPrimitive?.content
+            // 本版本的 kotlinx 没有 JsonPrimitive.contentOrNull，这里统一兜一层
+            fun prim(el: JsonElement?): String? =
+                runCatching { el?.jsonPrimitive?.content }.getOrNull()
+            val el = body?.let { json.parseToJsonElement(it) as? JsonObject }?.get("detail")
+            when (el) {
+                // 常规：{"detail": "中文提示"}
+                is JsonPrimitive -> prim(el)
+                // FastAPI 参数校验失败（HTTP 422）：detail 是 [{type,loc,msg,input}] 数组，
+                // msg 是英文技术文案，不直接抛给用户，统一给中文提示；原始内容落日志便于排障。
+                // 不兜住的话这里会因 jsonPrimitive 抛错而整段退化成「请求失败（HTTP 422）」。
+                is JsonArray -> {
+                    val first = el.firstOrNull() as? JsonObject
+                    val loc = first?.get("loc")?.toString().orEmpty()
+                    ClientLog.warn("请求参数不合法 status=$status loc=$loc msg=${prim(first?.get("msg"))}")
+                    "请求参数不合法" + (status?.let { "（HTTP $it）" } ?: "")
+                }
+                else -> null
+            }
         }.getOrNull()
         return detail ?: "请求失败（HTTP $status）"
     }
@@ -243,6 +260,9 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
 
     suspend fun put(path: String, body: Any? = null) = req(HttpMethod.Put, path, body)
 
+    /** 局部更新（重命名等）：与 PUT 完全同构，仅 HTTP 方法不同 */
+    suspend fun patch(path: String, body: Any? = null) = req(HttpMethod.Patch, path, body)
+
     /**
      * POST /auth/change-password {old_password, new_password, confirm_password}
      * 服务端校验旧密码与复杂度；客户端不缓存、不记录任何密码明文。
@@ -270,6 +290,11 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     HttpMethod.Get -> c.get(url) { auth(); params.forEach { (k, v) -> parameter(k, v) } }
                     HttpMethod.Delete -> c.delete(url) { auth() }
                     HttpMethod.Put -> c.put(url) {
+                        auth()
+                        contentType(ContentType.Application.Json)
+                        body?.let { setBody(it.toJsonElement()) }
+                    }
+                    HttpMethod.Patch -> c.patch(url) {
                         auth()
                         contentType(ContentType.Application.Json)
                         body?.let { setBody(it.toJsonElement()) }
@@ -334,15 +359,51 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
 
     // ---------- 下载 ----------
 
+    /**
+     * 落盘下载内容并校验，避免「服务端 200 但内容是错误页」时给用户一个坏文件：
+     * - 目标目录不存在 → mkdirs；
+     * - 空响应体 → 不写文件，返回可读错误；
+     * - `expectDocx` 且内容前 4 字节不是 zip 魔数 `PK\x03\x04` → 丢弃，不写出 .docx；
+     * - 写盘后校验 `length() > 0`。
+     * 返回 null 表示成功；返回非 null 为给用户看的错误提示。
+     */
+    private fun writeDownloadChecked(body: ByteArray, target: File, expectDocx: Boolean): String? {
+        if (body.isEmpty()) {
+            ClientLog.error("下载内容为空，未写出 " + target.name)
+            return "服务端返回内容为空，未生成文件"
+        }
+        if (expectDocx && !isZipDocx(body)) {
+            val head = body.take(8).joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+            ClientLog.error("下载内容不是有效 docx（前 8 字节=$head），已丢弃，未写出 " + target.name)
+            return "服务端返回的不是有效的 docx 文件，已取消保存"
+        }
+        target.parentFile?.mkdirs()
+        target.writeBytes(body)
+        if (target.length() <= 0L) {
+            ClientLog.error("文件写入后为空：" + target.absolutePath)
+            return "文件写入失败，目标文件为空"
+        }
+        return null
+    }
+
+    /** docx（OOXML）是 zip，魔数固定为 PK\x03\x04 */
+    private fun isZipDocx(body: ByteArray): Boolean =
+        body.size >= 4 && body[0] == 0x50.toByte() && body[1] == 0x4B.toByte() &&
+            body[2] == 0x03.toByte() && body[3] == 0x04.toByte()
+
     suspend fun downloadGet(path: String, target: File, timeoutMs: Long = 300_000): ApiResult<String> {
         val url = configProvider().apiBase + path
         return try {
             client(timeoutMs).use { c ->
                 val r = c.get(url) { auth() }
                 if (r.status.isSuccess()) {
-                    target.writeBytes(r.body())
-                    ClientLog.info("下载成功 " + target.name)
-                    ApiResult.Ok("已保存：" + target.absolutePath)
+                    val err = writeDownloadChecked(r.body(), target,
+                        expectDocx = target.name.endsWith(".docx", ignoreCase = true))
+                    if (err != null) ApiResult.Err(r.status.value, err)
+                    else {
+                        ClientLog.info("下载成功 " + target.name)
+                        ApiResult.Ok("已保存：" + target.absolutePath)
+                    }
                 } else ApiResult.Err(r.status.value, errMsg(r.status.value, r.body(), null))
             }
         } catch (e: Exception) {
@@ -359,9 +420,13 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     auth(); contentType(ContentType.Application.Json); setBody(body.toJsonElement())
                 }
                 if (r.status.isSuccess()) {
-                    target.writeBytes(r.body())
-                    ClientLog.info("导出成功 " + target.name)
-                    ApiResult.Ok("已保存：" + target.absolutePath)
+                    val err = writeDownloadChecked(r.body(), target,
+                        expectDocx = target.name.endsWith(".docx", ignoreCase = true))
+                    if (err != null) ApiResult.Err(r.status.value, err)
+                    else {
+                        ClientLog.info("导出成功 " + target.name)
+                        ApiResult.Ok("已保存：" + target.absolutePath)
+                    }
                 } else ApiResult.Err(r.status.value, errMsg(r.status.value, r.body(), null))
             }
         } catch (e: Exception) {

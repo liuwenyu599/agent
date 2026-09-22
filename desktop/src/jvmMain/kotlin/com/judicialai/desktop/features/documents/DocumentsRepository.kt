@@ -59,6 +59,10 @@ class DocumentsRepository(private val api: ApiClient) {
 
     suspend fun delete(id: String) = api.del(Endpoints.Documents.item(id))
 
+    /** PATCH /documents/{id} {title} → 重命名文档（版本不受影响） */
+    suspend fun rename(id: String, title: String) =
+        api.patch(Endpoints.Documents.item(id), mapOf("title" to title))
+
     /** GET /documents/{id}/export/docx 导出公文格式 Word */
     suspend fun exportDocx(id: String, target: File) =
         api.downloadGet(Endpoints.Documents.exportDocx(id), target)

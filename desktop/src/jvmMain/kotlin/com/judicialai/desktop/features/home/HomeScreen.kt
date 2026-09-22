@@ -2,6 +2,7 @@ package com.judicialai.desktop.features.home
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,8 +24,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Card
 import androidx.compose.material.Icon
+import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,28 +43,23 @@ import com.judicialai.desktop.app.AppNav
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.app.NavItem
-import com.judicialai.desktop.design.components.EmptyState
-import com.judicialai.desktop.design.components.SectionTitle
-import com.judicialai.desktop.design.components.SoftPanel
-import com.judicialai.desktop.design.components.StatusChip
+import com.judicialai.desktop.design.components.FilterChip
 import com.judicialai.desktop.design.components.paletteOf
+import com.judicialai.desktop.design.theme.AiInk
+import com.judicialai.desktop.design.theme.AiSoft
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.FeatureCheckSoft
 import com.judicialai.desktop.design.theme.FeaturePptSoft
 import com.judicialai.desktop.design.theme.FeatureTemplateSoft
-import com.judicialai.desktop.design.theme.FeatureWriteInk
 import com.judicialai.desktop.design.theme.FeatureWriteSoft
-import com.judicialai.desktop.design.theme.HomeBg
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.Muted
 import com.judicialai.desktop.design.theme.Ok
-import com.judicialai.desktop.design.theme.OkSoft
-import com.judicialai.desktop.design.theme.Surface
+import com.judicialai.desktop.design.theme.Surface as SurfaceColor
 import com.judicialai.desktop.design.theme.Warn
-import com.judicialai.desktop.design.theme.WarnSoft
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -70,77 +67,82 @@ import java.util.Locale
 private val WEEKDAYS = arrayOf("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 /**
- * 工作台（HOME）
+ * 工作台（HOME · v4.0）
  *
- * 产品定位：办公工具的首页，不是管理后台 Dashboard。
- * 结构 = 大欢迎区 + 2×2 四张整卡彩色功能卡 + 弱化的二级区（最近使用 / 我的待办）。
- * 默认无侧边导航；所有数据来自后端，无占位假数据。
+ * 结构 = 欢迎条（无背景，页面底色 + 科室上下文） + 2×2 彩色功能卡。
+ * 四大功能卡是唯一的视觉中心，不再有二级内容区抢权重。
  */
 @Composable
 fun HomeScreen(vm: HomeViewModel = remember { HomeViewModel() }) {
     Column(
-        Modifier.fillMaxSize().background(HomeBg).verticalScroll(rememberScrollState())
-            .padding(horizontal = Dimens.space10, vertical = Dimens.space8),
+        Modifier.fillMaxSize().background(AppBg).verticalScroll(rememberScrollState())
+            .padding(horizontal = Dimens.space8, vertical = Dimens.space5),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.widthIn(max = Dimens.homeMaxWidth)) {
-            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space8)) {
-                WelcomeBlock(vm)
+        // 首页 2×2 收窄：局部宽度，不动 Dimens.homeMaxWidth 全局 token
+        Box(Modifier.widthIn(max = HOME_CONTENT_MAX_WIDTH)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space5)) {
+                WelcomeBand(vm)
                 FeatureGrid()
             }
         }
     }
 }
 
-// ---------------- 欢迎区 ----------------
+/** 首页内容最大宽：比全局 homeMaxWidth 更窄，让 2×2 格子更紧凑 */
+private val HOME_CONTENT_MAX_WIDTH = 960.dp
+
+// ---------------- 欢迎条（无背景，页面底色） ----------------
 
 @Composable
-private fun WelcomeBlock(vm: HomeViewModel) {
+private fun WelcomeBand(vm: HomeViewModel) {
     val today = LocalDate.now()
     val dateText = today.format(DateTimeFormatter.ofPattern("yyyy年M月d日")) +
         "  " + WEEKDAYS[(today.dayOfWeek.value + 6) % 7]
 
-    Column(Modifier.fillMaxWidth()) {
-        Text("${vm.greeting}，${vm.realName.ifBlank { AppState.displayName }}",
-            fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-        Spacer(Modifier.height(Dimens.space2))
-        Text("今天有什么需要处理？", fontSize = 15.sp, color = Ink2)
-        Spacer(Modifier.height(Dimens.space3))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(dateText, fontSize = 12.5.sp, color = Muted)
-            if (vm.department.isNotBlank()) {
-                Spacer(Modifier.width(Dimens.space3))
-                Text(vm.department, fontSize = 12.5.sp, color = Muted)
-            }
-            if (vm.roleName.isNotBlank()) {
-                Spacer(Modifier.width(Dimens.space3))
-                Text(vm.roleName, fontSize = 12.5.sp, color = Muted)
-            }
-            if (AppState.agentName.isNotBlank()) {
-                Spacer(Modifier.width(Dimens.space3))
-                Box(
-                    Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
-                        .background(FeatureWriteSoft)
-                        .padding(horizontal = 9.dp, vertical = 3.dp),
-                ) {
-                    Text(AppState.agentName, fontSize = 12.sp, color = FeatureWriteInk,
-                        fontWeight = FontWeight.Medium)
+    Box(Modifier.fillMaxWidth().heightIn(min = 120.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+            Text("${vm.greeting}，${vm.realName.ifBlank { AppState.displayName }}",
+                fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+                letterSpacing = (-0.3).sp)
+            Spacer(Modifier.height(Dimens.space1))
+            Text("今天有什么需要处理？我已按你的所属科室准备就绪。",
+                fontSize = 14.sp, color = Muted)
+            Spacer(Modifier.height(Dimens.space4))
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+                MetaPill(dateText)
+                if (vm.department.isNotBlank()) MetaPill(vm.department)
+                if (vm.roleName.isNotBlank()) MetaPill(vm.roleName)
+                if (AppState.agentName.isNotBlank()) MetaPill(AppState.agentName)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(6.dp).clip(CircleShape)
+                        .background(if (vm.aiOnline) Ok else Muted))
+                    Spacer(Modifier.width(Dimens.space2))
+                    Text(if (vm.aiOnline) "AI 助手在线" else "AI 助手离线 · 基础功能正常",
+                        fontSize = 12.sp, color = Muted)
+                }
+                if (vm.todoCount > 0) {
+                    Text("${vm.todoCount} 项待办", fontSize = 12.sp,
+                        color = Warn, fontWeight = FontWeight.Medium)
                 }
             }
-            Spacer(Modifier.width(Dimens.space3))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).clip(CircleShape)
-                    .background(if (vm.aiOnline) Ok else Muted))
-                Spacer(Modifier.width(Dimens.space2))
-                Text(if (vm.aiOnline) "AI 助手在线" else "AI 助手离线 · 基础功能正常",
-                    fontSize = 12.5.sp, color = Muted)
-            }
-            if (vm.todoCount > 0) {
-                Spacer(Modifier.width(Dimens.space3))
-                Text("${vm.todoCount} 项待办", fontSize = 12.5.sp, color = Warn,
-                    fontWeight = FontWeight.Medium)
-            }
         }
+    }
+}
+
+/** 浅底方案：白底 + 标准描边 + 次级文字（原为深底半透明白，随欢迎条去背景一并调整） */
+@Composable
+private fun MetaPill(text: String) {
+    val shape = RoundedCornerShape(Dimens.radiusPill)
+    Box(
+        Modifier.clip(shape)
+            .background(SurfaceColor)
+            .border(1.dp, Line, shape)
+            .padding(horizontal = 11.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = 12.sp, color = Ink2, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -149,12 +151,10 @@ private fun WelcomeBlock(vm: HomeViewModel) {
 @Composable
 private fun FeatureGrid() {
     val items = AppNav.coreItems
-    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space5)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         items.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space5)) {
-                row.forEach { item ->
-                    FeatureCard(item, Modifier.weight(1f))
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+                row.forEach { item -> FeatureCard(item, Modifier.weight(1f)) }
             }
         }
     }
@@ -166,14 +166,14 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val lift by animateDpAsState(if (hovered) (-3).dp else 0.dp)
-    val elevation by animateDpAsState(if (hovered) Dimens.elevFloat else Dimens.elevCard)
+    val elevation by animateDpAsState(if (hovered) Dimens.elevFloat else Dimens.elevRaised)
     val arrow by animateDpAsState(if (hovered) 6.dp else 0.dp)
 
-    Card(
-        modifier = modifier.height(196.dp).offset(y = lift),
-        shape = RoundedCornerShape(Dimens.radiusXl),
+    Surface(
+        modifier = modifier.height(HOME_FEATURE_CARD_HEIGHT).offset(y = lift),
+        shape = RoundedCornerShape(Dimens.radiusSheet),
         elevation = elevation,
-        backgroundColor = Color.Transparent,
+        color = Color.Transparent,
     ) {
         Box(
             Modifier.fillMaxSize()
@@ -181,41 +181,47 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
                 .clickable(interactionSource = interaction, indication = null) {
                     AppState.navigate(item.screen, item.adminTab)
                 }
-                .padding(Dimens.space6),
+                .padding(Dimens.space5),
         ) {
-            // 半透明几何装饰：右上角大圆 + 右下角大图标水印
             Box(
-                Modifier.size(150.dp).align(Alignment.TopEnd)
-                    .offset(x = 40.dp, y = (-52).dp)
+                Modifier.size(132.dp).align(Alignment.TopEnd)
+                    .offset(x = 44.dp, y = (-52).dp)
                     .clip(CircleShape).background(Color.White.copy(alpha = 0.10f)),
             )
             Icon(
                 item.icon, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.14f),
+                tint = Color.White.copy(alpha = 0.13f),
                 modifier = Modifier.size(Dimens.iconDeco).align(Alignment.BottomEnd)
-                    .offset(x = 14.dp, y = 22.dp),
+                    .offset(x = 12.dp, y = 20.dp),
             )
 
             Column(Modifier.fillMaxSize()) {
                 Box(
-                    Modifier.size(Dimens.iconFeature).clip(RoundedCornerShape(Dimens.radiusMd))
-                        .background(Color.White.copy(alpha = 0.18f)),
+                    Modifier.size(Dimens.iconFeature).clip(RoundedCornerShape(Dimens.radiusLg))
+                        .background(Color.White.copy(alpha = 0.18f))
+                        .border(1.dp, Color.White.copy(alpha = 0.22f),
+                            RoundedCornerShape(Dimens.radiusLg)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(item.icon, contentDescription = null, tint = Color.White,
                         modifier = Modifier.size(Dimens.iconLg))
                 }
                 Spacer(Modifier.weight(1f))
-                Text(item.label, fontSize = 21.sp, fontWeight = FontWeight.SemiBold,
+                Text(item.label, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
                     color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(Dimens.space2))
-                Text(item.desc, fontSize = 13.sp, color = Color.White.copy(alpha = 0.88f),
+                Spacer(Modifier.height(Dimens.space1 + 2.dp))
+                Text(item.desc, fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.86f),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(Dimens.space4))
+                Spacer(Modifier.height(Dimens.space3))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("开始使用", fontSize = 12.5.sp,
-                        color = Color.White.copy(alpha = 0.92f),
-                        fontWeight = FontWeight.Medium)
+                    Box(
+                        Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
+                            .background(Color.White.copy(alpha = 0.16f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    ) {
+                        Text("开始使用", fontSize = 12.sp, color = Color.White,
+                            fontWeight = FontWeight.Medium)
+                    }
                     Spacer(Modifier.width(Dimens.space2))
                     Text("→", fontSize = 14.sp, color = Color.White,
                         modifier = Modifier.offset(x = arrow))
@@ -225,12 +231,10 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
     }
 }
 
-// ---------------- 二级区已移除 ----------------
-// 「最近使用 / 我的待办」不再占用 HOME 版面，全部收进右上角「个人中心」，
-// 保证 2×2 四张彩色功能卡是 HOME 唯一的视觉中心。
+/** 首页 2×2 卡片高度：收窄后仍保证「图标 + 标题 + 说明 + 开始使用」四层完整可读 */
+private val HOME_FEATURE_CARD_HEIGHT = 160.dp
 
-
-/** 首页四卡对应功能色（供其他页面复用：工作区标题底色等） */
+/** 首页四卡对应功能色（供其他页面复用） */
 fun softColorOf(screen: AppScreen): Color = when (screen) {
     AppScreen.WRITING -> FeatureWriteSoft
     AppScreen.TEMPLATES -> FeatureTemplateSoft

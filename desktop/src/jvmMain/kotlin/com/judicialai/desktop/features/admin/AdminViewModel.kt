@@ -25,7 +25,6 @@ class AdminViewModel(private val repo: AdminRepository) {
     var pendingDocs by mutableStateOf(listOf<JsonObject>()); private set
     var publishedDocs by mutableStateOf(listOf<JsonObject>()); private set
     var rejectedDocs by mutableStateOf(listOf<JsonObject>()); private set
-    var sessions by mutableStateOf(listOf<JsonObject>()); private set
     var approvalConfig by mutableStateOf<JsonObject?>(null); private set
 
     /** 科室字典：来自 /organization/departments，只允许下拉选择 */
@@ -77,13 +76,6 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
     }
 
-    fun loadSessions() = scope.launch {
-        when (val r = repo.adminSessions()) {
-            is ApiResult.Ok -> sessions = r.data
-            is ApiResult.Err -> status = r.message
-        }
-    }
-
     fun loadDepartments() = scope.launch {
         when (val r = repo.departments()) {
             is ApiResult.Ok -> departments = r.data
@@ -109,7 +101,7 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
 
     fun loadAll() {
-        loadStats(); loadUsers(); loadKbs(); loadDocs(); loadSessions()
+        loadStats(); loadUsers(); loadKbs(); loadDocs()
         loadApprovalConfig(); loadDepartments()
     }
 
@@ -171,7 +163,5 @@ class AdminViewModel(private val repo: AdminRepository) {
         }
 
     fun archive(docId: String) = act("已归档") { repo.archive(docId) }
-
-    fun deleteSession(id: String) = act("已删除") { repo.deleteSession(id) }
 }
 

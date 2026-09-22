@@ -1,12 +1,15 @@
 package com.judicialai.desktop.features.department
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -14,245 +17,291 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.Button
 import androidx.compose.material.Icon
-import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
-import androidx.compose.material.TextButton
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.LibraryBooks
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Task
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
-import com.judicialai.desktop.design.components.EmptyState
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.AppTextField
+import com.judicialai.desktop.design.components.ContextBlock
+import com.judicialai.desktop.design.components.EmptyLine
+import com.judicialai.desktop.design.components.Eyebrow
+import com.judicialai.desktop.design.components.FieldError
 import com.judicialai.desktop.design.components.Hairline
+import com.judicialai.desktop.design.components.InlineNotice
 import com.judicialai.desktop.design.components.LoadingBlock
 import com.judicialai.desktop.design.components.PageHeader
 import com.judicialai.desktop.design.components.SectionTitle
-import com.judicialai.desktop.design.components.SoftPanel
-import com.judicialai.desktop.design.components.StatusChip
-import com.judicialai.desktop.design.components.SurfaceCard
+import com.judicialai.desktop.design.components.TagChip
+import com.judicialai.desktop.design.theme.AiIndigo
+import com.judicialai.desktop.design.theme.AiSoft
 import com.judicialai.desktop.design.theme.AppBg
+import com.judicialai.desktop.design.theme.BrandEnd
+import com.judicialai.desktop.design.theme.BrandStart
 import com.judicialai.desktop.design.theme.Dimens
-import com.judicialai.desktop.design.theme.FeatureTemplateSoft
-import com.judicialai.desktop.design.theme.FeatureWriteInk
-import com.judicialai.desktop.design.theme.FeatureWriteSoft
+import com.judicialai.desktop.design.theme.EmeraldInk
+import com.judicialai.desktop.design.theme.EmeraldSoft
+import com.judicialai.desktop.design.theme.FeatureCheckInk
+import com.judicialai.desktop.design.theme.FeatureCheckSoft
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.LineSubtle
 import com.judicialai.desktop.design.theme.Muted
-import com.judicialai.desktop.design.theme.Navy
-import com.judicialai.desktop.design.theme.Ok
-import com.judicialai.desktop.design.theme.OkSoft
+import com.judicialai.desktop.design.theme.Muted2
+import com.judicialai.desktop.design.theme.OnDarkMuted
+import com.judicialai.desktop.design.theme.OnPrimaryText
 import com.judicialai.desktop.design.theme.Primary
+import com.judicialai.desktop.design.theme.PrimarySoft
 import com.judicialai.desktop.design.theme.Surface
+import com.judicialai.desktop.design.theme.SurfaceTonal
 
 /**
- * 科室空间（v3.2）：本科室的「资源空间」，不是 Agent 选择器。
+ * 科室空间（v4.0）
  *
- * 进入即按所属科室自动绑定本科室智能助手，页面只聚合四块内容：
- * 本科室智能助手 / 常用业务 / 知识资源 / 本科室模板。
- * 知识管理员可在此维护本科室助手的「业务层」配置，并查看变更版本。
- * 界面不出现模型、检索范围、系统提示等技术概念。
+ * 普通用户进入即本科室：身份 → 本科室智能助手 → 常用业务 → 知识资源 → 科室模板。
+ * 不复制 HOME 的四大功能，也不让用户选择其他科室。
+ * knowledge_admin 在此基础上多一个「维护本科室助手」入口（仅业务层）。
  */
 @Composable
-fun DepartmentScreen(vm: DepartmentViewModel = remember { DepartmentViewModel() }) {
-    Column(
-        Modifier.fillMaxWidth().background(AppBg).verticalScroll(rememberScrollState())
-            .padding(Dimens.space6),
-    ) {
-        if (vm.maintaining && vm.agent?.canManage == true) {
-            MaintainPanel(vm)
-            return@Column
-        }
+fun DepartmentScreen() {
+    val vm = remember { DepartmentViewModel() }
 
-        PageHeader(
-            title = "科室空间",
-            subtitle = "${vm.deptName.ifBlank { "本科室" }} · 助手、常用业务、知识资源与模板",
-            actions = {
-                if (vm.agent?.canManage == true) {
-                    OutlinedButton(onClick = { vm.openMaintain() }) {
-                        Icon(Icons.Default.Edit, null, tint = Primary,
-                            modifier = Modifier.size(Dimens.iconSm))
-                        Spacer(Modifier.width(Dimens.space1))
-                        Text("维护本科室助手", fontSize = 12.5.sp, color = Primary)
-                    }
-                }
-            },
-        )
+    if (vm.loading) {
+        LoadingBlock("正在载入本科室空间…")
+        return
+    }
+    vm.error?.let {
+        Box(Modifier.fillMaxSize().background(AppBg).padding(Dimens.space6)) { FieldError(it) }
+        return
+    }
 
-        if (vm.loading && vm.agent == null) {
-            LoadingBlock("加载本科室资源…")
-            return@Column
-        }
-        vm.error?.let {
-            EmptyState("科室空间暂不可用：$it")
-            return@Column
-        }
-        if (vm.deptCode.isBlank()) {
-            EmptyState("当前账号未归属科室",
-                hint = "请联系系统管理员在「用户与组织」中设置所属科室")
-            return@Column
-        }
-
-        AgentPanel(vm)
-        Spacer(Modifier.height(Dimens.space5))
-        BusinessPanel(vm)
-        Spacer(Modifier.height(Dimens.space5))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Dimens.space5),
+    Box(Modifier.fillMaxSize().background(AppBg)) {
+        Column(
+            Modifier.fillMaxSize()
+                .padding(horizontal = Dimens.space6, vertical = Dimens.space5)
+                .verticalScroll(rememberScrollState()),
         ) {
-            Column(Modifier.weight(1f)) { KnowledgePanel(vm) }
-            Column(Modifier.weight(1f)) { TemplatePanel(vm) }
+            PageHeader(
+                title = vm.deptName.ifBlank { "本科室空间" },
+                subtitle = "本科室助手、常用业务、知识资源与科室模板",
+                eyebrow = "科室空间",
+                actions = {
+                    if (vm.agent?.canManage == true) {
+                        AppButton("维护本科室助手", onClick = { vm.openMaintain() },
+                            kind = AppButtonKind.PRIMARY, icon = Icons.Default.Settings)
+                    }
+                },
+            )
+
+            IdentityStrip(vm)
+
+            Spacer(Modifier.height(Dimens.space5))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
+            ) {
+                AgentCard(vm, Modifier.weight(1.15f))
+                BusinessCard(vm, Modifier.weight(1f))
+            }
+
+            Spacer(Modifier.height(Dimens.space4))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
+            ) {
+                KnowledgeCard(vm, Modifier.weight(1f))
+                TemplateCard(vm, Modifier.weight(1f))
+            }
+
+            vm.status?.let {
+                Spacer(Modifier.height(Dimens.space4))
+                InlineNotice(it)
+            }
+            Spacer(Modifier.height(Dimens.space6))
         }
-        Spacer(Modifier.height(Dimens.space5))
+    }
+
+    if (vm.maintaining) MaintainDialog(vm)
+}
+
+// ---------------- 本科室身份 ----------------
+
+@Composable
+private fun IdentityStrip(vm: DepartmentViewModel) {
+    val shape = RoundedCornerShape(Dimens.radiusXl)
+    val canManage = vm.agent?.canManage == true
+    Box(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(Brush.horizontalGradient(listOf(BrandStart, BrandEnd))),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(Dimens.space6),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(52.dp).clip(RoundedCornerShape(Dimens.radiusLg))
+                    .background(OnPrimaryText.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Badge, null, tint = OnPrimaryText,
+                    modifier = Modifier.size(Dimens.iconLg))
+            }
+            Spacer(Modifier.width(Dimens.space4))
+            Column(Modifier.weight(1f)) {
+                Text(vm.deptName.ifBlank { "本科室" }, fontSize = 19.sp,
+                    fontWeight = FontWeight.SemiBold, color = OnPrimaryText)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    buildString {
+                        append("已自动绑定本科室助手")
+                        vm.agent?.name?.takeIf { it.isNotBlank() }?.let { append("：$it") }
+                        val v = vm.agent?.version ?: 0
+                        if (v > 0) append(" · 配置版本 v$v")
+                    },
+                    fontSize = 12.5.sp, color = OnDarkMuted, lineHeight = 18.sp,
+                )
+            }
+            Spacer(Modifier.width(Dimens.space4))
+            Box(
+                Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
+                    .background(OnPrimaryText.copy(alpha = 0.16f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(if (canManage) "本科室管理员" else "本科室成员", fontSize = 12.sp,
+                    color = OnPrimaryText)
+            }
+        }
     }
 }
 
 // ---------------- 本科室智能助手 ----------------
 
 @Composable
-private fun AgentPanel(vm: DepartmentViewModel) {
-    val agent = vm.agent
-    SurfaceCard {
-        Column(Modifier.padding(Dimens.space5)) {
+private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
+    val a = vm.agent
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space5),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(Dimens.radiusMd))
+                    .background(Brush.linearGradient(listOf(AiIndigo, Primary))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.AutoAwesome, null, tint = OnPrimaryText,
+                    modifier = Modifier.size(Dimens.iconMd))
+            }
+            Spacer(Modifier.width(Dimens.space3))
+            Column(Modifier.weight(1f)) {
+                Text("本科室智能助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = Ink)
+                Text(a?.name.orEmpty().ifBlank { "${vm.deptName}助手" }, fontSize = 11.5.sp,
+                    color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space4))
+        a?.intro?.takeIf { it.isNotBlank() }?.let {
+            Text(it, fontSize = 12.5.sp, color = Ink2, lineHeight = 20.sp)
+            Spacer(Modifier.height(Dimens.space3))
+        }
+        a?.manager?.takeIf { it.isNotBlank() }?.let {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(44.dp).clip(CircleShape).background(Navy),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Default.AutoAwesome, null, tint = Surface,
-                        modifier = Modifier.size(Dimens.iconLg))
-                }
-                Spacer(Modifier.width(Dimens.space3))
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(agent?.name ?: "${vm.deptName}智能助手", fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold, color = Ink)
-                        Spacer(Modifier.width(Dimens.space2))
-                        StatusChip(
-                            text = if (agent == null) "未配置" else "已启用",
-                            fg = if (agent == null) Muted else Ok,
-                            bg = if (agent == null) AppBg else OkSoft,
-                        )
-                        if (agent != null && agent.version > 0) {
-                            Spacer(Modifier.width(Dimens.space2))
-                            StatusChip(text = "v${agent.version}", fg = Ink2, bg = AppBg)
-                        }
-                    }
-                    Spacer(Modifier.height(Dimens.space1))
-                    Text("${vm.deptName} · 已按所属科室自动绑定", fontSize = 12.sp, color = Muted)
-                }
+                TagChip("本科室维护人", fg = Primary, bg = PrimarySoft)
+                Spacer(Modifier.width(Dimens.space2))
+                Text(it, fontSize = 12.sp, color = Ink2)
             }
-
-            if (!agent?.intro.isNullOrBlank()) {
-                Spacer(Modifier.height(Dimens.space3))
-                Text(agent!!.intro, fontSize = 13.sp, color = Ink2, lineHeight = 21.sp)
-            }
-
-            if (!agent?.recommendedTasks.isNullOrEmpty()) {
-                Spacer(Modifier.height(Dimens.space4))
-                SectionTitle(title = "本科室常用任务")
-                Spacer(Modifier.height(Dimens.space2))
-                Column(verticalArrangement = Arrangement.spacedBy(Dimens.space1)) {
-                    agent!!.recommendedTasks.forEach { task ->
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clip(RoundedCornerShape(Dimens.radiusSm))
-                                .clickable {
-                                    AppState.pendingWritingIntent = task
-                                    AppState.navigate(AppScreen.WRITING)
-                                }
-                                .padding(horizontal = Dimens.space2,
-                                    vertical = Dimens.space2),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                Modifier.size(6.dp).clip(CircleShape).background(FeatureWriteInk),
-                            )
-                            Spacer(Modifier.width(Dimens.space2))
-                            Text(task, fontSize = 13.sp, color = Ink,
-                                modifier = Modifier.weight(1f), maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            Text("开始 →", fontSize = 11.5.sp, color = Muted)
-                        }
-                    }
-                }
-            }
-
-            if (!agent?.manager.isNullOrBlank()) {
-                Spacer(Modifier.height(Dimens.space3))
-                Hairline()
-                Spacer(Modifier.height(Dimens.space2))
-                Text("本科室维护人：${agent!!.manager}", fontSize = 12.sp, color = Muted)
-            }
-        }
-    }
-}
-
-// ---------------- 常用业务 ----------------
-
-@Composable
-private fun BusinessPanel(vm: DepartmentViewModel) {
-    SurfaceCard {
-        Column(Modifier.padding(Dimens.space5)) {
-            SectionTitle(title = "常用业务",
-                more = if (vm.business.isEmpty()) null else "进入智能写作",
-                onMore = if (vm.business.isEmpty()) null else {
-                    { AppState.navigate(AppScreen.WRITING) }
-                })
             Spacer(Modifier.height(Dimens.space3))
-            if (vm.business.isEmpty()) {
-                Text("本科室助手尚未配置常用业务。可由本科室知识管理员在「维护本科室助手」中添加。",
-                    fontSize = 12.5.sp, color = Muted)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                    vm.business.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                            row.forEach { item ->
-                                Box(
-                                    Modifier.weight(1f)
-                                        .clip(RoundedCornerShape(Dimens.radiusMd))
-                                        .background(FeatureWriteSoft)
-                                        .clickable {
-                                            AppState.pendingWritingIntent = item.title
-                                            AppState.navigate(AppScreen.WRITING)
-                                        }
-                                        .padding(Dimens.space4),
-                                ) {
-                                    Column {
-                                        Text(item.title, fontSize = 13.5.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = FeatureWriteInk, maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis)
-                                        if (item.hint.isNotBlank()) {
-                                            Spacer(Modifier.height(Dimens.space1))
-                                            Text(item.hint, fontSize = 11.5.sp, color = Ink2,
-                                                maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                }
+        }
+
+        Hairline()
+        Spacer(Modifier.height(Dimens.space3))
+        SectionTitle("推荐任务", icon = Icons.Default.Task)
+        Spacer(Modifier.height(Dimens.space2))
+        val tasks = a?.recommendedTasks.orEmpty()
+        if (tasks.isEmpty()) {
+            EmptyLine("本科室暂未配置推荐任务")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                tasks.forEach { t ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(AiSoft)
+                            .clickable {
+                                AppState.pendingWritingIntent = t
+                                AppState.navigate(AppScreen.WRITING)
                             }
-                            if (row.size == 1) Spacer(Modifier.weight(1f))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(5.dp)
+                            .clip(RoundedCornerShape(Dimens.radiusPill))
+                            .background(AiIndigo))
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text(t, fontSize = 12.5.sp, color = Ink, modifier = Modifier.weight(1f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("开始 →", fontSize = 11.5.sp, color = AiIndigo)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------- 常用业务 / 知识 / 模板 ----------------
+
+@Composable
+private fun BusinessCard(vm: DepartmentViewModel, modifier: Modifier) {
+    PanelCard(modifier, title = "常用业务", icon = Icons.Default.Task) {
+        if (vm.business.isEmpty()) {
+            EmptyLine("本科室暂未配置常用业务")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                vm.business.forEach { b ->
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(SurfaceTonal)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(b.title, fontSize = 12.5.sp, color = Ink,
+                            fontWeight = FontWeight.Medium, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        if (b.hint.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(b.hint, fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
                         }
                     }
                 }
@@ -261,200 +310,170 @@ private fun BusinessPanel(vm: DepartmentViewModel) {
     }
 }
 
-// ---------------- 知识资源 ----------------
-
 @Composable
-private fun KnowledgePanel(vm: DepartmentViewModel) {
-    SurfaceCard {
-        Column(Modifier.padding(Dimens.space5)) {
-            SectionTitle(title = "知识资源",
-                more = "进入知识库",
-                onMore = { AppState.navigate(AppScreen.KNOWLEDGE) })
-            Spacer(Modifier.height(Dimens.space3))
-            if (vm.knowledge.isEmpty()) {
-                Text("本科室暂无知识库。可由本科室知识管理员在知识库中创建。",
-                    fontSize = 12.5.sp, color = Muted)
-            } else {
+private fun KnowledgeCard(vm: DepartmentViewModel, modifier: Modifier) {
+    PanelCard(modifier, title = "知识资源", icon = Icons.Default.LibraryBooks,
+        tint = EmeraldInk) {
+        if (vm.knowledge.isEmpty()) {
+            EmptyLine("本科室暂无可用知识资源")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
                 vm.knowledge.forEach { k ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(Dimens.radiusSm))
-                            .clickable { AppState.navigate(AppScreen.KNOWLEDGE) }
-                            .padding(vertical = Dimens.space2),
+                            .clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(EmeraldSoft)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(
-                            Modifier.size(32.dp).clip(RoundedCornerShape(Dimens.radiusSm))
-                                .background(AppBg),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Default.LibraryBooks, null, tint = Ink2,
-                                modifier = Modifier.size(Dimens.iconMd))
-                        }
-                        Spacer(Modifier.width(Dimens.space3))
                         Column(Modifier.weight(1f)) {
-                            Text(k.name, fontSize = 13.sp, color = Ink, maxLines = 1,
+                            Text(k.name, fontSize = 12.5.sp, color = Ink,
+                                fontWeight = FontWeight.Medium, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
-                            Text("${k.docCount} 份资料", fontSize = 11.5.sp, color = Muted)
+                            if (k.description.isNotBlank()) {
+                                Text(k.description, fontSize = 11.5.sp, color = Muted,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
+                        Spacer(Modifier.width(Dimens.space2))
+                        TagChip("${k.docCount} 篇", fg = EmeraldInk, bg = Surface)
                     }
-                    Hairline()
                 }
             }
         }
     }
 }
 
-// ---------------- 本科室模板 ----------------
-
 @Composable
-private fun TemplatePanel(vm: DepartmentViewModel) {
-    SurfaceCard {
-        Column(Modifier.padding(Dimens.space5)) {
-            SectionTitle(title = "本科室模板",
-                more = "进入模板中心",
-                onMore = { AppState.navigate(AppScreen.TEMPLATES) })
-            Spacer(Modifier.height(Dimens.space3))
-            if (vm.templates.isEmpty()) {
-                Text("本科室暂无专属模板。可在模板中心把系统模板调整为本科室版本。",
-                    fontSize = 12.5.sp, color = Muted)
-            } else {
+private fun TemplateCard(vm: DepartmentViewModel, modifier: Modifier) {
+    PanelCard(modifier, title = "科室模板", icon = Icons.Default.Description,
+        tint = FeatureCheckInk) {
+        if (vm.templates.isEmpty()) {
+            EmptyLine("本科室暂无专属模板，可在模板中心用 AI 调整生成")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
                 vm.templates.forEach { t ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(Dimens.radiusSm))
+                            .clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(FeatureCheckSoft)
                             .clickable { AppState.navigate(AppScreen.TEMPLATES) }
-                            .padding(vertical = Dimens.space2),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(
-                            Modifier.size(32.dp).clip(RoundedCornerShape(Dimens.radiusSm))
-                                .background(FeatureTemplateSoft),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Default.Star, null, tint = Ink2,
-                                modifier = Modifier.size(Dimens.iconMd))
-                        }
-                        Spacer(Modifier.width(Dimens.space3))
                         Column(Modifier.weight(1f)) {
-                            Text(t.name, fontSize = 13.sp, color = Ink, maxLines = 1,
+                            Text(t.name, fontSize = 12.5.sp, color = Ink,
+                                fontWeight = FontWeight.Medium, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
-                            Text(t.category.ifBlank { "科室模板" }, fontSize = 11.5.sp,
-                                color = Muted)
+                            if (t.category.isNotBlank()) {
+                                Text(t.category, fontSize = 11.sp, color = Muted)
+                            }
                         }
+                        Text("去使用 →", fontSize = 11.5.sp, color = FeatureCheckInk)
                     }
-                    Hairline()
                 }
             }
         }
     }
 }
 
-// ---------------- 本科室助手维护（知识管理员） ----------------
-
 @Composable
-private fun MaintainPanel(vm: DepartmentViewModel) {
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { vm.closeMaintain() }) {
-                Icon(Icons.Default.ArrowBack, null, tint = Primary,
-                    modifier = Modifier.size(Dimens.iconSm))
-                Spacer(Modifier.width(Dimens.space1))
-                Text("返回科室空间", color = Primary, fontSize = 13.sp)
-            }
-            Spacer(Modifier.weight(1f))
-            Text("本科室助手 · 业务配置", fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold, color = Ink)
-        }
-        Spacer(Modifier.height(Dimens.space2))
-        Text("只维护本科室的业务口径与工作要求；系统级安全与权限约束由系统统一控制，不可修改。",
-            fontSize = 12.5.sp, color = Muted)
-        Spacer(Modifier.height(Dimens.space4))
-
-        SurfaceCard {
-            Column(Modifier.padding(Dimens.space5)) {
-                MaintainField("助手简介", vm.formIntro, { vm.formIntro = it },
-                    "一句话说明本科室助手负责哪些工作")
-                MaintainField("维护人", vm.formManager, { vm.formManager = it },
-                    "本科室负责维护该助手的人员")
-                MaintainField("业务口径", vm.formBusinessPrompt, { vm.formBusinessPrompt = it },
-                    "本科室职责、常用文种、表述习惯与业务边界", singleLine = false)
-                MaintainField("工作要求", vm.formRequirements, { vm.formRequirements = it },
-                    "成稿必须满足的规范与质量口径", singleLine = false)
-                MaintainField("推荐任务", vm.formTasks, { vm.formTasks = it },
-                    "每行一条，作为本科室常用业务与智能写作推荐目标", singleLine = false)
-                MaintainField("关联模板", vm.formTemplates, { vm.formTemplates = it },
-                    "每行一个模板名称，优先用于本科室写作", singleLine = false)
-                MaintainField("关联知识", vm.formKbIds, { vm.formKbIds = it },
-                    "每行一个知识库标识；检索范围仍由后端按科室权限强制", singleLine = false)
-
-                Spacer(Modifier.height(Dimens.space3))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { vm.save() }, enabled = !vm.saving) {
-                        Text(if (vm.saving) "保存中…" else "保存并生效", fontSize = 13.sp)
-                    }
-                    Spacer(Modifier.width(Dimens.space3))
-                    vm.status?.let {
-                        Text(it, fontSize = 12.5.sp, color = Ok)
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(Dimens.space5))
-        SurfaceCard {
-            Column(Modifier.padding(Dimens.space5)) {
-                SectionTitle(title = "变更版本记录")
-                Spacer(Modifier.height(Dimens.space3))
-                if (vm.versions.isEmpty()) {
-                    Text("暂无变更记录", fontSize = 12.5.sp, color = Muted)
-                } else {
-                    vm.versions.forEach { v ->
-                        Row(Modifier.fillMaxWidth().padding(vertical = Dimens.space2),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            StatusChip(text = "v${v.version}", fg = Ink2, bg = AppBg)
-                            Spacer(Modifier.width(Dimens.space3))
-                            Column(Modifier.weight(1f)) {
-                                Text(v.note.ifBlank { "配置更新" }, fontSize = 12.5.sp,
-                                    color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(v.createdAt.take(16).replace("T", " "),
-                                    fontSize = 11.sp, color = Muted)
-                            }
-                            if (v.operator.isNotBlank()) {
-                                Text(v.operator, fontSize = 12.sp, color = Muted)
-                            }
-                        }
-                        Hairline()
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(Dimens.space5))
-    }
-}
-
-@Composable
-private fun MaintainField(
-    label: String,
-    value: String,
-    onChange: (String) -> Unit,
-    hint: String,
-    singleLine: Boolean = true,
+private fun PanelCard(
+    modifier: Modifier,
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color = Primary,
+    content: @Composable () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(bottom = Dimens.space3)) {
-        Text(label, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = Ink)
-        Spacer(Modifier.height(Dimens.space1))
-        OutlinedTextField(
-            value = value,
-            onValueChange = onChange,
-            placeholder = { Text(hint, fontSize = 12.sp, color = Muted) },
-            modifier = Modifier.fillMaxWidth()
-                .then(if (singleLine) Modifier else Modifier.heightIn(min = 88.dp)),
-            singleLine = singleLine,
-            maxLines = if (singleLine) 1 else 6,
-            colors = TextFieldDefaults.outlinedTextFieldColors(
-                focusedBorderColor = Primary, cursorColor = Primary,
-                unfocusedBorderColor = Line),
-        )
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space5),
+    ) {
+        SectionTitle(title, icon = icon, tint = tint)
+        Spacer(Modifier.height(Dimens.space3))
+        content()
+    }
+}
+
+// ---------------- 维护面板（knowledge_admin）----------------
+
+@Composable
+private fun MaintainDialog(vm: DepartmentViewModel) {
+    val editable = vm.agent?.editableFields.orEmpty()
+    AppDialog(
+        onDismissRequest = { vm.closeMaintain() },
+        title = "维护本科室助手",
+        subtitle = "仅可维护本科室业务配置；系统基础与安全权限由平台统一控制",
+        icon = Icons.Default.Settings,
+        width = 760.dp,
+        actions = {
+            AppButton("关闭", onClick = { vm.closeMaintain() }, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton("保存并生效", onClick = { vm.save() }, kind = AppButtonKind.PRIMARY,
+                enabled = !vm.saving, loading = vm.saving)
+        },
+    ) {
+        InlineNotice("保存后将生成新的配置版本，本科室所有成员立即按新配置使用")
+        AppTextField(value = vm.formManager, onValueChange = { vm.formManager = it },
+            label = "本科室维护人")
+        AppTextField(value = vm.formIntro, onValueChange = { vm.formIntro = it },
+            label = "助手简介", singleLine = false, minLines = 2)
+
+        if (editable.isEmpty() || editable.contains("business_prompt")) {
+            AppTextField(value = vm.formBusinessPrompt,
+                onValueChange = { vm.formBusinessPrompt = it },
+                label = "本科室业务要求（业务层）",
+                placeholder = "例如：本室负责行政复议与应诉，报告须包含案件办理数据与问题分析",
+                singleLine = false, minLines = 4)
+        }
+        if (editable.isEmpty() || editable.contains("work_requirements")) {
+            AppTextField(value = vm.formRequirements,
+                onValueChange = { vm.formRequirements = it },
+                label = "工作要求", singleLine = false, minLines = 3)
+        }
+        if (editable.isEmpty() || editable.contains("tasks")) {
+            AppTextField(value = vm.formTasks, onValueChange = { vm.formTasks = it },
+                label = "推荐任务（每行一条）", singleLine = false, minLines = 3)
+        }
+        if (editable.isEmpty() || editable.contains("templates")) {
+            AppTextField(value = vm.formTemplates, onValueChange = { vm.formTemplates = it },
+                label = "关联模板（每行一个模板名称）", singleLine = false, minLines = 2)
+        }
+        if (editable.isEmpty() || editable.contains("kb_ids")) {
+            AppTextField(value = vm.formKbIds, onValueChange = { vm.formKbIds = it },
+                label = "关联知识资源（每行一个知识库 ID）", singleLine = false, minLines = 2)
+        }
+
+        vm.status?.let { FieldError(it) }
+
+        if (vm.versions.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space2))
+            SectionTitle("配置版本记录")
+            Spacer(Modifier.height(Dimens.space2))
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusMd))
+                    .background(SurfaceTonal)
+                    .padding(Dimens.space4),
+                verticalArrangement = Arrangement.spacedBy(Dimens.space2),
+            ) {
+                vm.versions.take(8).forEach { v ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                        Text("v${v.version}", fontSize = 12.sp, color = Primary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.width(38.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(v.note.ifBlank { "更新本科室业务配置" }, fontSize = 12.sp,
+                                color = Ink)
+                            Text("${v.operator.ifBlank { "系统" }} · ${v.createdAt}",
+                                fontSize = 11.sp, color = Muted)
+                        }
+                    }
+                }
+            }
+        }
     }
 }

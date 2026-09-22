@@ -59,5 +59,9 @@ class PptRepository(private val api: ApiClient) {
         api.downloadGet(Endpoints.Ppt.documentDownload(id), target)
 
     suspend fun deleteDocument(id: String) = api.del(Endpoints.Ppt.documentDelete(id))
+
+    /** PATCH /ppt/documents/{id} {title} → 重命名演示文稿 */
+    suspend fun renameDocument(id: String, title: String) =
+        api.patch(Endpoints.Ppt.document(id), mapOf("title" to title))
 }
 

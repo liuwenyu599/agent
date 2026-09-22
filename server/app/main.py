@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
         knowledge,
         organization,
         ppt,
+        preferences,
         references,
         system,
         templates,
@@ -176,9 +177,18 @@ def create_app() -> FastAPI:
         system.router,
         # v3.1 组织架构与科室 Agent
         organization.router,
+        # v3.3 用户个人偏好（Prompt 分层第 5 层，仅本人可读写）
+        preferences.router,
     ]
     for r in routers:
         app.include_router(r, prefix="/api/v1")
+
+    # 偏好路由的字段校验统一转 400 + 中文 detail（其余路由保持默认 422）
+    from fastapi.exceptions import RequestValidationError
+
+    from app.interfaces.preferences import validation_error_handler
+
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
 
     @app.get("/health")
     def health():

@@ -39,6 +39,12 @@ object AppState {
     /** 管理后台直达 Tab（对应 AdminScreen 内 TabRow） */
     var adminTab by mutableStateOf(0)
 
+    /**
+     * 历史记录「继续」打开指定文档：从历史页 set，由 DocumentsScreen 消费后置回 null。
+     * 只做一次性的跨页参数传递，不把 DocumentsViewModel 提升为全局单例。
+     */
+    var pendingDocumentId by mutableStateOf<String?>(null)
+
     /** 待办数量（来自 /approvals/counts，未取到时为 0，前端不臆造） */
     var todoCount by mutableStateOf(0)
 

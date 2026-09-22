@@ -1,33 +1,34 @@
 package com.judicialai.desktop.features.admin
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
-import androidx.compose.material.Button
-import androidx.compose.material.ButtonDefaults
-import androidx.compose.material.Card
-import androidx.compose.material.Checkbox
-import androidx.compose.material.Divider
-import androidx.compose.material.DropdownMenu
-import androidx.compose.material.DropdownMenuItem
-import androidx.compose.material.OutlinedTextField
-import androidx.compose.material.Tab
-import androidx.compose.material.TabRow
+import androidx.compose.material.Icon
 import androidx.compose.material.Text
-import androidx.compose.material.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,87 +38,118 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
-import com.judicialai.desktop.design.theme.EpDanger
-import com.judicialai.desktop.design.theme.EpPrimary
-import com.judicialai.desktop.design.theme.EpSuccess
-import com.judicialai.desktop.design.theme.EpWarning
-import com.judicialai.desktop.design.theme.QuickPurple
-import com.judicialai.desktop.design.theme.TextPrimary
-import com.judicialai.desktop.design.theme.TextRegular
-import com.judicialai.desktop.design.theme.TextSecondary
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppCardRaised
+import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.AppSegmentedTabs
+import com.judicialai.desktop.design.components.AppSelect
+import com.judicialai.desktop.design.components.AppTextField
+import com.judicialai.desktop.design.components.AppCardTonal
+import com.judicialai.desktop.design.components.Eyebrow
+import com.judicialai.desktop.design.components.FieldError
+import com.judicialai.desktop.design.components.FilterChip
+import com.judicialai.desktop.design.components.SelectOption
+import com.judicialai.desktop.design.components.TagChip
+import com.judicialai.desktop.design.theme.AiSoft
+import com.judicialai.desktop.design.theme.AppBg
+import com.judicialai.desktop.design.theme.Danger
+import com.judicialai.desktop.design.theme.DangerSoft
+import com.judicialai.desktop.design.theme.Dimens
+import com.judicialai.desktop.design.theme.EmeraldSoft
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.LineStrong
+import com.judicialai.desktop.design.theme.LineSubtle
+import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.Muted2
+import com.judicialai.desktop.design.theme.Ok
+import com.judicialai.desktop.design.theme.OkSoft
+import com.judicialai.desktop.design.theme.Primary
+import com.judicialai.desktop.design.theme.Surface
+import com.judicialai.desktop.design.theme.SurfaceTonal
+import com.judicialai.desktop.design.theme.SurfaceDeep
+import com.judicialai.desktop.design.theme.Warn
+import com.judicialai.desktop.design.theme.WarnSoft
 import kotlinx.serialization.json.JsonObject
 
-/** 管理后台：1:1 还原 Web AdminView.vue（数据概览/用户管理/知识库管理/文档审核/会话管理） */
+/** 管理后台：数据概览 / 用户管理 / 知识库管理 / 文档审核 / 公文与审批配置 */
 @Composable
 fun AdminScreen() {
     val vm = remember { AdminViewModel(Repositories.admin) }
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(AppState.adminTab) }
     LaunchedEffect(Unit) { vm.loadAll() }
+    LaunchedEffect(AppState.adminTab) { tab = AppState.adminTab }
 
-    Column(Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("管理后台", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
-            modifier = Modifier.fillMaxSize()) {
-            Column {
-                TabRow(selectedTabIndex = tab, backgroundColor = Color.White,
-                    contentColor = EpPrimary) {
-                    listOf("数据概览", "用户管理", "知识库管理", "文档审核", "会话管理", "公文与审批配置")
-                        .forEachIndexed { i, t ->
-                            Tab(selected = tab == i, onClick = { tab = i }) {
-                                Text(t, fontSize = 14.sp,
-                                    modifier = Modifier.padding(vertical = 12.dp))
-                            }
-                        }
-                }
-                Box(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
-                    when (tab) {
-                        0 -> StatsTab(vm)
-                        1 -> UsersTab(vm)
-                        2 -> KbTab(vm)
-                        3 -> DocsTab(vm)
-                        4 -> SessionsTab(vm)
-                        5 -> ApprovalConfigTab(vm)
-                    }
-                }
+    Column(
+        Modifier.fillMaxSize().background(AppBg).padding(Dimens.space6),
+        verticalArrangement = Arrangement.spacedBy(Dimens.space5),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Eyebrow("管理能力")
+                Spacer(Modifier.height(Dimens.space1))
+                Text("管理后台", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             }
         }
-        vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
+        AppSegmentedTabs(
+            tabs = listOf("数据概览", "用户管理", "知识库管理", "文档审核", "公文与审批配置"),
+            selectedIndex = tab,
+            onSelect = { tab = it },
+        )
+        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+            when (tab) {
+                0 -> StatsTab(vm)
+                1 -> UsersTab(vm)
+                2 -> KbTab(vm)
+                3 -> DocsTab(vm)
+                4 -> ApprovalConfigTab(vm)
+            }
+        }
+        vm.status?.let {
+            com.judicialai.desktop.design.components.InlineNotice(
+                text = it, container = AiSoft,
+                content = com.judicialai.desktop.design.theme.AiInk,
+            )
+        }
     }
 }
 
 @Composable
 private fun StatsTab(vm: AdminViewModel) {
     val items = listOf(
-        Triple("总用户数", vm.userCount, EpPrimary),
-        Triple("文档总数", vm.docCount, EpSuccess),
-        Triple("会话总数", vm.sessionCount, EpWarning),
-        Triple("知识库数", vm.kbCount, QuickPurple),
+        "总用户数" to (vm.userCount to Primary),
+        "文档总数" to (vm.docCount to Ok),
+        "会话总数" to (vm.sessionCount to Warn),
+        "知识库数" to (vm.kbCount to com.judicialai.desktop.design.theme.Purple),
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        items.forEach { (label, num, color) ->
-            Card(Modifier.weight(1f), shape = RoundedCornerShape(8.dp), elevation = 2.dp) {
-                Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Box(Modifier.width(48.dp).height(48.dp).clip(RoundedCornerShape(8.dp))
-                        .background(color.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center) {
-                        Text(label.take(1), color = color, fontSize = 20.sp,
+    Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+        items.forEach { (label, pair) ->
+            val (num, color) = pair
+            AppCardRaised(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(46.dp).clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(color.copy(alpha = 0.10f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(label.take(1), color = color, fontSize = 18.sp,
                             fontWeight = FontWeight.Bold)
                     }
+                    Spacer(Modifier.width(Dimens.space3))
                     Column {
-                        Text("$num", fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                            color = TextPrimary)
-                        Text(label, fontSize = 13.sp, color = TextSecondary)
+                        Text("$num", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink)
+                        Text(label, fontSize = 12.5.sp, color = Muted)
                     }
                 }
             }
@@ -131,18 +163,16 @@ private fun UsersTab(vm: AdminViewModel) {
     var editUser by remember { mutableStateOf<JsonObject?>(null) }
     var resetUser by remember { mutableStateOf<JsonObject?>(null) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row {
-            Spacer(Modifier.weight(1f))
-            Button(onClick = { showCreate = true },
-                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-                Text("＋ 新建用户", color = Color.White, fontSize = 13.sp)
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Eyebrow("账号、所属科室与角色", Modifier.weight(1f))
+            AppButton("＋ 新建用户", onClick = { showCreate = true },
+                icon = Icons.Default.Add, size = com.judicialai.desktop.design.components.AppButtonSize.SM)
         }
         AdminTable(
             headers = listOf(
-                "#" to 50, "用户名" to 110, "真实姓名" to 110, "邮箱" to 170,
-                "部门" to 130, "角色" to 100, "状态" to 80, "注册时间" to 150, "操作" to 230),
+                "#" to 46, "用户名" to 110, "真实姓名" to 100, "邮箱" to 180,
+                "所属科室" to 150, "角色" to 110, "状态" to 80, "注册时间" to 110, "操作" to 240),
             rows = vm.users.mapIndexed { i, u ->
                 listOf(
                     "${i + 1}", u["username"].str(), u["real_name"].str(),
@@ -156,27 +186,29 @@ private fun UsersTab(vm: AdminViewModel) {
             },
         ) { idx, _ ->
             val u = vm.users[idx]
-            Row {
-                TextButton(onClick = { editUser = u }) { Text("编辑", color = EpPrimary, fontSize = 12.sp) }
-                TextButton(onClick = { resetUser = u }) { Text("重置密码", color = EpPrimary, fontSize = 12.sp) }
-                TextButton(onClick = {
-                    vm.toggleUser(u["id"].str(), !u["is_active"].bool())
-                }) {
-                    Text(if (u["is_active"].bool()) "禁用" else "启用",
-                        color = if (u["is_active"].bool()) EpDanger else EpSuccess,
-                        fontSize = 12.sp)
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space1)) {
+                com.judicialai.desktop.design.components.AppLinkButton("编辑",
+                    onClick = { editUser = u })
+                com.judicialai.desktop.design.components.AppLinkButton("重置密码",
+                    onClick = { resetUser = u })
+                com.judicialai.desktop.design.components.AppLinkButton(
+                    if (u["is_active"].bool()) "禁用" else "启用",
+                    onClick = { vm.toggleUser(u["id"].str(), !u["is_active"].bool()) },
+                    color = if (u["is_active"].bool()) Danger else Ok,
+                )
             }
         }
     }
 
-    if (showCreate) UserDialog("新建用户", null, vm,
-        onSubmit = { name, email, pwd, real, deptCode, role ->
-            vm.createUser(name, email, pwd, real, deptCode, role); showCreate = false
-        }) { showCreate = false }
+    if (showCreate) {
+        UserDialog("新建用户", "所属科室与角色只能从系统提供的选项中选择", null, vm,
+            onSubmit = { name, email, pwd, real, deptCode, role ->
+                vm.createUser(name, email, pwd, real, deptCode, role); showCreate = false
+            }) { showCreate = false }
+    }
 
     editUser?.let { u ->
-        UserDialog("编辑用户", u, vm,
+        UserDialog("编辑用户", "修改后立即生效", u, vm,
             onSubmit = { _, _, _, real, deptCode, role ->
                 vm.updateUser(u["id"].str(), real, deptCode, role); editUser = null
             }) { editUser = null }
@@ -184,29 +216,41 @@ private fun UsersTab(vm: AdminViewModel) {
 
     resetUser?.let { u ->
         var pwd by remember { mutableStateOf("") }
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { resetUser = null },
-            title = { Text("重置密码：${u["username"].str()}") },
-            text = {
-                OutlinedTextField(value = pwd, onValueChange = { pwd = it },
-                    label = { Text("新密码（至少6位）") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
+            title = "重置密码",
+            subtitle = "用户：${u["username"].str()}",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { resetUser = null },
+                    kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确定重置", onClick = {
+                    if (pwd.length >= 6) {
+                        vm.resetPassword(u["id"].str(), pwd); resetUser = null
+                    }
+                }, enabled = pwd.length >= 6)
             },
-            confirmButton = {
-                Button(onClick = {
-                    if (pwd.length >= 6) { vm.resetPassword(u["id"].str(), pwd); resetUser = null }
-                }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-                    Text("确定", color = Color.White)
-                }
-            },
-            dismissButton = { TextButton(onClick = { resetUser = null }) { Text("取消") } },
-        )
+        ) {
+            AppTextField(pwd, { pwd = it }, label = "新密码", placeholder = "至少 6 位",
+                hint = if (pwd.isNotBlank() && pwd.length < 6) "密码至少 6 位" else null,
+                error = pwd.isNotBlank() && pwd.length < 6)
+        }
     }
 }
 
+/**
+ * 新建 / 编辑用户
+ *
+ * 所属科室与角色均为 [AppSelect]：整块区域可点击、右侧有展开箭头、
+ * 展开后显示完整选项并标记当前选中项、禁止自由输入。
+ */
 @Composable
 private fun UserDialog(
-    title: String, user: JsonObject?, vm: AdminViewModel,
+    title: String,
+    subtitle: String,
+    user: JsonObject?,
+    vm: AdminViewModel,
     onSubmit: (String, String, String, String, String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -214,134 +258,127 @@ private fun UserDialog(
     var email by remember { mutableStateOf(user?.get("email").str()) }
     var password by remember { mutableStateOf("") }
     var realName by remember { mutableStateOf(user?.get("real_name").str()) }
-    // 所属科室只允许从科室字典下拉选择，不接受任何自由输入
     var departmentCode by remember { mutableStateOf(user?.get("department_code").str()) }
-    var deptMenu by remember { mutableStateOf(false) }
-    val roleOptions = vm.roleOptions(com.judicialai.desktop.app.AppState.role)
+    val roleOptions = vm.roleOptions(AppState.role)
     var role by remember {
-        mutableStateOf(user?.get("role").str().ifBlank { "user" }.let {
-            it.takeIf { r -> roleOptions.any { o -> o.first == r } } ?: "user"
-        })
+        mutableStateOf(
+            user?.get("role").str().ifBlank { "user" }.let { r ->
+                r.takeIf { v -> roleOptions.any { it.first == v } } ?: (roleOptions.firstOrNull()?.first ?: "user")
+            }
+        )
     }
-    var roleMenu by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val isEdit = user != null
 
-    AlertDialog(
+    val deptOptions = vm.departments.map { d ->
+        val name = d["name"].str()
+        val short = d["short_name"].str()
+        SelectOption(
+            value = d["code"].str(),
+            text = name,
+            desc = if (short.isNotBlank() && short != name) short else d["type"].str(),
+        )
+    }
+    val roleSelectOptions = roleOptions.map { (v, l) -> SelectOption(v, l, roleRoleDesc(v)) }
+
+    AppDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!isEdit) {
-                    OutlinedTextField(value = username, onValueChange = { username = it },
-                        label = { Text("用户名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = email, onValueChange = { email = it },
-                        label = { Text("邮箱") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = password, onValueChange = { password = it },
-                        label = { Text("密码") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                }
-                OutlinedTextField(value = realName, onValueChange = { realName = it },
-                    label = { Text("真实姓名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-
-                // 所属科室：下拉选择，数据来自 /organization/departments
-                Box {
-                    OutlinedTextField(
-                        value = vm.deptLabel(departmentCode).ifBlank { "请选择所属科室" },
-                        onValueChange = {}, label = { Text("所属科室") }, readOnly = true,
-                        modifier = Modifier.fillMaxWidth().clickable { deptMenu = true })
-                    DropdownMenu(expanded = deptMenu, onDismissRequest = { deptMenu = false }) {
-                        if (vm.departments.isEmpty()) {
-                            DropdownMenuItem(onClick = { deptMenu = false }, enabled = false) {
-                                Text("暂无可用科室", fontSize = 13.sp)
-                            }
-                        }
-                        vm.departments.forEach { d ->
-                            val code = d["code"].str()
-                            val shortName = d["short_name"].str()
-                            DropdownMenuItem(onClick = { departmentCode = code; deptMenu = false }) {
-                                Text(buildString {
-                                    append(d["name"].str())
-                                    if (shortName.isNotBlank() && shortName != d["name"].str())
-                                        append("（$shortName）")
-                                }, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-
-                // 角色：下拉三选一，与后端 assignable 角色保持一致
-                Box {
-                    OutlinedTextField(
-                        value = roleOptions.firstOrNull { it.first == role }?.second ?: "普通用户",
-                        onValueChange = {}, label = { Text("角色") }, readOnly = true,
-                        enabled = roleOptions.isNotEmpty(),
-                        modifier = Modifier.fillMaxWidth().clickable(enabled = roleOptions.isNotEmpty()) {
-                            roleMenu = true
-                        })
-                    DropdownMenu(expanded = roleMenu, onDismissRequest = { roleMenu = false }) {
-                        roleOptions.forEach { (value, label) ->
-                            DropdownMenuItem(onClick = { role = value; roleMenu = false }) {
-                                Text(label, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
-
-                error?.let { Text(it, fontSize = 11.5.sp, color = EpDanger) }
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                when {
-                    departmentCode.isBlank() -> error = "请选择所属科室"
-                    role.isBlank() -> error = "请选择角色"
-                    isEdit || (username.isNotBlank() && password.isNotBlank()) -> {
-                        error = null
+        title = title,
+        subtitle = subtitle,
+        icon = Icons.Default.Group,
+        width = 560.dp,
+        actions = {
+            AppButton("取消", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton(if (isEdit) "保存修改" else "创建用户", onClick = {
+                error = when {
+                    departmentCode.isBlank() -> "请选择所属科室"
+                    role.isBlank() -> "请选择角色"
+                    !isEdit && username.isBlank() -> "请填写用户名"
+                    !isEdit && password.isBlank() -> "请填写密码"
+                    !isEdit && email.isBlank() -> "请填写邮箱"
+                    else -> {
                         onSubmit(username, email, password, realName, departmentCode, role)
+                        null
                     }
-                    else -> error = "请填写用户名与密码"
                 }
-            }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-                Text("确定", color = Color.White)
-            }
+            })
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+    ) {
+        if (!isEdit) {
+            AppTextField(username, { username = it; error = null }, label = "用户名",
+                placeholder = "登录账号")
+            AppTextField(email, { email = it; error = null }, label = "邮箱",
+                placeholder = "name@example.com")
+            AppTextField(password, { password = it; error = null }, label = "密码",
+                placeholder = "至少 6 位")
+        }
+        AppTextField(realName, { realName = it }, label = "真实姓名", placeholder = "选填")
+
+        AppSelect(
+            label = "所属科室",
+            value = departmentCode,
+            options = deptOptions,
+            onSelect = { departmentCode = it; error = null },
+            placeholder = "请选择所属科室",
+            error = error == "请选择所属科室",
+            leadingIcon = Icons.Default.Group,
+            hint = if (deptOptions.isEmpty()) "科室列表加载中，请稍候" else "由系统科室字典提供，不可自由输入",
+        )
+
+        AppSelect(
+            label = "角色",
+            value = role,
+            options = roleSelectOptions,
+            onSelect = { role = it; error = null },
+            placeholder = "请选择角色",
+            enabled = roleSelectOptions.isNotEmpty(),
+            error = error == "请选择角色",
+            leadingIcon = Icons.Default.AutoAwesome,
+            hint = if (roleSelectOptions.isEmpty()) "当前账号无角色分配权限"
+            else "可分配角色与后端权限口径一致",
+        )
+
+        error?.let { FieldError(it) }
+    }
+}
+
+private fun roleRoleDesc(role: String): String = when (role) {
+    "developer" -> "可管理全部科室与系统配置"
+    "knowledge_admin" -> "可维护本科室知识、模板与助手"
+    else -> "使用本科室能力完成日常办公"
 }
 
 @Composable
 private fun KbTab(vm: AdminViewModel) {
     AdminTable(
-        headers = listOf("#" to 50, "知识库名称" to 300, "类型" to 90,
-            "文档数" to 90, "创建时间" to 160, "操作" to 100),
+        headers = listOf("#" to 46, "知识库名称" to 320, "类型" to 90,
+            "文档数" to 90, "创建时间" to 140, "操作" to 120),
         rows = vm.kbs.mapIndexed { i, kb ->
             listOf("${i + 1}", kb["name"].str(),
                 if (kb["type"].str() == "public") "公共" else "个人",
                 "${kb["doc_count"].int()}", kb["created_at"].str().take(10), "ops")
         },
     ) { idx, _ ->
-        TextButton(onClick = { vm.deleteKb(vm.kbs[idx]["id"].str()) }) {
-            Text("删除", color = EpDanger, fontSize = 12.sp)
-        }
+        com.judicialai.desktop.design.components.AppLinkButton("删除",
+            onClick = { vm.deleteKb(vm.kbs[idx]["id"].str()) }, color = Danger)
     }
 }
 
 @Composable
 private fun DocsTab(vm: AdminViewModel) {
     var sub by remember { mutableStateOf(0) }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        TabRow(selectedTabIndex = sub, backgroundColor = Color.White, contentColor = EpPrimary) {
-            listOf("待审核 (${vm.pendingDocs.size})", "已发布 (${vm.publishedDocs.size})",
-                "已驳回 (${vm.rejectedDocs.size})").forEachIndexed { i, t ->
-                Tab(selected = sub == i, onClick = { sub = i }) {
-                    Text(t, fontSize = 13.sp, modifier = Modifier.padding(vertical = 10.dp))
-                }
-            }
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+        AppSegmentedTabs(
+            tabs = listOf("待审核 (${vm.pendingDocs.size})", "已发布 (${vm.publishedDocs.size})",
+                "已驳回 (${vm.rejectedDocs.size})"),
+            selectedIndex = sub,
+            onSelect = { sub = it },
+        )
         val docs = when (sub) { 0 -> vm.pendingDocs; 1 -> vm.publishedDocs; else -> vm.rejectedDocs }
         AdminTable(
-            headers = listOf("#" to 50, "文档标题" to 300, "类型" to 80,
-                "所属知识库" to 140, "上传者" to 100, "时间" to 150, "操作" to 160),
+            headers = listOf("#" to 46, "文档标题" to 320, "类型" to 80,
+                "所属知识库" to 150, "上传者" to 110, "时间" to 140, "操作" to 170),
             rows = docs.mapIndexed { i, d ->
                 listOf("${i + 1}", d["title"].str(), d["doc_type"].str(),
                     d["kb_name"].str(), d["uploader_name"].str(),
@@ -352,35 +389,15 @@ private fun DocsTab(vm: AdminViewModel) {
             val d = docs[idx]
             Row {
                 if (sub == 0) {
-                    TextButton(onClick = { vm.review(d["id"].str(), "approved") }) {
-                        Text("通过", color = EpSuccess, fontSize = 12.sp)
-                    }
-                    TextButton(onClick = { vm.review(d["id"].str(), "rejected") }) {
-                        Text("驳回", color = EpDanger, fontSize = 12.sp)
-                    }
+                    com.judicialai.desktop.design.components.AppLinkButton("通过",
+                        onClick = { vm.review(d["id"].str(), "approved") }, color = Ok)
+                    com.judicialai.desktop.design.components.AppLinkButton("驳回",
+                        onClick = { vm.review(d["id"].str(), "rejected") }, color = Danger)
                 } else if (sub == 1) {
-                    TextButton(onClick = { vm.archive(d["id"].str()) }) {
-                        Text("归档", color = EpDanger, fontSize = 12.sp)
-                    }
+                    com.judicialai.desktop.design.components.AppLinkButton("归档",
+                        onClick = { vm.archive(d["id"].str()) }, color = Danger)
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun SessionsTab(vm: AdminViewModel) {
-    AdminTable(
-        headers = listOf("#" to 50, "会话标题" to 340, "用户" to 120,
-            "消息数" to 90, "创建时间" to 160, "操作" to 100),
-        rows = vm.sessions.mapIndexed { i, s ->
-            listOf("${i + 1}", s["title"].str(), s["user_name"].str(),
-                "${s["message_count"].int()}",
-                s["created_at"].str().take(16).replace("T", " "), "ops")
-        },
-    ) { idx, _ ->
-        TextButton(onClick = { vm.deleteSession(vm.sessions[idx]["id"].str()) }) {
-            Text("删除", color = EpDanger, fontSize = 12.sp)
         }
     }
 }
@@ -402,66 +419,107 @@ private fun ApprovalConfigTab(vm: AdminViewModel) {
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("公文与审批配置", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        OutlinedTextField(daizi, { daizi = it },
-            label = { Text("文号代字（如 白云司）") }, modifier = Modifier.fillMaxWidth())
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = countersign, onCheckedChange = { countersign = it })
-            Text("启用会签", color = TextRegular, fontSize = 13.sp)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = seal, onCheckedChange = { seal = it })
-            Text("用印需审批", color = TextRegular, fontSize = 13.sp)
-        }
-        OutlinedTextField(businessTypes, { businessTypes = it },
-            label = { Text("业务类型（逗号分隔）") }, modifier = Modifier.fillMaxWidth())
-        Button(onClick = { vm.saveApprovalConfig(daizi, countersign, seal, businessTypes) },
-            colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-            Text("保存配置", color = Color.White)
+    AppCardRaised(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+            com.judicialai.desktop.design.components.SectionTitle("公文与审批配置")
+            AppTextField(daizi, { daizi = it }, label = "文号代字",
+                placeholder = "例如：白云司")
+            AppTextField(businessTypes, { businessTypes = it }, label = "业务类型",
+                placeholder = "多个类型用逗号分隔")
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+                ToggleRow("启用会签", countersign) { countersign = it }
+                ToggleRow("用印需审批", seal) { seal = it }
+            }
+            Row {
+                Spacer(Modifier.weight(1f))
+                AppButton("保存配置", onClick = {
+                    vm.saveApprovalConfig(daizi, countersign, seal, businessTypes)
+                })
+            }
         }
     }
 }
 
-/** 通用表格：表头灰底 + 行分隔线 + 操作列插槽 */
+@Composable
+private fun ToggleRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val shape = RoundedCornerShape(Dimens.radiusControl)
+    Row(
+        Modifier.clip(shape)
+            .background(if (checked) AiSoft else SurfaceDeep)
+            .border(1.dp, if (checked) Primary.copy(alpha = 0.35f) else Line, shape)
+            .clickable { onChange(!checked) }
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(18.dp).clip(RoundedCornerShape(Dimens.radiusXs))
+                .background(if (checked) Primary else Surface)
+                .border(1.dp, if (checked) Primary else LineStrong,
+                    RoundedCornerShape(Dimens.radiusXs)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) Text("✓", fontSize = 11.sp, color = androidx.compose.ui.graphics.Color.White)
+        }
+        Spacer(Modifier.width(Dimens.space2))
+        Text(text, fontSize = 13.sp, color = if (checked) Primary else Ink2)
+    }
+}
+
+/**
+ * 通用表格：tonal 表头 + hover 行 + 弱化分隔线 + 操作列插槽
+ */
 @Composable
 private fun AdminTable(
     headers: List<Pair<String, Int>>,
     rows: List<List<String>>,
     opsCell: @Composable (rowIndex: Int, row: List<String>) -> Unit,
 ) {
-    Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
-        modifier = Modifier.fillMaxWidth()) {
-        Column {
-            Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
-                .padding(horizontal = 16.dp, vertical = 10.dp)) {
-                headers.forEach { (h, w) ->
-                    Text(h, Modifier.width(w.dp), fontSize = 12.sp, color = TextSecondary)
-                }
+    AppCardRaised(padding = 0.dp) {
+        Row(
+            Modifier.fillMaxWidth().background(SurfaceDeep)
+                .padding(horizontal = Dimens.space4, vertical = 11.dp),
+        ) {
+            headers.forEach { (h, w) ->
+                Text(h, Modifier.width(w.dp), fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium, color = Muted)
             }
-            if (rows.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center) {
-                    Text("暂无数据", color = TextSecondary, fontSize = 13.sp)
-                }
-            }
-            rows.forEachIndexed { i, row ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    row.forEachIndexed { j, cell ->
-                        val w = headers[j].second
-                        if (cell == "ops") {
-                            Box(Modifier.width(w.dp)) { opsCell(i, row) }
-                        } else {
-                            Text(cell, Modifier.width(w.dp), fontSize = 13.sp,
-                                color = TextRegular, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
+        }
+        if (rows.isEmpty()) {
+            com.judicialai.desktop.design.components.EmptyLine("暂无数据")
+        }
+        rows.forEachIndexed { i, row ->
+            val interaction = remember { MutableInteractionSource() }
+            val hovered by interaction.collectIsHoveredAsState()
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(if (hovered) SurfaceTonal else Surface)
+                    .padding(horizontal = Dimens.space4, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                row.forEachIndexed { j, cell ->
+                    val w = headers[j].second
+                    if (cell == "ops") {
+                        Box(Modifier.width(w.dp)) { opsCell(i, row) }
+                    } else {
+                        val isIndex = j == 0
+                        val isState = headers[j].first == "状态"
+                        Box(Modifier.width(w.dp)) {
+                            if (isState) {
+                                TagChip(
+                                    text = cell,
+                                    fg = if (cell == "正常") Ok else Danger,
+                                    bg = if (cell == "正常") OkSoft else DangerSoft,
+                                )
+                            } else {
+                                Text(cell, fontSize = 12.5.sp,
+                                    color = if (isIndex) Muted2 else Ink2,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
-                Divider(color = Color(0xFFF2F4F8))
             }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(LineSubtle))
         }
     }
 }
-

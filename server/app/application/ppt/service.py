@@ -434,6 +434,20 @@ class PPTService:
         d = self.documents.update(d)
         return {"is_favorite": bool(d.is_favorite)}
 
+    def rename_document(self, doc_id: str, user: User, title: str) -> dict:
+        """重命名 PPT 文档：只改标题，不动 outline / status / 版本。"""
+        d = self._get_doc_checked(doc_id, user)
+        name = (title or "").strip()
+        if not name:
+            raise AppError(422, "文档标题不能为空")
+        if len(name) > 200:
+            raise AppError(422, "文档标题不能超过 200 字")
+        d.title = name
+        d = self.documents.update(d)
+        # 模板名取值方式与 list_documents 完全一致，保证与列表项同构
+        tmap = {t.id: t.name for t in self.templates.list_for_user(user.id, "all")}
+        return self._doc_dto(d, tmap.get(d.template_id, ""))
+
     def delete_document(self, doc_id: str, user: User) -> dict:
         d = self._get_doc_checked(doc_id, user)
         if d.file_path and os.path.exists(d.file_path):

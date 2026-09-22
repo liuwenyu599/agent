@@ -4,12 +4,15 @@ import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.chat.model.ChatMessage
 import com.judicialai.desktop.features.chat.model.ChatSession
+import com.judicialai.desktop.features.chat.model.HistoryCategory
+import com.judicialai.desktop.features.chat.model.HistoryItem
 import java.io.File
 
 /** /chat/send 完整结果（含智能写作流水线字段） */
@@ -44,6 +47,61 @@ class ChatRepository(private val api: ApiClient) {
         })
         is ApiResult.Err -> r
     }
+
+    /**
+     * 历史记录 · 对话：`GET /chat/sessions`，后端按 `list_by_user(user.id)` 过滤，
+     * 返回值恒为当前登录用户自己的会话（无他人数据）。
+     */
+    suspend fun listMyChats(): ApiResult<List<HistoryItem>> =
+        when (val r = listSessions()) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.map {
+                HistoryItem(
+                    id = it.id,
+                    title = it.title,
+                    category = HistoryCategory.CHAT,
+                    time = it.createdAt,
+                )
+            })
+            is ApiResult.Err -> r
+        }
+
+    /**
+     * 历史记录 · 文档：`GET /documents`，后端 `MyDocumentModel.user_id == user_id`
+     * 强制过滤，只可能返回本人文档。
+     */
+    suspend fun listMyDocuments(): ApiResult<List<HistoryItem>> =
+        when (val r = api.get(Endpoints.Documents.LIST)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
+                HistoryItem(
+                    id = it["id"].str(),
+                    title = it["title"].str().ifBlank { "未命名文档" },
+                    category = HistoryCategory.DOC,
+                    time = it["updated_at"].str().ifBlank { it["created_at"].str() },
+                    sub = listOf(
+                        it["doc_type"].str(),
+                        "第 ${it["current_version"].str().ifBlank { "1" }} 版",
+                    ).filter { s -> s.isNotBlank() }.joinToString(" · "),
+                )
+            })
+            is ApiResult.Err -> r
+        }
+
+    /**
+     * 历史记录 · PPT：`GET /ppt/documents`，后端 `documents.list_by_user(user.id)` 过滤。
+     */
+    suspend fun listMyPptDocuments(): ApiResult<List<HistoryItem>> =
+        when (val r = api.get(Endpoints.Ppt.DOCUMENTS)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
+                HistoryItem(
+                    id = it["id"].str(),
+                    title = it["title"].str().ifBlank { "未命名演示文稿" },
+                    category = HistoryCategory.PPT,
+                    time = it["updated_at"].str().ifBlank { it["created_at"].str() },
+                    sub = "${it["slide_count"].int()} 页",
+                )
+            })
+            is ApiResult.Err -> r
+        }
 
     /** GET /chat/sessions/{id}/messages → 纯数组 */
     suspend fun listMessages(sessionId: String): ApiResult<List<ChatMessage>> =
@@ -126,6 +184,10 @@ class ChatRepository(private val api: ApiClient) {
 
     /** DELETE /chat/sessions/{id} */
     suspend fun deleteSession(id: String) = api.del(Endpoints.Chat.session(id))
+
+    /** PATCH /chat/sessions/{id} {title} → 重命名会话（后端返回会话摘要） */
+    suspend fun renameSession(id: String, title: String) =
+        api.patch(Endpoints.Chat.session(id), mapOf("title" to title))
 
     suspend fun exportDocx(payload: Map<String, Any?>, redHeader: Boolean, target: File): ApiResult<String> {
         val path = if (redHeader) Endpoints.Chat.EXPORT_OFFICIAL else Endpoints.Chat.EXPORT_DOCX

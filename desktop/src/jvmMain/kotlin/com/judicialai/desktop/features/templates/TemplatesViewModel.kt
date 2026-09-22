@@ -49,7 +49,30 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var draft by mutableStateOf<Map<String, String>?>(null)
         private set
 
+    /** 右侧预览：选中模板后拉取完整结构（列表接口不带正文） */
+    var selectedId by mutableStateOf<String?>(null)
+        private set
+    var preview by mutableStateOf<JsonObject?>(null)
+        private set
+
     fun tierOf(t: JsonObject): String = t["tier"].str().ifBlank { "system" }
+
+    fun select(t: JsonObject) {
+        val id = t["id"].str()
+        selectedId = id
+        preview = t
+        scope.launch {
+            when (val r = repo.detail(id)) {
+                is ApiResult.Ok -> preview = r.data.obj() ?: t
+                is ApiResult.Err -> Unit
+            }
+        }
+    }
+
+    fun clearSelection() {
+        selectedId = null
+        preview = null
+    }
 
     fun shown(): List<JsonObject> {
         val base = templates.filter { filterCat == null || it["category"].str() == filterCat }

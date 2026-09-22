@@ -3,11 +3,13 @@ package com.judicialai.desktop.features.formatcheck
 import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
+import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.items
+import com.judicialai.desktop.core.utils.obj
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 
-/** 格式校验数据访问（对应 Web format_check.js） */
+/** 格式校验数据访问（对应后端 format-check 系列接口） */
 class FormatCheckRepository(private val api: ApiClient) {
 
     suspend fun check(file: File, useAi: Boolean) =
@@ -20,11 +22,59 @@ class FormatCheckRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
-    suspend fun paragraphs(recordId: String): ApiResult<List<JsonObject>> =
-        when (val r = api.get(Endpoints.FormatCheck.paragraphs(recordId))) {
-            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+    /** GET /format-check/records/{id} → 记录详情（含 issues / applied_ids / resolved_ids / open_issue_count） */
+    suspend fun record(id: String): ApiResult<JsonObject> =
+        when (val r = api.get(Endpoints.FormatCheck.record(id))) {
+            is ApiResult.Ok -> {
+                val o = r.data.obj()
+                if (o != null) ApiResult.Ok(o)
+                else ApiResult.Err(null, "记录响应不是对象：$id")
+            }
             is ApiResult.Err -> r
         }
+
+    /**
+     * GET /format-check/records/{id}/paragraphs?version=original|current
+     *
+     * 响应固定为 {"paragraphs":[...], "page":{...}}；这里**直接取 paragraphs 键**，
+     * 不走 JsonExt.items()（它不认该键，会永远返回空列表）。
+     *
+     * 同级新增的 `page`（页边距 / 页面尺寸，供页面级 issue 使用）**不解析、不渲染**，
+     * 因为只按 key 取值，未知字段天然被安全忽略，后端继续加字段也不会把这里打挂。
+     */
+    suspend fun paragraphs(id: String, version: String): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.FormatCheck.paragraphs(id, version))) {
+            is ApiResult.Ok -> ApiResult.Ok(
+                r.data.obj()?.get("paragraphs").arr().mapNotNull { it.obj() }
+            )
+            is ApiResult.Err -> r
+        }
+
+    /** POST /format-check/records/{id}/apply {"issue_id":n} → {applied_ids, resolved_ids, paragraphs} */
+    suspend fun applyIssue(id: String, issueId: Int): ApiResult<JsonObject> =
+        asObject(api.post(Endpoints.FormatCheck.apply(id), mapOf("issue_id" to issueId)))
+
+    /** POST /format-check/records/{id}/undo {"issue_id":n} → {applied_ids, resolved_ids, paragraphs} */
+    suspend fun undoIssue(id: String, issueId: Int): ApiResult<JsonObject> =
+        asObject(api.post(Endpoints.FormatCheck.undo(id), mapOf("issue_id" to issueId)))
+
+    /** POST /format-check/records/{id}/recheck → 与 check 相同结构 */
+    suspend fun recheck(id: String): ApiResult<JsonObject> =
+        asObject(api.post(Endpoints.FormatCheck.recheck(id), emptyMap<String, String>()))
+
+    /** 把原始 JsonElement 响应收敛成 JsonObject，非对象时给出可读错误 */
+    private fun asObject(r: ApiResult<kotlinx.serialization.json.JsonElement>): ApiResult<JsonObject> =
+        when (r) {
+            is ApiResult.Ok -> {
+                val o = r.data.obj()
+                if (o != null) ApiResult.Ok(o)
+                else ApiResult.Err(null, "后端响应不是对象，无法解析")
+            }
+            is ApiResult.Err -> r
+        }
+
+    /** DELETE /format-check/records/{id} */
+    suspend fun deleteRecord(id: String) = api.del(Endpoints.FormatCheck.record(id))
 
     suspend fun fix(recordId: String, acceptedIndices: List<Int>, target: File) =
         api.downloadPost(Endpoints.FormatCheck.FIX,
@@ -46,4 +96,3 @@ class FormatCheckRepository(private val api: ApiClient) {
 
     suspend fun deleteRule(id: String) = api.del(Endpoints.FormatCheck.rule(id))
 }
-
