@@ -3,6 +3,7 @@ package com.judicialai.desktop.features.templates
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
@@ -37,15 +38,15 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var tier by mutableStateOf<String?>(null)
 
     /**
-     * 系统模板 → 本科室模板的 AI 草案（未落库）。
-     * 知识管理员校核后再保存，保证「AI 建议 + 人工确认」。
+     * 系统模板 → AI 调整草案（未落库）。
+     * 校核后按角色保存：科室管理员 → 科室模板，普通用户 → 我的模板。
      */
     var adapting by mutableStateOf(false)
         private set
     var adaptError by mutableStateOf<String?>(null)
         private set
 
-    /** 系统模板 → 本科室模板草案（未落库，AI 建议 + 人工确认后才保存） */
+    /** AI 调整草案（未落库，AI 建议 + 人工确认后才保存） */
     var draft by mutableStateOf<Map<String, String>?>(null)
         private set
 
@@ -54,6 +55,10 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         private set
     var preview by mutableStateOf<JsonObject?>(null)
         private set
+
+    /** AI 调整结果是否保存为科室模板（科室管理员/系统管理员），否则保存为我的模板 */
+    val canSaveDeptTemplate: Boolean
+        get() = AppState.isKnowledgeAdmin || AppState.isDeveloper
 
     fun tierOf(t: JsonObject): String = t["tier"].str().ifBlank { "system" }
 
@@ -148,7 +153,7 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 
-    /** 把系统模板按本科室写作习惯生成科室模板草案（只返回建议，不落库） */
+    /** 把系统模板按写作习惯生成调整草案（只返回建议，不落库） */
     fun adaptForDepartment(t: JsonObject, hints: String) {
         adapting = true
         status = null
@@ -164,7 +169,7 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
                         "content_template" to o["content_template"].str(),
                         "source" to o["source"].str(),
                     )
-                    if (draft == null) status = "未生成科室模板草案"
+                    if (draft == null) status = "未生成模板调整草案"
                 }
                 is ApiResult.Err -> status = r.message
             }
@@ -172,22 +177,37 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 
-    /** 人工确认后保存为本科室模板（科室归属由服务端写入） */
-    fun saveDepartmentTemplate(name: String, content: String) {
+    /**
+     * 人工确认后保存调整结果：
+     * - 科室管理员 / 系统管理员 → 科室模板（科室归属由服务端写入）；
+     * - 普通用户 → 我的模板（仅本人可见）。
+     */
+    fun saveAdaptedTemplate(name: String, content: String) {
         val d = draft ?: return
         if (name.isBlank() || content.isBlank()) {
             status = "模板名称与正文不能为空"
             return
         }
         scope.launch {
-            when (val r = repo.saveDeptTemplate(mapOf(
-                "name" to name,
-                "content_template" to content,
-                "category" to d["category"].orEmpty(),
-                "source_template_id" to d["source_template_id"].orEmpty(),
-            ))) {
+            val r = if (canSaveDeptTemplate) {
+                repo.saveDeptTemplate(mapOf(
+                    "name" to name,
+                    "content_template" to content,
+                    "category" to d["category"].orEmpty(),
+                    "source_template_id" to d["source_template_id"].orEmpty(),
+                ))
+            } else {
+                repo.create(mapOf(
+                    "name" to name,
+                    "category" to d["category"].orEmpty(),
+                    "content_template" to content,
+                    "description" to "基于系统模板按个人写作习惯调整",
+                    "visibility" to "personal",
+                ))
+            }
+            when (r) {
                 is ApiResult.Ok -> {
-                    status = "已保存为本科室模板"
+                    status = if (canSaveDeptTemplate) "已保存为本科室模板" else "已保存为我的模板"
                     draft = null
                     load()
                 }
@@ -231,4 +251,3 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 }
-
