@@ -204,71 +204,6 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                 }
             }
 
-            Spacer(Modifier.height(Dimens.space4))
-
-            // 常见目标
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
-            ) {
-                listOf(
-                    "起草通知" to "起草一份关于行政复议案件办理时限的通知",
-                    "撰写报告" to "根据本月工作材料撰写一份向区政府报送的工作情况报告",
-                    "根据材料成文" to "根据这份会议材料整理一份会议纪要",
-                ).forEach { (label, text) ->
-                    Box(
-                        Modifier.clip(RoundedCornerShape(Dimens.radiusPill))
-                            .background(Surface)
-                            .border(1.dp, Line, RoundedCornerShape(Dimens.radiusPill))
-                            .clickable { vm.entryInput = text }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                    ) { Text(label, fontSize = 12.5.sp, color = Ink2) }
-                }
-            }
-
-            Spacer(Modifier.height(Dimens.space5))
-
-            // 上下文条：当前科室 + 可依据资料（不暴露知识库实现语言）
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
-            ) {
-                ContextPill("当前科室", AppState.departmentName.ifBlank { "未设置" }, Modifier.weight(1f))
-                ContextPill("可依据资料", "公共资料 + ${AppState.departmentName.ifBlank { "本科室" }}业务资料",
-                    Modifier.weight(1f))
-            }
-
-            // 本科室常用任务
-            val deptTasks = AppState.deptTasks
-            if (deptTasks.isNotEmpty()) {
-                Spacer(Modifier.height(Dimens.space6))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Eyebrow("本科室常用任务")
-                }
-                Spacer(Modifier.height(Dimens.space2))
-                Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                    deptTasks.take(4).forEach { task ->
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clip(RoundedCornerShape(Dimens.radiusMd))
-                                .background(Surface)
-                                .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusMd))
-                                .clickable {
-                                    vm.entryInput = task
-                                    vm.planAndStart()
-                                }
-                                .padding(horizontal = 14.dp, vertical = 11.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(task, fontSize = 13.sp, color = Ink,
-                                modifier = Modifier.weight(1f), maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            Text("开始 →", fontSize = 12.sp, color = Primary)
-                        }
-                    }
-                }
-            }
-
             if (vm.planning) {
                 Spacer(Modifier.height(Dimens.space5))
                 Column(
@@ -360,21 +295,6 @@ private fun EntryHero() {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ContextPill(label: String, value: String, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(Dimens.radiusMd)
-    Row(
-        modifier.clip(shape).background(Surface).border(1.dp, LineSubtle, shape)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, fontSize = 11.5.sp, color = Muted)
-        Spacer(Modifier.width(Dimens.space2))
-        Text(value, fontSize = 12.5.sp, color = Ink, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -788,8 +708,8 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.width(Dimens.space2))
             Column(Modifier.weight(1f)) {
                 Text("助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-                Text(vm.spec?.agent?.ifBlank { AppState.agentName.ifBlank { "本科室助手" } }
-                    ?: AppState.agentName.ifBlank { "本科室助手" },
+                Text(vm.spec?.agent?.ifBlank { AppState.agentName.ifBlank { "智能助手" } }
+                    ?: AppState.agentName.ifBlank { "智能助手" },
                     fontSize = 11.sp, color = Muted, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
             }
