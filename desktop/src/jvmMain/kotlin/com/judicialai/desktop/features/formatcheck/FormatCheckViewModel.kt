@@ -132,8 +132,11 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         editorDirty = false
     }
 
-    /** 切换版本：重载编辑器内容（放弃未保存的手动编辑，由 UI 提前确认）。 */
-    fun setVersion(v: DocVersion) {
+    /**
+     * 切换版本：重载编辑器内容（放弃未保存的手动编辑，由 UI 提前确认）。
+     * 命名不用 setVersion——属性 version 的自动生成 setter 与它 JVM 签名冲突。
+     */
+    fun switchVersion(v: DocVersion) {
         if (v == version) return
         version = v
         loadEditor(if (v == DocVersion.ORIGINAL) paragraphsOriginal else paragraphsCurrent)
