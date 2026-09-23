@@ -2,6 +2,7 @@
 
 智能写作工作台专属 API：任务 = 结构化上下文 + 当前文档 + 持续对话 + 版本链。
 与普通 /chat/send 分离，所有接口强制登录且按 user_id 隔离。
+起草支持 SSE 流式（/draft/stream）：正文边生成边推给前端。
 """
 from typing import Any, Dict, Optional
 
@@ -125,6 +126,18 @@ def task_draft(task_id: str, req: TaskDraftRequest,
                user: User = Depends(get_current_user),
                svc: WritingTaskService = Depends(get_task_service)):
     return svc.draft(task_id, user.id, req.outline_only)
+
+
+@router.post("/{task_id}/draft/stream")
+def task_draft_stream(task_id: str, req: TaskDraftRequest,
+                      user: User = Depends(get_current_user),
+                      svc: WritingTaskService = Depends(get_task_service)):
+    """流式起草（SSE）：先逐段推 delta 供前端渐进展示，最后推 done 携带权威结果。"""
+    return StreamingResponse(
+        svc.draft_stream(task_id, user.id, req.outline_only),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{task_id}/revise")

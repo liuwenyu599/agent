@@ -5,12 +5,14 @@
 - 文号/成文日期默认关闭，只有用户明确要求才启用（用户指定值原样使用）；
 - revise 是"对当前文档的修改"，明确告知模型不得重新起草、不得改变事实；
 - 每次 AI 修改自动形成版本（复用 documents 版本快照）；
-- 所有查询按 user_id 隔离。
+- 所有查询按 user_id 隔离；
+- 起草支持流式（draft_stream）：模型边生成边推给前端，完成后落库与非流式一致。
 """
+import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import desc, select
@@ -47,6 +49,19 @@ DRAFT_RULES = (
     "2. 不要编造具体数据和成效，材料中没有的用「⚠️ 缺少事实依据」标注；\n"
     "3. 结构完整：标题、主送（如适用）、正文、落款（如适用）。"
 )
+
+# 正文末尾的落款行（机关署名）：导出时据此判断正文是否已自带落款，避免重复追加
+SIGNOFF_TAIL_RE = re.compile(
+    r"^[\u4e00-\u9fa5（）()]{2,25}"
+    r"(政府|办公厅|办公室|委员会|局|厅|部|署|所|处|院|中心)$"
+)
+
+DATE_TAIL_RE = re.compile(r"20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
+
+
+def _sse(event: Dict[str, Any]) -> str:
+    """一条 SSE 事件行。"""
+    return "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
 
 
 class WritingTaskService:
@@ -482,7 +497,47 @@ class WritingTaskService:
         text = self._clean_markdown(text)
         if not text.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
+        return self._finalize_draft(t, ctx, text, sources, user_id)
 
+    def draft_stream(self, task_id: str, user_id: str,
+                     outline_only: bool = False) -> Iterator[str]:
+        """流式起草（SSE）：先逐段推 {"type":"delta"} 供前端渐进展示，
+        完成后推 {"type":"done","data":...}，data 与非流式 draft 返回结构一致（最终权威内容）；
+        失败推 {"type":"error","message":...}。
+
+        delta 是模型原始输出（未经后处理/清洗），仅用于展示；落库内容以 done 为准。
+        """
+        try:
+            t = self._get_owned(task_id, user_id)
+            ctx = dict(t.context or {})
+            template = self._load_template(ctx.get("template_id"))
+            instruction = self._build_draft_instruction(ctx, outline_only, template)
+            sources = self._retrieve(ctx, user_id)
+            attachment_ctx = self._attachment_context(t, ctx)
+
+            parts: List[str] = []
+            for delta in self._llm_draft_stream(instruction, sources, attachment_ctx,
+                                                user_id, template=template):
+                if not delta:
+                    continue
+                parts.append(delta)
+                yield _sse({"type": "delta", "text": delta})
+
+            text = self._clean_markdown("".join(parts))
+            if not text.strip():
+                yield _sse({"type": "error", "message": "模型未返回内容，请重试"})
+                return
+            payload = self._finalize_draft(t, ctx, text, sources, user_id)
+            yield _sse({"type": "done", "data": payload})
+        except HTTPException as e:
+            yield _sse({"type": "error", "message": str(e.detail)})
+        except Exception as e:  # 模型中断 / 网络异常 / 其他未预期错误
+            logger.exception("[写作任务] 流式起草失败")
+            yield _sse({"type": "error", "message": f"生成中断：{e}"})
+
+    def _finalize_draft(self, t, ctx: Dict[str, Any], text: str,
+                        sources: List[Dict], user_id: str) -> Dict[str, Any]:
+        """起草收尾（draft 与 draft_stream 共用）：后处理 → 质量评估 → 落库 → 版本快照。"""
         # 后处理：文号/日期按任务开关决定，默认不注入
         text, events, doc_number, doc_date = self._postprocess(text, ctx)
         from app.application.writing.quality_gate import QualityGate
@@ -629,24 +684,44 @@ class WritingTaskService:
                 "reply": f"已回退到 v{version_no} 的内容；回退前的内容已自动保存为新版本 v{new_ver}，可随时再次回退。",
                 "content_changed": True}
 
+    @staticmethod
+    def _tail_lines(content: str, n: int = 6) -> List[str]:
+        """正文末尾的非空行（用于判断是否已自带落款/成文日期）。"""
+        return [l.strip() for l in (content or "").split("\n") if l.strip()][-n:]
+
     def _render_docx(self, content: str, ctx: Dict[str, Any], red_header: bool):
-        """把文本内容渲染为可编辑的带格式 docx（红头或普通排版）。"""
+        """把文本内容渲染为可编辑的带格式 docx（红头或普通排版）。
+
+        落款去重：模型起草的正文按规范自带署名与成文日期，导出时若正文末尾
+        已含落款行/日期，则不再用 ctx 中的发文机关/成文日期追加，避免出现两个落款。
+        """
         from app.application.chat.docx_export import generate_official_document, markdown_to_docx
         doc_number = ""
         if ctx.get("document_number_enabled") and ctx.get("document_number"):
             doc_number = ctx["document_number"]
         title = ctx.get("title") or "公文"
+
+        tail = self._tail_lines(content)
+        tail_text = "\n".join(tail)
+        signature = ctx.get("authority") or ""
+        if signature and any(
+                signature in l or SIGNOFF_TAIL_RE.match(l) for l in tail):
+            signature = ""  # 正文已自带落款，不重复追加
+        date_text = ctx.get("document_date") or ""
+        if date_text and DATE_TAIL_RE.search(tail_text):
+            date_text = ""  # 正文已自带成文日期
+
         renderer = generate_official_document if red_header else markdown_to_docx
         buf = renderer(
             content=content, title=title, doc_number=doc_number,
             recipient=ctx.get("recipient") or "",
-            signature=ctx.get("authority") or "",
-            date_text=ctx.get("document_date") or "",
+            signature=signature,
+            date_text=date_text,
         ) if red_header else renderer(
             text=content, title=title, doc_number=doc_number,
             recipient=ctx.get("recipient") or "",
-            signature=ctx.get("authority") or "",
-            date_text=ctx.get("document_date") or "",
+            signature=signature,
+            date_text=date_text,
         )
         return buf, title
 
@@ -828,19 +903,36 @@ class WritingTaskService:
             logger.warning("[写作任务] 科室 Agent 上下文加载失败: %s", e)
             return ""
 
-    def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id,
-                   template: Optional[Dict[str, Any]] = None) -> str:
-        if not self.assistant:
-            raise HTTPException(status_code=503, detail="模型服务不可用")
+    def _draft_system(self, user_id: str,
+                      template: Optional[Dict[str, Any]] = None) -> str:
+        """起草系统提示（draft 与 draft_stream 共用）。"""
         agent = self._agent_prompt(user_id)
         system = (agent + "\n" if agent else "") + DRAFT_RULES
         # 模板自带系统提示（管理员配置的写作规范）附加在通用起草规则之后
         if template and template.get("system_prompt"):
             system = system + "\n模板附加要求：\n" + str(template["system_prompt"])[:800]
+        return system
+
+    def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id,
+                   template: Optional[Dict[str, Any]] = None) -> str:
+        if not self.assistant:
+            raise HTTPException(status_code=503, detail="模型服务不可用")
         return self.assistant.chat(
             message=instruction, history=[], sources=sources, user_role="user",
-            system_prompt=system, attachment_context=attachment_ctx,
+            system_prompt=self._draft_system(user_id, template),
+            attachment_context=attachment_ctx,
         ) or ""
+
+    def _llm_draft_stream(self, instruction: str, sources, attachment_ctx, user_id,
+                          template: Optional[Dict[str, Any]] = None) -> Iterator[str]:
+        """流式起草：网关不支持流式时由 assistant 降级为一次性输出。"""
+        if not self.assistant:
+            raise HTTPException(status_code=503, detail="模型服务不可用")
+        return self.assistant.chat_stream(
+            message=instruction, history=[], sources=sources, user_role="user",
+            system_prompt=self._draft_system(user_id, template),
+            attachment_context=attachment_ctx,
+        )
 
     def _llm_revise(self, prompt: str, sources, attachment_ctx, user_id) -> str:
         if not self.assistant:
