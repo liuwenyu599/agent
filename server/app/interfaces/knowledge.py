@@ -148,6 +148,26 @@ def archive_document(doc_id: str, user: User = Depends(require_admin_or_above),
     return svc.archive_document(doc_id, user)
 
 
+@router.get("/batch-tasks")
+def list_batch_tasks(user: User = Depends(get_current_user)):
+    return {"tasks": BatchImportTask.list_by_user(user.id)}
+
+
+@router.get("/batch-tasks/{task_id}")
+def get_batch_task(task_id: str, user: User = Depends(get_current_user)):
+    task = BatchImportTask.get(task_id)
+    if not task:
+        raise AppError(404, "Task not found")
+    if task["user_id"] != user.id:
+        raise AppError(403, "No permission")
+    return task
+
+
+@router.get("/queue-status")
+def queue_status(user: User = Depends(require_knowledge_admin)):
+    return get_queue_status()
+
+
 @router.get("/{kb_id}")
 def get_kb(kb_id: str, user: User = Depends(get_current_user),
            svc: KnowledgeService = Depends(get_knowledge_service)):
@@ -194,27 +214,6 @@ async def batch_upload(kb_id: str = Query(...), files: List[UploadFile] = File(.
                     user_id=user.id, user_role=user.role, original_name=file.filename)
     return {"task_id": task.id, "total_files": len(files), "status": "pending",
             "message": f"已提交 {len(files)} 个文件到处理队列"}
-
-
-@router.get("/batch-tasks")
-def list_batch_tasks(user: User = Depends(get_current_user)):
-    return {"tasks": BatchImportTask.list_by_user(user.id)}
-
-
-@router.get("/batch-tasks/{task_id}")
-def get_batch_task(task_id: str, user: User = Depends(get_current_user)):
-    task = BatchImportTask.get(task_id)
-    if not task:
-        raise AppError(404, "Task not found")
-    if task["user_id"] != user.id:
-        raise AppError(403, "No permission")
-    return task
-
-
-@router.get("/queue-status")
-def queue_status(user: User = Depends(require_knowledge_admin)):
-    return get_queue_status()
-
 
 # ========== 网页链接导入知识库 ==========
 
