@@ -39,10 +39,12 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,23 +123,54 @@ private const val Pending = "待补充"
 fun WritingScreen() {
     val vm = remember { WritingViewModel(Repositories.writing, Repositories.knowledge) }
 
-    if (!vm.hasTask) {
-        TaskEntryScreen(vm)
-        return
+    // ---- 跨页面恢复 ----
+    // 切走再切回时 remember 会重建 ViewModel（状态清零），但生成协程不会被取消，
+    // 任务仍在服务端。这里读取全局任务 id：本地还没有任务就按 id 从服务端取回。
+    // 读取发生在组合内，id 一旦写入（可能是离开页面之后才创建成功）就会触发重组并自动恢复。
+    val pendingTaskId = AppState.pendingWritingTaskId
+    LaunchedEffect(pendingTaskId) {
+        // 模板中心「使用模板」/ 聊天跳转写作带来的一次性参数优先：
+        // 此时不恢复旧任务，否则本恢复请求先占用 busy，会把这次新任务挤掉。
+        val jumping = AppState.pendingWritingTemplate != null || AppState.pendingWritingIntent != null
+        if (!jumping && pendingTaskId != null && !vm.hasTask) vm.openTask(pendingTaskId)
+    }
+    // 生成由「进行中」变为「结束」时刷新一次：起草可能是在离开页面之后才跑完的，
+    // 那时恢复到的还是生成前的内容。用状态流转触发，不用定时器，离开组合即取消。
+    LaunchedEffect(vm) {
+        var wasGenerating = AppState.writingGenerating
+        snapshotFlow { AppState.writingGenerating }.collect { now ->
+            if (wasGenerating && !now) vm.refreshTask()
+            wasGenerating = now
+        }
     }
 
-    Box(Modifier.fillMaxSize().background(AppBg)) {
-        Row(
-            Modifier.fillMaxSize().padding(Dimens.space4),
-            horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
-        ) {
-            if (vm.spec != null) {
-                SpecPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+    // 上次生成失败提示（失败可能发生在切到别的页面期间，那时本地 status 已随 ViewModel 一起丢失）。
+    // 入口页与已恢复的工作台都要显示：工作台靠 openTask 恢复出来的是生成前状态（可能空正文），
+    // 不说明的话用户只看到「还没有正文」，同样以为生成丢了。
+    val lastError = AppState.writingLastError
+    val generating = AppState.writingGenerating
+
+    Column(Modifier.fillMaxSize().background(AppBg)) {
+        if (lastError != null && !generating) {
+            WritingFailedBanner(lastError) { AppState.writingLastError = null }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (!vm.hasTask) {
+                TaskEntryScreen(vm)
             } else {
-                TaskPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                Row(
+                    Modifier.fillMaxSize().padding(Dimens.space4),
+                    horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
+                ) {
+                    if (vm.spec != null) {
+                        SpecPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                    } else {
+                        TaskPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                    }
+                    EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
+                    AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
+                }
             }
-            EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
-            AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
         }
     }
 
@@ -155,6 +188,25 @@ fun WritingScreen() {
             onSave = { vm.saveDocument() },
             onClose = { vm.closeDocument() },
         )
+    }
+}
+
+/**
+ * 上次生成失败提示条：失败发生在切到别的页面期间时，本地 ViewModel 已被重建、
+ * status 丢失，只有全局记录还在。给一个关闭按钮，用户确认后不必一直挂着。
+ */
+@Composable
+private fun WritingFailedBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(WarnSoft)
+            .padding(horizontal = Dimens.space5, vertical = Dimens.space3),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("上次生成未完成：$message", fontSize = 12.5.sp, color = Warn,
+            lineHeight = 18.sp, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(Dimens.space2))
+        TextButton(onClick = onDismiss) { Text("知道了", fontSize = 12.sp, color = Warn) }
     }
 }
 
@@ -335,6 +387,21 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                     Text("任务规划不可用：$it", fontSize = 12.5.sp, color = Warn)
                     Spacer(Modifier.height(Dimens.space2))
                     AppLinkButton("不规划，直接开始写作", onClick = { vm.startWithoutPlan() })
+                }
+            }
+
+            // 还没拿到 task_id 就切回来了（任务仍在创建中）：明确说明仍在处理，
+            // 不要呈现一个空白入口让人以为任务丢了
+            if (AppState.writingGenerating && !vm.planning) {
+                Spacer(Modifier.height(Dimens.space4))
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusMd))
+                        .background(AiSoft)
+                        .padding(Dimens.space4),
+                ) {
+                    Text("上一次启动的写作任务仍在准备中，完成后会自动回到工作台。",
+                        fontSize = 12.5.sp, color = Ink2, lineHeight = 18.sp)
                 }
             }
 

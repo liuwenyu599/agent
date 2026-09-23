@@ -1,6 +1,7 @@
 package com.judicialai.desktop.features.ppt
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,13 +78,35 @@ fun PptScreen() {
     val vm = remember { PptViewModel(Repositories.ppt) }
     var tab by remember { mutableStateOf(0) }
 
+    // 跨页面恢复：切走再切回时 remember 会重建 ViewModel（状态清零），
+    // 但生成协程不会被取消，服务端文档早已落库。这里读取全局状态：
+    // 本地还没有文档而全局有 id → 按 id 从服务端取回大纲，直接回到工作台。
+    // 读取发生在组合内，生成完成后（可能是离开页面之后才跑完）id 一写入就会触发重组并自动恢复。
+    val pendingDocId = AppState.pendingPptDocId
+    val generating = AppState.pptOutlineGenerating
+
     LaunchedEffect(Unit) { vm.loadTemplates(); vm.loadDocuments() }
+
+    // 以 id 为 key：id 从 null 变为具体值时（生成完成）自动执行一次恢复
+    LaunchedEffect(pendingDocId) {
+        if (pendingDocId != null && vm.docId == null) vm.openDocument(pendingDocId)
+    }
 
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(tab == 0, { tab = 0 }) { Text("新建 PPT", Modifier.padding(12.dp)) }
             Tab(tab == 1, { tab = 1 }) { Text("我的 PPT", Modifier.padding(12.dp)) }
             Tab(tab == 2, { tab = 2 }) { Text("模板库", Modifier.padding(12.dp)) }
+        }
+        // 还没拿到 doc_id 就切回来了：明确告诉用户生成仍在进行（协程并未被取消），
+        // 不要呈现一片空白让人以为生成丢了
+        val lastError = AppState.pptLastError
+        if (generating && vm.docId == null) {
+            PptGeneratingBanner(vm)
+        } else if (lastError != null && vm.docId == null) {
+            // 上次生成（可能发生在切走期间）失败了：本地 status 已随 ViewModel 丢失，
+            // 只有全局记录还在，必须让用户知道失败原因
+            PptFailedBanner(lastError) { AppState.pptLastError = null }
         }
         when {
             tab == 0 && vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
@@ -96,6 +119,46 @@ fun PptScreen() {
                 }
             }
         }
+    }
+}
+
+/**
+ * 跨页面生成提示条：大纲还在生成（协程不随页面切换取消）但本地还没拿到文档时显示。
+ * 有实时阶段就展示阶段文案，否则说明「完成后会自动回到工作台」。
+ */
+@Composable
+private fun PptGeneratingBanner(vm: PptViewModel) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colors.primary.copy(alpha = 0.08f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("正在生成 PPT", style = MaterialTheme.typography.subtitle2,
+            color = MaterialTheme.colors.primary)
+        Spacer(Modifier.width(8.dp))
+        Text(vm.outlineStage.ifBlank { "生成完成后会自动回到工作台，可先去其他页面" },
+            style = MaterialTheme.typography.caption, color = SecondaryText)
+    }
+}
+
+/**
+ * 上次生成失败提示条：失败发生在切到别的页面期间时，本地 ViewModel 已被重建、
+ * status 丢失，只有全局记录还在。
+ * 停在入口页时没有「返回修改」这类可清除入口，所以给一个关闭按钮，否则提示永远清不掉。
+ */
+@Composable
+private fun PptFailedBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colors.error.copy(alpha = 0.08f))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("上次生成未完成：$message", style = MaterialTheme.typography.caption,
+            color = MaterialTheme.colors.error, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(8.dp))
+        TextButton(onClick = onDismiss) { Text("知道了") }
     }
 }
 

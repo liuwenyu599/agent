@@ -108,12 +108,23 @@ class WritingViewModel(
     val hasTask: Boolean get() = task.taskId != null
     val hasDraft: Boolean get() = content.isNotBlank()
 
+    /**
+     * 最近一次由服务端下发的正文快照。
+     * 与 [content] 相等说明用户没有手改过编辑器内容，此时才允许用服务端新内容覆盖
+     * （用于「离开页面之后生成才跑完」的自动刷新，避免把用户手改的字冲掉）。
+     */
+    private var serverContent: String = ""
+
     // ---------------- 状态装载 ----------------
 
     private fun applyResponse(d: JsonObject) {
+        val id = d["task_id"].str().ifBlank { task.taskId }
+        // 记录到全局：切到别的页面再切回时（ViewModel 重建、状态清零）
+        // 按此 id 调 GET /writing/tasks/{id} 恢复任务
+        if (!id.isNullOrBlank()) AppState.pendingWritingTaskId = id
         val ctx = d["task_context"].obj() ?: return
         task = WritingTaskState(
-            taskId = d["task_id"].str().ifBlank { task.taskId },
+            taskId = id,
             documentType = ctx["document_type"].str(),
             title = ctx["title"].str(),
             topic = ctx["topic"].str(),
@@ -130,7 +141,10 @@ class WritingViewModel(
             documentDate = ctx["document_date"].str(),
             missingFields = ctx["missing_fields"].arr().map { it.str() }.filter { it.isNotBlank() },
         )
-        d["current_content"].str().takeIf { it.isNotBlank() }?.let { content = it }
+        d["current_content"].str().takeIf { it.isNotBlank() }?.let {
+            content = it
+            serverContent = it
+        }
         versionNo = d["version_no"].int()
         taskStatus = d["status"].str().ifBlank { taskStatus }
         d["references"].arr().map { it.str() }.filter { it.isNotBlank() }
@@ -141,6 +155,10 @@ class WritingViewModel(
     private fun fail(msg: String) {
         status = msg
         busy = false
+        AppState.writingGenerating = false
+        // 记到全局：切走再切回时本地 status 会随 ViewModel 一起丢失，
+        // 用户只会看到空工作台，不知道这次其实失败了
+        AppState.writingLastError = msg
     }
 
     // ---------------- 取消生成 / 返回模板 ----------------
@@ -154,7 +172,61 @@ class WritingViewModel(
         activeJob = null
         busy = false
         planning = false
+        AppState.writingGenerating = false
         status = "已取消本次生成"
+    }
+
+    // ---------------- 跨页面恢复 ----------------
+
+    /**
+     * 按 taskId 重新装载任务（切到别的页面再切回时 ViewModel 被重建、状态清零，
+     * 但生成协程不会被取消，任务在服务端仍然存在）。
+     * 复用 applyResponse 填充任务上下文 / 正文 / 版本号，并补拉版本链。
+     */
+    fun openTask(id: String) {
+        if (id.isBlank() || busy) return
+        busy = true
+        status = "正在恢复上次的写作任务…"
+        activeJob = scope.launch {
+            when (val r = repo.getTask(id)) {
+                is ApiResult.Ok -> {
+                    val d = r.data
+                    if (d != null) {
+                        applyResponse(d)
+                        // 服务端正文可能为空（还没起草完）：这里无条件对齐，避免残留别的内容
+                        content = d["current_content"].str()
+                        serverContent = content
+                        refreshVersions()
+                        status = null
+                    } else {
+                        status = "任务不存在或已被删除"
+                        AppState.pendingWritingTaskId = null
+                    }
+                }
+                is ApiResult.Err -> {
+                    status = "恢复上次写作任务失败：${r.message}"
+                    // 取不到就别再记着，避免每次切回页面都重试一次失败的请求
+                    AppState.pendingWritingTaskId = null
+                }
+            }
+            busy = false
+        }
+    }
+
+    /**
+     * 用服务端最新状态刷新当前任务。
+     * 仅在用户没有手改过正文（[content] 与 [serverContent] 一致）时才覆盖，
+     * 用于「离开页面之后生成才跑完」的场景：那时本地拿到的还是生成前的内容。
+     */
+    fun refreshTask() {
+        val id = task.taskId ?: return
+        if (content != serverContent) return
+        scope.launch {
+            when (val r = repo.getTask(id)) {
+                is ApiResult.Ok -> r.data?.let { applyResponse(it) }
+                is ApiResult.Err -> Unit
+            }
+        }
     }
 
     /**
@@ -178,6 +250,8 @@ class WritingViewModel(
         val text = entryInput.trim()
         if (text.isBlank() || busy) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         status = null
         messages = messages + TaskChatMessage("user", text)
         activeJob = scope.launch {
@@ -193,6 +267,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            AppState.writingGenerating = false
         }
     }
 
@@ -207,6 +282,8 @@ class WritingViewModel(
         val text = entryInput.trim()
         if (text.isBlank() || busy) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         planning = true
         status = null
         planError = null
@@ -235,6 +312,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            AppState.writingGenerating = false
         }
     }
 
@@ -246,6 +324,8 @@ class WritingViewModel(
     fun startFromTemplate(p: PendingTemplateWrite) {
         if (busy || hasTask) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         status = "正在按模板「${p.templateName}」创建写作任务…"
         messages = messages + TaskChatMessage("user", p.message)
         activeJob = scope.launch {
@@ -266,6 +346,8 @@ class WritingViewModel(
                     }
                     busy = false
                     status = null
+                    // 创建阶段结束；紧接着的 draft() 会自己把标记重新置起
+                    AppState.writingGenerating = false
                     if (hasTask) draft()
                     return@launch
                 }
@@ -365,6 +447,8 @@ class WritingViewModel(
         val id = task.taskId
         if (text.isBlank() || busy || id == null) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         messages = messages + TaskChatMessage("user", text)
         chatInput = ""
         activeJob = scope.launch {
@@ -379,6 +463,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            AppState.writingGenerating = false
         }
     }
 
@@ -393,6 +478,8 @@ class WritingViewModel(
         val id = task.taskId ?: return
         if (busy) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         status = null
         activeJob = scope.launch {
             var streamed = false
@@ -420,6 +507,7 @@ class WritingViewModel(
                 r is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            AppState.writingGenerating = false
         }
     }
 
@@ -431,6 +519,8 @@ class WritingViewModel(
         val id = task.taskId ?: return
         if (busy || !hasDraft) return
         busy = true
+        AppState.writingGenerating = true
+        AppState.writingLastError = null
         activeJob = scope.launch {
             when (val r = repo.revise(id, instruction, mode, content)) {
                 is ApiResult.Ok -> r.data?.let { d ->
@@ -441,6 +531,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            AppState.writingGenerating = false
         }
     }
 
@@ -632,8 +723,12 @@ class WritingViewModel(
     }
 
     fun newTask() {
+        // 用户明确放弃当前任务：清掉跨页面恢复标记与上次失败原因，切回页面不应再恢复它
+        AppState.pendingWritingTaskId = null
+        AppState.writingLastError = null
         task = WritingTaskState()
         content = ""
+        serverContent = ""
         versionNo = 0
         taskStatus = "collecting"
         messages = emptyList()

@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
@@ -172,6 +173,8 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     fun deleteDocument(id: String) {
+        // 文档已删除：恢复标记必须一起清掉，否则切回页面会去请求一个不存在的文档
+        if (AppState.pendingPptDocId == id) AppState.pendingPptDocId = null
         scope.launch {
             when (val r = repo.deleteDocument(id)) {
                 is ApiResult.Ok -> loadDocuments()
@@ -237,52 +240,89 @@ class PptViewModel(private val repo: PptRepository) {
             status = "请先填写汇报主题，或上传材料"
             return
         }
+        // 切走再切回会得到一个新的 ViewModel（busy 已重置），仅靠 busy 挡不住重复发起；
+        // 而两次生成会并发跑，后完成的覆盖 pendingPptDocId，先完成的文档客户端就找不到了
+        if (AppState.pptOutlineGenerating) {
+            status = "还有一份正在生成，请稍候"
+            return
+        }
         busy = true
+        // 全局标记：切到别的页面再切回时据此显示「正在生成中」；生成结束（无论成败）复位
+        AppState.pptOutlineGenerating = true
+        AppState.pptLastError = null
         outlineStage = "正在理解材料与任务要求…"
         status = null
         val body = outlineBody()
         scope.launch {
-            var doneOk = false
-            var streamErr: ApiResult.Err? = null
-            when (val r = repo.outlineStream(body) { ev ->
-                when (ev["type"].str()) {
-                    "stage" -> outlineStage = ev["text"].str()
-                    "done" -> {
-                        val d = ev["data"].obj()
-                        val ol = d?.get("outline").obj()
-                        if (d != null && ol != null) {
-                            applyOutline(d["doc_id"].str(), ol)
-                            doneOk = true
-                        }
-                    }
-                    "error" -> status = ev["message"].str().ifBlank { "大纲生成失败" }
-                }
-            }) {
-                is ApiResult.Ok -> Unit
-                is ApiResult.Err -> streamErr = r
+            var ok = false
+            try {
+                ok = runOutline(body)
+            } catch (e: Exception) {
+                status = "大纲生成中断：${e.message ?: "未知错误"}"
+            } finally {
+                // 生成协程不随页面切换取消，这里保证标记一定复位，不会永久卡在「生成中」
+                busy = false
+                AppState.pptOutlineGenerating = false
             }
-            // 服务端未部署流式接口（404）或流中断且未拿到 done → 回退一次性接口
-            if (!doneOk && streamErr != null) {
-                outlineStage = "正在生成大纲…"
-                when (val r2 = repo.outline(
-                    body["source_type"] as String, body["topic"] as String,
-                    body["content"] as String, body["slide_count"] as Int, "", "")) {
-                    is ApiResult.Ok -> {
-                        val ol = runCatching {
-                            kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
-                        }.getOrNull()
-                        if (ol != null) applyOutline(r2.data.first ?: "", ol)
-                        else status = "大纲解析失败，请重试"
-                    }
-                    is ApiResult.Err -> status = r2.message
-                }
-            }
-            busy = false
+            // 失败原因记到全局：切走再切回时本地 status 会随 ViewModel 一起丢失，
+            // 用户只会看到干净的入口页，以为生成"没了"
+            AppState.pptLastError = if (ok) null
+            else status?.takeIf { it.isNotBlank() } ?: "大纲生成未完成，请重试"
         }
     }
 
+    /**
+     * 执行一次大纲生成：优先 SSE 流式（过程可见）；
+     * 服务端未部署流式接口（404）或流中断且未拿到 done → 回退一次性接口。
+     * @return 是否成功拿到大纲（成功时已通过 applyOutline 写入本地与全局状态）
+     */
+    private suspend fun runOutline(body: Map<String, Any?>): Boolean {
+        var doneOk = false
+        var streamErr: ApiResult.Err? = null
+        when (val r = repo.outlineStream(body) { ev ->
+            when (ev["type"].str()) {
+                "stage" -> outlineStage = ev["text"].str()
+                "done" -> {
+                    val d = ev["data"].obj()
+                    val ol = d?.get("outline").obj()
+                    if (d != null && ol != null) {
+                        applyOutline(d["doc_id"].str(), ol)
+                        doneOk = true
+                    }
+                }
+                "error" -> status = ev["message"].str().ifBlank { "大纲生成失败" }
+            }
+        }) {
+            is ApiResult.Ok -> Unit
+            is ApiResult.Err -> streamErr = r
+        }
+        // 服务端未部署流式接口（404）或流中断且未拿到 done → 回退一次性接口
+        if (!doneOk && streamErr != null) {
+            outlineStage = "正在生成大纲…"
+            when (val r2 = repo.outline(
+                body["source_type"] as String, body["topic"] as String,
+                body["content"] as String, body["slide_count"] as Int, "", "")) {
+                is ApiResult.Ok -> {
+                    val ol = runCatching {
+                        kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
+                    }.getOrNull()
+                    if (ol != null) {
+                        applyOutline(r2.data.first ?: "", ol)
+                        doneOk = true
+                    } else status = "大纲解析失败，请重试"
+                }
+                is ApiResult.Err -> status = r2.message
+            }
+        }
+        return doneOk
+    }
+
     private fun applyOutline(newDocId: String, outline: JsonObject) {
-        if (newDocId.isNotBlank()) docId = newDocId
+        if (newDocId.isNotBlank()) {
+            docId = newDocId
+            // 记录到全局：切到别的页面再切回时按此 id 从服务端恢复大纲与工作台
+            AppState.pendingPptDocId = newDocId
+        }
         outlineTitle = outline["title"].str().ifBlank { topic.ifBlank { "未命名PPT" } }
         outlineSubtitle = outline["subtitle"].str()
         slides.clear()
@@ -318,7 +358,16 @@ class PptViewModel(private val repo: PptRepository) {
 
     fun toWorkbench() { step = PptStep.WORKBENCH; status = null }
     fun backToOutline() { if (docId != null) step = PptStep.OUTLINE }
-    fun backToEntry() { step = PptStep.ENTRY }
+
+    /**
+     * 回到极简入口页：用户明确放弃当前这份文档，
+     * 清掉跨页面恢复标记与上次失败原因，避免下次进页面又自动打开它、或一直挂着旧错误。
+     */
+    fun backToEntry() {
+        step = PptStep.ENTRY
+        AppState.pendingPptDocId = null
+        AppState.pptLastError = null
+    }
 
     // ================= 打开已有文档 / 导入 PPT 续改 =================
 
@@ -384,21 +433,45 @@ class PptViewModel(private val repo: PptRepository) {
     /** 生成并导出：先保存草稿，再渲染 pptx，最后让用户选保存位置 */
     fun generateAndExport(target: File) {
         val id = docId ?: return
+        // 同 startOutline：切走再切回后 busy 已重置，靠全局标记挡住重复导出，
+        // 否则两次导出并发跑会写同一个文件
+        if (AppState.pptExporting) {
+            status = "还有一份正在导出，请稍候"
+            return
+        }
         busy = true
+        AppState.pptExporting = true
+        AppState.pptLastError = null
         status = "正在生成 PPT（模板学习渲染）…"
         scope.launch {
-            repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
-            when (val r = repo.generate(id, outlineJson(), templateId)) {
-                is ApiResult.Ok -> {
-                    status = when (val d = repo.downloadDocument(id, target)) {
-                        is ApiResult.Ok -> d.data
-                        is ApiResult.Err -> d.message
+            var failed: String? = null
+            try {
+                repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
+                when (val r = repo.generate(id, outlineJson(), templateId)) {
+                    is ApiResult.Ok -> {
+                        status = when (val d = repo.downloadDocument(id, target)) {
+                            is ApiResult.Ok -> d.data
+                            is ApiResult.Err -> {
+                                failed = d.message
+                                d.message
+                            }
+                        }
+                        loadDocuments()
                     }
-                    loadDocuments()
+                    is ApiResult.Err -> {
+                        failed = r.message
+                        status = r.message
+                    }
                 }
-                is ApiResult.Err -> status = r.message
+            } catch (e: Exception) {
+                failed = "生成中断：${e.message ?: "未知错误"}"
+                status = failed
+            } finally {
+                busy = false
+                AppState.pptExporting = false
             }
-            busy = false
+            // 失败原因记到全局：切走再切回时本地 status 会随 ViewModel 一起丢失
+            AppState.pptLastError = failed
         }
     }
 

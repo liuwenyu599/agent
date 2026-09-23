@@ -71,6 +71,71 @@ object AppState {
     var pendingDocumentId by mutableStateOf<String?>(null)
 
     /**
+     * PPT 工作台「当前文档 id」（跨页面恢复用）。
+     * 由 PptViewModel 在拿到服务端 doc_id 时写入（applyOutline：大纲生成 / 导入 / 打开已有文档）；
+     * PptScreen 重建（切到别的页面再切回时 remember 会重建 ViewModel，本地状态清零）时消费：
+     * 本地 docId 为空则按此 id 调 openDocument，从服务端取回大纲并回到工作台。
+     * **不在消费后清空**（否则切走再切回仍然会丢），仅在用户显式回到入口页
+     * （PptViewModel.backToEntry）、删除该文档或登出时置 null。
+     */
+    var pendingPptDocId by mutableStateOf<String?>(null)
+
+    /**
+     * PPT 大纲是否正在生成中（全局可见，不随页面切换丢失）。
+     * 由 PptViewModel.startOutline 开始时置 true，结束（成功/失败）置 false。
+     * 页面切换不会取消生成协程（ViewModel 使用独立 CoroutineScope 且没有 onCleared），
+     * 所以切回来时可能正卡在「还没拿到 doc_id」这一段：PptScreen 据此显示明确的
+     * 「正在生成中」提示而不是空白入口页；生成完成后由仍在运行的协程写入
+     * [pendingPptDocId]，界面随即自动恢复到工作台。
+     */
+    var pptOutlineGenerating by mutableStateOf(false)
+
+    /**
+     * PPT 是否正在导出 pptx（跨页面可见）。
+     * 由 PptViewModel.generateAndExport 开始时置 true、结束（成功/失败）置 false。
+     * 用途同 [pptOutlineGenerating]：切走再切回会得到新的 ViewModel（busy 已重置），
+     * 仅靠 busy 挡不住重复发起，而两次导出会写同一个文件，必须用全局标记挡住。
+     */
+    var pptExporting by mutableStateOf(false)
+
+    /**
+     * 上一次 PPT 生成 / 导出的失败原因（跨页面可见）。
+     * 由 PptViewModel 在生成失败时写入真实的服务端或解析错误信息，成功时置 null。
+     * PptScreen 消费：切到别的页面再切回时本地 ViewModel 已被重建、status 丢失，
+     * 只有这里还能告诉用户「上次生成失败了，为什么」。
+     * 清空时机同 [pendingPptDocId]：回到入口页（backToEntry）、登出，
+     * 以及用户在提示条上点「知道了」（停在入口页时没有别的可清除入口）。
+     */
+    var pptLastError by mutableStateOf<String?>(null)
+
+    /**
+     * 智能写作「当前任务 id」（跨页面恢复用）。
+     * 由 WritingViewModel.applyResponse 在拿到后端 task_id 时写入；
+     * WritingScreen 重建时消费：本地尚无任务则按此 id 调 GET /writing/tasks/{id} 恢复
+     * 任务上下文、正文与版本号。仅在用户「重新描述任务」/ 新建任务（newTask）或登出时置 null。
+     */
+    var pendingWritingTaskId by mutableStateOf<String?>(null)
+
+    /**
+     * 智能写作是否有生成请求在跑（全局可见；创建任务 / 起草 / 修改 / 对话均计入）。
+     * 由 WritingViewModel 各生成入口在开始时置 true、结束（成功/失败/取消）置 false。
+     * 用途同 [pptOutlineGenerating]：切回页面时给出「正在处理」的明确提示；
+     * 并在其由 true 变为 false 时用服务端最新状态刷新一次——生成可能是在离开页面之后
+     * 才由仍在运行的协程跑完的，本地拿到的还是生成前的内容。
+     */
+    var writingGenerating by mutableStateOf(false)
+
+    /**
+     * 上一次智能写作生成 / 修改的失败原因（跨页面可见）。
+     * 由 WritingViewModel 各生成入口在开始时置 null、失败（fail）时写入真实错误信息。
+     * WritingScreen 消费：切走再切回时即便靠 openTask 恢复出了任务，恢复到的也是
+     * 生成前的状态（可能是空正文），必须明确告知失败原因，否则用户只看到「没有正文」。
+     * 清空时机同 [pendingWritingTaskId]：新建任务（newTask）、登出，
+     * 以及用户在提示条上点「知道了」。
+     */
+    var writingLastError by mutableStateOf<String?>(null)
+
+    /**
      * 管理员重置过密码 → true。后端会在改密前拦截业务接口，
      * 客户端据此引导用户到个人中心「账号安全」修改密码。
      */
@@ -168,6 +233,14 @@ object AppState {
         canManageDeptAgent = false
         screen = AppScreen.HOME
         navDrawerOpen = false
+        // 跨页面恢复标记一并清空，避免换账号登录后恢复到上一个账号的文档/任务
+        pendingPptDocId = null
+        pptOutlineGenerating = false
+        pptExporting = false
+        pptLastError = null
+        pendingWritingTaskId = null
+        writingGenerating = false
+        writingLastError = null
     }
 
     /** 统一导航入口：设置页面 + 管理后台 Tab + 关闭抽屉 */
