@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -75,6 +76,69 @@ fun KnowledgeScreen() {
     } else {
         KnowledgeList(vm)
     }
+
+    // 文档查看 / 编辑弹窗
+    if (vm.docDialogId != null) {
+        KnowledgeDocDialog(
+            title = vm.docDialogTitle,
+            content = vm.docDialogContent,
+            busy = vm.docDialogBusy,
+            onTitleChange = { vm.docDialogTitle = it },
+            onContentChange = { vm.docDialogContent = it },
+            onSave = { vm.saveDocument() },
+            onClose = { vm.closeDocument() },
+        )
+    }
+}
+
+/**
+ * 知识库文档查看 / 编辑弹窗。
+ * 知识库列表与智能写作「参考材料」共用；保存后后端重新分块并重建检索向量。
+ * 无编辑权限的用户保存时会被服务端拒绝并提示。
+ */
+@Composable
+fun KnowledgeDocDialog(
+    title: String,
+    content: String,
+    busy: Boolean,
+    onTitleChange: (String) -> Unit,
+    onContentChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("查看 / 编辑文档", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = title, onValueChange = onTitleChange,
+                    label = { Text("标题") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = content, onValueChange = onContentChange,
+                    label = { Text("正文内容") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 380.dp),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("约 ${content.length} 字 · 保存后将重新分块并同步检索",
+                    fontSize = 11.sp, color = TextSecondary)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSave, enabled = !busy,
+                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+            ) { Text(if (busy) "保存中…" else "保存", color = Color.White) }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
+    )
 }
 
 /** 知识库分类标签：科室库 = public 且带 department_code */
@@ -300,7 +364,7 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                     Text("类型", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
                     Text("状态", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
                     Text("上传时间", Modifier.width(160.dp), fontSize = 13.sp, color = TextSecondary)
-                    Text("操作", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
+                    Text("操作", Modifier.width(170.dp), fontSize = 13.sp, color = TextSecondary)
                 }
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (vm.docs.isEmpty()) {
@@ -311,6 +375,8 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                     }
                     vm.docs.forEach { d ->
                         Row(Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { vm.openDocument(d["id"].str()) }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(d["title"].str().ifBlank { d["filename"].str() },
@@ -330,10 +396,14 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                             }
                             Text(d["created_at"].str().take(16).replace("T", " "),
                                 Modifier.width(160.dp), fontSize = 13.sp, color = TextRegular)
-                            TextButton(onClick = { vm.deleteDocument(d["id"].str()) },
-                                modifier = Modifier.width(100.dp)) {
-                                Icon(Icons.Default.Delete, null, tint = EpDanger,
-                                    modifier = Modifier.size(16.dp))
+                            Row(Modifier.width(170.dp)) {
+                                TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
+                                    Text("查看/编辑", color = EpPrimary, fontSize = 13.sp)
+                                }
+                                TextButton(onClick = { vm.deleteDocument(d["id"].str()) }) {
+                                    Icon(Icons.Default.Delete, null, tint = EpDanger,
+                                        modifier = Modifier.size(16.dp))
+                                }
                             }
                         }
                         Divider(color = Color(0xFFF2F4F8))
