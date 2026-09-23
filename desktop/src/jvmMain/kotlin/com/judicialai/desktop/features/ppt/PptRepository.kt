@@ -56,7 +56,7 @@ class PptRepository(private val api: ApiClient) {
         }
 
     suspend fun downloadDocument(id: String, target: File) =
-        api.downloadGet(Endpoints.Ppt.documentDownload(id), target)
+        api.downloadPost(Endpoints.Ppt.documentExport(id), emptyMap(), target)
 
     suspend fun deleteDocument(id: String) = api.del(Endpoints.Ppt.documentDelete(id))
 
