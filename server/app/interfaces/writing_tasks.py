@@ -160,6 +160,14 @@ def get_version(task_id: str, version_no: int,
     return svc.get_version(task_id, user.id, version_no)
 
 
+@router.post("/{task_id}/versions/{version_no}/restore")
+def restore_version(task_id: str, version_no: int,
+                    user: User = Depends(get_current_user),
+                    svc: WritingTaskService = Depends(get_task_service)):
+    """回退到指定历史版本：当前内容先自动保存为新版本，再恢复目标版本内容。"""
+    return svc.restore_version(task_id, user.id, version_no)
+
+
 @router.get("/{task_id}/versions/{version_no}/export")
 def export_version(task_id: str, version_no: int, red_header: bool = True,
                    user: User = Depends(get_current_user),

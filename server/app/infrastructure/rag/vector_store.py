@@ -94,6 +94,10 @@ class FAISSVectorStore:
                 "scope": chunk.get("scope") or "GLOBAL",
             }
 
+        # 文档被编辑后重新入库时，解除其删除标记，使新向量可被检索
+        for c in chunks:
+            self._deleted_doc_ids.discard(c["doc_id"])
+
         self.next_idx += len(chunks)
         self._save()
         logger.info("[FAISS] 添加 %d 个向量，总计 %d", len(chunks), self.next_idx)
