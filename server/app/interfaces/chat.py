@@ -22,7 +22,7 @@ from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundError
 from app.domain.identity.entities import User
-from app.infrastructure.ai import get_llm_gateway
+from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.infrastructure.database import get_db
 from app.infrastructure.rag import get_embedder, get_vector_store
 from app.infrastructure.repositories.chat import (
@@ -39,7 +39,7 @@ _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.do
 def get_chat_service(db: Session = Depends(get_db)) -> ChatService:
     return ChatService(
         db,
-        WritingAssistant(get_llm_gateway()),
+        WritingAssistant(get_llm_gateway(), get_vision_gateway()),
         RagService(db, get_embedder(), get_vector_store()),
     )
 

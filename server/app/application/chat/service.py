@@ -4,6 +4,9 @@
 写作意图澄清判断 → RAG 检索 + 范文检索 → WritingAssistant 生成 →
 写作类请求追加智能写作流水线（后处理 → 质量门 → 内容校验 → D 级重试）→
 消息入库 → 每 20 条消息触发会话总结。
+
+视觉链路：本轮上传的图片附件在配置了 VISION_MODEL_URL 时直接送视觉模型，
+不再只依赖 OCR 文本。
 """
 from typing import Dict, List, Optional
 
@@ -73,6 +76,13 @@ class ChatService:
             "keywords": tmpl.keywords,
         }
 
+    @staticmethod
+    def _image_paths_of(new_attachments) -> List[str]:
+        """本轮新上传的图片附件本地路径（送视觉模型用，数量受 VISION_MAX_IMAGES 限制）。"""
+        paths = [a.file_path for a in new_attachments
+                 if getattr(a, "kind", "") == "image" and getattr(a, "file_path", "")]
+        return paths[: settings.VISION_MAX_IMAGES]
+
     def send_message(self, user: User, message: str, session_id: Optional[str] = None,
                      use_rag: bool = True, system_prompt: Optional[str] = None,
                      template_category: Optional[str] = None, source: str = "chat",
@@ -91,6 +101,9 @@ class ChatService:
         if attachment_ids:
             new_attachments = self.attachments.get_attachments(attachment_ids, user.id, self.db)
             self.attachments.bind_to_session(attachment_ids, session.id, user.id, self.db)
+
+        # 本轮图片附件（视觉链路；未配置视觉模型时仍走 OCR 文本上下文）
+        image_paths = self._image_paths_of(new_attachments) or None
 
         session_attachments = self.attachments.get_session_attachments(session.id, self.db)
         attachment_context = self.attachments.build_attachment_context(
@@ -167,6 +180,7 @@ class ChatService:
                 task_reference_context=task_reference_context,
                 template_reference_context=template_reference_context,
                 user_preference=user_preference,
+                image_paths=image_paths,
             )
 
         # ---- 智能写作流水线（仅写作类请求，自动质检，不影响普通问答）----
@@ -195,6 +209,7 @@ class ChatService:
                     template_reference_context=template_reference_context,
                     user=user,
                     user_preference=user_preference,
+                    image_paths=image_paths,
                 )
             # 自动落草稿：生成结果即成为"我的文档"中的版本 1，可在线编辑/存版本/导出
             document_id = self._auto_save_draft(
@@ -243,7 +258,8 @@ class ChatService:
                           attachment_context, reference_template,
                           task_reference_context,
                           template_reference_context, user: User,
-                          user_preference: Optional[str] = None) -> tuple:
+                          user_preference: Optional[str] = None,
+                          image_paths: Optional[List[str]] = None) -> tuple:
         """后处理 → 质量门 → 内容校验 → D 级自动重试一次。
 
         返回 (最终文本, 文号, 成文日期, quality, content_check, events)。
@@ -291,6 +307,7 @@ class ChatService:
                     task_reference_context=task_reference_context,
                     template_reference_context=template_reference_context,
                     user_preference=user_preference,
+                    image_paths=image_paths,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[写作流水线] 重试生成失败: %s", e)
