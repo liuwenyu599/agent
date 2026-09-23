@@ -1,0 +1,83 @@
+# =============================================================================
+# PPT 助手 · PPTAgent + DeepPresenter-9B 独立部署栈
+#
+# 架构：
+#   司法局 FastAPI :8000 → PPTAgent Host :7861（内部调 Sandbox）
+#     → OpenAI-compatible → DeepPresenter-9B :8003
+#
+# 原则：
+#   - 不动现有 PostgreSQL、justice-office-server、Qwen:8001、VL:8002、BGE-M3；
+#   - 三个新容器全部挂在独立网络 justice-network 上；
+#   - 端口避开 8000/8001/8002：模型 8003、Host WebUI/API 7861，Sandbox 不对外；
+#   - FastAPI 侧通过 docker network connect 接入本网络后即可调 Host。
+#
+# 用法：
+#   cd deploy/pptagent
+#   cp .env.example .env           # 首次，按注释修改
+#   cp config.yaml.example config.yaml
+#   docker compose up -d
+#   docker network connect justice-network justice-office-server   # 让后端可达 Host
+# =============================================================================
+
+services:
+  # ---------- DeepPresenter-9B：OpenAI-compatible 模型服务 ----------
+  deeppresenter-9b:
+    # CUDA 显卡：vllm/vllm-openai:latest
+    # 昇腾 310P/910B：quay.io/ascend/vllm-ascend:latest（并在 .env 里设置 ASCEND_RT_VISIBLE_DEVICES）
+    image: ${PPT_LLM_IMAGE:-vllm/vllm-openai:latest}
+    container_name: justice-deeppresenter-9b
+    command: >
+      --model ${PPT_LLM_MODEL_PATH:-/models/DeepPresenter-9B}
+      --served-model-name ${PPT_LLM_MODEL_NAME:-DeepPresenter-9B}
+      --port 8003
+      --max-model-len ${PPT_LLM_MAX_LEN:-32768}
+      --gpu-memory-utilization ${PPT_LLM_GPU_MEM:-0.85}
+      ${PPT_LLM_EXTRA_ARGS:-}
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/justice/models}:/models:ro
+    ports:
+      - "${PPT_LLM_PORT:-8003}:8003"
+    networks:
+      - justice-network
+    # CUDA 环境取消注释；昇腾改用环境变量 ASCEND_RT_VISIBLE_DEVICES 传卡
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  # ---------- PPTAgent Sandbox：隔离的工具执行环境（不对外暴露端口） ----------
+  ppt-sandbox:
+    image: ${PPT_SANDBOX_IMAGE:-forceless/deeppresenter-sandbox:latest}
+    container_name: justice-ppt-sandbox
+    networks:
+      - justice-network
+    restart: unless-stopped
+
+  # ---------- PPTAgent Host：编排 + WebUI/API ----------
+  ppt-host:
+    image: ${PPT_HOST_IMAGE:-forceless/deeppresenter-host:latest}
+    container_name: justice-ppt-host
+    environment:
+      PPTAGENT_OFFLINE: "${PPTAGENT_OFFLINE:-true}"
+    volumes:
+      # 模型指向配置：所有 Agent 角色 → DeepPresenter-9B（容器网络内地址）
+      - ./config.yaml:/app/deeppresenter/config.yaml:ro
+      # 生成的 PPTX 与缓存持久化
+      - ${PPT_DATA_DIR:-./data}:/app/data
+      - ${PPT_CACHE_DIR:-./cache}:/app/cache
+    ports:
+      - "${PPT_HOST_PORT:-7861}:7861"
+    networks:
+      - justice-network
+    depends_on:
+      - ppt-sandbox
+      - deeppresenter-9b
+    restart: unless-stopped
+
+networks:
+  justice-network:
+    name: justice-network

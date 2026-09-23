@@ -1,0 +1,29 @@
+# =============================================================================
+# PPTAgent 模型路由配置：全部角色指向本地 DeepPresenter-9B（OpenAI-compatible）
+# 容器网络内地址 http://deeppresenter-9b:8003/v1，司法局内网零外呼
+# =============================================================================
+
+offline_mode: true
+context_folding: true
+
+research_agent:
+  base_url: "http://deeppresenter-9b:8003/v1"
+  model: "DeepPresenter-9B"
+  api_key: "not-needed"
+
+design_agent:
+  base_url: "http://deeppresenter-9b:8003/v1"
+  model: "DeepPresenter-9B"
+  api_key: "not-needed"
+
+long_context_model:
+  base_url: "http://deeppresenter-9b:8003/v1"
+  model: "DeepPresenter-9B"
+  api_key: "not-needed"
+
+# 视觉角色：复用现有 VL 服务（若 VL 容器也接入 justice-network，可用容器名）
+# 未接入就注释掉整段，PPTAgent 会跳过视觉增强
+vision_model:
+  base_url: "http://host.docker.internal:8002/v1"
+  model: "Qwen2.5-VL-7B-Instruct"
+  api_key: "not-needed"
