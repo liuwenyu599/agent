@@ -142,7 +142,7 @@ def strip_header_docnum(text: str) -> Tuple[str, Optional[str]]:
     return "\n".join(lines), stripped
 
 
-def inject_docnum(text: str, docnum: str) -> str:
+def _insert_docnum_line(text: str, docnum: str) -> str:
     """在标题行之后插入程序生成的文号行。"""
     lines = text.split("\n")
     for i, line in enumerate(lines):
@@ -376,15 +376,17 @@ class PostProcessor:
         events.extend(typo_events)
 
         # 5. 文号：用户指定 > 程序生成 > 不注入
+        # 注意：参数 inject_docnum 是开关（bool），插入函数为 _insert_docnum_line，
+        # 二者不能同名——同名会让 bool 遮蔽函数，调用时 TypeError 500。
         out_number: Optional[str] = None
         if doc_number:
-            text = inject_docnum(text, doc_number)
+            text = _insert_docnum_line(text, doc_number)
             out_number = doc_number
             events.append(f"使用用户指定文号：{doc_number}")
         elif inject_docnum:
             daizi = derive_daizi(signoff_hint or text)
             out_number = DocNumberService(self.db).next_number(daizi)
-            text = inject_docnum(text, out_number)
+            text = _insert_docnum_line(text, out_number)
             events.append(f"程序注入文号：{out_number}")
 
         out_date = doc_date or (TODAY_STR if inject_date else None)
