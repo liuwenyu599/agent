@@ -10,6 +10,7 @@ import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.features.chat.model.ChatAttachment
+import com.judicialai.desktop.features.knowledge.KnowledgeRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,7 +44,10 @@ data class WritingTaskState(
     val missingFields: List<String> = emptyList(),
 )
 
-class WritingViewModel(private val repo: WritingRepository) {
+class WritingViewModel(
+    private val repo: WritingRepository,
+    private val knowledgeRepo: KnowledgeRepository? = null,
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     var task by mutableStateOf(WritingTaskState())
@@ -65,6 +69,18 @@ class WritingViewModel(private val repo: WritingRepository) {
     var versions by mutableStateOf(listOf<JsonObject>())
         private set
     var busy by mutableStateOf(false)
+        private set
+
+    /** 历史版本预览弹窗（查看 + 回退） */
+    var versionPreview by mutableStateOf<JsonObject?>(null)
+        private set
+
+    /** 参考材料（知识库文档）查看/编辑弹窗 */
+    var docDialogId by mutableStateOf<String?>(null)
+        private set
+    var docDialogTitle by mutableStateOf("")
+    var docDialogContent by mutableStateOf("")
+    var docDialogBusy by mutableStateOf(false)
         private set
 
     /** 零门槛入口输入 */
@@ -391,6 +407,91 @@ class WritingViewModel(private val repo: WritingRepository) {
         }
     }
 
+    /** 查看历史版本内容（弹窗预览） */
+    fun openVersion(no: Int) {
+        val id = task.taskId ?: return
+        scope.launch {
+            when (val r = repo.getVersion(id, no)) {
+                is ApiResult.Ok -> versionPreview = r.data
+                is ApiResult.Err -> status = r.message
+            }
+        }
+    }
+
+    fun closeVersionPreview() {
+        versionPreview = null
+    }
+
+    /** 回退到历史版本：后端先把当前内容自动保存为新版本，再恢复目标版本内容 */
+    fun restoreVersion(no: Int) {
+        val id = task.taskId ?: return
+        if (busy) return
+        busy = true
+        scope.launch {
+            when (val r = repo.restoreVersion(id, no)) {
+                is ApiResult.Ok -> {
+                    r.data?.let { d ->
+                        applyResponse(d)
+                        d["reply"].str().takeIf { it.isNotBlank() }?.let { status = it }
+                    }
+                    versionPreview = null
+                    refreshVersions()
+                }
+                is ApiResult.Err -> fail(r.message)
+            }
+            busy = false
+        }
+    }
+
+    // ---------------- 参考材料（知识库文档）查看 / 编辑 ----------------
+
+    /** 打开知识库文档全文（智能写作参考材料可直接查看/编辑） */
+    fun openDocument(docId: String) {
+        val kr = knowledgeRepo ?: return
+        if (docId.isBlank() || docDialogBusy) return
+        docDialogBusy = true
+        scope.launch {
+            when (val r = kr.getDocument(docId)) {
+                is ApiResult.Ok -> {
+                    val d = r.data
+                    if (d != null) {
+                        docDialogId = docId
+                        docDialogTitle = d["title"].str()
+                        docDialogContent = d["content"].str()
+                    } else {
+                        status = "文档内容为空"
+                    }
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            docDialogBusy = false
+        }
+    }
+
+    fun closeDocument() {
+        docDialogId = null
+        docDialogTitle = ""
+        docDialogContent = ""
+    }
+
+    /** 保存对知识库文档的编辑：后端重新分块并重建该文档向量 */
+    fun saveDocument() {
+        val kr = knowledgeRepo ?: return
+        val id = docDialogId ?: return
+        if (docDialogBusy) return
+        docDialogBusy = true
+        scope.launch {
+            when (val r = kr.updateDocument(id, docDialogTitle, docDialogContent)) {
+                is ApiResult.Ok -> {
+                    status = "已保存，知识库检索内容已同步更新"
+                    closeDocument()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            docDialogBusy = false
+        }
+    }
+
     fun export(redHeader: Boolean, target: File) {
         val id = task.taskId ?: return
         if (busy || !hasDraft) return
@@ -430,5 +531,7 @@ class WritingViewModel(private val repo: WritingRepository) {
         entryInput = ""
         chatInput = ""
         status = null
+        versionPreview = null
+        closeDocument()
     }
 }
