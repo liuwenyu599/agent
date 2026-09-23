@@ -112,6 +112,9 @@ private const val Pending = "待补充"
  * 左栏是「任务上下文」（任务卡 + 材料 + 可依据资料 + 模板），不是参数表；
  * 中栏是真正的文档工作台；右栏是 AI 助手（正在做什么 / 建议操作 / 对话 / 引用资料）。
  * 界面不出现「全局公共知识库」「本科室知识库」这类系统实现语言。
+ *
+ * 模板中心「使用模板 → 生成」也会进入本工作台：
+ * 携带模板绑定与已填要素，创建任务后自动起草。
  */
 @Composable
 fun WritingScreen() {
@@ -204,6 +207,12 @@ private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
 @Composable
 private fun TaskEntryScreen(vm: WritingViewModel) {
     androidx.compose.runtime.LaunchedEffect(Unit) {
+        // 模板中心「使用模板 → 生成」：创建绑定模板的任务并自动起草
+        AppState.pendingWritingTemplate?.let { p ->
+            AppState.pendingWritingTemplate = null
+            vm.startFromTemplate(p)
+            return@LaunchedEffect
+        }
         AppState.pendingWritingIntent?.let {
             vm.entryInput = it
             AppState.pendingWritingIntent = null
