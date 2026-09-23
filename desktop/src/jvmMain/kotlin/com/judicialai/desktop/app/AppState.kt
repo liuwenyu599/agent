@@ -32,6 +32,16 @@ object AppState {
     /** 模板中心填好要素后点「生成」：跳转智能写作工作台并携带模板与组装好的指令 */
     var pendingWritingTemplate by mutableStateOf<PendingTemplateWrite?>(null)
 
+    /**
+     * 写作工作台「返回模板重新填写」：携带模板 id 跳回模板中心，
+     * 由 TemplatesScreen 消费（选中该模板并打开填表面板）后置回 null。
+     */
+    var pendingTemplateUseId by mutableStateOf<String?>(null)
+
+    /** 最近一次模板要素填写值（「返回模板重新填写」时预填，避免重打） */
+    var lastTemplateUseId by mutableStateOf<String?>(null)
+    var lastTemplateUseValues by mutableStateOf<Map<String, String>>(emptyMap())
+
     // ---- 导航形态 ----
     /** 全局导航抽屉（点击顶部品牌名打开） */
     var navDrawerOpen by mutableStateOf(false)

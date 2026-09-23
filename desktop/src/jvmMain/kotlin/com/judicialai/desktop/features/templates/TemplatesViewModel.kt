@@ -93,6 +93,7 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
      * 使用模板生成：不再弹窗直接出文，而是把「模板 + 已填要素」
      * 交给智能写作工作台——创建绑定该模板的写作任务并自动起草，
      * 后续对话修改、历史版本与导出都在工作台完成。
+     * 已填要素同时留在 AppState，工作台「返回模板重新填写」时预填，不用重打。
      */
     fun launchWorkspace(params: Map<String, Pair<String, String>>) {
         val t = usingTemplate ?: return
@@ -110,6 +111,8 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         t["content_template"].str().takeIf { it.isNotBlank() }?.let {
             msg += "\n\n【结构参考】\n$it"
         }
+        AppState.lastTemplateUseId = t["id"].str()
+        AppState.lastTemplateUseValues = params.mapValues { it.value.second }
         AppState.pendingWritingTemplate = PendingTemplateWrite(
             templateId = t["id"].str(),
             templateName = t["name"].str(),
