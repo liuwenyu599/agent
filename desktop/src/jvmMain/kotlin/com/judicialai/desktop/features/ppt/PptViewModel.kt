@@ -1,35 +1,122 @@
 package com.judicialai.desktop.features.ppt
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiResult
+import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.io.File
+
+/** 工作台步骤：极简入口 → 大纲确认（可编辑） → 三栏工作台 */
+enum class PptStep { ENTRY, OUTLINE, WORKBENCH }
+
+/** 一份材料的分析结果（材料是一等公民：分析结果对用户可见） */
+class MaterialAnalysis(
+    val filename: String,
+    val chars: Int,
+    val summary: String,
+    val text: String,
+)
+
+/** 一页幻灯片的可编辑模型（标题/要点/页型可改，sources 内容依据只读展示） */
+class SlideEdit(
+    type: String,
+    title: String,
+    points: List<String>,
+    sources: List<String>,
+) {
+    var type by mutableStateOf(type)
+    var title by mutableStateOf(title)
+    /** 要点编辑为纯文本，一行一个要点 */
+    var pointsText by mutableStateOf(points.joinToString("\n"))
+    var sources by mutableStateOf(sources)
+
+    fun points(): List<String> =
+        pointsText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun toJson(): JsonObject = buildJsonObject {
+        put("type", type)
+        put("title", title)
+        putJsonArray("points") { points().forEach { add(it) } }
+        putJsonArray("sources") { sources.forEach { add(it) } }
+    }
+
+    fun replaceWith(slide: JsonObject) {
+        val t = slide["type"].str()
+        if (t.isNotBlank()) type = t
+        title = slide["title"].str().ifBlank { title }
+        val pts = slide["points"].arr().map { it.str() }.filter { it.isNotBlank() }
+        if (pts.isNotEmpty()) pointsText = pts.joinToString("\n")
+        val src = slide["sources"].arr().map { it.str() }.filter { it.isNotBlank() }
+        if (src.isNotEmpty()) sources = src
+    }
+
+    companion object {
+        fun fromJson(slide: JsonObject) = SlideEdit(
+            type = slide["type"].str().ifBlank { "content" },
+            title = slide["title"].str(),
+            points = slide["points"].arr().map { it.str() }.filter { it.isNotBlank() },
+            sources = slide["sources"].arr().map { it.str() }.filter { it.isNotBlank() },
+        )
+    }
+}
 
 class PptViewModel(private val repo: PptRepository) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    // ---- 模板 / 文档列表 ----
     var templates by mutableStateOf(listOf<JsonObject>())
         private set
     var documents by mutableStateOf(listOf<JsonObject>())
         private set
     var templateId by mutableStateOf<String?>(null)
-    var docId by mutableStateOf<String?>(null)
-        private set
-    var outlineText by mutableStateOf("")
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
     var downloadingId by mutableStateOf<String?>(null)
         private set
+
+    // ---- 入口页 ----
+    var topic by mutableStateOf("")
+    var slideCount by mutableStateOf("10")
+    var presenter by mutableStateOf("")
+    var reportDate by mutableStateOf("")
+    val materials = mutableStateListOf<MaterialAnalysis>()
+    var analyzing by mutableStateOf(false)
+        private set
+
+    // ---- 大纲 / 工作台 ----
+    var step by mutableStateOf(PptStep.ENTRY)
+        private set
+    var docId by mutableStateOf<String?>(null)
+        private set
+    var outlineTitle by mutableStateOf("")
+    var outlineSubtitle by mutableStateOf("")
+    val slides = mutableStateListOf<SlideEdit>()
+    var selected by mutableStateOf(0)
+    var outlineStage by mutableStateOf("")
+        private set
+
+    // ---- AI 助手 ----
+    var aiInstruction by mutableStateOf("")
+    var aiBusy by mutableStateOf(false)
+        private set
+    var aiNote by mutableStateOf<String?>(null)
+
+    // ================= 模板 / 文档列表 =================
 
     fun loadTemplates() {
         scope.launch {
@@ -73,40 +160,7 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
-    fun createOutline(sourceType: String, topic: String, content: String,
-                      slideCount: Int, audience: String, scene: String) {
-        busy = true
-        status = "生成大纲中…"
-        scope.launch {
-            when (val r = repo.outline(sourceType, topic, content, slideCount, audience, scene)) {
-                is ApiResult.Ok -> {
-                    docId = r.data.first
-                    outlineText = r.data.second
-                    status = "大纲已生成，可编辑后点击“生成 PPT”"
-                }
-                is ApiResult.Err -> status = r.message
-            }
-            busy = false
-        }
-    }
-
-    fun generate() {
-        val did = docId ?: return
-        if (outlineText.isBlank()) return
-        busy = true
-        status = "生成 PPT 中（模板学习渲染）…"
-        scope.launch {
-            val outlineJson = runCatching { Json.parseToJsonElement(outlineText) }
-                .getOrElse { JsonPrimitive(outlineText) }
-            when (val r = repo.generate(did, outlineJson, templateId)) {
-                is ApiResult.Ok -> { status = "生成完成，请到“我的 PPT”下载"; loadDocuments() }
-                is ApiResult.Err -> status = r.message
-            }
-            busy = false
-        }
-    }
-
-    fun download(id: String, title: String, target: File) {
+    fun download(id: String, target: File) {
         downloadingId = id
         scope.launch {
             status = when (val r = repo.downloadDocument(id, target)) {
@@ -125,5 +179,276 @@ class PptViewModel(private val repo: PptRepository) {
             }
         }
     }
-}
 
+    // ================= 入口页：材料分析 =================
+
+    fun analyzeMaterials(files: List<File>) {
+        if (files.isEmpty()) return
+        analyzing = true
+        status = "正在分析 ${files.size} 份材料…"
+        scope.launch {
+            when (val r = repo.analyzeMaterials(files)) {
+                is ApiResult.Ok -> {
+                    val items = r.data.obj()?.get("items").arr().mapNotNull { it.obj() }
+                    items.forEach { m ->
+                        materials.add(MaterialAnalysis(
+                            filename = m["filename"].str(),
+                            chars = m["chars"].int(),
+                            summary = m["summary"].str(),
+                            text = m["text"].str(),
+                        ))
+                    }
+                    status = if (items.isEmpty()) "没有可解析的材料"
+                    else "已分析 ${items.size} 份材料，可继续添加或直接生成大纲"
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            analyzing = false
+        }
+    }
+
+    fun removeMaterial(index: Int) {
+        if (index in materials.indices) materials.removeAt(index)
+    }
+
+    // ================= 大纲生成（流式 + 回退） =================
+
+    private fun outlineBody(): Map<String, Any?> {
+        val content = buildString {
+            materials.forEach {
+                append("【").append(it.filename).append("】\n").append(it.text).append("\n\n")
+            }
+            if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
+            if (reportDate.isNotBlank()) append("汇报时间：").append(reportDate).append('\n')
+        }.trim()
+        return mapOf(
+            "source_type" to if (materials.isNotEmpty()) "document" else "topic",
+            "topic" to topic,
+            "content" to content,
+            "slide_count" to (slideCount.toIntOrNull() ?: 10),
+            "audience" to "",
+            "scene" to "",
+            "material_names" to materials.map { it.filename },
+        )
+    }
+
+    fun startOutline() {
+        if (topic.isBlank() && materials.isEmpty()) {
+            status = "请先填写汇报主题，或上传材料"
+            return
+        }
+        busy = true
+        outlineStage = "正在理解材料与任务要求…"
+        status = null
+        val body = outlineBody()
+        scope.launch {
+            var doneOk = false
+            var streamErr: ApiResult.Err? = null
+            when (val r = repo.outlineStream(body) { ev ->
+                when (ev["type"].str()) {
+                    "stage" -> outlineStage = ev["text"].str()
+                    "done" -> {
+                        val d = ev["data"].obj()
+                        val ol = d?.get("outline").obj()
+                        if (d != null && ol != null) {
+                            applyOutline(d["doc_id"].str(), ol)
+                            doneOk = true
+                        }
+                    }
+                    "error" -> status = ev["message"].str().ifBlank { "大纲生成失败" }
+                }
+            }) {
+                is ApiResult.Ok -> Unit
+                is ApiResult.Err -> streamErr = r
+            }
+            // 服务端未部署流式接口（404）或流中断且未拿到 done → 回退一次性接口
+            if (!doneOk && streamErr != null) {
+                outlineStage = "正在生成大纲…"
+                when (val r2 = repo.outline(
+                    body["source_type"] as String, body["topic"] as String,
+                    body["content"] as String, body["slide_count"] as Int, "", "")) {
+                    is ApiResult.Ok -> {
+                        val ol = runCatching {
+                            kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
+                        }.getOrNull()
+                        if (ol != null) applyOutline(r2.data.first ?: "", ol)
+                        else status = "大纲解析失败，请重试"
+                    }
+                    is ApiResult.Err -> status = r2.message
+                }
+            }
+            busy = false
+        }
+    }
+
+    private fun applyOutline(newDocId: String, outline: JsonObject) {
+        if (newDocId.isNotBlank()) docId = newDocId
+        outlineTitle = outline["title"].str().ifBlank { topic.ifBlank { "未命名PPT" } }
+        outlineSubtitle = outline["subtitle"].str()
+        slides.clear()
+        outline["slides"].arr().mapNotNull { it.obj() }.forEach { slides.add(SlideEdit.fromJson(it)) }
+        if (slides.isEmpty()) {
+            slides.add(SlideEdit("content", "第一页", listOf("点击右侧 AI 助手或直接编辑"), emptyList()))
+        }
+        selected = 0
+        step = PptStep.OUTLINE
+        outlineStage = ""
+        status = "大纲已生成（${slides.size} 页），请逐页确认或修改"
+    }
+
+    fun addSlideAfter(index: Int) {
+        val at = (index + 1).coerceIn(0, slides.size)
+        slides.add(at, SlideEdit("content", "新页面", listOf(""), emptyList()))
+        selected = at
+    }
+
+    fun removeSlide(index: Int) {
+        if (slides.size <= 1 || index !in slides.indices) return
+        slides.removeAt(index)
+        selected = selected.coerceIn(0, slides.size - 1)
+    }
+
+    fun moveSlide(index: Int, delta: Int) {
+        val to = index + delta
+        if (index !in slides.indices || to !in slides.indices) return
+        val s = slides.removeAt(index)
+        slides.add(to, s)
+        selected = to
+    }
+
+    fun toWorkbench() { step = PptStep.WORKBENCH; status = null }
+    fun backToOutline() { if (docId != null) step = PptStep.OUTLINE }
+    fun backToEntry() { step = PptStep.ENTRY }
+
+    // ================= 打开已有文档 / 导入 PPT 续改 =================
+
+    fun openDocument(id: String) {
+        busy = true
+        status = "正在打开文档…"
+        scope.launch {
+            when (val r = repo.document(id)) {
+                is ApiResult.Ok -> {
+                    val d = r.data.obj()
+                    val ol = d?.get("outline").obj()
+                    if (d != null && ol != null) {
+                        d["template_id"].str().ifBlank { null }?.let { templateId = it }
+                        applyOutline(id, ol)
+                        step = PptStep.WORKBENCH
+                        status = "已打开「${d["title"].str()}」"
+                    } else status = "文档内容为空"
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            busy = false
+        }
+    }
+
+    fun importPptx(file: File) {
+        busy = true
+        status = "正在解析「${file.name}」…"
+        scope.launch {
+            when (val r = repo.importPptx(file)) {
+                is ApiResult.Ok -> {
+                    val d = r.data.obj()
+                    val ol = d?.get("outline").obj()
+                    if (d != null && ol != null) {
+                        applyOutline(d["doc_id"].str(), ol)
+                        step = PptStep.WORKBENCH
+                        status = d["message"].str().ifBlank { "已导入，可继续编辑" }
+                    } else status = "导入结果为空"
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            busy = false
+        }
+    }
+
+    // ================= 保存 / 生成 / 导出 =================
+
+    private fun outlineJson(): JsonObject = buildJsonObject {
+        put("title", outlineTitle)
+        put("subtitle", outlineSubtitle)
+        putJsonArray("slides") { slides.forEach { add(it.toJson()) } }
+    }
+
+    fun saveDraft(showTip: Boolean = true) {
+        val id = docId ?: return
+        scope.launch {
+            when (val r = repo.saveDraft(id, outlineTitle, outlineJson(), templateId)) {
+                is ApiResult.Ok -> if (showTip) status = "草稿已保存"
+                is ApiResult.Err -> if (showTip) status = r.message
+            }
+        }
+    }
+
+    /** 生成并导出：先保存草稿，再渲染 pptx，最后让用户选保存位置 */
+    fun generateAndExport(target: File) {
+        val id = docId ?: return
+        busy = true
+        status = "正在生成 PPT（模板学习渲染）…"
+        scope.launch {
+            repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
+            when (val r = repo.generate(id, outlineJson(), templateId)) {
+                is ApiResult.Ok -> {
+                    status = when (val d = repo.downloadDocument(id, target)) {
+                        is ApiResult.Ok -> d.data
+                        is ApiResult.Err -> d.message
+                    }
+                    loadDocuments()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            busy = false
+        }
+    }
+
+    // ================= AI 助手（单页局部编辑优先） =================
+
+    /** 单页局部修改：润色 / 扩写 / 精简 / 重写 / 自定义 */
+    fun aiSlide(action: String, instruction: String = "") {
+        val i = selected
+        if (i !in slides.indices) return
+        aiBusy = true
+        aiNote = null
+        scope.launch {
+            when (val r = repo.aiSlideAction(action, slides[i].toJson(), instruction)) {
+                is ApiResult.Ok -> {
+                    val slide = r.data.obj()?.get("slide").obj()
+                    if (slide != null) {
+                        slides[i].replaceWith(slide)
+                        aiNote = "已更新第 ${i + 1} 页"
+                    } else aiNote = "AI 未返回有效修改"
+                }
+                is ApiResult.Err -> aiNote = r.message
+            }
+            aiBusy = false
+        }
+    }
+
+    /** 结构调整：add 在此页后新增 / split 拆分此页 / merge 与下一页合并 */
+    fun aiStructure(action: String) {
+        if (slides.isEmpty()) return
+        val i = selected.coerceIn(0, slides.size - 1)
+        if (action == "merge" && i >= slides.size - 1) {
+            aiNote = "最后一页无法与下一页合并"
+            return
+        }
+        aiBusy = true
+        aiNote = null
+        scope.launch {
+            when (val r = repo.aiStructure(action, slides.map { it.toJson() }, i)) {
+                is ApiResult.Ok -> {
+                    val arr = r.data.obj()?.get("slides").arr().orEmpty().mapNotNull { it.obj() }
+                    if (arr.isNotEmpty()) {
+                        slides.clear()
+                        arr.forEach { slides.add(SlideEdit.fromJson(it)) }
+                        selected = i.coerceIn(0, slides.size - 1)
+                        aiNote = "结构已调整（共 ${slides.size} 页）"
+                    } else aiNote = "AI 未返回有效结构"
+                }
+                is ApiResult.Err -> aiNote = r.message
+            }
+            aiBusy = false
+        }
+    }
+}
