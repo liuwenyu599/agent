@@ -177,7 +177,7 @@ private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
         text = {
             Column {
                 Box(
-                    Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 420.dp)
+                    Modifier.fillMaxWidth().height(420.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
                     Text(
@@ -652,7 +652,10 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
     }
 }
 
-/** 可编辑任务字段：改动后点右侧 ✓ 同步后端 */
+/**
+ * 可编辑任务字段：改动后点右侧 ✓ 同步后端。
+ * 多行展示（最多 3 行），避免长参数（如写作目标、主要工作）被单行裁剪看不全。
+ */
 @Composable
 private fun TaskField(label: String, value: String, onSync: (String) -> Unit) {
     var editing by remember(value) { androidx.compose.runtime.mutableStateOf<String?>(null) }
@@ -664,8 +667,9 @@ private fun TaskField(label: String, value: String, onSync: (String) -> Unit) {
             value = shown,
             onValueChange = { editing = it },
             placeholder = { Text(Pending, fontSize = 12.sp, color = Muted2) },
-            modifier = Modifier.weight(1f).heightIn(max = 44.dp),
-            singleLine = true,
+            modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 96.dp),
+            singleLine = false,
+            maxLines = 3,
             shape = RoundedCornerShape(Dimens.radiusSm),
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.5.sp, color = Ink),
             colors = TextFieldDefaults.outlinedTextFieldColors(
