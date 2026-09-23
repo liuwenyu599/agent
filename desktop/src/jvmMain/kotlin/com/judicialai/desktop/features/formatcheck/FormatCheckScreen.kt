@@ -30,6 +30,7 @@ import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
@@ -102,10 +103,9 @@ import java.io.File
  * 左：校验记录（上传 / 打开 / 删除）  中：连续文本编辑器（版本切换 / 缩放 / 问题定位）
  * 右：校验结果（修改前后对照 / 应用 / 撤销 / 重新校验 / 导出）
  *
- * 中栏说明：整篇文档是一个连续可编辑的 BasicTextField，段落间用单个换行连接，
- * 不再按段落分块渲染（旧实现里空段落 + 段前段后距叠加，视觉上「全是换行」）。
- * 「修改前」只读，「当前版本」可编辑；手动编辑只影响本地预览，不写回服务端，
- * 也不进入导出稿 —— 导出仍以「应用修改」产生的自动修正为准（不伪造持久化）。
+ * 中栏说明：整篇文档是一个连续可编辑的 BasicTextField，段落间用单个换行连接。
+ * 「修改前」只读，「当前版本」可编辑；手动编辑后点「保存修改」写回服务端成为新基线
+ * 并自动重新校验；不保存只影响本地预览。导出修正稿 = 新基线 + 已应用的自动修正。
  */
 @Composable
 fun FormatCheckScreen() {
@@ -317,11 +317,14 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
                 fontSize = 12.sp, color = Ink2, modifier = Modifier.weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (vm.editorDirty) {
-                Text("已手动编辑（仅预览，不影响导出）", fontSize = 12.sp, color = Warn,
+                Text("有未保存的修改", fontSize = 12.sp, color = Warn,
                     fontWeight = FontWeight.Medium)
                 Spacer(Modifier.width(Dimens.space2))
-                Text("恢复", fontSize = 12.sp, color = Primary,
+                Text("保存修改", fontSize = 12.sp, color = Primary,
                     fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable { vm.saveEditorEdits() })
+                Spacer(Modifier.width(Dimens.space2))
+                Text("放弃", fontSize = 12.sp, color = Muted,
                     modifier = Modifier.clickable { vm.resetEditor() })
             } else {
                 Text("已修改 ${vm.appliedCount} 处", fontSize = 12.sp, color = Ok,
@@ -381,7 +384,7 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
                 }, kind = AppButtonKind.PRIMARY)
             },
         ) {
-            Text("当前有手动编辑的内容（仅本地预览），切换到「${target.label}」后将丢弃。",
+            Text("当前有未保存的手动修改，切换到「${target.label}」后将丢弃（可先点「保存修改」写回服务端）。",
                 fontSize = 13.sp, color = Ink2)
         }
     }
@@ -717,7 +720,11 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
 }
 
 /**
- * 规则编辑器。
+ * 规则编辑器（白话描述版）。
+ *
+ * 管理员和普通用户都不再手写 JSON：用白话描述校验要求，点「AI 生成校验项」
+ * 由服务端把描述转换为校验项（白名单过滤后返回），界面上以白话预览确认，
+ * 确认后保存（保存权限由服务端按角色校验，普通用户保存时会被提示无权限）。
  *
  * 修复：旧版在「外层 verticalScroll 的 Column」里又嵌了一个
  * 「verticalScroll + heightIn 的 Row」（校验对象单选组），Compose 会直接抛
@@ -729,10 +736,18 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
     var name by remember { mutableStateOf(form.name) }
     var target by remember { mutableStateOf(form.target) }
     var severity by remember { mutableStateOf(form.severity) }
-    var checksJson by remember { mutableStateOf(form.checksJson) }
-    var remark by remember { mutableStateOf(form.remark) }
+    var description by remember { mutableStateOf(form.description) }
     var isDefault by remember { mutableStateOf(form.isDefault) }
     var isActive by remember { mutableStateOf(form.isActive) }
+
+    /** 把当前界面状态回写到 vm 表单（触发 AI 生成 / 保存前都要先同步） */
+    fun syncForm(): RuleForm {
+        val f = vm.editingRule ?: form
+        val merged = f.copy(name = name, target = target, severity = severity,
+            description = description, isDefault = isDefault, isActive = isActive)
+        vm.editingRule = merged
+        return merged
+    }
 
     Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), elevation = 0.dp) {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
@@ -740,7 +755,7 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
             Text(if (form.id.isBlank()) "新建规则" else "编辑规则",
                 fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             androidx.compose.material.OutlinedTextField(
-                name, { name = it }, label = { Text("规则名称") },
+                name, { name = it }, label = { Text("规则名称（可留空，AI 会拟一个）") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 // 校验对象：固定两列，不滚动（避免与外层滚动容器嵌套崩溃）
@@ -774,28 +789,63 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                     }
                 }
             }
+
+            // 白话描述：不再要求手写 JSON
+            Text("校验要求（白话描述）", fontSize = 12.sp, color = TextSecondary)
             androidx.compose.material.OutlinedTextField(
-                checksJson, { checksJson = it },
-                label = { Text("校验项（JSON，如 {\"font_name\":\"仿宋_GB2312\",\"font_size_pt\":16}）") },
-                modifier = Modifier.fillMaxWidth().height(120.dp))
-            androidx.compose.material.OutlinedTextField(
-                remark, { remark = it }, label = { Text("备注") },
-                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                description, { description = it },
+                placeholder = {
+                    Text("例如：正文用仿宋_GB2312 三号字，首行缩进2字符，行距固定28磅，两端对齐",
+                        fontSize = 12.sp)
+                },
+                modifier = Modifier.fillMaxWidth().height(96.dp))
+            Text("无需手写任何 JSON：描述写好后点下方按钮，AI 会自动转换为系统校验项",
+                fontSize = 11.5.sp, color = TextSecondary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled = !vm.compilingRule && !vm.busy && description.isNotBlank(),
+                    onClick = {
+                        syncForm()
+                        vm.compileRuleDescription()
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+                    Icon(Icons.Default.AutoAwesome, null, tint = Color.White,
+                        modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (vm.compilingRule) "AI 生成中…" else "AI 生成校验项",
+                        color = Color.White, fontSize = 13.sp)
+                }
+            }
+
+            // 校验项白话预览（AI 生成结果 / 既有规则的已配置项）
+            if (vm.compiledSummary.isNotEmpty()) {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF6F8FA)).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("将按以下校验项检查（AI 生成，可改描述后重新生成）",
+                        fontSize = 11.5.sp, color = TextSecondary)
+                    vm.compiledSummary.forEach {
+                        Text("· $it", fontSize = 12.5.sp, color = TextPrimary)
+                    }
+                }
+            }
+
             vm.error?.let {
                 NoticeBar(it, Danger, DangerSoft, Modifier.fillMaxWidth())
             }
+            vm.status?.let {
+                NoticeBar(it, Ok, OkSoft, Modifier.fillMaxWidth())
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(enabled = !vm.busy, onClick = {
-                    vm.editingRule = form.copy(name = name, target = target, severity = severity,
-                        checksJson = checksJson, remark = remark,
-                        isDefault = isDefault, isActive = isActive)
+                Button(enabled = !vm.busy && !vm.compilingRule, onClick = {
+                    syncForm()
                     vm.saveRule()
                 }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
                     Text("保存", color = Color.White)
                 }
                 androidx.compose.material.OutlinedButton(onClick = {
-                    vm.editingRule = null
-                    vm.clearError()
+                    vm.closeRuleEditor()
                 }) { Text("取消") }
             }
         }
