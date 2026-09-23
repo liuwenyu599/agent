@@ -22,11 +22,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.AlertDialog
+import androidx.compose.material.Button
+import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Checkbox
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Switch
 import androidx.compose.material.Text
+import androidx.compose.material.TextButton
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -53,6 +57,7 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AiActionChip
 import com.judicialai.desktop.design.components.AiBubble
@@ -95,6 +100,8 @@ import com.judicialai.desktop.design.theme.Warn
 import com.judicialai.desktop.design.theme.WarnSoft
 import com.judicialai.desktop.design.theme.FeatureWriteEnd
 import com.judicialai.desktop.design.theme.FeatureWriteStart
+import com.judicialai.desktop.features.knowledge.KnowledgeDocDialog
+import kotlinx.serialization.json.JsonObject
 
 private const val Pending = "待补充"
 
@@ -108,7 +115,7 @@ private const val Pending = "待补充"
  */
 @Composable
 fun WritingScreen() {
-    val vm = remember { WritingViewModel(Repositories.writing) }
+    val vm = remember { WritingViewModel(Repositories.writing, Repositories.knowledge) }
 
     if (!vm.hasTask) {
         TaskEntryScreen(vm)
@@ -129,6 +136,67 @@ fun WritingScreen() {
             AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
         }
     }
+
+    // 历史版本预览 / 回退弹窗
+    vm.versionPreview?.let { v -> VersionPreviewDialog(vm, v) }
+
+    // 参考材料（知识库文档）查看 / 编辑弹窗
+    if (vm.docDialogId != null) {
+        KnowledgeDocDialog(
+            title = vm.docDialogTitle,
+            content = vm.docDialogContent,
+            busy = vm.docDialogBusy,
+            onTitleChange = { vm.docDialogTitle = it },
+            onContentChange = { vm.docDialogContent = it },
+            onSave = { vm.saveDocument() },
+            onClose = { vm.closeDocument() },
+        )
+    }
+}
+
+/** 历史版本预览：可查看全文并回退（回退前当前内容由后端自动保存为新版本） */
+@Composable
+private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
+    val no = v["version_no"].int()
+    val note = v["note"].str().ifBlank { "自动保存" }
+    val body = v["content"].str()
+    AlertDialog(
+        onDismissRequest = { vm.closeVersionPreview() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("历史版本 v$no", fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f))
+                Text(note, fontSize = 12.sp, color = Muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        },
+        text = {
+            Column {
+                Box(
+                    Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        body.ifBlank { "（该版本无正文内容）" },
+                        fontSize = 13.sp, color = Ink, lineHeight = 22.sp,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("约 ${body.length} 字 · 回退不会丢失当前内容（自动保存为新版本）",
+                    fontSize = 11.sp, color = Muted)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { vm.restoreVersion(no) },
+                enabled = !vm.busy && body.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
+            ) { Text(if (vm.busy) "回退中…" else "回退到此版本", color = OnPrimaryText) }
+        },
+        dismissButton = {
+            TextButton(onClick = { vm.closeVersionPreview() }) { Text("关闭") }
+        },
+    )
 }
 
 // ---------------- 零门槛入口 ----------------
@@ -335,7 +403,7 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
             spec.fields.forEach { SpecFact(it.label, it.value.ifBlank { Pending }) }
         }
 
-        // 参考材料
+        // 参考材料：可勾选，也可直接查看/编辑知识库原文
         if (spec.materials.isNotEmpty()) {
             Spacer(Modifier.height(Dimens.space3))
             ContextBlock(title = "参考材料（${spec.materials.count { it.selected }}）") {
@@ -355,6 +423,13 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                             overflow = TextOverflow.Ellipsis)
                         if (opt.note.isNotBlank()) {
                             TagChip(opt.note, fg = Warn, bg = WarnSoft)
+                        } else if (opt.id.isNotBlank()) {
+                            Spacer(Modifier.width(Dimens.space1))
+                            Text("查看", fontSize = 11.5.sp, color = Primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(Dimens.radiusXs))
+                                    .clickable { vm.openDocument(opt.id) }
+                                    .padding(horizontal = 4.dp, vertical = 1.dp))
                         }
                     }
                 }
@@ -817,14 +892,23 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
                     if (vm.versions.isNotEmpty()) {
                         Spacer(Modifier.height(Dimens.space2))
                         SectionTitle("历史版本")
+                        Text("点击查看全文，可回退（当前内容会自动保存）",
+                            fontSize = 11.sp, color = Muted)
                         vm.versions.take(6).forEach { v ->
-                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(Dimens.radiusXs))
+                                    .clickable { vm.openVersion(v["version_no"].int()) }
+                                    .padding(vertical = 4.dp, horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text("v${v["version_no"].int()}", fontSize = 12.sp,
                                     color = Primary, modifier = Modifier.width(40.dp))
-                                Text(v["note"].toString().trim('"').ifBlank { "自动保存" },
+                                Text(v["note"].str().ifBlank { "自动保存" },
                                     fontSize = 12.sp, color = Ink2, maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis)
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f))
+                                Text("查看/回退", fontSize = 11.sp, color = Primary)
                             }
                         }
                     }
