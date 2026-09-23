@@ -44,6 +44,16 @@ class Settings:
         # auto: 有 active 模型走其 provider；mock: 强制 MockProvider（测试）
         self.AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")
 
+        # PPT 助手专用模型（DeepPresenter-9B，OpenAI 兼容，独立容器服务）：
+        # 配置后 PPT 的大纲 / 逐页编辑等全部走该服务；留空则回退主文本模型
+        self.PPT_MODEL_URL = os.getenv("PPT_MODEL_URL", "")
+        self.PPT_MODEL_NAME = os.getenv("PPT_MODEL_NAME", "DeepPresenter-9B")
+        self.PPT_MODEL_API_KEY = os.getenv("PPT_MODEL_API_KEY", "")
+        self.PPT_MODEL_TIMEOUT = int(os.getenv("PPT_MODEL_TIMEOUT", "300"))
+        # PPTAgent Host 地址（自管流程模式：后端编排，预留下行渲染/导出集成；
+        # 容器网络内地址，如 http://justice-ppt-host:7861）
+        self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "")
+
         # 智能写作流水线（V1.3 推理层机制服务端化）
         # 生成后自动：后处理（文号/日期程序接管）→ 质量门 → 内容校验
         self.WRITING_AUTO_QA = os.getenv("WRITING_AUTO_QA", "true").lower() == "true"
