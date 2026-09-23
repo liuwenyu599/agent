@@ -464,10 +464,12 @@ class WritingTaskService:
             logger.warning("[写作任务] 模板 %s 读取失败: %s", template_id, e)
             return None
 
-    # ---------------- 起草 ----------------
+    # ---------------- 起草 / 继续生成 ----------------
 
     def draft(self, task_id: str, user_id: str,
               outline_only: bool = False) -> Dict[str, Any]:
+        """起草初稿；已有正文时调用即「继续生成」——按当前任务参数重新起草，
+        旧版本不覆盖，每次生成自动沉淀为新版本（v1/v2/v3…）。"""
         t = self._get_owned(task_id, user_id)
         ctx = dict(t.context or {})
         template = self._load_template(ctx.get("template_id"))
@@ -496,13 +498,19 @@ class WritingTaskService:
             t.ai_draft = text
         t.status = "editing"
         self.db.flush()
-        doc_id, ver = self._snapshot(t, user_id, note="V1 AI 初稿" if t.version_no == 0 else "重新生成")
+        doc_id, ver = self._snapshot(
+            t, user_id,
+            note="V1 AI 初稿" if t.version_no == 0 else f"V{t.version_no + 1} 继续生成")
         t.document_id = doc_id
         t.version_no = ver
         t.updated_at = datetime.utcnow()
         self.db.commit()
 
-        reply = "已生成 V1 初稿（待完善）。"
+        if ver <= 1:
+            reply = "已生成 V1 初稿（待完善）。"
+        else:
+            reply = (f"已按当前任务参数继续生成一版（v{ver}），上一版仍在「历史版本」中可随时查看/回退；"
+                     "不满意可先修改左侧参数再点「继续生成」。")
         if sources:
             reply += f"本次检索到 {len(sources)} 份内部资料作为写作依据。"
         if ctx.get("missing_fields"):
