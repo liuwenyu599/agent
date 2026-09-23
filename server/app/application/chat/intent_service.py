@@ -3,6 +3,12 @@
 - 用户只提供模糊需求时，主动询问最关键的 2~3 个缺失信息；
 - 信息足够时直接生成，不机械提问；
 - 任何异常都回退为"直接生成"，不影响主流程稳定性。
+
+路由原则（治"分不清动作和询问、答非所问"）：
+- 主判据是"有没有动作"（强动作动词），不是"有没有文种词"；
+- WRITING_HINTS 保留作兜底弱线索，不再单独当判据；
+- 疑问形式且没有明确指令口吻 → 一律当提问直接答；
+- 宁可当提问直接答，也不要误当指令去改东西。
 """
 import json
 import re
@@ -17,13 +23,27 @@ logger = get_logger(__name__)
 
 
 class IntentService:
-    WRITING_HINTS = [
-        "写", "撰写", "起草", "拟稿", "代写", "帮我写", "编写", "草拟",
-        "文档", "材料", "汇报", "总结", "简报", "新闻稿", "讲话稿",
+    # 强动作动词：出现才可能是"要产出/修改内容"
+    ACTION_HINTS = (
+        "写", "起草", "撰写", "拟稿", "代写", "编写", "草拟",
+        "生成", "出一份", "给我一份", "整理成",
+        "扩写", "润色", "精简", "改写", "修改", "改成", "删除",
+        "删掉", "导出", "换成", "调整为", "加上", "补一段",
+    )
+
+    # 弱线索：保留作兜底，必须与指令口吻同时出现才算写作意图
+    WRITING_HINTS = (
+        "拟", "文档", "材料", "汇报", "总结", "简报", "新闻稿", "讲话稿",
         "通知", "请示", "报告", "方案", "纪要", "函", "决定", "公告",
         "格式", "规范", "公文", "稿件", "文稿", "正式版", "完整版",
-        "给我一份", "生成一份", "出一份", "整理成",
-    ]
+    )
+
+    # 疑问特征：命中且没有指令口吻时，按只读问答处理
+    _QUESTION_WORDS = ("什么", "怎么", "怎么样", "如何", "哪些", "哪个",
+                       "哪里", "多久", "多少", "几", "吗", "呢")
+
+    # 指令口吻：疑问句里带这些词，仍是 workspace 指令（"能不能帮我改成 2000 字？"）
+    _IMPERATIVE_WORDS = ("帮我", "请", "给我", "麻烦", "把", "按")
 
     _DEFAULT_CLARIFY_PROMPT = """你是司法行政单位办公助手的需求分析模块。用户想写一篇材料，请判断用户已提供的信息是否足以起草一篇真实、不虚构的初稿。
 
@@ -54,8 +74,35 @@ class IntentService:
             reference_template_name=reference_template_name,
         )
 
+    # ---- 路由判定 ----
+
+    def is_writing_request(self, message: str) -> bool:
+        """主判据：这条消息是否"要在工作台产出/修改内容"。
+
+        - 没有强动作动词 → 兜底看弱线索+指令口吻；
+        - 疑问形式且没有指令口吻 → False（只读问答）；
+        - 宁可漏判为提问直接答，也不要误判为指令去改东西。
+        """
+        m = (message or "").strip()
+        if not m:
+            return False
+        has_action = any(k in m for k in self.ACTION_HINTS)
+        has_imperative = any(k in m for k in self._IMPERATIVE_WORDS)
+        if not has_action:
+            # 兜底：弱线索（文种词/拟）必须配指令口吻才算 workspace
+            if not (has_imperative and any(k in m for k in self.WRITING_HINTS)):
+                return False
+        is_question = (
+            "？" in m or "?" in m
+            or any(w in m for w in self._QUESTION_WORDS)
+        )
+        if is_question and not has_imperative:
+            return False
+        return True
+
     def _looks_like_writing(self, message: str) -> bool:
-        return any(k in message for k in self.WRITING_HINTS)
+        """保留旧接口名，内部已切换为 side_effect 主判据。"""
+        return self.is_writing_request(message)
 
     @staticmethod
     def _last_assistant_was_asking(history: List[Dict]) -> bool:
@@ -76,7 +123,7 @@ class IntentService:
     ) -> Optional[str]:
         """返回 None 表示直接生成；返回字符串表示给用户的提问回复。"""
         try:
-            if not self._looks_like_writing(message):
+            if not self.is_writing_request(message):
                 return None
             if has_materials:
                 return None

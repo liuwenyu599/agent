@@ -7,6 +7,10 @@
 
 视觉链路：本轮上传的图片附件在配置了 VISION_MODEL_URL 时直接送视觉模型，
 不再只依赖 OCR 文本。
+
+路由说明：是否按写作请求处理（范文检索/写作流水线/自动落草稿）一律以
+IntentService.is_writing_request（side_effect 主判据）为准，
+不再用单字关键词匹配——宁可当提问直接答，也不要误当指令去改东西。
 """
 from typing import Dict, List, Optional
 
@@ -28,8 +32,6 @@ from app.infrastructure.repositories.chat import (
 )
 
 logger = get_logger(__name__)
-
-WRITING_KEYWORDS = ("写", "起草", "生成", "撰写", "拟")
 
 
 class ChatService:
@@ -133,9 +135,13 @@ class ChatService:
         # 两条链路互不叠加。
         user_preference = self._user_preference_block(user.id)
 
+        # 写作意图主判据：本条消息是否要在工作台产出/修改内容。
+        # 只读问答（咨询/查询/闲聊）一律跳过澄清与写作流水线，直接作答。
+        writing_request = self.intent.is_writing_request(message)
+
         # 写作类请求的信息完整度判断（模板表单模式跳过）
         clarify_reply = None
-        if not system_prompt:
+        if not system_prompt and writing_request:
             clarify_reply = self.intent.check_writing_clarification(
                 message=message,
                 history=history_messages,
@@ -163,7 +169,7 @@ class ChatService:
                             kb_types=["public", "personal"])
 
             examples = []
-            if any(k in message for k in ["写", "起草", "生成", "撰写", "拟"]):
+            if writing_request:
                 examples = self.rag.search_examples(message, user.id, top_k=2)
 
             reply = self.assistant.chat(
@@ -189,8 +195,7 @@ class ChatService:
         document_id = None
         postprocess_events: List[str] = []
         is_writing = bool(
-            reference_template or template_category
-            or any(k in message for k in WRITING_KEYWORDS)
+            reference_template or template_category or writing_request
         )
         if (
             settings.WRITING_AUTO_QA and is_writing
