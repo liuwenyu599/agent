@@ -137,7 +137,7 @@ def get_stats(user: User = Depends(require_admin_or_above),
 @router.get("/documents")
 def list_all_documents(status: str = Query("all"),
                        user: User = Depends(require_admin_or_above),
-                       page: int = Query(1), page_size: int = Query(20),
+                       page: int = Query(1), page_size: Query(20),
                        svc: KnowledgeService = Depends(get_knowledge_service)):
     return svc.list_all_documents(user, status, page, page_size)
 
@@ -159,7 +159,8 @@ def get_kb(kb_id: str, user: User = Depends(get_current_user),
 def update_kb(kb_id: str, req: KBUpdateRequest,
               user: User = Depends(require_knowledge_admin),
               svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.update_kb(kb_id, req.name, req.description, user)
+    """编辑知识库：名称 / 描述 / 类型（类型调整的细粒度权限在服务端按角色校验）。"""
+    return svc.update_kb(kb_id, req.name, req.description, user, req.kb_type)
 
 
 @router.delete("/{kb_id}")
@@ -252,7 +253,7 @@ async def import_urls_excel(kb_id: str = Query(...), file: UploadFile = File(...
                             user: User = Depends(get_current_user),
                             db: Session = Depends(get_db),
                             svc: KnowledgeService = Depends(get_knowledge_service)):
-    kb = svc.check_kb_write(req.kb_id, user)
+    kb = svc.check_kb_write(kb_id, user)
     filename = file.filename or ""
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
         raise AppError(400, "请上传 .xlsx 格式的 Excel 文件")

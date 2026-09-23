@@ -13,6 +13,8 @@ class KBCreateRequest(BaseModel):
 class KBUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    # 类型调整（public / department / personal），权限在服务端按角色校验
+    kb_type: Optional[str] = None
 
 
 class ReviewRequest(BaseModel):

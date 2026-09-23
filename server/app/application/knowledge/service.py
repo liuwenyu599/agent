@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.application.knowledge.access import KnowledgeAccessPolicy
 from app.application.knowledge.document_service import DocumentService
-from app.core.exceptions import NotFoundError, PermissionDeniedError
+from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
 from app.domain.identity.authorization import is_system_admin, is_knowledge_admin
 from app.domain.knowledge.entities import (
     KB_TYPE_PERSONAL,
@@ -133,15 +133,51 @@ class KnowledgeService:
             raise PermissionDeniedError("无权管理该知识库")
         return kb
 
-    def update_kb(self, kb_id: str, name: Optional[str], description: Optional[str], user):
+    def _change_kb_type(self, kb, kb_type: str, user) -> None:
+        """调整知识库类型（科室管理员 / 系统管理员均可发起，管理权限已在上层校验）。
+
+        - public：全员可见，仅系统管理员可设置（与创建规则一致）；
+        - department：科室管理员 / 系统管理员可设置，科室归属按当前账号服务端解析；
+        - personal：仅本人可见，无 owner 时归属当前操作人。
+        """
+        kind = (kb_type or "").strip().lower()
+        if kind == "public":
+            if not is_system_admin(user):
+                raise PermissionDeniedError("仅系统管理员可将知识库设为公共（全员可见）")
+            kb.kb_type = KB_TYPE_PUBLIC
+            kb.department_code = None
+            kb.owner_id = None
+        elif kind == "department":
+            if not (is_knowledge_admin(user) or is_system_admin(user)):
+                raise PermissionDeniedError("仅科室管理员可设置科室知识库")
+            dept = self.access.dept_code_of(user)
+            if not dept:
+                raise PermissionDeniedError("当前账号未归属科室，无法设置科室知识库")
+            kb.kb_type = KB_TYPE_PUBLIC
+            kb.department_code = dept
+            kb.owner_id = None
+        elif kind == "personal":
+            kb.kb_type = KB_TYPE_PERSONAL
+            kb.department_code = None
+            if not getattr(kb, "owner_id", None):
+                kb.owner_id = user.id
+        else:
+            raise AppError(400, "kb_type 必须是 public / department / personal")
+
+    def update_kb(self, kb_id: str, name: Optional[str], description: Optional[str],
+                  user, kb_type: Optional[str] = None):
         kb = self.get_kb_managed(kb_id, user)
         if name is not None:
             kb.name = name
         if description is not None:
             kb.description = description
+        if kb_type is not None:
+            self._change_kb_type(kb, kb_type, user)
         self.db.commit()
         self.db.refresh(kb)
-        return {"id": kb.id, "message": "Updated"}
+        return {"id": kb.id, "message": "Updated",
+                "type": kb.kb_type,
+                "department_code": getattr(kb, "department_code", "") or ""}
 
     def delete_kb(self, kb_id: str, user):
         kb = self.get_kb_managed(kb_id, user)
