@@ -132,7 +132,8 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 
 def generate_outline(assistant, source_type: str, topic: str, content: str,
                      images: List[Dict], slide_count: int = 10,
-                     audience: str = "", scene: str = "") -> Dict:
+                     audience: str = "", scene: str = "",
+                     material_names: Optional[List[str]] = None) -> Dict:
     image_list = "\n".join(f"- {im['name']}：{im.get('caption') or '（无说明）'}" for im in images) \
         or "（素材库为空）"
     extra = ""
@@ -145,6 +146,16 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
         content=(content or "")[:6000], image_list=image_list,
         slide_count=slide_count,
     )
+    # 事实约束（provenance）：给出材料清单时，要求每页标注内容依据，
+    # 防止模型把旧材料/记忆中的数据当作本次数据
+    names = "、".join(str(n) for n in (material_names or []) if n)
+    if names:
+        prompt += (
+            f"\n\n【来源标注】本次材料清单：{names}\n"
+            "每页 slide 增加 \"sources\" 字段（字符串数组）：列出该页内容依据的材料名"
+            "（从清单中选择，可多选；确实无依据则为空数组）。\n"
+            "凡含数字、日期、排名的内容必须标注来源；"
+            "禁止使用清单之外的旧数据充当本次数据。")
     try:
         raw = assistant.complete(
             [{"role": "system", "content": "你是 PPT 大纲策划模块，只输出 JSON。"},
@@ -183,16 +194,19 @@ def normalize_outline(outline: Dict) -> Dict:
             "image_name": s.get("image_name") or None,
             "image_hint": s.get("image_hint") or "",
             "note": s.get("note") or "",
+            # 内容依据（材料名清单），编辑器右侧 AI 面板可展示
+            "sources": [str(x)[:80] for x in (s.get("sources") or [])][:4],
         })
     if not norm or norm[0]["type"] != "cover":
         norm.insert(0, {"id": uuid.uuid4().hex[:8], "type": "cover",
                         "title": outline.get("title", "演示文稿"),
                         "subtitle": outline.get("subtitle", ""), "layout": None,
-                        "points": [], "blocks": {}, "image_name": None, "image_hint": "", "note": ""})
+                        "points": [], "blocks": {}, "image_name": None, "image_hint": "",
+                        "note": "", "sources": []})
     if norm[-1]["type"] != "closing":
         norm.append({"id": uuid.uuid4().hex[:8], "type": "closing", "title": "谢谢聆听，请批评指正",
                      "subtitle": "", "layout": None, "points": [], "blocks": {},
-                     "image_name": None, "image_hint": "", "note": ""})
+                     "image_name": None, "image_hint": "", "note": "", "sources": []})
     outline["slides"] = norm
     outline.setdefault("title", norm[0]["title"])
     outline.setdefault("subtitle", norm[0].get("subtitle", ""))
@@ -224,6 +238,77 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
         if img and s.get("layout") is None and s.get("type") == "content":
             s["layout"] = "image_right"
     return outline
+
+
+# ================= 已有 PPT 导入：解析为可编辑大纲 =================
+
+def outline_from_pptx(data: bytes) -> Dict:
+    """解析已有 .pptx 为可编辑大纲（「上传 PPT 继续修改」入口）。
+
+    提取每页标题 / 正文要点 / 演讲备注，页型按规则分类（不依赖 LLM）。
+    解析失败抛 RuntimeError，由调用方转成用户可读提示。
+    """
+    from pptx import Presentation
+    try:
+        prs = Presentation(io.BytesIO(data))
+    except Exception as e:
+        raise RuntimeError(f"无法解析该 PPT 文件：{e}")
+    slides = list(prs.slides)
+    if not slides:
+        raise RuntimeError("该 PPT 没有任何页面")
+    sw, sh = prs.slide_width, prs.slide_height
+    total = len(slides)
+    out = []
+    for idx, slide in enumerate(slides):
+        texts = []  # (max_font_size, top, left, text)
+        for shape in slide.shapes:
+            try:
+                if not shape.has_text_frame:
+                    continue
+                t = shape.text_frame.text.strip()
+            except Exception:
+                continue
+            if not t:
+                continue
+            size = 0
+            try:
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if run.font.size and run.font.size.pt > size:
+                            size = run.font.size.pt
+            except Exception:
+                pass
+            texts.append((size, shape.top or 0, shape.left or 0, t))
+        if not texts:
+            continue
+        texts.sort(key=lambda x: (-x[0], x[1], x[2]))
+        title = texts[0][3].split("\n")[0][:60]
+        points = []
+        for _, _, _, t in texts[1:]:
+            for line in t.split("\n"):
+                line = line.strip()
+                if line and line != title:
+                    points.append(line[:150])
+        points = points[:6]
+        try:
+            dtype = _classify_slide(_slide_elements(slide, sw, sh), idx, total)
+        except Exception:
+            dtype = "content"
+        if dtype in ("content_image", "two_col"):
+            dtype = "content"
+        if dtype not in PAGE_TYPES:
+            dtype = "content"
+        note = ""
+        try:
+            note = slide.notes_slide.notes_text_frame.text.strip()[:200]
+        except Exception:
+            pass
+        out.append({"type": dtype, "title": title, "points": points,
+                    "note": note, "sources": []})
+    if not out:
+        raise RuntimeError("未能从该 PPT 提取到文字内容")
+    return normalize_outline({"title": out[0]["title"] or "导入的PPT",
+                              "subtitle": "", "slides": out})
 
 
 # ================= PPTX 构建 =================
@@ -696,7 +781,7 @@ def ai_slide_action(assistant, action: str, slide: Dict, instruction: str = "") 
 {_slide_json(slide)}
 
 【输出要求】
-1. 只输出修改后的该页 JSON（保持相同字段结构，保留 id/type/layout/blocks 结构，只改文字内容）；
+1. 只输出修改后的该页 JSON（保持相同字段结构，保留 id/type/layout/blocks/sources 结构，只改文字内容）；
 2. 要点仍是 15~40 字的完整句子，有信息量；
 3. 不要虚构事实和数据。"""
     raw = assistant.complete(
