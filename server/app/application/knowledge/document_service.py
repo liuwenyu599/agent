@@ -2,6 +2,7 @@
 
 分块 → 建 Document/Chunk → 向量化。文件上传与网页导入共用同一流程。
 分块时把文档标题传入，块内容自动带「《标题》」面包屑，检索可区分不同文档的雷同章节。
+支持正文在线编辑：编辑后重新分块并重建该文档的向量索引。
 """
 import re
 import uuid
@@ -157,6 +158,63 @@ class DocumentService:
             logger.info("[FAISS] 已索引 %d 个 chunk", len(faiss_chunks))
         except Exception as e:
             logger.error("向量化失败: %s", e)
+
+    # ========== 正文在线编辑 ==========
+
+    def update_content(self, db: Session, doc_id: str, text: str) -> Dict:
+        """更新文档正文：重新分块、替换 chunk 记录并重建该文档的向量索引。
+
+        权限由路由层（KnowledgeService.update_document）先行校验。
+        """
+        doc = db.get(DocumentModel, doc_id)
+        if not doc:
+            return {"doc_id": doc_id, "chunks": 0, "message": "文档不存在"}
+
+        text = text or ""
+        doc.content = text[:500000]
+
+        # 旧块删除，按新正文重新分块
+        db.query(ChunkModel).filter(ChunkModel.doc_id == doc_id).delete(
+            synchronize_session=False)
+        if doc.doc_type == "法规":
+            chunks = self.legal_chunker.chunk(text, doc_id, title=doc.title or "")
+        else:
+            chunks = self.official_chunker.chunk(text, doc_id, title=doc.title or "")
+
+        records = []
+        for i, chunk_data in enumerate(chunks):
+            chunk_id = f"{doc_id}_{i}"
+            db.add(ChunkModel(
+                id=chunk_id,
+                doc_id=doc_id,
+                chunk_index=chunk_data["chunk_index"],
+                chunk_type=chunk_data["chunk_type"],
+                title=chunk_data.get("title", ""),
+                content=chunk_data["content"],
+                char_count=chunk_data["metadata"].get("char_count", 0),
+                word_count=chunk_data["metadata"].get("word_count", 0),
+                chunk_metadata=chunk_data["metadata"],
+            ))
+            records.append({
+                "chunk_id": chunk_id,
+                "doc_id": doc_id,
+                "kb_id": doc.kb_id,
+                "content": chunk_data["content"],
+                "title": chunk_data.get("title", ""),
+            })
+        db.commit()
+
+        # 重建向量：先标记删除旧向量，再按当前状态重新索引
+        if self.vector_store:
+            try:
+                self.vector_store.delete_by_document(doc_id)
+            except Exception as e:
+                logger.error("[FAISS] 删除旧向量失败: %s", e)
+        if doc.status == "published":
+            self._vectorize(records, scope=scope_of_doc(db, doc))
+
+        return {"doc_id": doc_id, "chunks": len(chunks),
+                "message": "正文已更新，检索内容已同步"}
 
     # ========== 网页入库 ==========
 
