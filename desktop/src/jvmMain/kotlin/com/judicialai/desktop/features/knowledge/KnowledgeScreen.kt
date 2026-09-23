@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -105,6 +104,9 @@ fun KnowledgeScreen() {
  * 知识库文档查看 / 编辑弹窗。
  * 知识库列表与智能写作「参考材料」共用；保存后后端重新分块并重建检索向量。
  * 无编辑权限的用户保存时会被服务端拒绝并提示。
+ *
+ * 正文框用固定高度（而不是 heightIn 区间）：内容随输入增长时弹窗不会不断拉高，
+ * 滚动发生在文本框内部，也不会出现顶部白边。
  */
 @Composable
 fun KnowledgeDocDialog(
@@ -132,7 +134,7 @@ fun KnowledgeDocDialog(
                 OutlinedTextField(
                     value = content, onValueChange = onContentChange,
                     label = { Text("正文内容") },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 380.dp),
+                    modifier = Modifier.fillMaxWidth().height(360.dp),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
                 )
