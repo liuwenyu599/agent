@@ -3,6 +3,7 @@
 分块 → 建 Document/Chunk → 向量化。文件上传与网页导入共用同一流程。
 分块时把文档标题传入，块内容自动带「《标题》」面包屑，检索可区分不同文档的雷同章节。
 支持正文在线编辑：编辑后重新分块并重建该文档的向量索引。
+文件解析支持 docx / doc / pdf / wps / rtf / txt / md；解析失败明确报错，不入库垃圾内容。
 """
 import re
 import uuid
@@ -17,6 +18,7 @@ from app.application.knowledge.chunkers import LegalChunker, OfficialChunker
 from app.application.ports import Embedder, VectorStore
 from app.application.knowledge.access import scope_of_doc, scope_of_kb
 from app.core.config import settings
+from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.domain.identity.authorization import is_privileged
 from app.domain.organization.departments import SCOPE_GLOBAL
@@ -281,10 +283,13 @@ class DocumentService:
             f.write(content)
 
         text = self.extract_text(tmp_path, file.filename)
+        if not text.strip():
+            raise AppError(400, "未能从文件中解析出文字内容（扫描件 PDF 请先做 OCR 再上传）")
 
+        stem = Path(file.filename or "").stem.strip() or "未命名文档"
         result = self._persist_document(
             db=db, kb_id=kb_id,
-            title=title if title else file.filename.replace(".docx", "").replace(".txt", "").replace(".pdf", "").replace(".md", ""),
+            title=title if title else stem,
             text=text, user_id=user_id, user_role=user_role,
             doc_type=doc_type, file_path=str(tmp_path), file_size=len(content),
             doc_metadata={"source_type": "file", "original_filename": file.filename},
@@ -324,45 +329,125 @@ class DocumentService:
 
         return {"doc_id": doc_id, "status": doc.status, "message": "审核完成"}
 
+    # ========== 文件解析 ==========
+
+    #: 经 LibreOffice 转换解析的格式
+    _SOFFICE_EXTS = ("doc", "wps", "rtf")
+
     def extract_text(self, file_path: Path, filename: str) -> str:
-        suffix = filename.lower().split('.')[-1]
+        """提取文件纯文本。支持 docx / doc / pdf / wps / rtf / txt / md。
+
+        解析失败或不支持的格式直接抛 400，不再把「解析失败」占位文字当正文入库。
+        """
+        suffix = filename.lower().rsplit('.', 1)[-1] if '.' in (filename or "") else ""
 
         if suffix == 'docx':
-            from docx import Document as DocxDocument
-            doc = DocxDocument(str(file_path))
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            return "\n\n".join(paragraphs)
-        elif suffix == 'doc':
             try:
-                import subprocess
-                result = subprocess.run(['antiword', str(file_path)], capture_output=True, text=True)
-                if result.returncode == 0:
-                    return result.stdout
-            except Exception:
-                pass
+                from docx import Document as DocxDocument
+                doc = DocxDocument(str(file_path))
+                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                text = "\n\n".join(paragraphs)
+            except AppError:
+                raise
+            except Exception as e:
+                logger.error("DOCX 解析失败: %s", e)
+                raise AppError(400, "docx 文件解析失败，文件可能已损坏")
+            if not text.strip():
+                raise AppError(400, "docx 文件中没有可读取的文字内容")
+            return text
+
+        if suffix in self._SOFFICE_EXTS:
+            text = self._extract_via_soffice(file_path)
+            if not text.strip() and suffix == 'doc':
+                text = self._extract_doc_legacy(file_path)
+            if not text.strip():
+                raise AppError(400, f".{suffix} 文件解析失败，请另存为 .docx 后上传")
+            return text
+
+        if suffix == 'pdf':
+            text = self._extract_pdf(file_path)
+            if not text.strip():
+                raise AppError(400, "PDF 解析失败或不含可复制文字（扫描件请先做 OCR 再上传）")
+            return text
+
+        if suffix in ('txt', 'md'):
+            return self._read_text_file(file_path)
+
+        raise AppError(
+            400, f"暂不支持 .{suffix or '未知'} 格式的文件，"
+                 "请上传 doc / docx / pdf / wps / rtf / txt / md 格式的文档")
+
+    @staticmethod
+    def _read_text_file(file_path: Path) -> str:
+        """文本文件：UTF-8 优先，兼容 Windows 中文环境常见的 GBK 编码。"""
+        for enc in ("utf-8", "gb18030"):
             try:
-                import docx2txt
-                return docx2txt.process(str(file_path))
+                return Path(file_path).read_text(encoding=enc)
+            except UnicodeDecodeError:
+                continue
             except Exception:
-                pass
-            return "[.doc 格式解析失败，请转换为 .docx 后上传]"
-        elif suffix == 'pdf':
+                break
+        return Path(file_path).read_text(encoding="utf-8", errors="ignore")
+
+    @staticmethod
+    def _extract_pdf(file_path: Path) -> str:
+        """PDF 文本提取：pypdf 优先，PyPDF2 兜底。"""
+        try:
+            from pypdf import PdfReader
+        except ImportError:
             try:
                 from PyPDF2 import PdfReader
-                reader = PdfReader(str(file_path))
-                text = ""
-                for page in reader.pages:
-                    text += page.extract_text() + "\n"
-                return text
-            except Exception as e:
-                logger.error("PDF 解析失败: %s", e)
-                return "[PDF 解析失败]"
-        elif suffix in ['txt', 'md']:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        else:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    return f.read()
-            except Exception:
+            except ImportError:
+                logger.error("未安装 pypdf/PyPDF2，无法解析 PDF")
                 return ""
+        try:
+            reader = PdfReader(str(file_path))
+            return "\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as e:
+            logger.error("PDF 解析失败: %s", e)
+            return ""
+
+    @staticmethod
+    def _extract_doc_legacy(file_path: Path) -> str:
+        """.doc 传统解析：antiword → docx2txt（环境没有 LibreOffice 时的兜底）。"""
+        try:
+            import subprocess
+            result = subprocess.run(['antiword', str(file_path)],
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout
+        except Exception:
+            pass
+        try:
+            import docx2txt
+            return docx2txt.process(str(file_path)) or ""
+        except Exception:
+            return ""
+
+    def _extract_via_soffice(self, file_path: Path) -> str:
+        """用 LibreOffice 无头模式把 doc / wps / rtf 转成 UTF-8 文本再读取。
+
+        LibreOffice 对中文旧格式（含 WPS）覆盖率最高；环境未安装时返回空串走兜底。
+        """
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.TemporaryDirectory() as out_dir:
+                result = subprocess.run(
+                    ["soffice", "--headless", "--convert-to", "txt:Text (encoded):UTF8",
+                     "--outdir", out_dir, str(file_path)],
+                    capture_output=True, timeout=120)
+                if result.returncode != 0:
+                    logger.warning("[文档解析] LibreOffice 转换返回非零: %s",
+                                   (result.stderr or b"")[:200])
+                    return ""
+                txt_files = list(Path(out_dir).glob("*.txt"))
+                if not txt_files:
+                    return ""
+                return txt_files[0].read_text(encoding="utf-8", errors="ignore")
+        except FileNotFoundError:
+            logger.warning("[文档解析] 未检测到 LibreOffice（soffice），doc/wps/rtf 走兜底解析")
+            return ""
+        except Exception as e:
+            logger.error("[文档解析] LibreOffice 转换失败: %s", e)
+            return ""
