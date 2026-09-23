@@ -46,8 +46,8 @@ enum class DocZoom(val label: String, val baseSp: Float) {
  *
  * 中栏编辑器：整篇文档是一个连续可编辑文本（`editorText`），段落间用单个换行连接，
  * 不再按段落分块渲染（旧实现空段落 + 段前段后距叠加，视觉上「全是换行」）。
- * 「修改前」只读，「当前版本」可编辑；手动编辑只影响本地预览（`editorDirty`），
- * 不会写回服务端，也不会进入导出稿 —— 导出仍以「应用修改」的自动修正为准。
+ * 「修改前」只读，「当前版本」可编辑；手动编辑后点「保存修改」写回服务端成为新基线
+ * （服务端重置应用/解决状态），并自动重新校验；不保存则只影响本地预览。
  */
 class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -96,7 +96,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     /** 中栏编辑器内容（整篇连续文本）。 */
     var editorText by mutableStateOf(TextFieldValue(""))
         private set
-    /** 用户是否做过手动编辑（仅本地预览，不写回服务端、不进导出稿）。 */
+    /** 用户是否做过手动编辑（保存前仅本地预览，点「保存修改」后写回服务端）。 */
     var editorDirty by mutableStateOf(false)
         private set
 
@@ -142,7 +142,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         loadEditor(if (v == DocVersion.ORIGINAL) paragraphsOriginal else paragraphsCurrent)
     }
 
-    /** 用户输入。手动编辑只影响本地预览，不参与导出。 */
+    /** 用户输入。手动编辑先只影响本地预览，点「保存修改」后写回服务端。 */
     fun onEditorChange(v: TextFieldValue) {
         if (version == DocVersion.ORIGINAL) return // 修改前只读，双保险（UI 层也 readOnly）
         editorText = v
@@ -153,6 +153,40 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     fun resetEditor() {
         loadEditor(if (version == DocVersion.ORIGINAL) paragraphsOriginal else paragraphsCurrent)
         status = "已恢复为服务端版本"
+    }
+
+    /**
+     * 保存中栏人工修改：整篇段落文本写回服务端成为新基线
+     * （服务端重置 applied/resolved），随后自动重新校验让问题清单对齐新文本。
+     */
+    fun saveEditorEdits() {
+        val id = currentRecordId
+        if (id.isNullOrBlank()) { error = "请先打开一条校验记录"; return }
+        if (!editorDirty || busy) return
+        val texts = editorText.text.split('\n')
+        if (texts.all { it.isBlank() }) { error = "正文不能为空"; return }
+        busy = true
+        error = null
+        notice = null
+        status = "正在保存正文修改…"
+        scope.launch {
+            when (val r = repo.updateContent(id, texts)) {
+                is ApiResult.Ok -> {
+                    paragraphsCurrent = r.data["paragraphs"].arr().mapNotNull { it.obj() }
+                    // 人工修改成为新基线：修改前视图同步指向新内容
+                    paragraphsOriginal = paragraphsCurrent
+                    applyIdsFrom(r.data)
+                    version = DocVersion.CURRENT
+                    loadEditor(paragraphsCurrent)
+                    status = "修改已保存，正在重新校验…"
+                    busy = false
+                    recheck()
+                    return@launch
+                }
+                is ApiResult.Err -> fail("保存修改失败", r.message)
+            }
+            busy = false
+        }
     }
 
     /**
@@ -363,6 +397,10 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             ClientLog.error("format-check export: 记录 id 为空")
             return
         }
+        if (editorDirty) {
+            error = "有未保存的正文修改：请先点「保存修改」或「放弃」再导出"
+            return
+        }
         val indices = appliedIds.sorted()
         scope.launch {
             busy = true
@@ -393,6 +431,13 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     /** 正在编辑的规则表单；null 表示未打开 */
     var editingRule by mutableStateOf<RuleForm?>(null)
 
+    /** AI 正在根据白话描述生成校验项 */
+    var compilingRule by mutableStateOf(false)
+        private set
+    /** 最近一次 AI 生成（或打开既有规则时的）校验项白话预览 */
+    var compiledSummary by mutableStateOf<List<String>>(emptyList())
+        private set
+
     fun loadRules() {
         scope.launch {
             when (val r = repo.rules()) {
@@ -404,17 +449,60 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
 
     fun openRuleEditor(rule: JsonObject?) {
         editingRule = rule?.let {
+            val checksJson = it["checks"]?.toString() ?: "{}"
             RuleForm(
                 id = it["id"].str(),
                 name = it["name"].str(),
                 target = it["target"].str().ifBlank { "body" },
                 severity = it["severity"].str().ifBlank { "error" },
-                checksJson = it["checks"]?.toString() ?: "{}",
-                remark = it["remark"].str(),
+                checksJson = checksJson,
+                description = it["remark"].str(),
                 isDefault = it["is_default"].bool(),
                 isActive = it["is_active"].bool(true),
             )
         } ?: RuleForm()
+        compiledSummary = describeChecks(editingRule?.checksJson ?: "{}")
+    }
+
+    fun closeRuleEditor() {
+        editingRule = null
+        compiledSummary = emptyList()
+        clearError()
+    }
+
+    /**
+     * 白话描述 → AI 生成校验项（不落库）。
+     * 管理员和普通用户都只写自然语言；生成的校验项在编辑器里以白话预览确认，
+     * 确认后保存（保存权限由服务端按角色校验）。
+     */
+    fun compileRuleDescription() {
+        val form = editingRule ?: return
+        if (form.description.isBlank()) {
+            status = "请先用白话描述校验要求，例如「正文用仿宋三号字，首行缩进2字符，行距固定28磅」"
+            return
+        }
+        compilingRule = true
+        status = null
+        scope.launch {
+            when (val r = repo.compileRule(form.target, form.description,
+                form.name.ifBlank { null })) {
+                is ApiResult.Ok -> {
+                    val o = r.data
+                    val checks = o["checks"]?.toString() ?: "{}"
+                    compiledSummary = o["summary"].arr().map { it.str() }
+                        .filter { it.isNotBlank() }
+                    if (compiledSummary.isEmpty()) compiledSummary = describeChecks(checks)
+                    editingRule = form.copy(
+                        name = form.name.ifBlank { o["name"].str() },
+                        checksJson = checks,
+                        description = form.description,
+                    )
+                    status = "已根据描述生成校验项，请核对下方预览后保存"
+                }
+                is ApiResult.Err -> fail("生成校验项失败", r.message)
+            }
+            compilingRule = false
+        }
     }
 
     fun saveRule() {
@@ -423,16 +511,22 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             status = "规则名称不能为空"
             return
         }
+        if (form.checksJson.isBlank() || form.checksJson.trim() == "{}") {
+            status = "请先点「AI 生成校验项」，根据白话描述生成校验项后再保存"
+            return
+        }
         val checks = try {
             kotlinx.serialization.json.Json.parseToJsonElement(form.checksJson).jsonObject
         } catch (e: Exception) {
-            status = "校验项不是合法 JSON，请检查格式（例如 {\"font_size_pt\": 16}）"
+            status = "校验项数据异常，请重新点「AI 生成校验项」生成"
             return
         }
         val body = mapOf<String, Any?>(
             "name" to form.name, "target" to form.target, "checks" to checks,
             "severity" to form.severity, "is_default" to form.isDefault,
-            "is_active" to form.isActive, "remark" to form.remark,
+            "is_active" to form.isActive,
+            // 白话描述同时存为备注，下次编辑时原样回填
+            "remark" to form.description,
         )
         busy = true
         scope.launch {
@@ -441,6 +535,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                 is ApiResult.Ok -> {
                     status = "规则已保存"
                     editingRule = null
+                    compiledSummary = emptyList()
                     loadRules()
                 }
                 is ApiResult.Err -> fail("保存规则失败", ruleErrorOf(r))
@@ -568,14 +663,67 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     val resolvedCount: Int get() = resolvedIds.size
 }
 
-/** 规则编辑表单（checks 以 JSON 文本编辑，保存时校验合法性） */
+/**
+ * 规则编辑表单。
+ * 用户只写白话描述（description），校验项 JSON（checksJson）由 AI 在后台生成，
+ * 表单与界面上都不要求手写 JSON。
+ */
 data class RuleForm(
     val id: String = "",
     val name: String = "",
     val target: String = "body",
     val severity: String = "error",
     val checksJson: String = "{}",
-    val remark: String = "",
+    val description: String = "",
     val isDefault: Boolean = false,
     val isActive: Boolean = true,
 )
+
+// ---------------- 校验项白话预览（与服务端 _summarize_checks 同口径） ----------------
+
+private val CHECK_LABELS = linkedMapOf(
+    "font_name" to "字体",
+    "font_size_pt" to "字号",
+    "bold" to "加粗",
+    "alignment" to "对齐方式",
+    "line_spacing_pt" to "行距",
+    "first_line_indent_chars" to "首行缩进",
+    "space_before_pt" to "段前间距",
+    "space_after_pt" to "段后间距",
+    "top_margin_cm" to "上边距",
+    "bottom_margin_cm" to "下边距",
+    "left_margin_cm" to "左边距",
+    "right_margin_cm" to "右边距",
+    "page_width_cm" to "页面宽度",
+    "page_height_cm" to "页面高度",
+    "no_extra_blank_lines" to "不允许多余空行",
+    "no_trailing_spaces" to "不允许行尾空格",
+)
+
+private val ALIGN_CN = mapOf(
+    "left" to "左对齐", "center" to "居中", "right" to "右对齐", "justify" to "两端对齐",
+)
+
+/** 把 checks JSON 转成给用户看的白话预览行；解析失败返回空列表 */
+internal fun describeChecks(checksJson: String): List<String> {
+    val obj = try {
+        kotlinx.serialization.json.Json.parseToJsonElement(checksJson).jsonObject
+    } catch (e: Exception) {
+        return emptyList()
+    }
+    return obj.entries.mapNotNull { (key, value) ->
+        val label = CHECK_LABELS[key] ?: return@mapNotNull null
+        val raw = value.str()
+        val text = when {
+            key == "alignment" -> ALIGN_CN[raw] ?: raw
+            key == "bold" -> if (value.bool()) "加粗" else "不加粗"
+            key == "no_extra_blank_lines" || key == "no_trailing_spaces" ->
+                if (value.bool()) "是" else "否"
+            key.endsWith("_pt") -> "$raw 磅"
+            key.endsWith("_cm") -> "$raw 厘米"
+            key == "first_line_indent_chars" -> "$raw 字符"
+            else -> raw
+        }
+        "$label：$text"
+    }
+}
