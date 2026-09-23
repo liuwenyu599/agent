@@ -304,6 +304,24 @@ class WritingViewModel(
         })
     }
 
+    /**
+     * 左栏 AI 规划参数人工修订：对生成结果不满意时直接改参数，
+     * 改后同步 spec 展示并 PATCH 回任务上下文，下次「继续生成」按新参数起草。
+     */
+    fun patchSpecField(label: String, value: String) {
+        val s = spec ?: return
+        when (label) {
+            "文种" -> spec = s.copy(docType = value)
+            "报送对象" -> spec = s.copy(audience = value)
+            "写作目标" -> spec = s.copy(target = value)
+            else -> spec = s.copy(fields = s.fields.map {
+                if (it.label == label) it.copy(value = value) else it
+            })
+        }
+        val key = SPEC_FIELD_KEYS[label] ?: return
+        patchContext(mapOf(key to value.ifBlank { null }))
+    }
+
     // ---------------- 任务内对话 ----------------
 
     /** 用户在工作台持续对话（补要素 / 起草 / 自然语言修改都由后端决策） */
@@ -329,8 +347,9 @@ class WritingViewModel(
         }
     }
 
-    // ---------------- 起草 / 修改 ----------------
+    // ---------------- 起草 / 继续生成 / 修改 ----------------
 
+    /** 起草初稿；已有正文时即「继续生成」：按当前参数重新起草并沉淀为新版本（v2/v3…） */
     fun draft(outlineOnly: Boolean = false) {
         val id = task.taskId ?: return
         if (busy) return
@@ -570,5 +589,18 @@ class WritingViewModel(
         status = null
         versionPreview = null
         closeDocument()
+    }
+
+    companion object {
+        /** SpecPanel 可编辑要素标签 → task_context 字段键（与后端 plan_task 的 fields 标签一致） */
+        private val SPEC_FIELD_KEYS = mapOf(
+            "文种" to "document_type",
+            "报送对象" to "recipient",
+            "写作目标" to "purpose",
+            "发文机关" to "authority",
+            "时间范围" to "time_range",
+            "用途" to "purpose",
+            "主题" to "topic",
+        )
     }
 }
