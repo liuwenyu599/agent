@@ -43,9 +43,15 @@ class QwenGateway:
     def complete(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
+        # 不传时取全局配置：温度与最大输出统一由 .env 调节，不再硬编码
+        if temperature is None:
+            temperature = settings.MODEL_TEMPERATURE
+        if max_tokens is None:
+            max_tokens = settings.MODEL_MAX_TOKENS
+
         messages = [m for m in messages if m.get("content")]
         ctx_limit = self.ctx_limit
 
