@@ -35,6 +35,7 @@ import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.runtime.Composable
@@ -109,7 +110,7 @@ private const val Pending = "待补充"
  * 智能写作（v4.0）
  *
  * 三段式：一句话入口 → AI 规划本次写作环境 → 三栏工作台。
- * 左栏是「任务上下文」（任务卡 + 材料 + 可依据资料 + 模板），不是参数表；
+ * 左栏是「任务上下文」（任务卡可人工修订 + 材料 + 可依据资料 + 模板），不是只读参数表；
  * 中栏是真正的文档工作台；右栏是 AI 助手（正在做什么 / 建议操作 / 对话 / 引用资料）。
  * 界面不出现「全局公共知识库」「本科室知识库」这类系统实现语言。
  *
@@ -404,12 +405,13 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
 
         Spacer(Modifier.height(Dimens.space4))
 
-        // 任务卡
-        ContextBlock(title = "任务要点", icon = Icons.Default.Description, tint = Primary) {
-            if (spec.docType.isNotBlank()) SpecFact("文种", spec.docType)
-            if (spec.audience.isNotBlank()) SpecFact("报送对象", spec.audience)
-            if (spec.target.isNotBlank()) SpecFact("写作目标", spec.target)
-            spec.fields.forEach { SpecFact(it.label, it.value.ifBlank { Pending }) }
+        // 任务卡：AI 规划结果可人工修订（改后点 ✓ 同步后端，对下次「继续生成」生效）
+        ContextBlock(title = "任务要点（可修改）", icon = Icons.Default.Description, tint = Primary) {
+            TaskField("文种", spec.docType) { v -> vm.patchSpecField("文种", v) }
+            TaskField("报送对象", spec.audience) { v -> vm.patchSpecField("报送对象", v) }
+            TaskField("写作目标", spec.target) { v -> vm.patchSpecField("写作目标", v) }
+            spec.fields.filter { it.label !in setOf("文种", "报送对象", "写作目标") }
+                .forEach { f -> TaskField(f.label, f.value) { v -> vm.patchSpecField(f.label, v) } }
         }
 
         // 参考材料：可勾选，也可直接查看/编辑知识库原文
@@ -500,6 +502,14 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.height(Dimens.space2))
             AppButton("生成初稿", onClick = { vm.draft() }, kind = AppButtonKind.AI,
                 enabled = !vm.busy, loading = vm.busy, fill = true)
+        } else {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+                kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
+                icon = Icons.Default.Refresh, fill = true)
+            Spacer(Modifier.height(Dimens.space1))
+            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+                fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
     }
 }
@@ -613,6 +623,14 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.height(Dimens.space2))
             AppButton("先搭框架", onClick = { vm.draft(outlineOnly = true) },
                 kind = AppButtonKind.SECONDARY, enabled = !vm.busy, fill = true)
+        } else {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+                kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
+                icon = Icons.Default.Refresh, fill = true)
+            Spacer(Modifier.height(Dimens.space1))
+            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+                fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
         Spacer(Modifier.height(Dimens.space4))
     }
@@ -680,6 +698,10 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
             }
             Spacer(Modifier.width(Dimens.space3))
             if (vm.hasDraft) {
+                AppButton("继续生成", onClick = { vm.draft() },
+                    kind = AppButtonKind.AI, enabled = !vm.busy,
+                    icon = Icons.Default.Refresh)
+                Spacer(Modifier.width(Dimens.space2))
                 AppButton("保存版本", onClick = { vm.saveVersion() },
                     kind = AppButtonKind.SECONDARY, enabled = !vm.busy)
                 Spacer(Modifier.width(Dimens.space2))
@@ -717,7 +739,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
         // 文档纸张
         DocumentSurface(modifier = Modifier.weight(1f), padding = Dimens.space6) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TagChip("V${maxOf(vm.versionNo, 1)} 初稿", fg = Warn, bg = WarnSoft)
+                TagChip("V${maxOf(vm.versionNo, 1)}", fg = Warn, bg = WarnSoft)
                 Spacer(Modifier.width(Dimens.space2))
                 Text("待完善", fontSize = 11.5.sp, color = Muted)
                 Spacer(Modifier.weight(1f))
