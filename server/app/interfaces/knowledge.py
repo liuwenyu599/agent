@@ -137,7 +137,7 @@ def get_stats(user: User = Depends(require_admin_or_above),
 @router.get("/documents")
 def list_all_documents(status: str = Query("all"),
                        user: User = Depends(require_admin_or_above),
-                       page: int = Query(1), page_size: Query(20),
+                       page: int = Query(1), page_size: int = Query(20),
                        svc: KnowledgeService = Depends(get_knowledge_service)):
     return svc.list_all_documents(user, status, page, page_size)
 
