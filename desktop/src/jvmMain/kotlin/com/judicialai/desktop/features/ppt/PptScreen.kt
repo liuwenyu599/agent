@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
@@ -32,6 +34,7 @@ import androidx.compose.material.TabRow
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
@@ -53,7 +56,22 @@ import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.theme.SecondaryText
 
-/** PPT 助手（对应 Web PptView + PptTemplateLib）：创建 / 我的 PPT / 模板库 */
+/** 页型中文标签（与服务端 10 种页型一致） */
+val SLIDE_TYPE_LABELS = linkedMapOf(
+    "cover" to "封面", "toc" to "目录", "section" to "章节页",
+    "content" to "内容页", "data" to "数据页", "chart" to "图表页",
+    "case" to "案例页", "timeline" to "时间线", "process" to "流程页",
+    "summary" to "总结页", "closing" to "结尾页",
+)
+
+fun slideTypeLabel(type: String) = SLIDE_TYPE_LABELS[type] ?: type
+
+/**
+ * PPT 助手工作台（重设计）：
+ * 新建 = 极简入口（材料 + 一句话意图 + 可选项，无技术参数）
+ * → 流式大纲 → 可编辑大纲确认 → 三栏工作台；
+ * 我的 PPT = 打开续改 / 导入已有 PPT / 下载 / 删除；模板库保持不变。
+ */
 @Composable
 fun PptScreen() {
     val vm = remember { PptViewModel(Repositories.ppt) }
@@ -63,131 +81,233 @@ fun PptScreen() {
 
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
-            Tab(tab == 0, { tab = 0 }) { Text("创建 PPT", Modifier.padding(12.dp)) }
+            Tab(tab == 0, { tab = 0 }) { Text("新建 PPT", Modifier.padding(12.dp)) }
             Tab(tab == 1, { tab = 1 }) { Text("我的 PPT", Modifier.padding(12.dp)) }
             Tab(tab == 2, { tab = 2 }) { Text("模板库", Modifier.padding(12.dp)) }
         }
-        Column(Modifier.padding(12.dp)) {
-            when (tab) {
-                0 -> PptCreatePane(vm)
-                1 -> PptDocsPane(vm)
-                else -> PptTemplatesPane(vm)
+        when {
+            tab == 0 && vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
+            tab == 0 && vm.step == PptStep.OUTLINE -> OutlineConfirmPane(vm)
+            else -> Column(Modifier.padding(12.dp)) {
+                when (tab) {
+                    0 -> PptEntryPane(vm)
+                    1 -> PptDocsPane(vm, onOpen = { tab = 0 })
+                    else -> PptTemplatesPane(vm)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun sel(selected: Boolean) = ButtonDefaults.outlinedButtonColors(
+internal fun sel(selected: Boolean) = ButtonDefaults.outlinedButtonColors(
     backgroundColor = if (selected) MaterialTheme.colors.primary.copy(alpha = 0.12f)
     else Color.Transparent)
 
-@Composable
-private fun PptCreatePane(vm: PptViewModel) {
-    var topic by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
-    var slideCount by remember { mutableStateOf("10") }
-    var audience by remember { mutableStateOf("") }
-    var scene by remember { mutableStateOf("") }
-    var sourceType by remember { mutableStateOf("topic") }
+// ================= 极简入口页 =================
 
+@Composable
+private fun PptEntryPane(vm: PptViewModel) {
     Column(Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Text("方式：")
-            OutlinedButton(onClick = { sourceType = "topic" },
-                colors = sel(sourceType == "topic")) { Text("主题生成") }
-            OutlinedButton(onClick = { sourceType = "content" },
-                colors = sel(sourceType == "content")) { Text("文档提炼") }
-        }
 
-        if (sourceType == "topic") {
-            OutlinedTextField(topic, { topic = it },
-                label = { Text("主题，如：社区矫正工作汇报") }, modifier = Modifier.fillMaxWidth())
-        } else {
-            OutlinedTextField(content, { content = it },
-                label = { Text("粘贴文档内容，AI 提炼成大纲") },
-                modifier = Modifier.fillMaxWidth().height(140.dp))
-        }
+        Text("想做一份什么 PPT？", style = MaterialTheme.typography.subtitle1)
+        OutlinedTextField(vm.topic, { vm.topic = it },
+            label = { Text("一句话说明，如：社区矫正工作年度汇报") },
+            modifier = Modifier.fillMaxWidth())
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(slideCount, { slideCount = it.filter(Char::isDigit) },
-                label = { Text("页数") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(audience, { audience = it },
-                label = { Text("受众（可选）") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(scene, { scene = it },
-                label = { Text("场景（可选）") }, modifier = Modifier.weight(1f))
+        // 材料区：上传后逐份显示 AI 分析结果，不再是黑盒
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("参考材料", style = MaterialTheme.typography.subtitle2,
+                modifier = Modifier.weight(1f))
+            OutlinedButton(enabled = !vm.analyzing, onClick = {
+                val files = pickFiles("选择材料（doc/docx/pdf/txt/md/xlsx/csv/pptx，可多选）")
+                if (files.isNotEmpty()) vm.analyzeMaterials(files)
+            }) { Text(if (vm.analyzing) "分析中…" else "添加材料") }
         }
-
-        Text("选择模板", style = MaterialTheme.typography.subtitle2)
-        Row(Modifier.fillMaxWidth().height(130.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            vm.templates.take(6).forEach { t ->
-                val tid = t["id"].str()
-                val selected = tid == vm.templateId
-                Card(
-                    Modifier.width(180.dp).fillMaxHeight(),
-                    elevation = if (selected) 6.dp else 1.dp,
-                    backgroundColor = if (selected)
-                        MaterialTheme.colors.primary.copy(alpha = 0.10f)
-                    else MaterialTheme.colors.surface,
-                ) {
-                    TextButton(onClick = { vm.templateId = tid }, modifier = Modifier.fillMaxSize()) {
-                        Column(Modifier.fillMaxSize()) {
-                            val img = rememberServerImage(AppState.api,
-                                t["preview_url"].str().ifBlank { null })
-                            if (img != null) {
-                                Image(img, contentDescription = t["name"].str(),
-                                    modifier = Modifier.fillMaxWidth().weight(1f),
-                                    contentScale = ContentScale.Crop)
-                            } else {
-                                Box(Modifier.fillMaxWidth().weight(1f),
-                                    contentAlignment = Alignment.Center) {
-                                    Text(t["name"].str(), style = MaterialTheme.typography.caption)
-                                }
-                            }
-                            Text(t["name"].str(), style = MaterialTheme.typography.caption,
-                                maxLines = 1, modifier = Modifier.padding(4.dp))
+        if (vm.materials.isEmpty()) {
+            Text("可上传工作总结、数据表、既有 PPT 等，AI 会逐份分析并作为内容依据。",
+                style = MaterialTheme.typography.caption, color = SecondaryText)
+        }
+        vm.materials.forEachIndexed { i, m ->
+            Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${m.filename}（${m.chars} 字）",
+                            style = MaterialTheme.typography.subtitle2, maxLines = 1)
+                        if (m.summary.isNotBlank()) {
+                            Text(m.summary, style = MaterialTheme.typography.caption,
+                                color = SecondaryText, maxLines = 3)
                         }
+                    }
+                    IconButton(onClick = { vm.removeMaterial(i) }) {
+                        Icon(Icons.Default.Close, "移除", tint = MaterialTheme.colors.error)
                     }
                 }
             }
-            if (vm.templates.isEmpty()) {
-                Text("模板加载中或为空，可到“模板库”上传。", style = MaterialTheme.typography.caption,
-                    color = SecondaryText, modifier = Modifier.align(Alignment.CenterVertically))
-            }
         }
 
+        // 可选项：页数 / 汇报人 / 时间
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                enabled = !vm.busy &&
-                    (if (sourceType == "topic") topic.isNotBlank() else content.isNotBlank()),
-                onClick = {
-                    vm.createOutline(sourceType, topic, content,
-                        slideCount.toIntOrNull() ?: 10, audience, scene)
-                }) { Text("1. 生成大纲") }
-            Button(
-                enabled = !vm.busy && vm.docId != null && vm.outlineText.isNotBlank(),
-                onClick = { vm.generate() }) { Text("2. 生成 PPT") }
+            OutlinedTextField(vm.slideCount, { vm.slideCount = it.filter(Char::isDigit) },
+                label = { Text("页数（可选）") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.presenter, { vm.presenter = it },
+                label = { Text("汇报人（可选）") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.reportDate, { vm.reportDate = it },
+                label = { Text("汇报时间（可选）") }, modifier = Modifier.weight(1f))
         }
 
-        if (vm.outlineText.isNotBlank()) {
-            OutlinedTextField(vm.outlineText, { vm.outlineText = it },
-                label = { Text("大纲（JSON，可编辑）") },
-                modifier = Modifier.fillMaxWidth().height(200.dp))
-        }
+        TemplatePicker(vm)
+
+        Button(
+            enabled = !vm.busy && (vm.topic.isNotBlank() || vm.materials.isNotEmpty()),
+            onClick = { vm.startOutline() },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (vm.busy) vm.outlineStage.ifBlank { "生成中…" } else "生成大纲") }
 
         PptStatus(vm)
     }
 }
 
 @Composable
-private fun PptDocsPane(vm: PptViewModel) {
+internal fun TemplatePicker(vm: PptViewModel) {
+    Text("选择模板", style = MaterialTheme.typography.subtitle2)
+    Row(Modifier.fillMaxWidth().height(130.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        vm.templates.take(6).forEach { t ->
+            val tid = t["id"].str()
+            val selected = tid == vm.templateId
+            Card(
+                Modifier.width(180.dp).fillMaxHeight(),
+                elevation = if (selected) 6.dp else 1.dp,
+                backgroundColor = if (selected)
+                    MaterialTheme.colors.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colors.surface,
+            ) {
+                TextButton(onClick = { vm.templateId = tid }, modifier = Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize()) {
+                        val img = rememberServerImage(AppState.api,
+                            t["preview_url"].str().ifBlank { null })
+                        if (img != null) {
+                            Image(img, contentDescription = t["name"].str(),
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                                contentScale = ContentScale.Crop)
+                        } else {
+                            Box(Modifier.fillMaxWidth().weight(1f),
+                                contentAlignment = Alignment.Center) {
+                                Text(t["name"].str(), style = MaterialTheme.typography.caption)
+                            }
+                        }
+                        Text(t["name"].str(), style = MaterialTheme.typography.caption,
+                            maxLines = 1, modifier = Modifier.padding(4.dp))
+                    }
+                }
+            }
+        }
+        if (vm.templates.isEmpty()) {
+            Text("模板加载中或为空，可到“模板库”上传。", style = MaterialTheme.typography.caption,
+                color = SecondaryText, modifier = Modifier.align(Alignment.CenterVertically))
+        }
+    }
+}
+
+// ================= 可编辑大纲确认 =================
+
+@Composable
+internal fun OutlineConfirmPane(vm: PptViewModel) {
+    Column(Modifier.fillMaxSize().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("确认大纲（共 ${vm.slides.size} 页，逐页可改）",
+                style = MaterialTheme.typography.subtitle1, modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.backToEntry() }) { Text("返回修改") }
+            OutlinedButton(onClick = {
+                vm.addSlideAfter(vm.slides.size - 1)
+            }) { Text("添加页面") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { vm.toWorkbench() }) { Text("确认，进入编辑") }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(vm.outlineTitle, { vm.outlineTitle = it },
+                label = { Text("PPT 标题") }, modifier = Modifier.weight(2f))
+            OutlinedTextField(vm.outlineSubtitle, { vm.outlineSubtitle = it },
+                label = { Text("副标题（可选）") }, modifier = Modifier.weight(1f))
+        }
+
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsIndexed(vm.slides, key = { i, _ -> i }) { i, s ->
+                Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
+                    Column(Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${i + 1}", style = MaterialTheme.typography.subtitle1,
+                                color = MaterialTheme.colors.primary)
+                            Spacer(Modifier.width(8.dp))
+                            SlideTypeDropdown(s)
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { vm.moveSlide(i, -1) },
+                                enabled = i > 0) { Text("上移") }
+                            TextButton(onClick = { vm.moveSlide(i, 1) },
+                                enabled = i < vm.slides.size - 1) { Text("下移") }
+                            TextButton(onClick = { vm.addSlideAfter(i) }) { Text("下插一页") }
+                            IconButton(onClick = { vm.removeSlide(i) }) {
+                                Icon(Icons.Default.Delete, "删除本页",
+                                    tint = MaterialTheme.colors.error)
+                            }
+                        }
+                        OutlinedTextField(s.title, { s.title = it },
+                            label = { Text("本页标题") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(s.pointsText, { s.pointsText = it },
+                            label = { Text("要点（一行一条）") },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 200.dp))
+                        if (s.sources.isNotEmpty()) {
+                            Text("内容依据：" + s.sources.joinToString("、"),
+                                style = MaterialTheme.typography.caption,
+                                color = SecondaryText)
+                        }
+                    }
+                }
+            }
+        }
+        PptStatus(vm)
+    }
+}
+
+@Composable
+internal fun SlideTypeDropdown(s: SlideEdit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }, colors = sel(false)) {
+            Text(slideTypeLabel(s.type))
+        }
+        androidx.compose.material.DropdownMenu(open, { open = false }) {
+            SLIDE_TYPE_LABELS.forEach { (key, label) ->
+                androidx.compose.material.DropdownMenuItem(onClick = {
+                    s.type = key; open = false
+                }) { Text(label) }
+            }
+        }
+    }
+}
+
+// ================= 我的 PPT =================
+
+@Composable
+private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("我的 PPT", style = MaterialTheme.typography.subtitle1,
                 modifier = Modifier.weight(1f))
+            OutlinedButton(enabled = !vm.busy, onClick = {
+                pickFiles("选择要导入的 .pptx").firstOrNull()?.let { f ->
+                    if (f.name.endsWith(".pptx", ignoreCase = true)) {
+                        vm.importPptx(f); onOpen()
+                    } else vm.status = "仅支持 .pptx 文件"
+                }
+            }) { Text("导入 PPT 续改") }
+            Spacer(Modifier.width(4.dp))
             IconButton(onClick = { vm.loadDocuments() }) {
                 Icon(Icons.Default.Refresh, "刷新")
             }
@@ -200,15 +320,24 @@ private fun PptDocsPane(vm: PptViewModel) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(d["title"].str().ifBlank { d["topic"].str() },
+                            Text(d["title"].str().ifBlank { "未命名PPT" },
                                 style = MaterialTheme.typography.subtitle2)
-                            Text(d["created_at"].str(), style = MaterialTheme.typography.caption,
+                            val meta = listOf(
+                                d["slide_count"].str().let { if (it.isNotBlank()) "$it 页" else "" },
+                                d["template_name"].str(),
+                                d["updated_at"].str().ifBlank { d["created_at"].str() },
+                            ).filter { it.isNotBlank() }.joinToString(" · ")
+                            Text(meta, style = MaterialTheme.typography.caption,
                                 color = SecondaryText)
                         }
+                        OutlinedButton(enabled = !vm.busy, onClick = {
+                            vm.openDocument(id); onOpen()
+                        }) { Text("打开") }
+                        Spacer(Modifier.width(4.dp))
                         Button(enabled = vm.downloadingId != id, onClick = {
                             val target = pickSaveFile(
                                 d["title"].str().ifBlank { "演示文稿" } + ".pptx") ?: return@Button
-                            vm.download(id, d["title"].str(), target)
+                            vm.download(id, target)
                         }) { Text(if (vm.downloadingId == id) "下载中…" else "下载") }
                         Spacer(Modifier.width(4.dp))
                         IconButton(onClick = { vm.deleteDocument(id) }) {
@@ -218,12 +347,14 @@ private fun PptDocsPane(vm: PptViewModel) {
                 }
             }
             if (vm.documents.isEmpty()) item {
-                Text("暂无 PPT，先到“创建 PPT”生成。", style = MaterialTheme.typography.caption,
-                    color = SecondaryText)
+                Text("暂无 PPT，可到“新建 PPT”生成，或点击上方“导入 PPT 续改”。",
+                    style = MaterialTheme.typography.caption, color = SecondaryText)
             }
         }
     }
 }
+
+// ================= 模板库 =================
 
 @Composable
 private fun PptTemplatesPane(vm: PptViewModel) {
@@ -279,11 +410,10 @@ private fun PptTemplatesPane(vm: PptViewModel) {
 }
 
 @Composable
-private fun PptStatus(vm: PptViewModel) {
+internal fun PptStatus(vm: PptViewModel) {
     vm.status?.let {
         Text(it, style = MaterialTheme.typography.caption,
-            color = if (it.contains("完成") || it.contains("已保存")) MaterialTheme.colors.primary
-            else MaterialTheme.colors.error)
+            color = if (it.contains("完成") || it.contains("已保存") || it.contains("已"))
+                MaterialTheme.colors.primary else MaterialTheme.colors.error)
     }
 }
-
