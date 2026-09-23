@@ -21,6 +21,14 @@ class KnowledgeRepository(private val api: ApiClient) {
         api.post(Endpoints.Knowledge.CREATE, mapOf(
             "name" to name, "description" to description, "kb_type" to kbType))
 
+    /** 编辑知识库：名称 / 描述 / 类型（kbType 为 null 表示不改类型；类型调整由服务端按角色校验） */
+    suspend fun updateKb(id: String, name: String, description: String, kbType: String?) =
+        api.put(Endpoints.Knowledge.kb(id), buildMap<String, Any?> {
+            put("name", name)
+            put("description", description)
+            if (kbType != null) put("kb_type", kbType)
+        })
+
     suspend fun deleteKb(id: String) = api.del(Endpoints.Knowledge.kb(id))
 
     suspend fun listDocuments(kbId: String): ApiResult<List<JsonObject>> =

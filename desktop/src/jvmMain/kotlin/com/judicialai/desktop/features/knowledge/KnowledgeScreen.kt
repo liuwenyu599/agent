@@ -63,6 +63,7 @@ import com.judicialai.desktop.design.theme.TextPlaceholder
 import com.judicialai.desktop.design.theme.TextPrimary
 import com.judicialai.desktop.design.theme.TextRegular
 import com.judicialai.desktop.design.theme.TextSecondary
+import kotlinx.serialization.json.JsonObject
 
 /** 知识库：统计条（公共/科室/个人/文档总数）+ 筛选 + 表格 + 详情视图 */
 @Composable
@@ -75,6 +76,15 @@ fun KnowledgeScreen() {
         KnowledgeDetail(vm)
     } else {
         KnowledgeList(vm)
+    }
+
+    // 知识库编辑弹窗（管理员：名称 / 描述 / 类型）
+    vm.editingKb?.let { kb ->
+        KbEditDialog(
+            kb = kb,
+            onDismiss = { vm.editingKb = null },
+            onSave = { name, desc, kbType -> vm.updateKb(kb["id"].str(), name, desc, kbType) },
+        )
     }
 
     // 文档查看 / 编辑弹窗
@@ -142,10 +152,88 @@ fun KnowledgeDocDialog(
 }
 
 /** 知识库分类标签：科室库 = public 且带 department_code */
-private fun kbTypeLabel(kb: kotlinx.serialization.json.JsonObject): Pair<String, Boolean> = when {
+private fun kbTypeLabel(kb: JsonObject): Pair<String, Boolean> = when {
     kb["department_code"].str().isNotBlank() -> "科室" to true
     kb["type"].str() == "public" -> "公共" to true
     else -> "个人" to false
+}
+
+/** 当前知识库类型值（用于编辑弹窗的默认选中）：department / public / personal */
+private fun kbTypeValue(kb: JsonObject): String = when {
+    kb["department_code"].str().isNotBlank() -> "department"
+    kb["type"].str() == "public" -> "public"
+    else -> "personal"
+}
+
+/**
+ * 知识库编辑弹窗（科室管理员 / 系统管理员）。
+ * 可修改名称、描述与类型（个人 ↔ 科室 ↔ 公共）；
+ * 类型的细粒度权限（谁能设公共、谁能设科室）由服务端按角色校验并返回明确提示。
+ */
+@Composable
+private fun KbEditDialog(
+    kb: JsonObject,
+    onDismiss: () -> Unit,
+    onSave: (name: String, desc: String, kbType: String) -> Unit,
+) {
+    var name by remember { mutableStateOf(kb["name"].str()) }
+    var desc by remember { mutableStateOf(kb["description"].str()) }
+    // 可选类型按角色给出：公共（系统管理员）/ 科室（科室管理员与系统管理员）/ 个人（均可）
+    val typeOptions = buildList {
+        if (AppState.isDeveloper) add("public" to "公共知识库（全员可见）")
+        if (AppState.isKnowledgeAdmin || AppState.isDeveloper)
+            add("department" to "科室知识库（本科室可见）")
+        add("personal" to "个人知识库（仅自己可见）")
+    }
+    var kbType by remember { mutableStateOf(kbTypeValue(kb)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("编辑知识库", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column {
+                OutlinedTextField(value = name, onValueChange = { name = it },
+                    label = { Text("名称") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = desc, onValueChange = { desc = it },
+                    label = { Text("描述") }, modifier = Modifier.fillMaxWidth(),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+                Spacer(Modifier.height(12.dp))
+                Text("类型", fontSize = 13.sp, color = TextRegular)
+                Spacer(Modifier.height(4.dp))
+                typeOptions.forEach { (value, label) ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { kbType = value }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = kbType == value,
+                            onClick = { kbType = value },
+                            colors = RadioButtonDefaults.colors(selectedColor = EpPrimary),
+                        )
+                        Text(label, fontSize = 13.sp, color = TextPrimary)
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("改为科室/公共后，可见范围立即扩大；改为个人后仅创建者可见",
+                    fontSize = 11.sp, color = TextSecondary)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (name.isNotBlank()) onSave(name, desc, kbType) },
+                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+            ) { Text("保存", color = Color.White) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -214,7 +302,7 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                     Text("类型", Modifier.width(90.dp), fontSize = 13.sp, color = TextSecondary)
                     Text("文档数", Modifier.width(90.dp), fontSize = 13.sp, color = TextSecondary)
                     Text("创建时间", Modifier.width(160.dp), fontSize = 13.sp, color = TextSecondary)
-                    Text("操作", Modifier.width(180.dp), fontSize = 13.sp, color = TextSecondary)
+                    Text("操作", Modifier.width(240.dp), fontSize = 13.sp, color = TextSecondary)
                 }
                 val filtered = vm.kbs.filter {
                     search.isBlank() || it["name"].str().contains(search, true)
@@ -254,9 +342,14 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                             fontSize = 13.sp, color = EpSuccess)
                         Text(kb["created_at"].str().take(10), Modifier.width(160.dp),
                             fontSize = 13.sp, color = TextRegular)
-                        Row(Modifier.width(180.dp)) {
+                        Row(Modifier.width(240.dp)) {
                             TextButton(onClick = { vm.select(kb) }) {
                                 Text("查看", color = EpPrimary, fontSize = 13.sp)
+                            }
+                            if (AppState.isAdmin) {
+                                TextButton(onClick = { vm.editingKb = kb }) {
+                                    Text("编辑", color = TextRegular, fontSize = 13.sp)
+                                }
                             }
                             TextButton(onClick = { vm.deleteKb(kb["id"].str()) }) {
                                 Text("删除", color = EpDanger, fontSize = 13.sp)

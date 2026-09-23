@@ -29,6 +29,9 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     var busy by mutableStateOf(false)
         private set
 
+    /** 知识库编辑弹窗（管理员）：名称 / 描述 / 类型 */
+    var editingKb by mutableStateOf<JsonObject?>(null)
+
     // ---- 文档查看 / 编辑弹窗 ----
     var docDialogId by mutableStateOf<String?>(null)
         private set
@@ -90,6 +93,20 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         scope.launch {
             when (val r = repo.createKb(name, desc, kbType)) {
                 is ApiResult.Ok -> loadKbs()
+                is ApiResult.Err -> status = r.message
+            }
+        }
+    }
+
+    /** 编辑知识库（管理员）：类型可改为公共 / 科室 / 个人，细粒度权限由服务端按角色校验 */
+    fun updateKb(id: String, name: String, desc: String, kbType: String) {
+        scope.launch {
+            when (val r = repo.updateKb(id, name, desc, kbType)) {
+                is ApiResult.Ok -> {
+                    editingKb = null
+                    status = "知识库已更新"
+                    loadKbs()
+                }
                 is ApiResult.Err -> status = r.message
             }
         }
