@@ -5,6 +5,7 @@
 支持正文在线编辑：编辑后重新分块并重建该文档的向量索引。
 文件解析支持 docx / doc / pdf / wps / rtf / txt / md；解析失败明确报错，不入库垃圾内容。
 """
+from app.core.timeutil import now_local
 import re
 import uuid
 from datetime import datetime
@@ -306,7 +307,7 @@ class DocumentService:
         if action in ["approve", "approved"]:
             doc.status = "published"
             doc.reviewed_by = reviewer_id
-            doc.reviewed_at = datetime.utcnow()
+            doc.reviewed_at = now_local()
             doc.review_comment = comment or "审核通过"
             db.commit()
 
@@ -323,7 +324,7 @@ class DocumentService:
         elif action in ["reject", "rejected"]:
             doc.status = "rejected"
             doc.reviewed_by = reviewer_id
-            doc.reviewed_at = datetime.utcnow()
+            doc.reviewed_at = now_local()
             doc.review_comment = comment or "审核未通过"
             db.commit()
 

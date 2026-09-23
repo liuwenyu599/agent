@@ -3,6 +3,7 @@
 一个任务 = 一次持续的写作过程：结构化任务上下文 + 当前文档 + 对话历史指针。
 版本快照复用 my_documents / my_document_versions。
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -23,7 +24,7 @@ class WritingTaskModel(Base, IdMixin):
     ai_draft: Mapped[str] = mapped_column(Text, default="")         # 首版 AI 初稿（训练数据用）
     version_no: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="collecting")  # collecting/drafting/editing/final
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=now_local, onupdate=now_local
     )

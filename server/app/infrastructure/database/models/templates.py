@@ -1,4 +1,5 @@
 """写作模板 ORM 模型（字段与旧系统 writing_templates / template_categories 一致）。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import List, Optional
 
@@ -23,8 +24,8 @@ class WritingTemplateModel(Base, IdMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     use_count: Mapped[int] = mapped_column(Integer, default=0)
     base_type: Mapped[str] = mapped_column(String(50), default="公文")
@@ -58,4 +59,4 @@ class TemplateCategoryModel(Base, IdMixin):
     icon: Mapped[str] = mapped_column(String(50), default="Folder")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

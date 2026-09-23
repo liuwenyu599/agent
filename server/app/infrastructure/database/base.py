@@ -1,4 +1,5 @@
 """SQLAlchemy 声明基类与通用 Mixin。所有 ORM 模型统一继承 Base。"""
+from app.core.timeutil import now_local
 import uuid
 from datetime import datetime
 
@@ -15,9 +16,9 @@ class Base(DeclarativeBase):
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=now_local, onupdate=now_local
     )
 
 

@@ -1,4 +1,5 @@
 """RBAC ORM 模型（v3.0）：角色 / 权限 / 角色权限关联。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
@@ -15,7 +16,7 @@ class RoleModel(Base):
     description: Mapped[str] = mapped_column(String(300), default="")
     is_system: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class PermissionModel(Base):
@@ -25,7 +26,7 @@ class PermissionModel(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     module: Mapped[str] = mapped_column(String(30), default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class RolePermissionModel(Base):
@@ -35,4 +36,4 @@ class RolePermissionModel(Base):
         String(30), ForeignKey("roles.code"), primary_key=True)
     permission_code: Mapped[str] = mapped_column(
         String(60), ForeignKey("permissions.code"), primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

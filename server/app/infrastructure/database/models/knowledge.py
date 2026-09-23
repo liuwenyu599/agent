@@ -1,4 +1,5 @@
 """知识库 ORM 模型：knowledge_bases / documents / chunks。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Any, Optional
 
@@ -76,6 +77,6 @@ class ChunkModel(Base, IdMixin):
     word_count: Mapped[Optional[int]] = mapped_column(Integer)
     embedding_model: Mapped[Optional[str]] = mapped_column(String(50))
     chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     document: Mapped[DocumentModel] = relationship("DocumentModel", back_populates="chunks")

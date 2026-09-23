@@ -4,6 +4,7 @@ approval_instances 与 my_documents 双向外键且**均可空**：
 - 存量公文从未走过审批流，document_id 关联后 approval_instance_id 仍可为 NULL，
   保证已有 10 篇文档零改动。
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -28,9 +29,9 @@ class ApprovalInstanceModel(Base, IdMixin):
     flow: Mapped[Optional[dict]] = mapped_column(JSON)
     doc_number: Mapped[Optional[str]] = mapped_column(String(80))
     urgency: Mapped[str] = mapped_column(String(10), default="normal")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now())
+        DateTime, default=now_local, onupdate=now_local)
 
 
 class ApprovalActionModel(Base, IdMixin):
@@ -45,4 +46,4 @@ class ApprovalActionModel(Base, IdMixin):
     actor_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
     actor_name: Mapped[str] = mapped_column(String(100), default="")
     actor_role: Mapped[str] = mapped_column(String(30), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

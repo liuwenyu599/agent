@@ -6,6 +6,7 @@
 - 权限由后端 `require_perm` 级别的权限码判定，**不依赖前端隐藏按钮**。
 - 不调用任何 AI 能力：模型不可用时审核流转必须照常可用。
 """
+from app.core.timeutil import now_local
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -84,7 +85,7 @@ class ApprovalService:
             "dept": sm.PENDING_DEPT, "office": sm.PENDING_OFFICE, "leader": sm.PENDING_LEADER,
         }.get(steps[0], sm.PENDING_DEPT)
 
-        now = datetime.utcnow()
+        now = now_local()
         inst = ApprovalInstanceModel(
             id=_uuid(), document_id=document_id, title=doc.title,
             submitter_id=user.id, submitter_name=user.real_name or user.username,
@@ -134,7 +135,7 @@ class ApprovalService:
         if inst.current_status in sm.TERMINAL_STATES:
             raise AppError(400, "流程已结束，不能再操作")
 
-        now = datetime.utcnow()
+        now = now_local()
         from_status = inst.current_status
         inst.current_status = tr.to_status
         inst.current_step = sm.STATUS_STEP.get(tr.to_status, inst.current_step)
@@ -168,11 +169,11 @@ class ApprovalService:
             raise AppError(404, "审批单不存在")
         from app.application.writing.doc_number_service import resolve_daizi
         daizi = daizi or resolve_daizi(self.db)
-        year = datetime.now().year
+        year = now_local().year
         seq = self.db.query(ApprovalInstanceModel).filter(
             ApprovalInstanceModel.doc_number.like(f"{daizi}〔{year}%")).count() + 1
         inst.doc_number = f"{daizi}〔{year}〕{seq}号"
-        inst.updated_at = datetime.utcnow()
+        inst.updated_at = now_local()
         _audit(self.db, user, "approval.number", inst.id, inst.doc_number)
         self.db.commit()
         return self._dto(inst, None)

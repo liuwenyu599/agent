@@ -1,4 +1,5 @@
 """会话记忆服务（移植自旧 services/memory_service.py）。"""
+from app.core.timeutil import now_local
 import re
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -83,7 +84,7 @@ class MemoryService:
         ).all()
 
         for m in memories[:5]:
-            m.last_accessed = datetime.utcnow()
+            m.last_accessed = now_local()
             m.access_count = (m.access_count or 0) + 1
         db.commit()
 
@@ -101,7 +102,7 @@ class MemoryService:
 
         if existing:
             existing.importance = max(existing.importance, importance)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = now_local()
         else:
             db.add(UserMemoryModel(
                 user_id=user_id, memory_type=memory_type, content=content,

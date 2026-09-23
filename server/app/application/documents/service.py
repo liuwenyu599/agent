@@ -2,6 +2,7 @@
 
 安全约束：所有查询强制按 user_id 过滤，用户之间互相看不到文档。
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -109,7 +110,7 @@ class DocumentService:
             doc.title = req.title
         if req.status:
             doc.status = req.status
-        doc.updated_at = datetime.utcnow()
+        doc.updated_at = now_local()
         self.db.commit()
         return self.get_document(doc.id, user_id)
 

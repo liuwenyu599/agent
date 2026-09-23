@@ -2,6 +2,7 @@
 
 任务状态持久化为 DATA_DIR/tasks/<id>.json，后台线程逐个处理。
 """
+from app.core.timeutil import now_local
 import json
 import os
 import queue
@@ -44,8 +45,8 @@ class BatchImportTask:
         self.status = TaskStatus.PENDING
         self.current_file = ""
         self.errors = []
-        self.created_at = datetime.now().isoformat()
-        self.updated_at = datetime.now().isoformat()
+        self.created_at = now_local().isoformat()
+        self.updated_at = now_local().isoformat()
         self._save()
 
     def _save(self):
@@ -78,12 +79,12 @@ class BatchImportTask:
                 self.failed += 1
                 if error:
                     self.errors.append({"file": current_file, "error": error})
-        self.updated_at = datetime.now().isoformat()
+        self.updated_at = now_local().isoformat()
         self._save()
 
     def set_status(self, status: str):
         self.status = status
-        self.updated_at = datetime.now().isoformat()
+        self.updated_at = now_local().isoformat()
         self._save()
 
     @classmethod

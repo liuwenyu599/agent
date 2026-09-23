@@ -5,6 +5,7 @@
 - AI 在线状态只做轻量连通性探测（0.8s 超时），失败即 ai_online=False，
   前端据此显示「AI 助手离线 · 基础功能正常」，不弹窗、不阻断办公。
 """
+from app.core.timeutil import now_local
 import logging
 import socket
 from datetime import datetime
@@ -54,7 +55,7 @@ def summary(user: User = Depends(get_current_user), db: Session = Depends(get_db
         q = q.filter(MyDocumentModel.user_id == user.id)
 
     doc_total = q.count()
-    now = datetime.now()
+    now = now_local()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_created = q.filter(MyDocumentModel.created_at >= month_start).count()
 

@@ -1,4 +1,5 @@
 """对话模块 ORM 模型（表结构与旧系统一致）。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -13,7 +14,7 @@ class ChatSessionModel(Base, IdMixin):
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(200))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     user: Mapped[Optional[object]] = relationship("UserModel", lazy="joined")
     messages: Mapped[list] = relationship(
@@ -38,7 +39,7 @@ class ChatMessageModel(Base, IdMixin):
     tool_calls: Mapped[Optional[list]] = mapped_column(JSON)
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     session: Mapped[ChatSessionModel] = relationship(
         "ChatSessionModel", back_populates="messages"
@@ -60,7 +61,7 @@ class ChatAttachmentModel(Base, IdMixin):
     text_content: Mapped[Optional[str]] = mapped_column(Text)
     parse_status: Mapped[str] = mapped_column(String(20), default="ok")
     parse_note: Mapped[Optional[str]] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     session: Mapped[Optional[ChatSessionModel]] = relationship(
         "ChatSessionModel", back_populates="attachments"
@@ -76,7 +77,7 @@ class SessionSummaryModel(Base, IdMixin):
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     key_points: Mapped[Optional[list]] = mapped_column(JSON)
     message_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class UserMemoryModel(Base, IdMixin):
@@ -87,9 +88,9 @@ class UserMemoryModel(Base, IdMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     importance: Mapped[float] = mapped_column(Float, default=0.5)
     source: Mapped[Optional[str]] = mapped_column(String(50))
-    last_accessed: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_accessed: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     access_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=now_local, onupdate=now_local
     )

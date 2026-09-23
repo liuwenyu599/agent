@@ -6,6 +6,7 @@
 - agent_configs 不保存任何安全规则或权限位，权限仍由 RBAC + department_code 决定，
   知识管理员只能改业务配置，不能改权限。
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
@@ -22,7 +23,7 @@ class DepartmentModel(Base):
     short_name: Mapped[str] = mapped_column(String(60), default="")       # 简称
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class AgentConfigModel(Base, IdMixin):
@@ -52,7 +53,7 @@ class AgentConfigModel(Base, IdMixin):
     manager: Mapped[str] = mapped_column(String(100), default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now())
+        DateTime, default=now_local, onupdate=now_local)
 
 
 class AgentConfigVersionModel(Base, IdMixin):
@@ -69,4 +70,4 @@ class AgentConfigVersionModel(Base, IdMixin):
     # 变更字段清单（人类可读，不含大段正文）
     change_note: Mapped[str] = mapped_column(Text, default="")
     snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

@@ -8,6 +8,7 @@
 隐私约束：全部本地完成，不上传任何文档 / 训练数据 / 模型到第三方；
 AI 辅助构造只调用本地模型网关（get_llm_gateway）。
 """
+from app.core.timeutil import now_local
 import hashlib
 import json
 import os
@@ -111,7 +112,7 @@ class TrainingService:
     def import_zip(self, file_path: Path, filename: str, user_id: str) -> Dict[str, int]:
         """导入 ZIP（documents/001.docx ... 可选 dataset.xlsx 元数据）。
         ZIP 解压到 training/data/raw/<批次>/，原始文件保存在该外部目录。"""
-        batch_dir = TRAINING_DIR / "data" / "raw" / datetime.now().strftime("batch_%Y%m%d_%H%M%S")
+        batch_dir = TRAINING_DIR / "data" / "raw" / now_local().strftime("batch_%Y%m%d_%H%M%S")
         batch_dir.mkdir(parents=True, exist_ok=True)
         try:
             with zipfile.ZipFile(file_path) as zf:
@@ -290,7 +291,7 @@ class TrainingService:
         else:
             raise AppError(400, f"未知操作: {action}")
         sample.reviewed_by = user_id
-        sample.reviewed_at = datetime.utcnow()
+        sample.reviewed_at = now_local()
         self.db.commit()
 
     def edit_sample(self, sample_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -446,8 +447,8 @@ class TrainingService:
                 raise AppError(400, "父版本没有可用的 Adapter")
             resume_from = parent_mv.adapter_path
 
-        output_dir = TRAINING_DIR / "outputs" / f"{req.name}_{datetime.now():%Y%m%d_%H%M%S}"
-        log_path = TRAINING_DIR / "logs" / f"job_{datetime.now():%Y%m%d_%H%M%S}_{req.name}.log"
+        output_dir = TRAINING_DIR / "outputs" / f"{req.name}_{now_local():%Y%m%d_%H%M%S}"
+        log_path = TRAINING_DIR / "logs" / f"job_{now_local():%Y%m%d_%H%M%S}_{req.name}.log"
         output_dir.mkdir(parents=True, exist_ok=True)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -462,7 +463,7 @@ class TrainingService:
                 "lora_dropout": req.lora_dropout,
             },
             status="pending", log_path=str(log_path), output_dir=str(output_dir),
-            resume_from=resume_from, created_by=user_id, started_at=datetime.utcnow(),
+            resume_from=resume_from, created_by=user_id, started_at=now_local(),
         )
         self.db.add(job)
         self.db.flush()
@@ -491,7 +492,7 @@ class TrainingService:
         except Exception as e:
             job.status = "failed"
             job.error = f"训练进程启动失败: {e}"
-            job.finished_at = datetime.utcnow()
+            job.finished_at = now_local()
             mv.status = "Failed"
         self.db.commit()
         logger.info("[训练] 任务 %s 启动 pid=%s", job.name, job.pid)
@@ -507,7 +508,7 @@ class TrainingService:
             except Exception as e:
                 logger.warning("[训练] 终止进程组失败 pid=%s: %s", job.pid, e)
         job.status = "canceled"
-        job.finished_at = datetime.utcnow()
+        job.finished_at = now_local()
         mv = self.db.get(ModelVersionModel, job.model_version_id or "")
         if mv and mv.status == "Training":
             mv.status = "Failed"
@@ -570,7 +571,7 @@ class TrainingService:
                 pass
 
         if job.status in ("pending", "running") and not _pid_alive(job.pid):
-            job.finished_at = datetime.utcnow()
+            job.finished_at = now_local()
             changed = True
             mv = self.db.get(ModelVersionModel, job.model_version_id or "")
             adapter_dir = Path(job.output_dir) / "adapter"
@@ -922,7 +923,7 @@ class TrainingService:
     def import_zip(self, file_path: Path, filename: str, user_id: str) -> Dict[str, int]:
         """导入 ZIP（documents/001.docx ... 可选 dataset.xlsx 元数据）。
         ZIP 解压到 training/data/raw/<批次>/，原始文件保存在该外部目录。"""
-        batch_dir = TRAINING_DIR / "data" / "raw" / datetime.now().strftime("batch_%Y%m%d_%H%M%S")
+        batch_dir = TRAINING_DIR / "data" / "raw" / now_local().strftime("batch_%Y%m%d_%H%M%S")
         batch_dir.mkdir(parents=True, exist_ok=True)
         try:
             with zipfile.ZipFile(file_path) as zf:
@@ -1101,7 +1102,7 @@ class TrainingService:
         else:
             raise AppError(400, f"未知操作: {action}")
         sample.reviewed_by = user_id
-        sample.reviewed_at = datetime.utcnow()
+        sample.reviewed_at = now_local()
         self.db.commit()
 
     def edit_sample(self, sample_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -1257,8 +1258,8 @@ class TrainingService:
                 raise AppError(400, "父版本没有可用的 Adapter")
             resume_from = parent_mv.adapter_path
 
-        output_dir = TRAINING_DIR / "outputs" / f"{req.name}_{datetime.now():%Y%m%d_%H%M%S}"
-        log_path = TRAINING_DIR / "logs" / f"job_{datetime.now():%Y%m%d_%H%M%S}_{req.name}.log"
+        output_dir = TRAINING_DIR / "outputs" / f"{req.name}_{now_local():%Y%m%d_%H%M%S}"
+        log_path = TRAINING_DIR / "logs" / f"job_{now_local():%Y%m%d_%H%M%S}_{req.name}.log"
         output_dir.mkdir(parents=True, exist_ok=True)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1273,7 +1274,7 @@ class TrainingService:
                 "lora_dropout": req.lora_dropout,
             },
             status="pending", log_path=str(log_path), output_dir=str(output_dir),
-            resume_from=resume_from, created_by=user_id, started_at=datetime.utcnow(),
+            resume_from=resume_from, created_by=user_id, started_at=now_local(),
         )
         self.db.add(job)
         self.db.flush()
@@ -1302,7 +1303,7 @@ class TrainingService:
         except Exception as e:
             job.status = "failed"
             job.error = f"训练进程启动失败: {e}"
-            job.finished_at = datetime.utcnow()
+            job.finished_at = now_local()
             mv.status = "Failed"
         self.db.commit()
         logger.info("[训练] 任务 %s 启动 pid=%s", job.name, job.pid)
@@ -1318,7 +1319,7 @@ class TrainingService:
             except Exception as e:
                 logger.warning("[训练] 终止进程组失败 pid=%s: %s", job.pid, e)
         job.status = "canceled"
-        job.finished_at = datetime.utcnow()
+        job.finished_at = now_local()
         mv = self.db.get(ModelVersionModel, job.model_version_id or "")
         if mv and mv.status == "Training":
             mv.status = "Failed"
@@ -1381,7 +1382,7 @@ class TrainingService:
                 pass
 
         if job.status in ("pending", "running") and not _pid_alive(job.pid):
-            job.finished_at = datetime.utcnow()
+            job.finished_at = now_local()
             changed = True
             mv = self.db.get(ModelVersionModel, job.model_version_id or "")
             adapter_dir = Path(job.output_dir) / "adapter"

@@ -7,6 +7,7 @@
   偏好仅作为 Prompt 文本层参与生成，不改变任何服务端判定；
 - 与 users 主表 1:1（user_id 即主键），用户清空偏好 / 注销时删除整行即可。
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
@@ -34,4 +35,4 @@ class UserPreferenceModel(Base):
     behaviors_json: Mapped[str] = mapped_column(Text, default="{}")
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now())
+        DateTime, default=now_local, onupdate=now_local)

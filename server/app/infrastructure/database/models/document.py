@@ -3,6 +3,7 @@
 - documents：一篇成文文档的元信息（文号、成文日期、当前版本号）
 - document_versions：每次保存产生一个不可变版本快照，支持回溯
 """
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import List, Optional
 
@@ -24,9 +25,9 @@ class MyDocumentModel(Base, IdMixin):
     current_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft")     # draft/final
     session_id: Mapped[Optional[str]] = mapped_column(String(36))        # 来源对话
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=now_local, onupdate=now_local
     )
 
     versions: Mapped[List["MyDocumentVersionModel"]] = relationship(
@@ -47,7 +48,7 @@ class MyDocumentVersionModel(Base, IdMixin):
     content_check: Mapped[Optional[dict]] = mapped_column(JSON)   # 内容核查快照
     note: Mapped[Optional[str]] = mapped_column(String(500))      # 版本备注
     created_by: Mapped[Optional[str]] = mapped_column(String(36))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     document: Mapped[MyDocumentModel] = relationship(
         "MyDocumentModel", back_populates="versions"

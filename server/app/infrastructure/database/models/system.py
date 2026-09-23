@@ -1,4 +1,5 @@
 """系统配置 ORM 模型。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -18,7 +19,7 @@ class ModelVersionModel(Base, IdMixin):
     capabilities: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="active")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
@@ -30,4 +31,4 @@ class SystemConfigModel(Base, IdMixin):
     category: Mapped[str] = mapped_column(String(50), default="general")
     description: Mapped[Optional[str]] = mapped_column(Text)
     updated_by: Mapped[Optional[str]] = mapped_column(String(36))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)

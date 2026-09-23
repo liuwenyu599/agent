@@ -1,11 +1,12 @@
 """认证安全：JWT(HS256) + bcrypt。密钥来自配置，不硬编码。"""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import bcrypt
 from jose import JWTError, jwt
 
 from app.core.config import settings
+from app.core.timeutil import now_utc
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -23,7 +24,7 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (
+    expire = now_utc() + (
         expires_delta or timedelta(hours=settings.ACCESS_TOKEN_EXPIRE_HOURS)
     )
     to_encode.update({"exp": expire})

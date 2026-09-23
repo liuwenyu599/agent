@@ -1,4 +1,5 @@
 """参考材料 ORM 模型（表结构与旧 models_reference.py 一致）。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -25,7 +26,7 @@ class TemplateReferenceModel(Base, IdMixin):
     parse_note: Mapped[Optional[str]] = mapped_column(String(500))
     created_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class TaskReferenceModel(Base, IdMixin):
@@ -50,4 +51,4 @@ class TaskReferenceModel(Base, IdMixin):
     parse_status: Mapped[str] = mapped_column(String(20), default="ok")
     parse_note: Mapped[Optional[str]] = mapped_column(String(500))
     promoted_doc_id: Mapped[Optional[str]] = mapped_column(String(36))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

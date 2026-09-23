@@ -1,4 +1,5 @@
 """审计日志 ORM 模型。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -19,4 +20,4 @@ class AuditLogModel(Base, IdMixin):
     result: Mapped[str] = mapped_column(String(20), default="success")
     ip_address: Mapped[Optional[str]] = mapped_column(String(50))
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, index=True)

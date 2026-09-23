@@ -1,4 +1,5 @@
 """格式校验 ORM 模型（字段与旧系统 format_rules / format_check_records 一致）。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -22,8 +23,8 @@ class FormatRuleModel(Base, IdMixin):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     remark: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
 
 
 class FormatCheckRecordModel(Base, IdMixin):
@@ -37,7 +38,7 @@ class FormatCheckRecordModel(Base, IdMixin):
     issue_count: Mapped[int] = mapped_column(Integer, default=0)
     rule_issue_count: Mapped[int] = mapped_column(Integer, default=0)
     ai_issue_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     # 审校工作台状态（迁移 009 新增 TEXT 列，内容存 JSON 整数数组，如 "[1,3]"）
     applied_ids: Mapped[Optional[str]] = mapped_column(Text)
     resolved_ids: Mapped[Optional[str]] = mapped_column(Text)

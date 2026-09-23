@@ -1,4 +1,5 @@
 """PPT 助手 ORM 模型（字段与旧系统 models_ppt 一致，materials 补 mime_type 列）。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
@@ -24,8 +25,8 @@ class PPTTemplateModel(Base, IdMixin):
     layout_library: Mapped[Optional[list]] = mapped_column(JSON)
     source_file: Mapped[Optional[str]] = mapped_column(String(500))
     use_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
 
 
 class PPTTemplateFavoriteModel(Base, IdMixin):
@@ -33,7 +34,7 @@ class PPTTemplateFavoriteModel(Base, IdMixin):
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     template_id: Mapped[str] = mapped_column(String(36), ForeignKey("ppt_templates.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class PPTMaterialModel(Base, IdMixin):
@@ -47,7 +48,7 @@ class PPTMaterialModel(Base, IdMixin):
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
     mime_type: Mapped[str] = mapped_column(String(100), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 
 class PPTDocumentModel(Base, IdMixin):
@@ -65,5 +66,5 @@ class PPTDocumentModel(Base, IdMixin):
     outline: Mapped[Optional[dict]] = mapped_column(JSON)
     file_path: Mapped[Optional[str]] = mapped_column(String(500))
     slide_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)

@@ -1,4 +1,5 @@
 """系统配置与模型版本应用服务。"""
+from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -58,7 +59,7 @@ class SystemService:
             name=req.name, version=req.version, provider=req.provider,
             endpoint=req.endpoint, capabilities=req.capabilities,
             status=req.status, is_active=req.is_active,
-            activated_at=datetime.utcnow() if req.is_active else None,
+            activated_at=now_local() if req.is_active else None,
         )
         mv = self.mv_repo.add(mv)
         return {"id": mv.id, "message": "Model version created"}
@@ -76,7 +77,7 @@ class SystemService:
             raise NotFoundError("Model version not found")
         target.is_active = True
         target.status = "active"
-        target.activated_at = datetime.utcnow()
+        target.activated_at = now_local()
         self.mv_repo.update(target)
         return {"message": "Model activated", "id": target.id}
 

@@ -8,6 +8,7 @@
 - 所有查询按 user_id 隔离；
 - 起草支持流式（draft_stream）：模型边生成边推给前端，完成后落库与非流式一致。
 """
+from app.core.timeutil import now_local
 import json
 import logging
 import re
@@ -374,7 +375,7 @@ class WritingTaskService:
             ctx["kb_ids"] = []
         task_parser.compute_missing(ctx)
         t.context = ctx
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
         return self._to_dict(t)
 
@@ -407,7 +408,7 @@ class WritingTaskService:
 
         missing = task_parser.compute_missing(ctx)
         t.context = ctx
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
 
         # 2. 动作编排
@@ -558,7 +559,7 @@ class WritingTaskService:
             note="V1 AI 初稿" if t.version_no == 0 else f"V{t.version_no + 1} 继续生成")
         t.document_id = doc_id
         t.version_no = ver
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
 
         if ver <= 1:
@@ -611,7 +612,7 @@ class WritingTaskService:
         self.db.flush()
         _, ver = self._snapshot(t, user_id, note=f"AI 修改：{instruction[:30]}")
         t.version_no = ver
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
 
         reply = f"已按您的要求修改当前文档（{mode_desc.split('：')[0]}），保存为 v{ver}。"
@@ -631,7 +632,7 @@ class WritingTaskService:
         doc_id, ver = self._snapshot(t, user_id, note=note or "人工编辑")
         t.document_id = doc_id
         t.version_no = ver
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
         return self._to_dict(t)
 
@@ -677,7 +678,7 @@ class WritingTaskService:
         self.db.flush()
         _, new_ver = self._snapshot(t, user_id, note=f"回退到 v{version_no}")
         t.version_no = new_ver
-        t.updated_at = datetime.utcnow()
+        t.updated_at = now_local()
         self.db.commit()
 
         return {**self._to_dict(t),
