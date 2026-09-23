@@ -199,8 +199,10 @@ class WritingAssistant:
             logger.warning("[写作助手] 图片读取失败 %s: %s", path, e)
             return None
 
-    def complete(self, messages: List[Dict], temperature: float = 0.7, max_tokens: int = 4096) -> str:
-        """裸调用网关（供 format_check / ppt / workflow 等模块使用）。"""
+    def complete(self, messages: List[Dict], temperature: Optional[float] = None,
+                 max_tokens: Optional[int] = None) -> str:
+        """裸调用网关（供 format_check / ppt / workflow 等模块使用）。
+        temperature / max_tokens 不传时取全局 MODEL_TEMPERATURE / MODEL_MAX_TOKENS。"""
         return self.gateway.complete(messages, temperature=temperature, max_tokens=max_tokens)
 
     def chat(self, message: str, history: List[Dict], sources: List[Dict], user_role: str,

@@ -28,6 +28,8 @@ class Settings:
         self.MODEL_NAME = os.getenv("MODEL_NAME", "Qwen2.5-14B-Instruct")
         self.MODEL_API_KEY = os.getenv("MODEL_API_KEY", "")
         self.MODEL_TIMEOUT = int(os.getenv("MODEL_TIMEOUT", "300"))
+        # 采样温度：公文写作建议 0.2~0.5（越低越规范）；闲聊可调高
+        self.MODEL_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE", "0.4"))
         self.MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
         # 模型上下文总长度（与模型服务 max_model_len 一致），用于上下文预算估算
         self.MODEL_CTX_LIMIT = int(os.getenv("MODEL_CTX_LIMIT", "16384"))
