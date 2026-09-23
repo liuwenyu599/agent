@@ -3,6 +3,8 @@ package com.judicialai.desktop.features.writing
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.AppScreen
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.app.PendingTemplateWrite
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
@@ -14,6 +16,7 @@ import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.knowledge.KnowledgeRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -50,6 +53,9 @@ class WritingViewModel(
     private val knowledgeRepo: KnowledgeRepository? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
+    private var activeJob: Job? = null
 
     var task by mutableStateOf(WritingTaskState())
         private set
@@ -137,6 +143,34 @@ class WritingViewModel(
         busy = false
     }
 
+    // ---------------- 取消生成 / 返回模板 ----------------
+
+    /**
+     * 取消本次生成：立即结束本地等待，界面恢复可操作。
+     * 服务端若仍在生成会在后台收尾，其结果不再写回当前界面（协程已取消）。
+     */
+    fun cancelGeneration() {
+        activeJob?.cancel()
+        activeJob = null
+        busy = false
+        planning = false
+        status = "已取消本次生成"
+    }
+
+    /**
+     * 模板中心来的任务：取消当前生成并销毁本次任务，
+     * 回到模板中心重新填写要素（已填要素由 AppState 暂存回填）。
+     */
+    fun returnToTemplate() {
+        val templateId = spec?.templateId ?: return
+        cancelGeneration()
+        newTask()
+        spec = null
+        planError = null
+        AppState.pendingTemplateUseId = templateId
+        AppState.navigate(AppScreen.TEMPLATES)
+    }
+
     // ---------------- 入口 ----------------
 
     /** 一句话启动任务 */
@@ -146,7 +180,7 @@ class WritingViewModel(
         busy = true
         status = null
         messages = messages + TaskChatMessage("user", text)
-        scope.launch {
+        activeJob = scope.launch {
             when (val r = repo.createTask(text)) {
                 is ApiResult.Ok -> {
                     r.data?.let { d ->
@@ -176,7 +210,7 @@ class WritingViewModel(
         planning = true
         status = null
         planError = null
-        scope.launch {
+        activeJob = scope.launch {
             val planned = runCatching { repo.plan(text) }.getOrNull()
             val specResult = when (planned) {
                 is ApiResult.Ok -> planned.data?.let { parseSpec(it) }
@@ -214,7 +248,7 @@ class WritingViewModel(
         busy = true
         status = "正在按模板「${p.templateName}」创建写作任务…"
         messages = messages + TaskChatMessage("user", p.message)
-        scope.launch {
+        activeJob = scope.launch {
             val planned = WorkspaceSpec(
                 docType = p.docType,
                 title = p.title,
@@ -248,6 +282,7 @@ class WritingViewModel(
 
     /** 返回任务入口（重新描述任务） */
     fun backToEntry() {
+        cancelGeneration()
         newTask()
         spec = null
         planError = null
@@ -332,7 +367,7 @@ class WritingViewModel(
         busy = true
         messages = messages + TaskChatMessage("user", text)
         chatInput = ""
-        scope.launch {
+        activeJob = scope.launch {
             when (val r = repo.chat(id, text)) {
                 is ApiResult.Ok -> {
                     r.data?.let { d ->
@@ -354,7 +389,7 @@ class WritingViewModel(
         val id = task.taskId ?: return
         if (busy) return
         busy = true
-        scope.launch {
+        activeJob = scope.launch {
             when (val r = repo.draft(id, outlineOnly)) {
                 is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
@@ -375,7 +410,7 @@ class WritingViewModel(
         val id = task.taskId ?: return
         if (busy || !hasDraft) return
         busy = true
-        scope.launch {
+        activeJob = scope.launch {
             when (val r = repo.revise(id, instruction, mode, content)) {
                 is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
