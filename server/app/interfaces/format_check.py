@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.application.format_check.dto import FixRequest, IssueActionRequest, RuleRequest
+from app.application.format_check.dto import (
+    ContentUpdateRequest,
+    FixRequest,
+    IssueActionRequest,
+    RuleCompileRequest,
+    RuleRequest,
+)
 from app.application.format_check.service import FormatCheckService
 from app.application.shared.writing_assistant import WritingAssistant
 from app.domain.identity.entities import User
@@ -70,6 +76,14 @@ def get_record_paragraphs(
     return svc.get_record_paragraphs(record_id, user, version=version)
 
 
+@router.put("/records/{record_id}/content")
+def update_record_content(record_id: str, req: ContentUpdateRequest,
+                          user: User = Depends(get_current_user),
+                          svc: FormatCheckService = Depends(get_format_check_service)):
+    """保存工作台中栏的人工正文修改：写回记录文件成为新基线，应用/解决状态重置。"""
+    return svc.update_record_content(record_id, req.paragraphs, user)
+
+
 @router.post("/records/{record_id}/apply")
 def apply_issue(record_id: str, req: IssueActionRequest,
                 user: User = Depends(get_current_user),
@@ -118,6 +132,13 @@ def fix_document(req: FixRequest, user: User = Depends(get_current_user),
 def list_rules(user: User = Depends(get_current_user),
                svc: FormatCheckService = Depends(get_format_check_service)):
     return svc.list_rules()
+
+
+@router.post("/rules/compile")
+def compile_rule(req: RuleCompileRequest, user: User = Depends(get_current_user),
+                 svc: FormatCheckService = Depends(get_format_check_service)):
+    """白话描述 → AI 生成校验项（不落库，任何登录用户可用；保存规则仍需管理员权限）。"""
+    return svc.compile_rule(req, user)
 
 
 @router.post("/rules")

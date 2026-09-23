@@ -7,9 +7,13 @@
 - ``resolved_ids``  —— 经复检确认已修正的 issue id；累计保留。
 - ``open_issue_count`` 为派生值：``len(issues) - len(resolved_ids)``，不落库。
 
-原始上传文件 ``{id}.docx`` 全程只读，任何修正都重放到 ``*_preview.docx`` /
-``*_current.docx`` / ``*_fixed.docx``，保证「原始文件永不被覆盖」。
+原始上传文件 ``{id}.docx`` 只被两类操作改写：
+1. 自动修正重放到 ``*_preview.docx`` / ``*_current.docx`` / ``*_fixed.docx``；
+2. 工作台中栏的人工正文修改经 ``update_record_content`` 显式保存后直接写回
+   ``{id}.docx``（人工修改成为新基线），同时重置 applied/resolved 状态。
 """
+import json as _json
+import re
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -44,6 +48,105 @@ SUPPORTED_SUFFIXES = ("docx", "txt", "md", "pdf")
 
 # 记录关联的文件后缀（删除记录时一并清理）
 _RECORD_FILE_SUFFIXES = ("", "_preview", "_current", "_fixed")
+
+# ---- 规则校验项目录（与 check_engine 实际消费的键一一对应，供 AI 编译与二次校验） ----
+_PAGE_KEYS = {
+    "top_margin_cm", "bottom_margin_cm", "left_margin_cm", "right_margin_cm",
+    "page_width_cm", "page_height_cm",
+}
+_PARA_KEYS = {
+    "font_name", "font_size_pt", "bold", "alignment", "line_spacing_pt",
+    "first_line_indent_chars", "space_before_pt", "space_after_pt",
+}
+_GENERAL_KEYS = {"no_extra_blank_lines", "no_trailing_spaces"}
+_NUMERIC_KEYS = _PAGE_KEYS | {
+    "font_size_pt", "line_spacing_pt", "first_line_indent_chars",
+    "space_before_pt", "space_after_pt",
+}
+_BOOL_KEYS = {"bold", "no_extra_blank_lines", "no_trailing_spaces"}
+_ALIGN_VALUES = ("left", "center", "right", "justify")
+
+_TARGET_LABELS = {
+    "page": "页面设置", "title": "标题", "body": "正文",
+    "heading1": "一级标题", "heading2": "二级标题",
+    "signature": "落款", "date": "成文日期", "general": "全文通用",
+}
+_KEY_LABELS = {
+    "top_margin_cm": "上边距", "bottom_margin_cm": "下边距",
+    "left_margin_cm": "左边距", "right_margin_cm": "右边距",
+    "page_width_cm": "页面宽度", "page_height_cm": "页面高度",
+    "font_name": "字体", "font_size_pt": "字号", "bold": "加粗",
+    "alignment": "对齐方式", "line_spacing_pt": "行距",
+    "first_line_indent_chars": "首行缩进",
+    "space_before_pt": "段前间距", "space_after_pt": "段后间距",
+    "no_extra_blank_lines": "不允许多余空行", "no_trailing_spaces": "不允许行尾空格",
+}
+_ALIGN_CN = {"left": "左对齐", "center": "居中", "right": "右对齐", "justify": "两端对齐"}
+
+
+def _allowed_keys(target: str) -> set:
+    if target == "page":
+        return set(_PAGE_KEYS)
+    if target == "general":
+        return set(_GENERAL_KEYS)
+    return set(_PARA_KEYS)
+
+
+def _sanitize_checks(target: str, raw) -> Dict:
+    """白名单过滤 + 类型收敛：AI 输出的 checks 只保留引擎认识的键。"""
+    if not isinstance(raw, dict):
+        return {}
+    allowed = _allowed_keys(target)
+    out: Dict = {}
+    for key, value in raw.items():
+        if key not in allowed:
+            continue
+        try:
+            if key in _NUMERIC_KEYS:
+                out[key] = float(value)
+            elif key in _BOOL_KEYS:
+                if isinstance(value, str):
+                    out[key] = value.strip().lower() in ("1", "true", "yes", "是")
+                else:
+                    out[key] = bool(value)
+            elif key == "alignment":
+                v = str(value).strip().lower()
+                cn = {"左对齐": "left", "居中": "center", "右对齐": "right",
+                      "两端对齐": "justify", "分散对齐": "justify"}
+                v = cn.get(str(value).strip(), v)
+                if v in _ALIGN_VALUES:
+                    out[key] = v
+            else:
+                out[key] = str(value).strip()
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _summarize_checks(checks: Dict) -> List[str]:
+    """把 checks 转成给用户看的白话预览行。"""
+    lines: List[str] = []
+    for key, value in checks.items():
+        label = _KEY_LABELS.get(key, key)
+        try:
+            if key == "alignment":
+                text = _ALIGN_CN.get(str(value), str(value))
+            elif key == "bold":
+                text = "加粗" if value else "不加粗"
+            elif key in ("no_extra_blank_lines", "no_trailing_spaces"):
+                text = "是" if value else "否"
+            elif key.endswith("_pt"):
+                text = f"{float(value):g} 磅"
+            elif key.endswith("_cm"):
+                text = f"{float(value):g} 厘米"
+            elif key == "first_line_indent_chars":
+                text = f"{float(value):g} 字符"
+            else:
+                text = str(value)
+        except (TypeError, ValueError):
+            text = str(value)
+        lines.append(f"{label}：{text}")
+    return lines
 
 
 def _rule_to_dict(r: FormatRule) -> dict:
@@ -286,7 +389,8 @@ class FormatCheckService:
                            applied: Optional[List[int]] = None) -> Path:
         """按已应用的 issue 从**原始文件**重放出「当前」文档。
 
-        原始文件只读，结果写到 ``{id}_current.docx``。
+        原始文件只读（人工修改经 update_record_content 显式写回后即为新基线），
+        结果写到 ``{id}_current.docx``。
         """
         src = self._get_record_docx(record)
         applied = load_id_list(applied if applied is not None else record.applied_ids)
@@ -311,6 +415,59 @@ class FormatCheckService:
         data = self._read_doc_properties(path)
         data["version"] = version
         return data
+
+    def update_record_content(self, record_id: str, paragraphs: List[str],
+                              user: User) -> dict:
+        """保存工作台中栏的人工正文修改。
+
+        语义：人工修改直接写回 ``{id}.docx``，成为后续校验 / 应用修正 / 导出的
+        新基线（修改前视图也随之指向新内容——审校工作台以「当前可交付稿」为中心，
+        历史原文以用户本地文件为准）。保存后 applied_ids / resolved_ids 全部重置，
+        因为旧标记相对新文本已不再有意义；客户端随后应触发重新校验。
+        段落级排版格式尽量保留：逐段替换首个 run 文本，多余段删除、不足段追加。
+        """
+        record = self._load_record(record_id, user)
+        path = self._get_record_docx(record)
+        texts = [str(t) for t in (paragraphs or [])]
+        if not any(t.strip() for t in texts):
+            raise AppError(400, "正文不能为空")
+
+        doc = DocxDocument(str(path))
+        paras = list(doc.paragraphs)
+        for i, text in enumerate(texts):
+            if i < len(paras):
+                p = paras[i]
+                runs = p.runs
+                if runs:
+                    runs[0].text = text
+                    for r in runs[1:]:
+                        r.text = ""
+                else:
+                    p.add_run(text)
+            else:
+                doc.add_paragraph(text)
+        for p in paras[len(texts):]:
+            try:
+                p._p.getparent().remove(p._p)
+            except Exception as e:  # noqa: BLE001 - 个别段删除失败不阻断整体保存
+                logger.warning("记录 %s 删除多余段落失败（已跳过）: %s", record.id, e)
+        doc.save(str(path))
+
+        record.applied_ids = []
+        record.resolved_ids = []
+        self.records.update(record)
+        props = self._read_doc_properties(path)
+        logger.info("记录 %s 正文被手工修改（%d 段），应用/解决状态已重置",
+                    record.id, len(texts))
+        return {
+            "id": record.id, "record_id": record.id,
+            "applied_ids": [], "resolved_ids": [],
+            "issue_count": record.issue_count,
+            "open_issue_count": _open_issue_count(record),
+            "paragraphs": props["paragraphs"],
+            "page": props["page"],
+            "message": "正文修改已保存，建议重新校验",
+        }
 
     def preview_fix(self, record_id: str, accepted_indices: Optional[List[int]],
                     user: User) -> dict:
@@ -521,6 +678,95 @@ class FormatCheckService:
     # ================= 规则管理 =================
     def list_rules(self) -> List[dict]:
         return [_rule_to_dict(r) for r in self.rules.list_active()]
+
+    def compile_rule(self, req, user: User) -> dict:
+        """白话描述 → AI 生成校验项（不落库）。
+
+        管理员和普通用户都只写自然语言；AI 输出先经白名单过滤
+        （只保留 check_engine 认识的键、类型收敛），再交给前端预览确认。
+        保存仍走 create_rule / update_rule 的管理员权限校验。
+        """
+        target = (req.target or "").strip()
+        if target not in VALID_RULE_TARGETS:
+            raise AppError(400, f"target 必须是: {', '.join(VALID_RULE_TARGETS)}")
+        if self.engine.assistant is None:
+            raise AppError(503, "AI 服务不可用，无法自动转换校验项，请稍后再试")
+        description = (req.description or "").strip()
+        if not description:
+            raise AppError(400, "请先填写校验要求描述")
+
+        label = _TARGET_LABELS.get(target, target)
+        if target == "page":
+            catalog = (
+                "- top_margin_cm / bottom_margin_cm / left_margin_cm / right_margin_cm："
+                "页边距，单位厘米（数值）\n"
+                "- page_width_cm / page_height_cm：页面尺寸，单位厘米（数值）"
+            )
+        elif target == "general":
+            catalog = (
+                "- no_extra_blank_lines：不允许出现连续多余空行（true/false）\n"
+                "- no_trailing_spaces：不允许段落末尾有多余空格（true/false）"
+            )
+        else:
+            catalog = (
+                "- font_name：中文字体名（字符串，如 仿宋_GB2312、黑体、方正小标宋简体）\n"
+                "- font_size_pt：字号，单位磅（数值；一号=26，小一=24，二号=22，小二=18，"
+                "三号=16，小三=15，四号=14，小四=12）\n"
+                "- bold：是否加粗（true/false）\n"
+                "- alignment：对齐方式（left/center/right/justify，两端对齐用 justify）\n"
+                "- line_spacing_pt：固定行距，单位磅（数值，如 28）\n"
+                "- first_line_indent_chars：首行缩进字符数（数值，如 2）\n"
+                "- space_before_pt / space_after_pt：段前/段后间距，单位磅（数值）"
+            )
+
+        prompt = f"""你是公文格式规则配置助手。用户用自然语言描述了对「{label}」的格式要求，
+请转换成系统支持的校验项。
+
+系统对「{label}」支持的校验项（只允许使用这些键，不要发明其他键）：
+{catalog}
+
+用户描述：{description}
+
+要求：
+1. 只输出一个 JSON 对象，格式为 {{"name": "简短规则名称", "checks": {{...}}}}，不要输出任何解释。
+2. checks 的键只能来自上面列出的校验项；值类型按说明（数值不带单位）。
+3. 描述中无法映射到这些校验项的要求，直接忽略，不要编造。"""
+        try:
+            reply = self.engine.assistant.complete(
+                [{"role": "system", "content": "你是严谨的公文格式规则配置助手，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=512,
+            )
+        except Exception as e:
+            logger.warning("规则校验项 AI 生成失败: %s", e)
+            raise AppError(502, f"AI 生成校验项失败：{e}")
+        if not reply:
+            raise AppError(502, "AI 未返回结果，请换个更具体的描述再试")
+        m = re.search(r'\{.*\}', reply, re.S)
+        if not m:
+            raise AppError(502, "AI 返回内容无法解析，请换个更具体的描述再试")
+        try:
+            parsed = _json.loads(m.group(0))
+        except ValueError:
+            raise AppError(502, "AI 返回内容无法解析，请换个更具体的描述再试")
+
+        checks = _sanitize_checks(target, parsed.get("checks"))
+        if not checks:
+            raise AppError(
+                400,
+                "未能从描述中识别出可执行的校验项。请描述具体的排版要求，"
+                "例如「正文用仿宋三号字，首行缩进2字符，行距固定28磅，两端对齐」。",
+            )
+        name = (req.name or "").strip() or str(parsed.get("name") or "").strip()
+        if not name:
+            name = f"{label}格式规则"
+        return {
+            "name": name,
+            "target": target,
+            "checks": checks,
+            "severity": "error",
+            "summary": _summarize_checks(checks),
+        }
 
     def create_rule(self, req, admin: User) -> dict:
         if req.target not in VALID_RULE_TARGETS:
