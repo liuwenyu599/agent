@@ -119,13 +119,23 @@ object Endpoints {
         const val TEMPLATE_UPLOAD = "/ppt/templates/upload"
         fun templateDelete(id: String) = "/ppt/templates/$id"
         const val OUTLINE = "/ppt/outline"
+        /** 流式大纲（SSE）：stage 阶段事件 + done 携带权威大纲 */
+        const val OUTLINE_STREAM = "/ppt/outline/stream"
+        /** 材料分析：多文件上传，逐份返回 AI 摘要与提取文本 */
+        const val MATERIALS_ANALYZE = "/ppt/materials/analyze"
         const val GENERATE = "/ppt/generate"
         const val DOCUMENTS = "/ppt/documents"
+        /** 上传已有 .pptx 继续修改：解析为可编辑大纲 */
+        const val DOCUMENT_IMPORT = "/ppt/documents/import"
         fun document(id: String) = "/ppt/documents/$id"
         fun documentDraft(id: String) = "/ppt/documents/$id/draft"
         fun documentExport(id: String) = "/ppt/documents/$id/export"
         fun documentDownload(id: String) = "/ppt/documents/$id/download"
         fun documentDelete(id: String) = "/ppt/documents/$id"
+        /** 单页局部修改（润色/扩写/精简/重写/自定义） */
+        const val AI_SLIDE_ACTION = "/ppt/ai/slide-action"
+        /** 结构调整（新增/拆分/合并页） */
+        const val AI_STRUCTURE = "/ppt/ai/structure"
     }
 
     object Workflow {

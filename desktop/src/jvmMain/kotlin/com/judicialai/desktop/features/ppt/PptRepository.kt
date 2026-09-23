@@ -10,7 +10,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 
-/** PPT 助手数据访问（对应 Web PptView / PptTemplateLib） */
+/** PPT 助手数据访问（对应 Web PptView / PptTemplateLib + 工作台重设计新接口） */
 class PptRepository(private val api: ApiClient) {
 
     suspend fun templates(): ApiResult<List<JsonObject>> =
@@ -44,6 +44,38 @@ class PptRepository(private val api: ApiClient) {
         }
     }
 
+    /** 流式大纲（SSE）：onEvent 回调 {type: stage|done|error} 事件 */
+    suspend fun outlineStream(body: Map<String, Any?>, onEvent: (JsonObject) -> Unit) =
+        api.postStream(Endpoints.Ppt.OUTLINE_STREAM, body,
+            timeoutMs = 300_000, onEvent = onEvent)
+
+    /** 材料分析：多文件上传，逐份返回 {filename, chars, summary, text} */
+    suspend fun analyzeMaterials(files: List<File>) =
+        api.upload(Endpoints.Ppt.MATERIALS_ANALYZE, "files", files, timeoutMs = 300_000)
+
+    /** 上传已有 .pptx 继续修改 → {doc_id, outline, message} */
+    suspend fun importPptx(file: File) =
+        api.upload(Endpoints.Ppt.DOCUMENT_IMPORT, "file", listOf(file), timeoutMs = 300_000)
+
+    suspend fun document(id: String) = api.get(Endpoints.Ppt.document(id))
+
+    /** 保存草稿（大纲编辑结果写回服务端，不改变文档状态） */
+    suspend fun saveDraft(id: String, title: String, outline: JsonObject, templateId: String?) =
+        api.put(Endpoints.Ppt.documentDraft(id),
+            mapOf("title" to title, "outline" to outline, "template_id" to templateId))
+
+    /** 单页局部修改：action = rewrite / expand / condense / custom */
+    suspend fun aiSlideAction(action: String, slide: JsonObject, instruction: String) =
+        api.post(Endpoints.Ppt.AI_SLIDE_ACTION,
+            mapOf("action" to action, "slide" to slide, "instruction" to instruction),
+            timeoutMs = 180_000)
+
+    /** 结构调整：action = add / split / merge */
+    suspend fun aiStructure(action: String, slides: List<JsonObject>, index: Int) =
+        api.post(Endpoints.Ppt.AI_STRUCTURE,
+            mapOf("action" to action, "slides" to slides, "index" to index, "instruction" to ""),
+            timeoutMs = 180_000)
+
     suspend fun generate(docId: String, outline: JsonElement, templateId: String?) =
         api.post(Endpoints.Ppt.GENERATE,
             mapOf("doc_id" to docId, "outline" to outline, "template_id" to templateId),
@@ -64,4 +96,3 @@ class PptRepository(private val api: ApiClient) {
     suspend fun renameDocument(id: String, title: String) =
         api.patch(Endpoints.Ppt.document(id), mapOf("title" to title))
 }
-
