@@ -2,20 +2,30 @@
 
 只依赖注入的 LLMGateway 端口，不感知具体模型/传输。
 所有提示词规则与旧系统保持一致。
+
+视觉链路：可选注入 vision_gateway；chat() 带 image_paths 且视觉网关可用时，
+自动切换为视觉模型，用户消息转为多模态（text + image_url data-URL）。
 """
+import base64
+import mimetypes
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from jinja2 import Template
 
 from app.application.ports import LLMGateway
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
 
 class WritingAssistant:
-    def __init__(self, gateway: LLMGateway) -> None:
+    def __init__(self, gateway: LLMGateway,
+                 vision_gateway: Optional[LLMGateway] = None) -> None:
         self.gateway = gateway
+        self.vision_gateway = vision_gateway
         self.prompts = self._load_prompts()
 
     def _load_prompts(self) -> Dict:
@@ -175,6 +185,20 @@ class WritingAssistant:
             return "opinion"
         return "notification"
 
+    # ---- 视觉链路 ----
+
+    @staticmethod
+    def _image_part(path: str) -> Optional[Dict]:
+        """本地图片文件 → OpenAI 多模态 image_url（data-URL）消息部分。"""
+        try:
+            data = Path(path).read_bytes()
+            mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+            b64 = base64.b64encode(data).decode("ascii")
+            return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        except Exception as e:
+            logger.warning("[写作助手] 图片读取失败 %s: %s", path, e)
+            return None
+
     def complete(self, messages: List[Dict], temperature: float = 0.7, max_tokens: int = 4096) -> str:
         """裸调用网关（供 format_check / ppt / workflow 等模块使用）。"""
         return self.gateway.complete(messages, temperature=temperature, max_tokens=max_tokens)
@@ -186,12 +210,16 @@ class WritingAssistant:
              reference_template: Dict = None,
              task_reference_context: str = None,
              template_reference_context: str = None,
-             user_preference: str = None) -> str:
-        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference）。
+             user_preference: str = None,
+             image_paths: List[str] = None) -> str:
+        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference / image_paths）。
 
         ⚠️ `user_preference` 必须是**独立参数**：若把偏好块拼进 `system_prompt`
         传入，会命中 `if system_prompt:` 分支，短路 `_build_writing_prompt()`
         的 7 条写作硬规则，造成公文质量回归。
+
+        image_paths：本轮消息附带的图片本地路径。配置了视觉网关时，
+        本条消息转为多模态并路由到视觉模型；未配置时忽略（仍走 OCR 文本通道）。
         """
         intent = self._detect_intent(message)
 
@@ -245,12 +273,27 @@ class WritingAssistant:
                 + attachment_context
             )
 
+        # 视觉路由：有图片且配置了视觉模型时，本条消息转为多模态并走视觉网关
+        gateway = self.gateway
+        user_content = message
+        if image_paths and self.vision_gateway is not None:
+            parts: List[Dict] = [{"type": "text", "text": message}]
+            for p in image_paths:
+                part = self._image_part(p)
+                if part:
+                    parts.append(part)
+            if len(parts) > 1:
+                user_content = parts
+                gateway = self.vision_gateway
+                logger.info("[写作助手] 视觉链路：%d 张图片 → %s",
+                            len(parts) - 1, gateway.model_name)
+
         messages = [{"role": "system", "content": system_prompt}]
         for h in history[-20:]:
             messages.append({"role": h["role"], "content": h["content"]})
-        messages.append({"role": "user", "content": message})
+        messages.append({"role": "user", "content": user_content})
 
-        return self.gateway.complete(messages)
+        return gateway.complete(messages)
 
     def generate_document(self, doc_type: str, topic: str, references: str = "",
                           style: str = "严谨", word_count: int = 1000) -> str:
