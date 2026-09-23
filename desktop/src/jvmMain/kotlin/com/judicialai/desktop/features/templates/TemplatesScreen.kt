@@ -95,11 +95,21 @@ import kotlinx.serialization.json.JsonObject
  *
  * 「使用模板」不再弹窗出文：右侧内联填好要素后点「生成」，
  * 直接进入智能写作工作台（自动创建绑定该模板的任务并起草）。
+ * 从写作工作台「返回模板重新填写要素」时自动重开该模板并回填已填要素。
  */
 @Composable
 fun TemplatesScreen() {
     val vm = remember { TemplatesViewModel(Repositories.templates) }
     LaunchedEffect(Unit) { vm.load() }
+
+    // 写作工作台「返回模板重新填写要素」：模板加载完成后自动选中并打开填写面板
+    LaunchedEffect(vm.templates) {
+        val id = AppState.pendingTemplateUseId ?: return@LaunchedEffect
+        val t = vm.templates.firstOrNull { it["id"].str() == id } ?: return@LaunchedEffect
+        AppState.pendingTemplateUseId = null
+        vm.select(t)
+        vm.startUse(t)
+    }
 
     var search by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
@@ -399,9 +409,16 @@ private fun MetaText(text: String) {
 @Composable
 private fun UsePanel(vm: TemplatesViewModel, t: JsonObject, modifier: Modifier) {
     val fields = t["params_schema"].arr().mapNotNull { it.obj() }
-    var values by remember { mutableStateOf(fields.associate {
-        it["name"].str() to (it["label"].str().ifBlank { it["name"].str() } to "")
-    }) }
+    // 从写作工作台「返回模板重新填写要素」回来时，回填上次已填的要素值
+    var values by remember {
+        mutableStateOf(fields.associate {
+            val n = it["name"].str()
+            val label = it["label"].str().ifBlank { n }
+            val preset = if (AppState.lastTemplateUseId == t["id"].str())
+                AppState.lastTemplateUseValues[n].orEmpty() else ""
+            n to (label to preset)
+        })
+    }
 
     Column(
         modifier.fillMaxHeight()
