@@ -5,11 +5,15 @@
 
 视觉链路：可选注入 vision_gateway；chat() 带 image_paths 且视觉网关可用时，
 自动切换为视觉模型，用户消息转为多模态（text + image_url data-URL）。
+
+流式链路：chat_stream() 与 chat() 共用同一套提示词编排，
+网关实现 complete_stream 时逐段产出增量文本（供写作工作台流式生成），
+未实现时降级为一次性产出。
 """
 import base64
 import mimetypes
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from jinja2 import Template
 
@@ -205,24 +209,17 @@ class WritingAssistant:
         temperature / max_tokens 不传时取全局 MODEL_TEMPERATURE / MODEL_MAX_TOKENS。"""
         return self.gateway.complete(messages, temperature=temperature, max_tokens=max_tokens)
 
-    def chat(self, message: str, history: List[Dict], sources: List[Dict], user_role: str,
-             memories: List[Dict] = None, examples: list = None,
-             system_prompt: str = None, template_category: str = None,
-             attachment_context: str = None,
-             reference_template: Dict = None,
-             task_reference_context: str = None,
-             template_reference_context: str = None,
-             user_preference: str = None,
-             image_paths: List[str] = None) -> str:
-        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference / image_paths）。
+    # ---- 提示词组装（chat 与 chat_stream 共用） ----
 
-        ⚠️ `user_preference` 必须是**独立参数**：若把偏好块拼进 `system_prompt`
-        传入，会命中 `if system_prompt:` 分支，短路 `_build_writing_prompt()`
-        的 7 条写作硬规则，造成公文质量回归。
-
-        image_paths：本轮消息附带的图片本地路径。配置了视觉网关时，
-        本条消息转为多模态并路由到视觉模型；未配置时忽略（仍走 OCR 文本通道）。
-        """
+    def _build_system_prompt(self, message: str, sources: List[Dict],
+                             examples: list = None,
+                             system_prompt: str = None,
+                             reference_template: Dict = None,
+                             task_reference_context: str = None,
+                             template_reference_context: str = None,
+                             user_preference: str = None,
+                             attachment_context: str = None) -> str:
+        """按意图与上下文组装 system prompt（chat / chat_stream 唯一来源）。"""
         intent = self._detect_intent(message)
 
         sources_block = ""
@@ -274,8 +271,12 @@ class WritingAssistant:
                 "均应基于这些材料完成；回答中涉及的事实、数据、名称以材料为准，不要虚构：\n\n"
                 + attachment_context
             )
+        return system_prompt
 
-        # 视觉路由：有图片且配置了视觉模型时，本条消息转为多模态并走视觉网关
+    def _assemble_messages(self, message: str, history: List[Dict],
+                           system_prompt: str,
+                           image_paths: List[str] = None) -> Tuple[List[Dict], LLMGateway]:
+        """组装最终消息列表并挑选网关（视觉路由）。返回 (messages, gateway)。"""
         gateway = self.gateway
         user_content = message
         if image_paths and self.vision_gateway is not None:
@@ -294,8 +295,58 @@ class WritingAssistant:
         for h in history[-20:]:
             messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": user_content})
+        return messages, gateway
 
+    def chat(self, message: str, history: List[Dict], sources: List[Dict], user_role: str,
+             memories: List[Dict] = None, examples: list = None,
+             system_prompt: str = None, template_category: str = None,
+             attachment_context: str = None,
+             reference_template: Dict = None,
+             task_reference_context: str = None,
+             template_reference_context: str = None,
+             user_preference: str = None,
+             image_paths: List[str] = None) -> str:
+        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference / image_paths）。
+
+        ⚠️ `user_preference` 必须是**独立参数**：若把偏好块拼进 `system_prompt`
+        传入，会命中 `if system_prompt:` 分支，短路 `_build_writing_prompt()`
+        的 7 条写作硬规则，造成公文质量回归。
+
+        image_paths：本轮消息附带的图片本地路径。配置了视觉网关时，
+        本条消息转为多模态并路由到视觉模型；未配置时忽略（仍走 OCR 文本通道）。
+        """
+        system_prompt = self._build_system_prompt(
+            message, sources, examples=examples, system_prompt=system_prompt,
+            reference_template=reference_template,
+            task_reference_context=task_reference_context,
+            template_reference_context=template_reference_context,
+            user_preference=user_preference,
+            attachment_context=attachment_context,
+        )
+        messages, gateway = self._assemble_messages(
+            message, history, system_prompt, image_paths=image_paths)
         return gateway.complete(messages)
+
+    def chat_stream(self, message: str, history: List[Dict], sources: List[Dict],
+                    user_role: str, system_prompt: str = None,
+                    attachment_context: str = None) -> Iterator[str]:
+        """流式对话：与 chat 同一套提示词编排，逐段产出增量文本。
+
+        供写作工作台「流式生成」使用；网关未实现 complete_stream（如 mock）时
+        降级为一次性产出，调用方无感。
+        """
+        system_prompt = self._build_system_prompt(
+            message, sources, system_prompt=system_prompt,
+            attachment_context=attachment_context,
+        )
+        messages, gateway = self._assemble_messages(message, history, system_prompt)
+        stream = getattr(gateway, "complete_stream", None)
+        if stream is None:
+            text = gateway.complete(messages)
+            if text:
+                yield text
+            return
+        yield from stream(messages)
 
     def generate_document(self, doc_type: str, topic: str, references: str = "",
                           style: str = "严谨", word_count: int = 1000) -> str:
