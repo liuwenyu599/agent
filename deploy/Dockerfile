@@ -14,9 +14,16 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 
 WORKDIR /app
 
-# 系统依赖：antiword 解析 .doc，curl 用于健康检查
+# 系统依赖：
+#   antiword            解析 .doc
+#   libreoffice-writer  .doc/.docx 转换（PPT 预览等链路）
+#   libreoffice-impress .ppt/.pptx 转换
+#   fonts-noto-cjk      LibreOffice 转换时中文字体渲染
+#   curl                健康检查
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends antiword curl \
+    && apt-get install -y --no-install-recommends \
+       antiword curl \
+       libreoffice-writer libreoffice-impress fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装 CPU 版 torch（sentence-transformers 的依赖，避免拉入几个 GB 的 CUDA 版）
