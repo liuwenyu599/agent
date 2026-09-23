@@ -19,7 +19,8 @@ class KnowledgeBaseModel(Base, IdMixin, TimestampMixin):
     owner_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    documents: Mapped[list] = relationship("DocumentModel", back_populates="knowledge_base")
+    documents: Mapped[list["DocumentModel"]] = relationship(
+        "DocumentModel", back_populates="knowledge_base")
 
 
 class DocumentModel(Base, IdMixin, TimestampMixin):
@@ -56,7 +57,9 @@ class DocumentModel(Base, IdMixin, TimestampMixin):
     reviewer: Mapped[Optional[Any]] = relationship(
         "UserModel", foreign_keys=[reviewed_by], lazy="joined"
     )
-    chunks: Mapped[list] = relationship(
+    # 注意：必须带元素类型 Mapped[list["ChunkModel"]]——裸 Mapped[list] 会让
+    # SQLAlchemy 把 uselist 推断为 False，访问 document.chunks 得到单个对象而非列表
+    chunks: Mapped[list["ChunkModel"]] = relationship(
         "ChunkModel", back_populates="document", cascade="all, delete-orphan"
     )
 

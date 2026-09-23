@@ -42,7 +42,8 @@ def upgrade() -> None:
             sa.Column("code", sa.String(30), primary_key=True),
             sa.Column("name", sa.String(60), nullable=False),
             sa.Column("description", sa.String(300), server_default=""),
-            sa.Column("is_system", sa.Boolean, server_default=sa.text("1")),
+            # PostgreSQL boolean 默认值必须是 true/false，不能用 1（SQLite 两者都行）
+            sa.Column("is_system", sa.Boolean, server_default=sa.text("true")),
             sa.Column("sort_order", sa.Integer, server_default="0"),
             sa.Column("created_at", sa.DateTime, server_default=sa.text("CURRENT_TIMESTAMP")),
         )
