@@ -31,6 +31,14 @@ class Settings:
         self.MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
         # 模型上下文总长度（与模型服务 max_model_len 一致），用于上下文预算估算
         self.MODEL_CTX_LIMIT = int(os.getenv("MODEL_CTX_LIMIT", "16384"))
+        # 视觉模型服务（可选，Qwen2.5-VL 等，OpenAI 兼容）：
+        # 配置后对话中的图片附件直接送视觉模型；留空则走 OCR 文本通道
+        self.VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", "")
+        self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen2.5-VL-7B-Instruct")
+        self.VISION_MODEL_API_KEY = os.getenv("VISION_MODEL_API_KEY", "")
+        self.VISION_MODEL_TIMEOUT = int(os.getenv("VISION_MODEL_TIMEOUT", "180"))
+        # 单次对话最多送入视觉模型的图片数
+        self.VISION_MAX_IMAGES = int(os.getenv("VISION_MAX_IMAGES", "4"))
         # auto: 有 active 模型走其 provider；mock: 强制 MockProvider（测试）
         self.AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")
 
