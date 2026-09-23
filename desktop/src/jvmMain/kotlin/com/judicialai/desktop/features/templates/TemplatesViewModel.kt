@@ -3,11 +3,11 @@ package com.judicialai.desktop.features.templates
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.app.PendingTemplateWrite
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
-import com.judicialai.desktop.core.utils.bool
-import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
@@ -26,12 +26,8 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var filterCat by mutableStateOf<String?>(null)
     var status by mutableStateOf<String?>(null)
 
-    /** 公文助手填写视图状态（对应 Web TemplateView） */
+    /** 正在填写要素的模板（内联填表，不再是弹窗） */
     var usingTemplate by mutableStateOf<JsonObject?>(null)
-        private set
-    var generating by mutableStateOf(false)
-        private set
-    var result by mutableStateOf("")
         private set
 
     // ---- 模板三层：系统模板 / 本科室模板 / 我的模板（tier 由后端按归属判定）----
@@ -86,17 +82,19 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
 
     fun startUse(t: JsonObject) {
         usingTemplate = t
-        result = ""
         scope.launch { repo.markUsed(t["id"].str()) }
     }
 
     fun cancelUse() {
         usingTemplate = null
-        result = ""
     }
 
-    /** 组装要素与 system_prompt，调 /chat/send（与 Web TemplateView.generate 一致） */
-    fun generate(params: Map<String, Pair<String, String>>) {
+    /**
+     * 使用模板生成：不再弹窗直接出文，而是把「模板 + 已填要素」
+     * 交给智能写作工作台——创建绑定该模板的写作任务并自动起草，
+     * 后续对话修改、历史版本与导出都在工作台完成。
+     */
+    fun launchWorkspace(params: Map<String, Pair<String, String>>) {
         val t = usingTemplate ?: return
         val elements = t["params_schema"].arr().mapNotNull { it.obj() }.mapNotNull { f ->
             val name = f["name"].str()
@@ -104,31 +102,23 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
             val v = params[name]?.second?.trim().orEmpty()
             if (v.isEmpty()) null else "$label：$v"
         }
-        var sp = t["system_prompt"].str().ifBlank { "你是一位资深的司法行政公文写作专家。" }
-        sp += "\n\n写作要求：\n1. 写作风格：${t["writing_style"].str().ifBlank { "正式公文" }}；"
-        sp += "\n2. 字数要求：约 ${t["word_count"].int().let { if (it > 0) it else 1000 }} 字；"
-        if (t["need_red_header"].bool()) sp += "\n3. 需要包含红头（发文机关标识）；"
-        if (t["need_signature"].bool()) sp += "\n4. 需要包含落款（发文机关署名）；"
-        if (t["need_date"].bool()) sp += "\n5. 需要包含成文日期；"
-        if (t["need_doc_number"].bool()) sp += "\n6. 需要包含发文字号；"
-        sp += "\n\n请根据以下要素生成完整的公文正文，不要简单填空，要根据要素展开成流畅、规范的公文。"
-        sp += "\n\n【格式要求】\n1. 不要输出 Markdown 标记（如 **、## 等），不要输出 HTML 标签；\n2. 纯文本输出，段落之间用空行分隔；\n3. 一级标题（如“一、评查范围”）独占一行，前后空一行；\n4. 落款信息（联系人、电话、单位、日期、文号）每项独占一行；\n5. 不要输出解释性文字，直接给公文正文。"
-
-        var msg = "请根据以下要素生成公文：\n\n" + elements.joinToString("\n")
+        var msg = if (elements.isEmpty()) {
+            "请使用模板「${t["name"].str()}」生成一份公文。"
+        } else {
+            "请根据以下要素生成公文：\n\n" + elements.joinToString("\n")
+        }
         t["content_template"].str().takeIf { it.isNotBlank() }?.let {
             msg += "\n\n【结构参考】\n$it"
         }
-
-        generating = true
-        status = null
-        scope.launch {
-            when (val r = repo.generate(msg, sp)) {
-                is ApiResult.Ok -> result = r.data.obj()?.get("reply")?.str()
-                    ?: r.data.obj()?.get("message")?.str() ?: ""
-                is ApiResult.Err -> status = r.message
-            }
-            generating = false
-        }
+        AppState.pendingWritingTemplate = PendingTemplateWrite(
+            templateId = t["id"].str(),
+            templateName = t["name"].str(),
+            docType = t["category"].str(),
+            title = t["name"].str(),
+            message = msg,
+        )
+        usingTemplate = null
+        AppState.navigate(AppScreen.WRITING)
     }
 
     fun load() {
@@ -237,16 +227,6 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
             when (val r = repo.delete(id)) {
                 is ApiResult.Ok -> load()
                 is ApiResult.Err -> status = r.message
-            }
-        }
-    }
-
-    /** 导出当前生成结果为 Word */
-    fun exportResult(title: String, target: java.io.File) {
-        scope.launch {
-            status = when (val r = repo.exportResult(title, result, target)) {
-                is ApiResult.Ok -> r.data
-                is ApiResult.Err -> r.message
             }
         }
     }

@@ -42,7 +42,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
-import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
@@ -93,6 +92,9 @@ import kotlinx.serialization.json.JsonObject
  * 强化「系统模板 → 科室模板 → 我的模板」三层资产关系：
  * 三层用可点击的资产卡表达，列表行带类型 / 归属 / 说明 / 使用情况，
  * 右侧是真实模板结构预览，「AI 调整模板」是模板中心的重要能力而非重新生成。
+ *
+ * 「使用模板」不再弹窗出文：右侧内联填好要素后点「生成」，
+ * 直接进入智能写作工作台（自动创建绑定该模板的任务并起草）。
  */
 @Composable
 fun TemplatesScreen() {
@@ -182,9 +184,14 @@ fun TemplatesScreen() {
                     }
                 }
 
-                // 右：结构预览
-                PreviewPane(vm, Modifier.width(420.dp).fillMaxHeight(),
-                    onAdapt = { showAdapt = true })
+                // 右：填表使用（内联）或结构预览
+                val using = vm.usingTemplate
+                if (using != null) {
+                    UsePanel(vm, using, Modifier.width(420.dp).fillMaxHeight())
+                } else {
+                    PreviewPane(vm, Modifier.width(420.dp).fillMaxHeight(),
+                        onAdapt = { showAdapt = true })
+                }
             }
         }
     }
@@ -211,8 +218,6 @@ fun TemplatesScreen() {
             onDismiss = { showAdapt = false; vm.cancelDraft() },
         )
     }
-
-    vm.usingTemplate?.let { t -> UseDialog(vm, t) { vm.cancelUse() } }
 }
 
 // ---------------- 三层资产 ----------------
@@ -387,6 +392,64 @@ private fun TemplateRow(
 @Composable
 private fun MetaText(text: String) {
     Text(text, fontSize = 11.sp, color = Muted)
+}
+
+// ---------------- 右侧：使用模板（内联填表 → 进入写作工作台） ----------------
+
+@Composable
+private fun UsePanel(vm: TemplatesViewModel, t: JsonObject, modifier: Modifier) {
+    val fields = t["params_schema"].arr().mapNotNull { it.obj() }
+    var values by remember { mutableStateOf(fields.associate {
+        it["name"].str() to (it["label"].str().ifBlank { it["name"].str() } to "")
+    }) }
+
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space5)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        SectionTitle("使用模板", icon = Icons.Default.Description)
+        Spacer(Modifier.height(Dimens.space2))
+        Text(t["name"].str(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+        t["description"].str().takeIf { it.isNotBlank() }?.let {
+            Spacer(Modifier.height(Dimens.space1))
+            Text(it, fontSize = 12.sp, color = Ink2, lineHeight = 18.sp)
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        InlineNotice("填好要素后点「生成」，将进入智能写作工作台自动起草，可继续对话修改、保存版本与导出")
+
+        Spacer(Modifier.height(Dimens.space3))
+        if (fields.isEmpty()) {
+            InlineNotice("该模板无需填写要素，可直接生成")
+        } else {
+            fields.forEach { f ->
+                val n = f["name"].str()
+                val label = f["label"].str().ifBlank { n }
+                AppTextField(
+                    value = values[n]?.second.orEmpty(),
+                    onValueChange = { values = values + (n to (label to it)) },
+                    label = label,
+                    placeholder = f["placeholder"].str().ifBlank { "请填写$label" },
+                )
+                Spacer(Modifier.height(Dimens.space2))
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        AppButton("生成，进入写作工作台", onClick = { vm.launchWorkspace(values) },
+            kind = AppButtonKind.AI, fill = true, icon = Icons.Default.AutoAwesome)
+        Spacer(Modifier.height(Dimens.space2))
+        AppButton("返回预览", onClick = { vm.cancelUse() },
+            kind = AppButtonKind.SECONDARY, fill = true)
+        vm.status?.let {
+            Spacer(Modifier.height(Dimens.space2))
+            FieldError(it)
+        }
+    }
 }
 
 // ---------------- 右侧预览 ----------------
@@ -572,60 +635,6 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
                 else "确认无误后保存为我的模板，仅本人可见"
             )
         }
-    }
-}
-
-// ---------------- 使用模板生成 ----------------
-
-@Composable
-private fun UseDialog(vm: TemplatesViewModel, t: JsonObject, onDismiss: () -> Unit) {
-    val fields = t["params_schema"].arr().mapNotNull { it.obj() }
-    var values by remember { mutableStateOf(fields.associate {
-        it["name"].str() to (it["label"].str().ifBlank { it["name"].str() } to "")
-    }) }
-
-    AppDialog(
-        onDismissRequest = onDismiss,
-        title = "使用模板",
-        subtitle = t["name"].str(),
-        icon = Icons.Default.Description,
-        width = 680.dp,
-        actions = {
-            AppButton("关闭", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
-            Spacer(Modifier.width(Dimens.space2))
-            AppButton(if (vm.result.isBlank()) "生成正文" else "重新生成",
-                onClick = { vm.generate(values) },
-                kind = AppButtonKind.AI, enabled = !vm.generating, loading = vm.generating)
-        },
-    ) {
-        if (fields.isEmpty()) {
-            InlineNotice("该模板无需填写要素，可直接生成正文")
-        } else {
-            fields.forEach { f ->
-                val n = f["name"].str()
-                val label = f["label"].str().ifBlank { n }
-                AppTextField(
-                    value = values[n]?.second.orEmpty(),
-                    onValueChange = { values = values + (n to (label to it)) },
-                    label = label,
-                    placeholder = f["placeholder"].str().ifBlank { "请填写$label" },
-                )
-            }
-        }
-        if (vm.result.isNotBlank()) {
-            Spacer(Modifier.height(Dimens.space2))
-            SectionTitle("生成结果")
-            DocumentSurface(padding = Dimens.space4) {
-                Text(vm.result, fontSize = 13.sp, color = Ink, lineHeight = 22.sp)
-            }
-            Spacer(Modifier.height(Dimens.space2))
-            AppButton("导出 Word", onClick = {
-                pickSaveFile("${t["name"].str().ifBlank { "公文" }}.docx")?.let {
-                    vm.exportResult(t["name"].str().ifBlank { "公文" }, it)
-                }
-            }, kind = AppButtonKind.SECONDARY)
-        }
-        vm.status?.let { FieldError(it) }
     }
 }
 

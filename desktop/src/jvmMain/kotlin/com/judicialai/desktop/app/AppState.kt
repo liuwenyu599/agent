@@ -7,6 +7,18 @@ import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.storage.ServerConfig
 
 /**
+ * 模板中心「使用模板」→ 智能写作工作台 的一次性参数。
+ * 由 TemplatesViewModel 组装（模板绑定 + 要素指令），WritingScreen 消费后置回 null。
+ */
+data class PendingTemplateWrite(
+    val templateId: String,
+    val templateName: String,
+    val docType: String,
+    val title: String,
+    val message: String,
+)
+
+/**
  * 应用全局状态：当前页面、服务器配置、登录态、当前用户。
  * token 只在 ApiClient 内存中，不落盘；用户信息仅保存展示所需字段。
  */
@@ -16,6 +28,9 @@ object AppState {
 
     /** 普通聊天中识别到写作意图时，跳转到工作台携带的一句话需求 */
     var pendingWritingIntent by mutableStateOf<String?>(null)
+
+    /** 模板中心填好要素后点「生成」：跳转智能写作工作台并携带模板与组装好的指令 */
+    var pendingWritingTemplate by mutableStateOf<PendingTemplateWrite?>(null)
 
     // ---- 导航形态 ----
     /** 全局导航抽屉（点击顶部品牌名打开） */
