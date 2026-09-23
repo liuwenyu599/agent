@@ -89,9 +89,16 @@ def get_document(doc_id: str, user: User = Depends(get_current_user),
 @router.put("/documents/{doc_id}")
 def update_document(doc_id: str, req: DocUpdateRequest,
                     user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db),
                     svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.update_document(doc_id, user, req.title, req.doc_type, req.status,
-                               req.department, req.doc_number)
+    """更新文档元数据；传 content 时同步重新分块并重建该文档的向量索引。"""
+    # 先做权限校验与元数据更新（无权限直接 403，不会走到内容更新）
+    result = svc.update_document(doc_id, user, req.title, req.doc_type, req.status,
+                                 req.department, req.doc_number)
+    if req.content is not None:
+        result = {**result,
+                  **get_document_service().update_content(db, doc_id, req.content)}
+    return result
 
 
 @router.delete("/documents/{doc_id}")
@@ -245,7 +252,7 @@ async def import_urls_excel(kb_id: str = Query(...), file: UploadFile = File(...
                             user: User = Depends(get_current_user),
                             db: Session = Depends(get_db),
                             svc: KnowledgeService = Depends(get_knowledge_service)):
-    kb = svc.check_kb_write(kb_id, user)
+    kb = svc.check_kb_write(req.kb_id, user)
     filename = file.filename or ""
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
         raise AppError(400, "请上传 .xlsx 格式的 Excel 文件")

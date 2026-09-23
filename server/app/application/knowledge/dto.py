@@ -27,6 +27,8 @@ class DocUpdateRequest(BaseModel):
     status: Optional[str] = None
     department: Optional[str] = None
     doc_number: Optional[str] = None
+    # 正文在线编辑：传入时重新分块并重建该文档的向量索引
+    content: Optional[str] = None
 
 
 class UrlImportRequest(BaseModel):
