@@ -3,6 +3,7 @@ package com.judicialai.desktop.features.writing
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.PendingTemplateWrite
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
@@ -200,6 +201,42 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+        }
+    }
+
+    /**
+     * 模板中心「使用模板」直达：模板要素已在模板中心内联填好，
+     * 这里直接创建绑定该模板的写作任务（template_id 随任务落库），
+     * 成功后自动起草初稿——与智能写作工作台同一套对话/版本/导出能力。
+     */
+    fun startFromTemplate(p: PendingTemplateWrite) {
+        if (busy || hasTask) return
+        busy = true
+        status = "正在按模板「${p.templateName}」创建写作任务…"
+        messages = messages + TaskChatMessage("user", p.message)
+        scope.launch {
+            val planned = WorkspaceSpec(
+                docType = p.docType,
+                title = p.title,
+                source = "template",
+                templateId = p.templateId,
+                templateName = p.templateName,
+            )
+            spec = planned
+            when (val r = repo.createTask(p.message, planned)) {
+                is ApiResult.Ok -> {
+                    r.data?.let { d ->
+                        applyResponse(d)
+                        d["reply"].str().takeIf { it.isNotBlank() }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                    }
+                    busy = false
+                    status = null
+                    if (hasTask) draft()
+                    return@launch
+                }
+                is ApiResult.Err -> fail(r.message)
+            }
         }
     }
 
