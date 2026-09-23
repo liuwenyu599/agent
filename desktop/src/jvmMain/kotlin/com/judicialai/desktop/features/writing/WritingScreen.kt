@@ -319,6 +319,8 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                             Text(s, fontSize = 12.5.sp, color = Ink2)
                         }
                     }
+                    Spacer(Modifier.height(Dimens.space2))
+                    AppLinkButton("取消本次生成", onClick = { vm.cancelGeneration() })
                 }
             }
 
@@ -479,6 +481,10 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                         overflow = TextOverflow.Ellipsis)
                     Text("切换", fontSize = 11.5.sp, color = Primary)
                 }
+                if (spec.source == "template") {
+                    Spacer(Modifier.height(Dimens.space1))
+                    AppLinkButton("返回模板重新填写要素", onClick = { vm.returnToTemplate() })
+                }
             }
         }
 
@@ -510,6 +516,11 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.height(Dimens.space1))
             Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
+        }
+        if (vm.busy) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                kind = AppButtonKind.DANGER, fill = true)
         }
     }
 }
@@ -632,6 +643,11 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
             Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
+        if (vm.busy) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                kind = AppButtonKind.DANGER, fill = true)
+        }
         Spacer(Modifier.height(Dimens.space4))
     }
 }
@@ -697,6 +713,11 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 )
             }
             Spacer(Modifier.width(Dimens.space3))
+            if (vm.busy) {
+                AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                    kind = AppButtonKind.DANGER)
+                Spacer(Modifier.width(Dimens.space2))
+            }
             if (vm.hasDraft) {
                 AppButton("继续生成", onClick = { vm.draft() },
                     kind = AppButtonKind.AI, enabled = !vm.busy,
