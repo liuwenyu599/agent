@@ -50,6 +50,14 @@ class FormatCheckRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    /**
+     * PUT /format-check/records/{id}/content {"paragraphs": [...]}
+     * 保存中栏人工正文修改：写回服务端成为新基线，应用/解决状态由后端重置。
+     */
+    suspend fun updateContent(id: String, paragraphs: List<String>): ApiResult<JsonObject> =
+        asObject(api.put(Endpoints.FormatCheck.updateContent(id),
+            mapOf("paragraphs" to paragraphs)))
+
     /** POST /format-check/records/{id}/apply {"issue_id":n} → {applied_ids, resolved_ids, paragraphs} */
     suspend fun applyIssue(id: String, issueId: Int): ApiResult<JsonObject> =
         asObject(api.post(Endpoints.FormatCheck.apply(id), mapOf("issue_id" to issueId)))
@@ -87,6 +95,14 @@ class FormatCheckRepository(private val api: ApiClient) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.items())
             is ApiResult.Err -> r
         }
+
+    /** POST /format-check/rules/compile：白话描述 → AI 生成校验项（不落库） */
+    suspend fun compileRule(target: String, description: String, name: String?): ApiResult<JsonObject> =
+        asObject(api.post(Endpoints.FormatCheck.RULES_COMPILE, buildMap<String, Any?> {
+            put("target", target)
+            put("description", description)
+            if (!name.isNullOrBlank()) put("name", name)
+        }))
 
     suspend fun createRule(body: Map<String, Any?>) =
         api.post(Endpoints.FormatCheck.RULES, body)

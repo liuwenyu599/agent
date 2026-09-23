@@ -96,6 +96,8 @@ object Endpoints {
         /** version=original|current，分别取源文档与已应用修改后的段落 */
         fun paragraphs(recordId: String, version: String = "original") =
             "/format-check/records/$recordId/paragraphs?version=$version"
+        /** 保存中栏人工正文修改（写回服务端成为新基线，应用/解决状态重置） */
+        fun updateContent(recordId: String) = "/format-check/records/$recordId/content"
         /** 应用单条修改；响应回传 applied_ids / resolved_ids 与最新 current 段落 */
         fun apply(recordId: String) = "/format-check/records/$recordId/apply"
         /** 撤销单条修改；响应同上 */
@@ -105,6 +107,8 @@ object Endpoints {
         const val PREVIEW_FIX = "/format-check/preview-fix"
         const val FIX = "/format-check/fix"
         const val RULES = "/format-check/rules"
+        /** 白话描述 → AI 生成校验项（不落库，预览确认后再保存） */
+        const val RULES_COMPILE = "/format-check/rules/compile"
         fun rule(id: String) = "/format-check/rules/$id"
     }
 
