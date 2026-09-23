@@ -7,7 +7,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,6 +50,17 @@ class PPTService:
         self.favorites = SqlAlchemyPPTTemplateFavoriteRepository(db)
         self.materials = SqlAlchemyPPTMaterialRepository(db)
         self.documents = SqlAlchemyPPTDocumentRepository(db)
+        # PPT 专用助手（DeepPresenter-9B），惰性初始化；未配置时回退主模型
+        self._ppt_asst: Optional[WritingAssistant] = None
+
+    def _ppt_assistant(self) -> WritingAssistant:
+        """PPT 专用模型助手（DeepPresenter-9B）。
+        未配置 PPT_MODEL_URL 时回退主文本模型，功能保持可用。"""
+        if self._ppt_asst is None:
+            from app.infrastructure.ai import get_ppt_gateway
+            gw = get_ppt_gateway()
+            self._ppt_asst = WritingAssistant(gw) if gw is not None else self.assistant
+        return self._ppt_asst
 
     # ---- 存储路径 ----
     @property
@@ -498,8 +509,68 @@ class PPTService:
     async def extract_text(self, file) -> dict:
         """提取单个文档文本（前端多文件时循环调用，自行拼接后走 /outline）。"""
         data = await file.read()
-        text = self._extract_upload_text(file.filename or "unnamed", data)
+        text = self._extract_any(file.filename or "unnamed", data)
         return {"filename": file.filename, "text": text[:3000]}
+
+    # ---- 材料文本提取（一等公民：doc/docx/pdf/txt/md/xlsx/xls/csv/pptx 内容） ----
+    _EXCEL_EXTS = (".xlsx", ".xlsm", ".xls", ".csv")
+
+    def _extract_any(self, filename: str, data: bytes) -> str:
+        """材料文本提取：Excel/CSV 直接读表格，其余走附件解析通道。"""
+        ext = "." + filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+        if ext in self._EXCEL_EXTS:
+            return self._extract_excel(filename, data, ext)
+        if ext == ".pptx":
+            # 已有 PPT 作为材料：抽取各页文字供 AI 参考
+            try:
+                ol = ppt_engine.outline_from_pptx(data)
+                parts = [f"《{ol.get('title', '')}》"]
+                for i, s in enumerate(ol.get("slides") or [], 1):
+                    seg = f"第{i}页 {s.get('title', '')}"
+                    pts = "；".join(s.get("points") or [])
+                    if pts:
+                        seg += "：" + pts
+                    parts.append(seg)
+                text = "\n".join(parts)
+                if text.strip():
+                    return text[:20000]
+            except Exception:
+                pass
+            raise AppError(400, f"未能从「{filename}」提取到文字内容")
+        return self._extract_upload_text(filename, data)
+
+    @staticmethod
+    def _extract_excel(filename: str, data: bytes, ext: str) -> str:
+        """Excel/CSV → 纯文本（工作表名 + 行，竖线分隔），供 AI 读取数据表。"""
+        try:
+            if ext == ".csv":
+                for enc in ("utf-8", "gb18030"):
+                    try:
+                        return data.decode(enc)[:20000]
+                    except UnicodeDecodeError:
+                        continue
+                return data.decode("utf-8", errors="ignore")[:20000]
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets[:5]:
+                parts.append(f"【工作表】{ws.title}")
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i >= 60:
+                        parts.append("……（后续行省略）")
+                        break
+                    vals = ["" if v is None else str(v) for v in row]
+                    if any(v.strip() for v in vals):
+                        parts.append(" | ".join(vals))
+            wb.close()
+            text = "\n".join(parts)
+            if not text.strip():
+                raise AppError(400, f"未能从「{filename}」提取到表格内容")
+            return text[:20000]
+        except AppError:
+            raise
+        except Exception as e:
+            raise AppError(400, f"表格「{filename}」解析失败：{e}")
 
     def _extract_upload_text(self, filename: str, data: bytes) -> str:
         from app.application.chat.attachment_service import AttachmentService
@@ -517,13 +588,59 @@ class PPTService:
             raise AppError(400, f"未能从「{filename}」提取到文字内容")
         return text
 
+    # ================= 材料分析（先看见分析结果，再生成大纲） =================
+    async def analyze_materials(self, files, user: User) -> dict:
+        """上传材料并逐份分析：提取文本 + AI 摘要（重点 / 数据表 / 约束条件）。
+
+        让「上传完黑盒等待」变成可见的分析结果；返回的 text 供后续大纲步骤
+        拼接使用（前端不必再调 extract-text）。
+        """
+        if not files:
+            raise AppError(400, "请先选择材料文件")
+        assistant = self._ppt_assistant()
+        items = []
+        for f in files[:8]:
+            data = await f.read()
+            if not data:
+                continue
+            text = self._extract_any(f.filename or "unnamed", data)
+            summary = self._summarize_material(assistant, f.filename or "材料", text)
+            items.append({
+                "filename": f.filename, "chars": len(text),
+                "summary": summary,
+                "text": text[:4000],
+            })
+        if not items:
+            raise AppError(400, "没有可解析的材料")
+        return {"items": items, "message": f"已分析 {len(items)} 份材料"}
+
+    @staticmethod
+    def _summarize_material(assistant, filename: str, text: str) -> str:
+        """单份材料的一句话性质说明 + 重点/数据表/约束，失败时返回空串不阻断。"""
+        prompt = (
+            "请用 2~4 句简短中文分析这份材料，格式如："
+            "「工作总结类文档，包含 N 项重点工作；含案件数量等统计数据；"
+            "要求汇报控制在 10 分钟以内」。\n"
+            "只输出这段分析文字，不要标题、不要列表符号、不要其他内容。\n\n"
+            f"【文件名】{filename}\n【内容节选】\n{text[:2500]}")
+        try:
+            raw = assistant.complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=300)
+        except Exception:
+            return ""
+        return (raw or "").strip()[:300]
+
+    # ================= 大纲 =================
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
-                    slide_count: int, audience: str = "", scene: str = "") -> dict:
+                    slide_count: int, audience: str = "", scene: str = "",
+                    material_names: Optional[List[str]] = None) -> dict:
         images = self._user_images(user.id)
         try:
             outline = ppt_engine.generate_outline(
-                self.assistant, source_type, topic, content, images,
-                max(6, min(slide_count, 18)), audience, scene)
+                self._ppt_assistant(), source_type, topic, content, images,
+                max(6, min(slide_count, 18)), audience, scene,
+                material_names=material_names)
         except RuntimeError as e:
             raise AIServiceError(str(e))
         d = self.documents.add(PPTDocument(
@@ -535,13 +652,74 @@ class PPTService:
 
     def make_outline(self, body, user: User) -> dict:
         return self._do_outline(user, body.source_type, body.topic, body.content,
-                                body.slide_count, body.audience, body.scene)
+                                body.slide_count, body.audience, body.scene,
+                                material_names=body.material_names)
+
+    def outline_stream(self, body, user: User) -> Iterator[str]:
+        """流式大纲（SSE）：stage 事件展示进度，done 携带权威大纲。
+
+        大纲是结构化 JSON，不逐 token 上屏；流式的价值在过程可见：
+        正在理解材料 → 正在梳理大纲 → 校验与保存。事件：
+          {"type":"stage","text":...} / {"type":"done","data":{doc_id,outline}}
+          / {"type":"error","message":...}
+        """
+        def _sse(obj) -> str:
+            return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
+
+        yield _sse({"type": "stage", "text": "正在理解材料与任务要求…"})
+        yield _sse({"type": "stage", "text": "正在梳理汇报结构…"})
+        try:
+            images = self._user_images(user.id)
+            outline = ppt_engine.generate_outline(
+                self._ppt_assistant(), body.source_type, body.topic, body.content,
+                images, max(6, min(body.slide_count, 18)), body.audience, body.scene,
+                material_names=body.material_names)
+        except RuntimeError as e:
+            yield _sse({"type": "error", "message": str(e)})
+            return
+        except Exception as e:
+            logger.exception("PPT 大纲生成失败")
+            yield _sse({"type": "error", "message": f"大纲生成中断：{e}"})
+            return
+        yield _sse({"type": "stage", "text": "大纲已就绪，正在校验与保存…"})
+        d = self.documents.add(PPTDocument(
+            user_id=user.id, title=outline.get("title", "未命名PPT"),
+            subtitle=outline.get("subtitle", ""), source_type=body.source_type,
+            source_content=(body.topic or body.content or "")[:2000],
+            outline=outline, status="draft"))
+        yield _sse({"type": "done", "data": {"doc_id": d.id, "outline": outline}})
 
     async def outline_from_doc(self, file, topic: str, audience: str, scene: str,
                                slide_count: int, user: User) -> dict:
         data = await file.read()
-        text = self._extract_upload_text(file.filename or "unnamed", data)
-        return self._do_outline(user, "document", topic, text, slide_count, audience, scene)
+        text = self._extract_any(file.filename or "unnamed", data)
+        return self._do_outline(user, "document", topic, text, slide_count, audience, scene,
+                                material_names=[file.filename] if file.filename else None)
+
+    # ================= 已有 PPT 导入续改 =================
+    async def import_pptx(self, file, user: User) -> dict:
+        """上传已有 .pptx 继续修改：解析为可编辑大纲并创建文档（状态 draft）。
+        之后走与新建文档完全相同的编辑 / AI 逐页修改 / 导出链路。"""
+        if not (file.filename or "").lower().endswith(".pptx"):
+            raise AppError(400, "仅支持 .pptx 文件")
+        data = await file.read()
+        if not data:
+            raise AppError(400, "文件内容为空")
+        if len(data) > 50 * 1024 * 1024:
+            raise AppError(400, "文件过大（限 50MB）")
+        if not zipfile.is_zipfile(io.BytesIO(data)):
+            raise AppError(400, "文件损坏或不是有效的 .pptx 文件")
+        try:
+            outline = ppt_engine.outline_from_pptx(data)
+        except RuntimeError as e:
+            raise AppError(400, str(e))
+        d = self.documents.add(PPTDocument(
+            user_id=user.id, title=outline.get("title", "导入的PPT"),
+            subtitle=outline.get("subtitle", ""), source_type="import",
+            source_content=(file.filename or "")[:200], outline=outline, status="draft"))
+        return {"doc_id": d.id, "outline": outline,
+                "message": f"已导入「{file.filename}」，共 {len(outline.get('slides') or [])} 页，"
+                           "可逐页编辑或让 AI 修改"}
 
     def _resolve_template(self, template_id: Optional[str],
                           fallback_theme: str = "") -> Tuple[Dict, Optional[PPTTemplate]]:
@@ -624,21 +802,21 @@ class PPTService:
     def ai_slide_action(self, body) -> dict:
         try:
             return {"slide": ppt_engine.ai_slide_action(
-                self.assistant, body.action, body.slide, body.instruction)}
+                self._ppt_assistant(), body.action, body.slide, body.instruction)}
         except RuntimeError as e:
             raise AIServiceError(str(e))
 
     def ai_visual(self, body) -> dict:
         try:
             return {"slide": ppt_engine.ai_generate_visual(
-                self.assistant, body.kind, body.slide, body.instruction)}
+                self._ppt_assistant(), body.kind, body.slide, body.instruction)}
         except RuntimeError as e:
             raise AIServiceError(str(e))
 
     def ai_structure(self, body) -> dict:
         try:
             slides = ppt_engine.ai_structure_action(
-                self.assistant, body.action, body.slides, body.index, body.instruction)
+                self._ppt_assistant(), body.action, body.slides, body.index, body.instruction)
             return {"slides": slides}
         except (RuntimeError, IndexError) as e:
             raise AIServiceError(str(e))
