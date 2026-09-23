@@ -794,7 +794,11 @@ def ai_slide_action(assistant, action: str, slide: Dict, instruction: str = "") 
     updated = json.loads(m.group(0))
     merged = {**slide, **updated, "id": slide.get("id") or uuid.uuid4().hex[:8]}
     merged.pop("_image", None)
-    return normalize_outline({"slides": [merged]})["slides"][0]
+    # 注意：normalize_outline() 会恒定保证"首屏 cover、末屏 closing"，对单页调用时
+    # 会在 index 0 插入一页合成封面，因此**不能**按索引取 ["slides"][0]，
+    # 必须按 id 取回真正被改写的那一页（merged["id"] 上面已保证非空）。
+    slides = normalize_outline({"slides": [merged]})["slides"]
+    return next((s for s in slides if s.get("id") == merged["id"]), merged)
 
 
 def ai_generate_visual(assistant, kind: str, slide: Dict, instruction: str = "") -> Dict:
