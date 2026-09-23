@@ -384,19 +384,40 @@ class WritingViewModel(
 
     // ---------------- 起草 / 继续生成 / 修改 ----------------
 
-    /** 起草初稿；已有正文时即「继续生成」：按当前参数重新起草并沉淀为新版本（v2/v3…） */
+    /**
+     * 起草初稿；已有正文时即「继续生成」：按当前参数重新起草并沉淀为新版本（v2/v3…）。
+     * 优先走 SSE 流式接口：正文边生成边在中栏上屏；
+     * 服务端未部署流式接口（HTTP 404）时自动回退为一次性生成。
+     */
     fun draft(outlineOnly: Boolean = false) {
         val id = task.taskId ?: return
         if (busy) return
         busy = true
+        status = null
         activeJob = scope.launch {
-            when (val r = repo.draft(id, outlineOnly)) {
-                is ApiResult.Ok -> r.data?.let { d ->
+            var streamed = false
+            val r = repo.draftStream(id, outlineOnly) { delta ->
+                streamed = true
+                content += delta
+            }
+            when {
+                r is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
                     d["reply"].str().takeIf { it.isNotBlank() }
                         ?.let { messages = messages + TaskChatMessage("assistant", it) }
                 }
-                is ApiResult.Err -> fail(r.message)
+                r is ApiResult.Err && r.status == 404 && !streamed -> {
+                    // 服务端尚未升级流式接口：回退非流式起草
+                    when (val r2 = repo.draft(id, outlineOnly)) {
+                        is ApiResult.Ok -> r2.data?.let { d ->
+                            applyResponse(d)
+                            d["reply"].str().takeIf { it.isNotBlank() }
+                                ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                        }
+                        is ApiResult.Err -> fail(r2.message)
+                    }
+                }
+                r is ApiResult.Err -> fail(r.message)
             }
             busy = false
         }

@@ -17,8 +17,10 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
@@ -26,6 +28,8 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -258,6 +262,50 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
     suspend fun post(path: String, body: Any? = null, timeoutMs: Long? = null) =
         req(HttpMethod.Post, path, body, emptyMap(), timeoutMs)
 
+    /**
+     * 流式 POST（SSE）：用于写作起草等长耗时生成。
+     * 逐行解析 `data: {...}` 事件并回调给调用方；整流结束返回 Ok(Unit)。
+     * 「取消生成」走协程取消：CancellationException 原样上抛，不当作错误。
+     * HTTP 层失败（含 404，服务端未部署流式接口）返回 Err，由调用方决定回退。
+     */
+    suspend fun postStream(
+        path: String, body: Any?, timeoutMs: Long = 600_000,
+        onEvent: (JsonObject) -> Unit,
+    ): ApiResult<Unit> {
+        val url = configProvider().apiBase + path
+        return try {
+            var failure: ApiResult.Err? = null
+            client(timeoutMs).use { c ->
+                c.preparePost(url) {
+                    auth()
+                    contentType(ContentType.Application.Json)
+                    setBody(body.toJsonElement())
+                }.execute { r ->
+                    if (!r.status.isSuccess()) {
+                        failure = ApiResult.Err(r.status.value,
+                            errMsg(r.status.value, r.body(), null))
+                        return@execute
+                    }
+                    val channel = r.bodyAsChannel()
+                    while (!channel.isClosedForRead) {
+                        val line = channel.readUTF8Line() ?: break
+                        if (!line.startsWith("data:")) continue
+                        val payload = line.substring(5).trim()
+                        if (payload.isEmpty()) continue
+                        runCatching { json.parseToJsonElement(payload) as? JsonObject }
+                            .getOrNull()?.let(onEvent)
+                    }
+                }
+            }
+            failure ?: ApiResult.Ok(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ClientLog.error("流式请求 $path 失败", e)
+            ApiResult.Err(null, friendlyMessage(e))
+        }
+    }
+
     suspend fun put(path: String, body: Any? = null) = req(HttpMethod.Put, path, body)
 
     /** 局部更新（重命名等）：与 PUT 完全同构，仅 HTTP 方法不同 */
@@ -447,4 +495,3 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         } catch (e: Exception) { null }
     }
 }
-
