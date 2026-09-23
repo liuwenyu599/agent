@@ -18,6 +18,19 @@ class LLMGateway(Protocol):
         """同步对话补全，返回模型文本。失败抛 app.core.exceptions.AIServiceError。"""
         ...
 
+    def complete_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> Any:
+        """流式补全：逐段 yield 增量文本（可选实现）。
+
+        调用方必须用 getattr(gateway, "complete_stream", None) 兜底，
+        未实现的网关（如 mock）降级为 complete 一次性返回。
+        """
+        ...
+
     @property
     def model_name(self) -> str:
         ...

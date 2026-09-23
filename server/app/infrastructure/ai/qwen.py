@@ -2,7 +2,8 @@
 
 业务模块一律通过 application.ports.LLMGateway 调用，禁止直接 HTTP 调模型服务。
 """
-from typing import Dict, List, Optional
+import json
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import requests
 
@@ -40,12 +41,12 @@ class QwenGateway:
     def model_name(self) -> str:
         return self.model
 
-    def complete(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ) -> str:
+    # ---- 请求准备（complete 与 complete_stream 共用） ----
+
+    def _prepare(self, messages: List[Dict[str, str]],
+                 temperature: Optional[float],
+                 max_tokens: Optional[int]) -> Tuple[List[Dict[str, str]], int, float]:
+        """上下文预算保护：返回 (裁剪后消息, 安全 max_tokens, 温度)。"""
         # 不传时取全局配置：温度与最大输出统一由 .env 调节，不再硬编码
         if temperature is None:
             temperature = settings.MODEL_TEMPERATURE
@@ -75,25 +76,25 @@ class QwenGateway:
             safe_max_tokens = max(1, min(256, ctx_limit - estimated - 50))
 
         logger.info("[AI网关] 估算输入: ~%d tokens, max_tokens: %d", estimated, safe_max_tokens)
+        return messages, safe_max_tokens, temperature
 
+    def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
 
+    def _post(self, payload: Dict, stream: bool = False) -> requests.Response:
         try:
             response = requests.post(
                 f"{self.api_url}/chat/completions",
-                headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": safe_max_tokens,
-                    "top_p": 0.9,
-                },
+                headers=self._headers(),
+                json=payload,
                 timeout=self.timeout,
+                stream=stream,
             )
             response.raise_for_status()
+            return response
         except requests.exceptions.ConnectionError:
             raise AIServiceError(f"模型服务不可用，请检查 {self.api_url}")
         except requests.exceptions.Timeout:
@@ -102,6 +103,23 @@ class QwenGateway:
             detail = e.response.text[:500] if e.response is not None else str(e)
             logger.error("[AI网关] HTTP 错误: %s", detail)
             raise AIServiceError("模型调用失败")
+
+    def complete(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        messages, safe_max_tokens, temperature = self._prepare(
+            messages, temperature, max_tokens)
+
+        response = self._post({
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": safe_max_tokens,
+            "top_p": 0.9,
+        })
 
         result = response.json()
         choice = result["choices"][0]
@@ -112,6 +130,52 @@ class QwenGateway:
         if choice.get("finish_reason") == "length":
             logger.warning("[AI网关] 输出被 max_tokens 截断")
         return choice["message"]["content"]
+
+    def complete_stream(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """流式补全：逐段 yield 增量文本（OpenAI 兼容 SSE）。
+
+        供写作工作台「流式生成」使用：前端边收边显示，不再整段等待。
+        失败抛 app.core.exceptions.AIServiceError。
+        """
+        messages, safe_max_tokens, temperature = self._prepare(
+            messages, temperature, max_tokens)
+
+        response = self._post({
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": safe_max_tokens,
+            "top_p": 0.9,
+            "stream": True,
+        }, stream=True)
+
+        finish_reason = None
+        for raw in response.iter_lines(decode_unicode=True):
+            if not raw:
+                continue
+            line = raw.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                data = json.loads(payload)
+            except ValueError:
+                continue
+            for choice in data.get("choices") or []:
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+                delta = (choice.get("delta") or {}).get("content")
+                if delta:
+                    yield delta
+        if finish_reason == "length":
+            logger.warning("[AI网关] 流式输出被 max_tokens 截断")
 
     # ---- 上下文预算（移植自旧 llm_service）----
     @staticmethod
