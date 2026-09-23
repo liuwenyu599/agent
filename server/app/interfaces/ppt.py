@@ -1,9 +1,9 @@
 """PPT 助手路由。路径与响应结构与旧系统一致（/ppt/...）。"""
 import os
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.application.ppt.dto import (
@@ -141,6 +141,15 @@ async def upload_material(name: str = Form(...), caption: str = Form(""),
     return await svc.upload_material(name, caption, file, user)
 
 
+@router.post("/materials/analyze")
+async def analyze_materials(files: List[UploadFile] = File(...),
+                            user: User = Depends(get_current_user),
+                            svc: PPTService = Depends(get_ppt_service)):
+    """上传材料并逐份分析（doc/docx/pdf/txt/md/xlsx/xls/csv/pptx）：
+    返回每份文件的 AI 分析摘要 + 提取文本，让材料不再黑盒。"""
+    return await svc.analyze_materials(files, user)
+
+
 @router.put("/materials/{mid}")
 def update_material(mid: str, name: str = Form(...), caption: str = Form(""),
                     user: User = Depends(get_current_user),
@@ -168,6 +177,14 @@ def list_documents(tab: str = "all", keyword: Optional[str] = Query(None),
                    user: User = Depends(get_current_user),
                    svc: PPTService = Depends(get_ppt_service)):
     return svc.list_documents(user, tab, keyword)
+
+
+@router.post("/documents/import")
+async def import_document(file: UploadFile = File(...),
+                          user: User = Depends(get_current_user),
+                          svc: PPTService = Depends(get_ppt_service)):
+    """上传已有 .pptx 继续修改：解析为可编辑大纲，进入同一编辑/AI 修改链路。"""
+    return await svc.import_pptx(file, user)
 
 
 @router.get("/documents/{doc_id}")
@@ -240,6 +257,18 @@ def make_outline(body: OutlineIn,
                user: User = Depends(get_current_user),
                svc: PPTService = Depends(get_ppt_service)):
     return svc.make_outline(body, user)
+
+
+@router.post("/outline/stream")
+def outline_stream(body: OutlineIn,
+                   user: User = Depends(get_current_user),
+                   svc: PPTService = Depends(get_ppt_service)):
+    """流式大纲（SSE）：先推 stage 事件（正在理解材料/正在梳理大纲/校验保存），
+    最后推 done 携带权威大纲（含每页 sources 内容依据）。"""
+    return StreamingResponse(svc.outline_stream(body, user),
+                             media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @router.post("/outline-from-doc")
