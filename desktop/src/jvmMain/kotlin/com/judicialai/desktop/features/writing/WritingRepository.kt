@@ -105,6 +105,21 @@ class WritingRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    /** GET /writing/tasks/{id}/versions/{no} 查看历史版本内容 */
+    suspend fun getVersion(id: String, no: Int): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.version(id, no))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** POST .../versions/{no}/restore 回退到指定历史版本（当前内容先自动保存为新版本） */
+    suspend fun restoreVersion(id: String, no: Int): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.versionRestore(id, no),
+            emptyMap<String, Any?>())) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
     suspend fun export(id: String, redHeader: Boolean, target: File) =
         api.downloadGet(Endpoints.WritingTasks.export(id, redHeader), target)
 

@@ -4,6 +4,7 @@ import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.items
+import com.judicialai.desktop.core.utils.obj
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 
@@ -27,6 +28,20 @@ class KnowledgeRepository(private val api: ApiClient) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.items())
             is ApiResult.Err -> r
         }
+
+    /** GET /knowledge/documents/{id} 查看文档全文（含 content） */
+    suspend fun getDocument(docId: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.Knowledge.document(docId))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /** PUT /knowledge/documents/{id} 编辑标题/正文；正文变化时后端重新分块并重建该文档向量 */
+    suspend fun updateDocument(docId: String, title: String?, content: String?) =
+        api.put(Endpoints.Knowledge.document(docId), buildMap<String, Any?> {
+            if (title != null) put("title", title)
+            if (content != null) put("content", content)
+        })
 
     suspend fun upload(kbId: String, files: List<File>) =
         if (files.size == 1)

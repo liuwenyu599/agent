@@ -29,6 +29,14 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     var busy by mutableStateOf(false)
         private set
 
+    // ---- 文档查看 / 编辑弹窗 ----
+    var docDialogId by mutableStateOf<String?>(null)
+        private set
+    var docDialogTitle by mutableStateOf("")
+    var docDialogContent by mutableStateOf("")
+    var docDialogBusy by mutableStateOf(false)
+        private set
+
     /** 知识库分类：科室库 = public 且带 department_code */
     private fun kindOf(kb: JsonObject): String = when {
         kb["department_code"].str().isNotBlank() -> "department"
@@ -122,6 +130,54 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
                 is ApiResult.Ok -> loadDocs()
                 is ApiResult.Err -> status = r.message
             }
+        }
+    }
+
+    // ---- 文档查看 / 编辑 ----
+
+    /** 打开文档详情（全文内容），进入查看/编辑弹窗 */
+    fun openDocument(docId: String) {
+        if (docId.isBlank() || docDialogBusy) return
+        docDialogBusy = true
+        scope.launch {
+            when (val r = repo.getDocument(docId)) {
+                is ApiResult.Ok -> {
+                    val d = r.data
+                    if (d != null) {
+                        docDialogId = docId
+                        docDialogTitle = d["title"].str()
+                        docDialogContent = d["content"].str()
+                    } else {
+                        status = "文档内容为空"
+                    }
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            docDialogBusy = false
+        }
+    }
+
+    fun closeDocument() {
+        docDialogId = null
+        docDialogTitle = ""
+        docDialogContent = ""
+    }
+
+    /** 保存编辑：后端重新分块并重建该文档向量，检索内容同步更新 */
+    fun saveDocument() {
+        val id = docDialogId ?: return
+        if (docDialogBusy) return
+        docDialogBusy = true
+        scope.launch {
+            when (val r = repo.updateDocument(id, docDialogTitle, docDialogContent)) {
+                is ApiResult.Ok -> {
+                    status = "已保存，检索内容已同步更新"
+                    closeDocument()
+                    loadDocs()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            docDialogBusy = false
         }
     }
 }
