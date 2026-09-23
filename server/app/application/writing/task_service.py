@@ -8,6 +8,7 @@
 - 所有查询按 user_id 隔离。
 """
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.application.writing import task_parser
 from app.core.config import settings
+from app.infrastructure.database.models.knowledge import DocumentModel
 
 logger = logging.getLogger(__name__)
 
@@ -253,9 +255,12 @@ class WritingTaskService:
                 if h["doc_id"] in seen:
                     continue
                 seen.add(h["doc_id"])
+                # 展示名优先用文档标题（向量元数据里是块标题，用户看不懂）
+                _doc = self.db.get(DocumentModel, h["doc_id"])
+                _doc_title = (_doc.title if _doc else "") or h.get("title") or "未命名材料"
                 out.append({
                     "id": h["doc_id"],
-                    "label": h.get("title") or "未命名材料",
+                    "label": _doc_title,
                     "selected": len(out) < 3,
                     "note": "",
                 })
@@ -472,6 +477,7 @@ class WritingTaskService:
 
         text = self._llm_draft(instruction, sources, attachment_ctx, user_id,
                                template=template)
+        text = self._clean_markdown(text)
         if not text.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
 
@@ -581,6 +587,40 @@ class WritingTaskService:
         from app.application.documents.service import DocumentService
         return DocumentService(self.db).get_version(t.document_id, version_no, user_id)
 
+    def restore_version(self, task_id: str, user_id: str,
+                        version_no: int) -> Dict[str, Any]:
+        """回退到指定历史版本。
+
+        安全语义：回退前先把当前内容自动保存为一个新版本（不丢用户手改），
+        再把目标版本内容恢复为当前内容并同样形成一个新版本。
+        版本链只增不改，任何一步都可再次回退。
+        """
+        t = self._get_owned(task_id, user_id)
+        if not t.document_id:
+            raise HTTPException(status_code=404, detail="暂无版本")
+        from app.application.documents.service import DocumentService
+        ver = DocumentService(self.db).get_version(t.document_id, version_no, user_id)
+        content = (ver.get("content") or "").strip()
+        if not content:
+            raise HTTPException(status_code=409, detail="该版本内容为空，无法回退")
+
+        current = (t.current_content or "").strip()
+        if current and current != content:
+            # 回退前自动保存当前内容，防止手改内容丢失
+            self.db.flush()
+            self._snapshot(t, user_id, note=f"回退到 v{version_no} 前自动保存")
+
+        t.current_content = content
+        self.db.flush()
+        _, new_ver = self._snapshot(t, user_id, note=f"回退到 v{version_no}")
+        t.version_no = new_ver
+        t.updated_at = datetime.utcnow()
+        self.db.commit()
+
+        return {**self._to_dict(t),
+                "reply": f"已回退到 v{version_no} 的内容；回退前的内容已自动保存为新版本 v{new_ver}，可随时再次回退。",
+                "content_changed": True}
+
     def _render_docx(self, content: str, ctx: Dict[str, Any], red_header: bool):
         """把文本内容渲染为可编辑的带格式 docx（红头或普通排版）。"""
         from app.application.chat.docx_export import generate_official_document, markdown_to_docx
@@ -654,6 +694,19 @@ class WritingTaskService:
 
     # ---------------- 内部 ----------------
 
+    @staticmethod
+    def _clean_markdown(text: str) -> str:
+        """剥离模型可能输出的 Markdown 标记（公文应为纯文本排版）。"""
+        if not text:
+            return ""
+        t = re.sub(r"(?m)^#{1,6}\s*", "", text)                 # 标题井号
+        t = re.sub(r"\*\*(.+?)\*\*", r"\1", t)                  # 加粗
+        t = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", t)  # 斜体
+        t = re.sub(r"(?m)^\s*---+\s*$", "", t)                   # 分隔线
+        t = re.sub(r"(?m)^\s*[-*+]\s+", "", t)                   # 列表符
+        t = re.sub(r"\n{3,}", "\n\n", t)                         # 多余空行
+        return t.strip()
+
     def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool,
                                  template: Optional[Dict[str, Any]] = None) -> str:
         parts = ["请起草一份公文提纲。" if outline_only else "请起草一份公文。"]
@@ -687,6 +740,16 @@ class WritingTaskService:
             parts.append(f"全文约 {template['word_count']} 字。")
         if ctx.get("tone"):
             parts.append(f"语气风格：{ctx['tone']}。")
+        if not outline_only:
+            parts.append(
+                "\n严格要求：\n"
+                "1) 必须输出完整公文，禁止提纲、片段、列表；\n"
+                "2) 结构完整：标题、主送机关、正文、落款单位、成文日期；\n"
+                "3) 正文分 6-8 个章节，每章节 200 字以上，全文不少于 1800 字；\n"
+                "4) 禁止使用任何 Markdown 标记：不要 ###、####、**、---、-、* 等；\n"
+                "5) 直接以纯文本输出，段落之间用一个空行分隔；\n"
+                "6) 语言规范、正式、符合党政机关公文写作惯例。"
+            )
         return "".join(parts)
 
     def _build_revise_prompt(self, current: str, instruction: str,
