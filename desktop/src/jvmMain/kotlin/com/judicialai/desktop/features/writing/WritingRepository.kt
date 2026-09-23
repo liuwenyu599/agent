@@ -62,13 +62,40 @@ class WritingRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
-    /** POST /writing/tasks/{id}/draft 生成初稿 */
+    /** POST /writing/tasks/{id}/draft 生成初稿（非流式，流式接口不可用时的回退） */
     suspend fun draft(id: String, outlineOnly: Boolean = false): ApiResult<JsonObject?> =
         when (val r = api.post(Endpoints.WritingTasks.draft(id),
             mapOf("outline_only" to outlineOnly), timeoutMs = 300_000)) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
             is ApiResult.Err -> r
         }
+
+    /**
+     * POST /writing/tasks/{id}/draft/stream 流式起草（SSE）。
+     * delta 事件回调 onDelta 供渐进展示；done 事件携带权威结果作为返回值；
+     * error 事件 / 传输失败转为 Err。
+     */
+    suspend fun draftStream(
+        id: String, outlineOnly: Boolean = false,
+        onDelta: (String) -> Unit,
+    ): ApiResult<JsonObject?> {
+        var done: JsonObject? = null
+        var streamError: String? = null
+        val r = api.postStream(
+            Endpoints.WritingTasks.draftStream(id),
+            mapOf("outline_only" to outlineOnly),
+        ) { ev ->
+            when (ev["type"].str()) {
+                "delta" -> onDelta(ev["text"].str())
+                "done" -> done = ev["data"].obj()
+                "error" -> streamError = ev["message"].str().ifBlank { "生成失败，请重试" }
+            }
+        }
+        done?.let { return ApiResult.Ok(it) }
+        streamError?.let { return ApiResult.Err(null, it) }
+        if (r is ApiResult.Err) return r
+        return ApiResult.Err(null, "生成中断，请重试")
+    }
 
     /** POST /writing/tasks/{id}/revise 修改当前文档（核心：作用于 currentContent） */
     suspend fun revise(

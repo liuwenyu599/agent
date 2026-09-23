@@ -58,6 +58,8 @@ object Endpoints {
         fun item(id: String) = "/writing/tasks/$id"
         fun chat(id: String) = "/writing/tasks/$id/chat"
         fun draft(id: String) = "/writing/tasks/$id/draft"
+        /** 流式起草（SSE）：正文边生成边推，最后推 done 携带权威结果 */
+        fun draftStream(id: String) = "/writing/tasks/$id/draft/stream"
         fun revise(id: String) = "/writing/tasks/$id/revise"
         fun versions(id: String) = "/writing/tasks/$id/versions"
         fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
