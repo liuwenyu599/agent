@@ -49,7 +49,7 @@ class PptRepository(private val api: ApiClient) {
         api.postStream(Endpoints.Ppt.OUTLINE_STREAM, body,
             timeoutMs = 300_000, onEvent = onEvent)
 
-    /** 材料分析：多文件上传，逐份返回 {filename, chars, summary, text} */
+    /** 材料分析：多文件上传，逐份返回 {filename, chars, summary, key_points, tables, text} + totals */
     suspend fun analyzeMaterials(files: List<File>) =
         api.upload(Endpoints.Ppt.MATERIALS_ANALYZE, "files", files, timeoutMs = 300_000)
 
@@ -63,6 +63,10 @@ class PptRepository(private val api: ApiClient) {
     suspend fun saveDraft(id: String, title: String, outline: JsonObject, templateId: String?) =
         api.put(Endpoints.Ppt.documentDraft(id),
             mapOf("title" to title, "outline" to outline, "template_id" to templateId))
+
+    /** 渲染当前草稿为逐页 PNG 预览 → {pages: [url...], count} */
+    suspend fun preview(id: String) =
+        api.post(Endpoints.Ppt.documentPreview(id), emptyMap<String, Any?>(), timeoutMs = 300_000)
 
     /** 单页局部修改：action = rewrite / expand / condense / custom */
     suspend fun aiSlideAction(action: String, slide: JsonObject, instruction: String) =

@@ -129,9 +129,13 @@ object Endpoints {
         const val DOCUMENT_IMPORT = "/ppt/documents/import"
         fun document(id: String) = "/ppt/documents/$id"
         fun documentDraft(id: String) = "/ppt/documents/$id/draft"
+        /** 渲染当前草稿为逐页 PNG 预览（工作台中栏真实版式） */
+        fun documentPreview(id: String) = "/ppt/documents/$id/preview"
         fun documentExport(id: String) = "/ppt/documents/$id/export"
         fun documentDownload(id: String) = "/ppt/documents/$id/download"
         fun documentDelete(id: String) = "/ppt/documents/$id"
+        /** 预览图（GET，name 为 pg-N.png） */
+        fun previewImage(docId: String, name: String) = "/ppt/preview/$docId/$name"
         /** 单页局部修改（润色/扩写/精简/重写/自定义） */
         const val AI_SLIDE_ACTION = "/ppt/ai/slide-action"
         /** 结构调整（新增/拆分/合并页） */
