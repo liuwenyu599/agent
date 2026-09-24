@@ -22,9 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
-import androidx.compose.material.Button
-import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Checkbox
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
@@ -50,9 +47,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppScreen
@@ -68,6 +69,7 @@ import com.judicialai.desktop.design.components.AiWorkingRow
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.AppIconButton
 import com.judicialai.desktop.design.components.AppLinkButton
 import com.judicialai.desktop.design.components.AppSegmentedTabs
@@ -221,49 +223,94 @@ private fun WritingFailedBanner(message: String, onDismiss: () -> Unit) {
     }
 }
 
-/** 历史版本预览：可查看全文并回退（回退前当前内容由后端自动保存为新版本） */
+/** 历史版本预览：带格式渲染全文，可回退（回退前当前内容由后端自动保存为新版本） */
 @Composable
 private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
     val no = v["version_no"].int()
     val note = v["note"].str().ifBlank { "自动保存" }
     val body = v["content"].str()
-    AlertDialog(
+    AppDialog(
         onDismissRequest = { vm.closeVersionPreview() },
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("历史版本 v$no", fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f))
-                Text(note, fontSize = 12.sp, color = Muted, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-            }
-        },
-        text = {
-            Column {
-                Box(
-                    Modifier.fillMaxWidth().height(420.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    Text(
-                        body.ifBlank { "（该版本无正文内容）" },
-                        fontSize = 13.sp, color = Ink, lineHeight = 22.sp,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Text("约 ${body.length} 字 · 回退不会丢失当前内容（自动保存为新版本）",
-                    fontSize = 11.sp, color = Muted)
-            }
-        },
-        confirmButton = {
-            Button(
+        title = "历史版本 v$no",
+        subtitle = "$note · 约 ${body.length} 字 · 回退不会丢失当前内容（自动保存为新版本）",
+        width = 640.dp,
+        actions = {
+            AppButton("关闭", onClick = { vm.closeVersionPreview() },
+                kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton(if (vm.busy) "回退中…" else "回退到此版本",
                 onClick = { vm.restoreVersion(no) },
-                enabled = !vm.busy && body.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
-            ) { Text(if (vm.busy) "回退中…" else "回退到此版本", color = OnPrimaryText) }
+                enabled = !vm.busy && body.isNotBlank())
         },
-        dismissButton = {
-            TextButton(onClick = { vm.closeVersionPreview() }) { Text("关闭") }
-        },
-    )
+    ) {
+        if (body.isBlank()) {
+            Text("（该版本无正文内容）", fontSize = 13.sp, color = Muted)
+        } else {
+            MarkdownText(body)
+        }
+    }
+}
+
+// ---------------- Markdown 轻量渲染（预览模式） ----------------
+
+/** 行内格式：解析 **粗体**，其余原样输出 */
+private fun inlineMd(text: String): AnnotatedString = buildAnnotatedString {
+    val regex = Regex("\\*\\*(.+?)\\*\\*")
+    var last = 0
+    for (m in regex.findAll(text)) {
+        append(text.substring(last, m.range.first))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
+        last = m.range.last + 1
+    }
+    append(text.substring(last))
+}
+
+private val OrderedListRegex = Regex("^\\d+\\.\\s+.*")
+
+/**
+ * 公文 Markdown 轻量渲染：标题（# / ## / ###）、无序/有序列表、分割线、粗体。
+ * 用于写作区「预览模式」与历史版本预览，让正文以带格式的方式呈现而不是裸 txt。
+ */
+@Composable
+private fun MarkdownText(text: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        text.split('\n').forEach { line ->
+            val t = line.trimEnd()
+            val s = t.trim()
+            when {
+                s.isBlank() -> Spacer(Modifier.height(4.dp))
+                s == "---" || s == "***" || s == "___" -> {
+                    Spacer(Modifier.height(4.dp)); Hairline(); Spacer(Modifier.height(4.dp))
+                }
+                s.startsWith("### ") -> Text(
+                    inlineMd(s.removePrefix("### ")), fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold, color = Ink, lineHeight = 22.sp)
+                s.startsWith("## ") -> Text(
+                    inlineMd(s.removePrefix("## ")), fontSize = 16.5.sp,
+                    fontWeight = FontWeight.Bold, color = Ink, lineHeight = 24.sp)
+                s.startsWith("# ") -> Text(
+                    inlineMd(s.removePrefix("# ")), fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold, color = Ink, lineHeight = 26.sp,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                s.startsWith("- ") || s.startsWith("* ") -> Row {
+                    Text("•  ", fontSize = 14.5.sp, color = Ink)
+                    Text(inlineMd(s.substring(2)), fontSize = 14.5.sp, color = Ink,
+                        lineHeight = 26.sp)
+                }
+                OrderedListRegex.matches(s) -> {
+                    val idx = s.indexOf('.')
+                    Row {
+                        Text(s.substring(0, idx + 1) + "  ", fontSize = 14.5.sp, color = Ink)
+                        Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 14.5.sp,
+                            color = Ink, lineHeight = 26.sp)
+                    }
+                }
+                s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
+                    lineHeight = 20.sp)
+                else -> Text(inlineMd(s), fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp)
+            }
+        }
+    }
 }
 
 // ---------------- 零门槛入口 ----------------
@@ -844,6 +891,9 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
 
         // 文档纸张
         DocumentSurface(modifier = Modifier.weight(1f), padding = Dimens.space6) {
+            // 正文默认「预览」：带格式渲染（标题/粗体/列表），不再是裸 txt；
+            // 需要改动时切到「编辑」，回到 Markdown 源文编辑框。
+            var editing by remember { mutableStateOf(false) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TagChip("V${maxOf(vm.versionNo, 1)}", fg = Warn, bg = WarnSoft)
                 Spacer(Modifier.width(Dimens.space2))
@@ -851,7 +901,9 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 Spacer(Modifier.weight(1f))
                 if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
                     Text(vm.task.documentNumber, fontSize = 11.5.sp, color = Muted)
+                    Spacer(Modifier.width(Dimens.space3))
                 }
+                AppLinkButton(if (editing) "完成编辑" else "编辑正文") { editing = !editing }
             }
             Spacer(Modifier.height(Dimens.space4))
             if (vm.task.title.isNotBlank()) {
@@ -862,19 +914,28 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
             }
             Hairline()
             Spacer(Modifier.height(Dimens.space3))
-            OutlinedTextField(
-                value = vm.content,
-                onValueChange = { vm.content = it },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp),
-                shape = RoundedCornerShape(Dimens.radiusMd),
-                colors = TextFieldDefaults.outlinedTextFieldColors(
-                    backgroundColor = Surface,
-                    focusedBorderColor = LineSubtle,
-                    unfocusedBorderColor = Color.Transparent,
-                    cursorColor = Primary),
-            )
+            if (editing) {
+                OutlinedTextField(
+                    value = vm.content,
+                    onValueChange = { vm.content = it },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp),
+                    shape = RoundedCornerShape(Dimens.radiusMd),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        backgroundColor = Surface,
+                        focusedBorderColor = LineSubtle,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = Primary),
+                )
+            } else {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    MarkdownText(vm.content)
+                }
+            }
             Spacer(Modifier.height(Dimens.space3))
             val versionText = if (vm.versionNo > 0) "版本 v${vm.versionNo}" else "未保存版本"
             val stateText = if (vm.busy) "助手处理中" else "已就绪"
