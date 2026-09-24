@@ -109,7 +109,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
                     Column(Modifier.weight(1f)) {
                         Text("公共工作流", fontSize = 18.sp, fontWeight = FontWeight.Bold,
                             color = TextPrimary)
-                        Text("提供常用办公流程模板，支持一键创建，智能生成各类材料",
+                        Text("提供常用办公流程模板，支持一键创建，智能生成各类材料；创建后可用 AI 调整节点",
                             fontSize = 12.sp, color = TextSecondary)
                     }
                     Button(onClick = { showCreate = filtered.firstOrNull() },
@@ -241,7 +241,7 @@ private fun WfTemplateCard(t: JsonObject, color: Color, onUse: () -> Unit) {
     }
 }
 
-/** 工作流详情：节点列表 + 生成/编辑内容（对应 Web WorkflowDetailView 核心） */
+/** 工作流详情：AI 调整流程 + 节点列表 + 生成/编辑内容 */
 @Composable
 private fun WorkflowDetail(vm: WorkflowViewModel, inst: JsonObject) {
     Column(Modifier.fillMaxSize().padding(20.dp),
@@ -257,6 +257,39 @@ private fun WorkflowDetail(vm: WorkflowViewModel, inst: JsonObject) {
             Spacer(Modifier.width(10.dp))
             StatusTag(inst["status"].str())
         }
+
+        // AI 调整流程：流程不是死模板，用自然语言说明怎么改
+        // （增/删节点、改写作要求、调顺序）；同名节点已写内容保留不丢
+        var adjustText by remember { mutableStateOf("") }
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = adjustText,
+                onValueChange = { adjustText = it },
+                placeholder = {
+                    Text("让 AI 调整流程，例如：去掉简报节点，在纪要后加一个整改清单",
+                        fontSize = 12.sp, color = TextSecondary)
+                },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                enabled = !vm.adjusting,
+                colors = TextFieldDefaults.outlinedTextFieldColors(
+                    focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+            )
+            Button(
+                onClick = {
+                    vm.adjust(inst["id"].str(), adjustText)
+                    adjustText = ""
+                },
+                enabled = !vm.adjusting && adjustText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+                shape = RoundedCornerShape(6.dp),
+            ) {
+                Text(if (vm.adjusting) "AI 调整中…" else "AI 调整流程",
+                    color = Color.White, fontSize = 12.sp)
+            }
+        }
+
         vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -342,4 +375,3 @@ private fun StatusTag(status: String) {
         Text(text, fontSize = 11.sp, color = color)
     }
 }
-

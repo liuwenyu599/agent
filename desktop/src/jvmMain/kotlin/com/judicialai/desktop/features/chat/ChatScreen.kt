@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
@@ -35,7 +36,6 @@ import androidx.compose.material.CheckboxDefaults
 import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.Icon
 import androidx.compose.material.AlertDialog
-import androidx.compose.material.Button
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,9 +65,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
+import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
@@ -107,25 +110,26 @@ import com.judicialai.desktop.features.chat.model.HistoryCategory
 import com.judicialai.desktop.features.chat.model.HistoryItem
 
 /**
- * 历史记录：左列（对话 / 文档 / PPT 三类，可继续 · 重命名 · 删除）
- * + 右侧对话区（打开会话后继续聊，MessageList + InputArea）。
+ * 历史记录：左列（对话 / 文档 / PPT / 工作流 四类，可继续 · 重命名 · 删除）
+ * + 右侧区（打开会话后继续聊；打开文档时内嵌查看正文，不离开本入口）。
  * 右侧不再放「信息写作」快启面板，无会话时只给一句引导。
  */
 @Composable
 fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }) {
     LaunchedEffect(Unit) {
         vm.loadSessions()
-        // 历史记录：对话 / 文档 / PPT 三类各自读取（后端按当前登录用户过滤）
+        // 历史记录：对话 / 文档 / PPT / 工作流 四类各自读取（后端按当前登录用户过滤）
         vm.loadHistory(HistoryCategory.CHAT)
         vm.loadHistory(HistoryCategory.DOC)
         vm.loadHistory(HistoryCategory.PPT)
+        vm.loadHistory(HistoryCategory.WORKFLOW)
     }
 
     var renameTarget by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteTarget by remember { mutableStateOf<HistoryItem?>(null) }
 
     Row(Modifier.fillMaxSize()) {
-        // ===== 左侧记录列：对话 / 文档 / PPT，可继续 · 重命名 · 删除 =====
+        // ===== 左侧记录列：对话 / 文档 / PPT / 工作流，可继续 · 重命名 · 删除 =====
         Column(Modifier.width(300.dp).fillMaxHeight().background(SurfaceDeep)) {
             Row(
                 Modifier.fillMaxWidth().height(60.dp).background(Surface)
@@ -142,7 +146,7 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
                 )
             }
             Hairline()
-            // 历史记录分类：对话 / 文档 / PPT，全部为「我生成的」内容
+            // 历史记录分类：对话 / 文档 / PPT / 工作流，全部为「我生成的」内容
             AppSegmentedTabs(
                 tabs = HistoryCategory.values().map { it.label },
                 selectedIndex = vm.historyCategory.ordinal,
@@ -175,7 +179,7 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         }
         Box(Modifier.width(1.dp).fillMaxHeight().background(Line))
 
-        // ===== 右侧：打开会话后继续对话（MessageList + InputArea 保留） =====
+        // ===== 右侧：打开会话继续对话；打开文档时内嵌查看（不离开历史记录入口） =====
         Column(Modifier.weight(1f).fillMaxHeight().background(AppBg)) {
             vm.historyMessage?.let { msg ->
                 NoticeBar(
@@ -186,9 +190,16 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
                 )
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (vm.messages.isEmpty()) EmptyChatHint() else MessageList(vm)
+                when {
+                    vm.openedDoc != null || vm.openedDocLoading -> InlineDocView(vm)
+                    vm.messages.isEmpty() -> EmptyChatHint()
+                    else -> MessageList(vm)
+                }
             }
-            InputArea(vm)
+            // 文档内嵌查看时隐藏对话输入区，避免「对着文档说话」的错觉
+            if (vm.openedDoc == null && !vm.openedDocLoading) {
+                InputArea(vm)
+            }
         }
     }
 
@@ -287,11 +298,18 @@ private fun HistoryEmptyState(category: HistoryCategory) {
                 HistoryCategory.CHAT -> "还没有对话记录"
                 HistoryCategory.DOC -> "还没有生成过文档"
                 HistoryCategory.PPT -> "还没有生成过 PPT"
+                HistoryCategory.WORKFLOW -> "还没有发起过工作流"
             },
             fontSize = 13.sp, color = Ink2,
         )
         Spacer(Modifier.height(Dimens.space1))
-        Text("在「智能写作」或「PPT 助手」中生成后会出现在这里",
+        Text(
+            when (category) {
+                HistoryCategory.CHAT -> "点右上角「新对话」开始，记录会出现在这里"
+                HistoryCategory.DOC -> "在「智能写作」中生成后会出现在这里"
+                HistoryCategory.PPT -> "在「PPT 助手」中生成后会出现在这里"
+                HistoryCategory.WORKFLOW -> "在「科室空间 · 工作流」中创建后会出现在这里"
+            },
             fontSize = 11.5.sp, color = Muted)
     }
 }
@@ -314,8 +332,58 @@ private fun EmptyChatHint() {
         Spacer(Modifier.height(Dimens.space4))
         Text("从左侧选择一条记录继续，或点「新对话」开始", fontSize = 14.sp, color = Ink2)
         Spacer(Modifier.height(Dimens.space1))
-        Text("文档会直接打开这一条，PPT 会打开 PPT 工作台；这里用于继续对话",
+        Text("文档在历史记录内直接打开；PPT 跳到工作台继续对话修改；工作流跳到「科室空间 · 工作流」",
             fontSize = 12.sp, color = Muted)
+    }
+}
+
+/**
+ * 文档内嵌查看：点文档不离开历史记录入口，左侧仍可切换其他记录。
+ * 只读查看正文；需要编辑/存版本/导出时再带 id 跳「我的文档」页。
+ */
+@Composable
+private fun InlineDocView(vm: ChatViewModel) {
+    val doc = vm.openedDoc
+    Column(Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { vm.closeInlineDoc() }) {
+                Text("← 返回对话区", color = EpPrimary, fontSize = 13.sp)
+            }
+            Spacer(Modifier.weight(1f))
+            if (doc != null) {
+                Button(
+                    onClick = {
+                        // 带 id 跳文档页：DocumentsScreen 消费后直接打开这一条进入编辑
+                        AppState.pendingDocumentId = doc["id"].str()
+                        AppState.navigate(AppScreen.DOCUMENTS)
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+                    shape = RoundedCornerShape(6.dp),
+                ) { Text("前往文档页编辑 →", color = Color.White, fontSize = 12.sp) }
+            }
+        }
+        when {
+            vm.openedDocLoading -> LoadingBlock("正在打开文档…")
+            doc == null -> Text("文档加载失败或已被删除", fontSize = 13.sp, color = Muted)
+            else -> {
+                Text(doc["title"].str().ifBlank { "（未命名文档）" },
+                    fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Ink)
+                val meta = listOf(
+                    doc["document_number"].str(),
+                    doc["updated_at"].str().take(16).replace("T", " "),
+                ).filter { it.isNotBlank() }.joinToString(" · ")
+                if (meta.isNotBlank()) Text(meta, fontSize = 12.sp, color = Muted)
+                Hairline()
+                SelectionContainer {
+                    Text(
+                        doc["content"].str().ifBlank { "（暂无内容）" },
+                        fontSize = 14.sp, lineHeight = 24.sp, color = TextPrimary,
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -338,6 +406,7 @@ private fun RenameDialog(
             HistoryCategory.CHAT -> "修改对话标题"
             HistoryCategory.DOC -> "修改文档标题"
             HistoryCategory.PPT -> "修改演示文稿标题"
+            HistoryCategory.WORKFLOW -> "修改工作流名称"
         },
         width = 460.dp,
         actions = {
@@ -390,6 +459,7 @@ private fun DeleteConfirmDialog(
                 HistoryCategory.CHAT -> "该对话的全部消息"
                 HistoryCategory.DOC -> "该文档及其全部版本"
                 HistoryCategory.PPT -> "该演示文稿"
+                HistoryCategory.WORKFLOW -> "该工作流及其全部节点内容"
             } + "将从你的记录中移除，且无法恢复。",
             fontSize = 12.5.sp, color = Ink2, lineHeight = 18.sp,
         )
@@ -400,16 +470,15 @@ private fun historyIconOf(category: HistoryCategory): ImageVector = when (catego
     HistoryCategory.CHAT -> Icons.Default.History
     HistoryCategory.DOC -> Icons.Default.Description
     HistoryCategory.PPT -> Icons.Default.PlayArrow
+    HistoryCategory.WORKFLOW -> Icons.Default.Share
 }
 
-/**
- * 「继续」按钮的说明文案：PPT 页没有按 id 打开既有演示的详情路由，
- * 所以这里不写成「继续」，如实写明是打开 PPT 工作台，避免做成打不开单条的假功能。
- */
+/** 「继续」按钮的说明文案：如实写明每类的打开方式 */
 private fun historyOpenLabelOf(category: HistoryCategory): String = when (category) {
     HistoryCategory.CHAT -> "继续对话"
-    HistoryCategory.DOC -> "打开这一条文档"
-    HistoryCategory.PPT -> "打开 PPT 工作台"
+    HistoryCategory.DOC -> "在这里打开这条文档"
+    HistoryCategory.PPT -> "打开这条 PPT 继续修改"
+    HistoryCategory.WORKFLOW -> "打开工作流"
 }
 
 private fun historySubOf(item: HistoryItem): String =
@@ -688,7 +757,7 @@ private fun InputArea(vm: ChatViewModel) {
             if (writingIntent) {
                 TextButton(onClick = {
                     AppState.pendingWritingIntent = text
-                    AppState.screen = com.judicialai.desktop.app.AppScreen.WRITING
+                    AppState.navigate(AppScreen.WRITING)
                     text = ""
                 }) { Text("进入写作工作台 →", fontSize = 12.sp) }
             }
@@ -706,4 +775,3 @@ private fun InputArea(vm: ChatViewModel) {
         }
     }
 }
-
