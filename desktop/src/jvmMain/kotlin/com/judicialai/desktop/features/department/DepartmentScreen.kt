@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,15 +20,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Checkbox
 import androidx.compose.material.Icon
-import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
-import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Task
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -47,6 +45,7 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.AppLinkButton
 import com.judicialai.desktop.design.components.AppTextField
 import com.judicialai.desktop.design.components.ContextBlock
 import com.judicialai.desktop.design.components.EmptyLine
@@ -84,7 +83,7 @@ import com.judicialai.desktop.design.theme.SurfaceTonal
 /**
  * 科室空间（v4.0）
  *
- * 普通用户进入即本科室：身份 → 智能助手 → 常用业务 → 知识资源 → 科室模板。
+ * 普通用户进入即本科室：身份 → 智能助手 → 常用业务 → 知识资源 → 科室模板 → 工作流程。
  * 不复制 HOME 的四大功能，也不让用户选择其他科室。
  * 科室管理员在此基础上多一个「维护智能助手」入口（仅业务层）。
  */
@@ -109,7 +108,7 @@ fun DepartmentScreen() {
         ) {
             PageHeader(
                 title = vm.deptName.ifBlank { "本科室空间" },
-                subtitle = "常用业务、知识资源与科室模板",
+                subtitle = "常用业务、知识资源、科室模板与工作流程",
                 eyebrow = "科室空间",
                 actions = {
                     if (vm.agent?.canManage == true) {
@@ -140,6 +139,10 @@ fun DepartmentScreen() {
                 KnowledgeCard(vm, Modifier.weight(1f))
                 TemplateCard(vm, Modifier.weight(1f))
             }
+
+            // 工作流程：放在科室空间最下面，展示本科室工作流程列表，点进去进入工作流程平台
+            Spacer(Modifier.height(Dimens.space4))
+            WorkflowCard(vm)
 
             vm.status?.let {
                 Spacer(Modifier.height(Dimens.space4))
@@ -281,7 +284,7 @@ private fun AgentCard(vm: DepartmentViewModel, modifier: Modifier) {
     }
 }
 
-// ---------------- 常用业务 / 知识 / 模板 ----------------
+// ---------------- 常用业务 / 知识 / 模板 / 工作流程 ----------------
 
 @Composable
 private fun BusinessCard(vm: DepartmentViewModel, modifier: Modifier) {
@@ -375,6 +378,59 @@ private fun TemplateCard(vm: DepartmentViewModel, modifier: Modifier) {
                 }
             }
         }
+    }
+}
+
+/**
+ * 本科室工作流程：科室空间最底部的通栏卡片。
+ * 展示本科室可用工作流程列表；点击任意流程或底部入口进入工作流程平台。
+ * 不用 PanelCard（其内部 fillMaxHeight 不适配滚动列里的通栏卡片）。
+ */
+@Composable
+private fun WorkflowCard(vm: DepartmentViewModel) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space5),
+    ) {
+        SectionTitle("工作流程", icon = Icons.Default.Share)
+        Spacer(Modifier.height(Dimens.space3))
+        if (vm.workflows.isEmpty()) {
+            EmptyLine("暂无工作流程，可进入工作流程平台创建")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                vm.workflows.forEach { w ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(Dimens.radiusMd))
+                            .background(SurfaceTonal)
+                            .clickable { AppState.navigate(AppScreen.WORKFLOW) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(w.name, fontSize = 12.5.sp, color = Ink,
+                                fontWeight = FontWeight.Medium, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            if (w.description.isNotBlank()) {
+                                Text(w.description, fontSize = 11.5.sp, color = Muted,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        if (w.nodeCount > 0) {
+                            TagChip("$w.nodeCount 个节点", fg = Primary, bg = PrimarySoft)
+                            Spacer(Modifier.width(Dimens.space2))
+                        }
+                        Text("进入 →", fontSize = 11.5.sp, color = Primary)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(Dimens.space3))
+        AppLinkButton("进入工作流程平台 →",
+            onClick = { AppState.navigate(AppScreen.WORKFLOW) })
     }
 }
 
