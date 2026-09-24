@@ -8,6 +8,8 @@
 - 所有查询按 user_id 隔离；
 - 起草支持流式（draft_stream）：模型边生成边推给前端，完成后落库与非流式一致。
 - 未产生实际改动时如实告知，不声称"已修改"、不生成新版本。
+- 提纲式退化兜底：起草落库前检测，只给骨架的自动重写一次，不把「此处略去」
+  式占位稿交给用户（提示词是软约束，检测+重写是结构性防线）。
 """
 from app.core.timeutil import now_local
 import json
@@ -61,7 +63,10 @@ DRAFT_RULES = (
     "3. 必须生成完整成文：每个部分都展开为连贯、完整的正式段落，"
     "禁止只列提纲或要点清单，也禁止用「此处略去」「仅保留思路」「待补充」"
     "一类说明文字代替正文段落——缺少的只是具体数字，不是整段内容；\n"
-    "4. 结构完整：标题、主送（如适用）、正文、落款（如适用）。"
+    "4. 结构完整：标题、主送（如适用）、正文、落款（如适用）。\n"
+    "5. 输出前自检：逐节回看，凡是章节标题下面没有完整段落、只有「略」"
+    "「待补充」「仅保留思路」式说明的，一律重写该节为具体内容后再输出——"
+    "宁可写得概括，也不得只留骨架。"
 )
 
 # 正文末尾的落款行（机关署名）：导出时据此判断正文是否已自带落款，避免重复追加
@@ -566,7 +571,13 @@ class WritingTaskService:
         text = self._clean_markdown(text)
         if not text.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
-        return self._finalize_draft(t, ctx, text, sources, user_id)
+        # 提纲式退化兜底：只给骨架的自动重写一次，不把「此处略去」式占位稿落库
+        text, retried = self._regenerate_if_degenerate(
+            instruction, sources, attachment_ctx, user_id, template, text)
+        payload = self._finalize_draft(t, ctx, text, sources, user_id)
+        if retried:
+            payload["reply"] = "检测到初稿只有提纲，已自动重写为完整成文。" + payload["reply"]
+        return payload
 
     def draft_stream(self, task_id: str, user_id: str,
                      outline_only: bool = False) -> Iterator[str]:
@@ -575,6 +586,7 @@ class WritingTaskService:
         失败推 {"type":"error","message":...}。
 
         delta 是模型原始输出（未经后处理/清洗），仅用于展示；落库内容以 done 为准。
+        若 delta 呈现的内容检出提纲式退化，服务端会重写一次，done 携带重写后的成文。
         """
         try:
             t = self._get_owned(task_id, user_id)
@@ -596,13 +608,50 @@ class WritingTaskService:
             if not text.strip():
                 yield _sse({"type": "error", "message": "模型未返回内容，请重试"})
                 return
+            # 提纲式退化兜底：只给骨架的自动重写一次（done 携带重写后的成文）
+            text, retried = self._regenerate_if_degenerate(
+                instruction, sources, attachment_ctx, user_id, template, text)
             payload = self._finalize_draft(t, ctx, text, sources, user_id)
+            if retried:
+                payload["reply"] = "检测到初稿只有提纲，已自动重写为完整成文。" + payload["reply"]
             yield _sse({"type": "done", "data": payload})
         except HTTPException as e:
             yield _sse({"type": "error", "message": str(e.detail)})
         except Exception as e:  # 模型中断 / 网络异常 / 其他未预期错误
             logger.exception("[写作任务] 流式起草失败")
             yield _sse({"type": "error", "message": f"生成中断：{e}"})
+
+    def _regenerate_if_degenerate(self, instruction: str, sources,
+                                  attachment_ctx, user_id,
+                                  template: Optional[Dict[str, Any]],
+                                  text: str) -> tuple:
+        """提纲式退化兜底：检测命中就按「逐节展开」要求重写一次，取更完整者。
+
+        提示词约束是软约束，模型仍可能只给骨架；这里是结构性防线，
+        宁多一次生成，也不把「此处略去」式占位稿交给用户。
+        重写失败或重写后仍退化/更短时，返回原文（质量门仍会如实标 D 级）。
+        """
+        from app.application.writing.postprocessor import detect_outline_degeneration
+        if not detect_outline_degeneration(text):
+            return text, False
+        logger.warning("[写作任务] 检测到提纲式退化，自动重写一次")
+        retry_instruction = (
+            instruction +
+            "\n\n【重写要求】上一次输出只有章节标题和占位说明，是提纲不是公文，不合格。"
+            "请逐节展开为完整段落：每节写清工作思路、具体举措、责任分工与预期目标；"
+            "工作举措属于作者自主规划，必须写实写具体，"
+            "不得出现任何「略」「待补充」「仅保留思路」式占位文字。")
+        try:
+            retry = self._llm_draft(retry_instruction, sources, attachment_ctx,
+                                    user_id, template=template)
+            retry = self._clean_markdown(retry)
+        except Exception as e:
+            logger.warning("[写作任务] 退化重写失败: %s", e)
+            return text, False
+        if retry.strip() and not detect_outline_degeneration(retry) \
+                and len(retry) > len(text):
+            return retry, True
+        return text, False
 
     def _finalize_draft(self, t, ctx: Dict[str, Any], text: str,
                         sources: List[Dict], user_id: str) -> Dict[str, Any]:
@@ -920,7 +969,10 @@ class WritingTaskService:
                 "7) 严禁编造具体信息：不得虚构联系人姓名、联系电话、邮箱地址、网址；"
                 "如文中必须包含这类字段，请使用占位符「XX」或「XXXX-XXXXXXX」等，"
                 "不得出现任何看起来真实但可能虚假的具体号码、邮箱、人名；\n"
-                "8) 日期使用「2026年X月X日」占位，不要编造具体日期。"
+                "8) 日期使用「2026年X月X日」占位，不要编造具体日期。\n"
+                "9) 再次强调：第 7、8 条只针对外部事实（姓名、电话、文号、统计数字、"
+                "具体日期）；工作思路、具体举措、责任分工、预期目标属于作者自主规划，"
+                "必须逐节写实写具体，严禁用「略」「待补充」「仅保留思路」式说明顶替正文段落。"
             )
         return "".join(parts)
 
