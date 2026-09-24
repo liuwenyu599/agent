@@ -1,7 +1,7 @@
 """生成质量门：公文结构 + 硬伤检测。
 
 规则全部来自 V1.2/V1.3 验收验证过的实现：
-- 硬伤（level D）：占位符、退化循环、机械重复、截断、乱码
+- 硬伤（level D）：占位符、提纲式退化、退化循环、机械重复、截断、乱码
 - 待完善（level B）：结构缺失、偏短、相关性弱
 - A：结构完整无硬伤，可直接使用
 """
@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from app.application.writing.postprocessor import (
     detect_degeneration,
     detect_garbled,
+    detect_outline_degeneration,
     detect_placeholders,
     detect_repetition,
     detect_truncation,
@@ -31,6 +32,12 @@ class QualityGate:
         ph = detect_placeholders(text)
         if ph:
             critical.append(f"占位符：{ph[:3]}")
+
+        # 提纲式退化：只有章节骨架、正文被「略」式说明顶替，
+        # 是反虚构规则过度约束时的典型退化，按硬伤处理（触发自动重写）
+        od = detect_outline_degeneration(text)
+        if od:
+            critical.append(f"提纲式退化：{od}")
 
         dg = detect_degeneration(text)
         if dg:

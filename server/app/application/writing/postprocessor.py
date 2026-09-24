@@ -240,6 +240,34 @@ def detect_placeholders(text: str) -> List[str]:
     return list(dict.fromkeys(matches))
 
 
+# 提纲式退化：模型被反虚构规则过度约束时，容易只给章节骨架，
+# 用「略」式说明顶替正文。这类输出对用户没有价值，属于硬伤，必须检出。
+OUTLINE_DEGENERATION_PHRASES = [
+    "此处略去", "仅保留思路", "内容从略", "此处从略", "此处省略",
+    "略去具体", "内容略", "（略）", "(略)", "（略。", "具体措施略",
+]
+
+_HEADING_LINE_RE = re.compile(
+    r"^(一|二|三|四|五|六|七|八|九|十)+、|^（(一|二|三|四|五|六|七|八|九|十)+）")
+
+
+def detect_outline_degeneration(text: str) -> Optional[str]:
+    """提纲式退化检测：只有章节骨架、正文被「略/仅保留思路」式占位顶替。
+
+    与占位符检测（××、待补充）不同：这里针对的是模型整节不写的退化形态。
+    """
+    hits = [p for p in OUTLINE_DEGENERATION_PHRASES if p in text]
+    if hits:
+        return "正文出现占位说明：" + "、".join(hits[:2])
+    # 结构比检测：章节标题行占全部行数过半，说明只有骨架没有内容
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    if len(lines) >= 6:
+        headings = sum(1 for l in lines if _HEADING_LINE_RE.match(l))
+        if headings >= 4 and headings / len(lines) > 0.5:
+            return f"章节标题 {headings} 行占全部 {len(lines)} 行过半，只有提纲没有正文"
+    return None
+
+
 def detect_degeneration(text: str) -> Optional[str]:
     m = re.search(r"(.{8,60}?)\1{2,}", text, flags=re.DOTALL)
     if m:
