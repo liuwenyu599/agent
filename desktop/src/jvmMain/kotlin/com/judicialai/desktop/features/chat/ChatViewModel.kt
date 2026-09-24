@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.network.ApiResult
+import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.chat.model.ChatMessage
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /** 记录标题长度上限：与后端 String(200) 对齐 */
@@ -47,8 +49,8 @@ class ChatViewModel(
         private set
     var status by mutableStateOf<String?>(null)
 
-    // ---- 历史记录：只展示当前登录用户自己生成的内容（对话 / 文档 / PPT）----
-    /** 当前展示的历史分类；三类数据源见 [HistoryCategory] 注释（后端无统一类型字段） */
+    // ---- 历史记录：只展示当前登录用户自己生成的内容（对话 / 文档 / PPT / 工作流）----
+    /** 当前展示的历史分类；四类数据源见 [HistoryCategory] 注释（后端无统一类型字段） */
     var historyCategory by mutableStateOf(HistoryCategory.CHAT)
         private set
     var historyChats by mutableStateOf(listOf<HistoryItem>())
@@ -56,6 +58,8 @@ class ChatViewModel(
     var historyDocs by mutableStateOf(listOf<HistoryItem>())
         private set
     var historyPpts by mutableStateOf(listOf<HistoryItem>())
+        private set
+    var historyWorkflows by mutableStateOf(listOf<HistoryItem>())
         private set
     var historyLoading by mutableStateOf(false)
         private set
@@ -67,6 +71,12 @@ class ChatViewModel(
     var historyMessage by mutableStateOf<String?>(null)
         private set
     var historyMessageError by mutableStateOf(false)
+        private set
+
+    // ---- 文档内嵌查看：点文档不离开历史记录入口，左侧仍可切换其他记录 ----
+    var openedDoc by mutableStateOf<JsonObject?>(null)
+        private set
+    var openedDocLoading by mutableStateOf(false)
         private set
 
     /** 切换历史分类 */
@@ -82,7 +92,7 @@ class ChatViewModel(
     }
 
     /**
-     * 重命名记录：三类共用同一入口，各自 PATCH 自己的端点，
+     * 重命名记录：四类共用同一入口，各自 PATCH/PUT 自己的端点，
      * 成功后用后端返回值刷新当前分类（不本地伪造标题）。
      */
     fun renameHistory(item: HistoryItem, title: String) {
@@ -95,6 +105,7 @@ class ChatViewModel(
                 HistoryCategory.CHAT -> repo.renameSession(item.id, name)
                 HistoryCategory.DOC -> documentsRepo.rename(item.id, name)
                 HistoryCategory.PPT -> pptRepo.renameDocument(item.id, name)
+                HistoryCategory.WORKFLOW -> Repositories.workflow.renameInstance(item.id, name)
             }
             when (r) {
                 is ApiResult.Ok -> {
@@ -112,9 +123,9 @@ class ChatViewModel(
     }
 
     /**
-     * 删除记录：三类共用同一入口（对话走 /chat/sessions/{id}，
-     * 文档走 /documents/{id}，PPT 走 /ppt/documents/{id}）。
-     * 删除的是当前打开的会话时，右栏回到新建态。
+     * 删除记录：四类共用同一入口（对话走 /chat/sessions/{id}，
+     * 文档走 /documents/{id}，PPT 走 /ppt/documents/{id}，工作流走 /workflow/instances/{id}）。
+     * 删除的是当前打开的会话/文档时，右栏回到空态。
      */
     fun deleteHistory(item: HistoryItem) {
         if (historyBusy) return
@@ -125,11 +136,16 @@ class ChatViewModel(
                 HistoryCategory.CHAT -> repo.deleteSession(item.id)
                 HistoryCategory.DOC -> documentsRepo.delete(item.id)
                 HistoryCategory.PPT -> pptRepo.deleteDocument(item.id)
+                HistoryCategory.WORKFLOW -> Repositories.workflow.deleteInstance(item.id)
             }
             when (r) {
                 is ApiResult.Ok -> {
                     if (item.category == HistoryCategory.CHAT && currentSessionId == item.id) {
                         newSession()
+                    }
+                    if (item.category == HistoryCategory.DOC &&
+                        openedDoc?.get("id")?.str() == item.id) {
+                        closeInlineDoc()
                     }
                     refreshHistory(item.category)
                     historyMessage = "已删除「${item.title}」"
@@ -150,11 +166,12 @@ class ChatViewModel(
             HistoryCategory.CHAT -> loadSessions()
             HistoryCategory.DOC -> loadHistory(HistoryCategory.DOC)
             HistoryCategory.PPT -> loadHistory(HistoryCategory.PPT)
+            HistoryCategory.WORKFLOW -> loadHistory(HistoryCategory.WORKFLOW)
         }
     }
 
     /**
-     * 读取历史记录：按分类分别命中三个「后端已按当前用户过滤」的端点，
+     * 读取历史记录：按分类分别命中四个「后端已按当前用户过滤」的端点，
      * 不做任何客户端二次过滤之外的拼装，也不伪造任何类型。
      */
     fun loadHistory(category: HistoryCategory = historyCategory) {
@@ -173,6 +190,19 @@ class ChatViewModel(
                     is ApiResult.Ok -> historyPpts = r.data
                     is ApiResult.Err -> status = r.message
                 }
+                HistoryCategory.WORKFLOW ->
+                    when (val r = Repositories.workflow.instances()) {
+                        is ApiResult.Ok -> historyWorkflows = r.data.map { inst ->
+                            HistoryItem(
+                                id = inst["id"].str(),
+                                title = inst["title"].str().ifBlank { "（未命名工作流）" },
+                                category = HistoryCategory.WORKFLOW,
+                                time = inst["created_at"].str(),
+                                sub = inst["template_name"].str(),
+                            )
+                        }
+                        is ApiResult.Err -> status = r.message
+                    }
             }
             historyLoading = false
         }
@@ -183,6 +213,7 @@ class ChatViewModel(
         HistoryCategory.CHAT -> historyChats
         HistoryCategory.DOC -> historyDocs
         HistoryCategory.PPT -> historyPpts
+        HistoryCategory.WORKFLOW -> historyWorkflows
     }
 
     fun loadSessions() {
@@ -213,9 +244,11 @@ class ChatViewModel(
         messages = emptyList()
         attachments = emptyList()
         referenceTemplate = null
+        closeInlineDoc()
     }
 
     fun openSession(id: String) {
+        closeInlineDoc()
         currentSessionId = id
         scope.launch {
             when (val r = repo.listMessages(id)) {
@@ -225,22 +258,44 @@ class ChatViewModel(
         }
     }
 
+    /** 在历史记录入口内直接打开文档：不跳走，左侧仍可切换其他对话/文档/PPT/工作流 */
+    fun openDocumentInline(id: String) {
+        openedDocLoading = true
+        openedDoc = null
+        scope.launch {
+            when (val r = documentsRepo.detail(id)) {
+                is ApiResult.Ok -> {
+                    openedDoc = r.data
+                    if (r.data == null) status = "文档不存在或已被删除"
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            openedDocLoading = false
+        }
+    }
+
+    fun closeInlineDoc() {
+        openedDoc = null
+        openedDocLoading = false
+    }
+
     /**
      * 「继续」：
      * - 对话 → 载入右栏继续聊；
-     * - 文档 → 带 id 跳文档页，由 DocumentsScreen 消费后直接打开这一条（不是只落到列表页）；
-     * - PPT → 跳 PPT 工作台。PPT 页没有按 id 打开既有演示的详情路由，
-     *   所以这里不伪造「打开单条」，只跳转，按钮文案写明是「打开 PPT 工作台」。
+     * - 文档 → 在历史记录入口内直接打开（不离开本页），需要编辑时再带 id 跳文档页；
+     * - PPT → 带上文档 id 跳 PPT 工作台，由 PPT 页直接打开这条演示继续对话修改；
+     * - 工作流 → 跳工作流页（入口在「科室空间」）。
      */
     fun openHistoryItem(item: HistoryItem) {
         when (item.category) {
             HistoryCategory.CHAT -> openSession(item.id)
-            HistoryCategory.DOC -> {
-                // 先挂待消费参数再导航：navigate() 不清它，由目标页消费后置回 null
-                AppState.pendingDocumentId = item.id
-                AppState.navigate(AppScreen.DOCUMENTS)
+            HistoryCategory.DOC -> openDocumentInline(item.id)
+            HistoryCategory.PPT -> {
+                // 先挂待消费参数再导航：PPT 页消费后直接打开这条记录，可继续对话修改
+                AppState.pendingPptDocId = item.id
+                AppState.navigate(AppScreen.PPT)
             }
-            HistoryCategory.PPT -> AppState.navigate(AppScreen.PPT)
+            HistoryCategory.WORKFLOW -> AppState.navigate(AppScreen.WORKFLOW)
         }
     }
 
@@ -262,6 +317,9 @@ class ChatViewModel(
                     )
                     if (currentSessionId == null && r.data.sessionId != null) {
                         currentSessionId = r.data.sessionId
+                        loadSessions()
+                    } else if (currentSessionId != null) {
+                        // 首轮后服务端会用 AI 总结替换占位标题，刷新列表让新标题即时可见
                         loadSessions()
                     }
                     attachments = emptyList()
@@ -316,4 +374,3 @@ class ChatViewModel(
     fun lastAssistantMessage(): String =
         messages.lastOrNull { it.role == "assistant" }?.content ?: ""
 }
-
