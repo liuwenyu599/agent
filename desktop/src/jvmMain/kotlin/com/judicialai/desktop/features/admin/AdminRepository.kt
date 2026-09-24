@@ -6,6 +6,7 @@ import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 
 /** 管理后台数据访问（对应 Web AdminView.vue 调用的接口） */
 class AdminRepository(private val api: ApiClient) {
@@ -25,6 +26,10 @@ class AdminRepository(private val api: ApiClient) {
         }
 
     suspend fun createUser(body: Map<String, Any?>) = api.post(Endpoints.Users.CREATE, body)
+
+    /** 批量导入用户（.xlsx / .csv）：逐行容错，返回每行结果 */
+    suspend fun batchImportUsers(file: File) =
+        api.upload(Endpoints.Users.BATCH_IMPORT, "file", listOf(file))
 
     /** 科室字典：直接取自现有科室接口，禁止前端自由输入科室 */
     suspend fun departments(): ApiResult<List<JsonObject>> =

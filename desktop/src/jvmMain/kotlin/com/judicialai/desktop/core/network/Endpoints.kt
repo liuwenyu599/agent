@@ -20,6 +20,8 @@ object Endpoints {
         const val CREATE = "/users/"
         fun item(id: String) = "/users/$id"
         fun resetPassword(id: String) = "/users/$id/reset-password"
+        /** 批量导入用户（.xlsx / .csv，multipart 字段名 file） */
+        const val BATCH_IMPORT = "/users/batch-import"
     }
 
     object Chat {
