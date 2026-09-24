@@ -37,6 +37,11 @@ class MaterialAnalysis(
 /** 材料分析聚合统计："已分析 N 份材料，提取 X 个重点，识别 Y 张数据表" */
 data class MaterialsTotals(val materials: Int = 0, val keyPoints: Int = 0, val tables: Int = 0)
 
+/** 生成前预检提出的待确认问题（答案预填默认方案，可改） */
+class ConfirmQuestion(val question: String, val default: String) {
+    var answer by mutableStateOf(default)
+}
+
 /** 一页幻灯片的可编辑模型（标题/要点/页型可改，sources 内容依据只读展示） */
 class SlideEdit(
     type: String,
@@ -104,6 +109,10 @@ class PptViewModel(private val repo: PptRepository) {
     var analyzing by mutableStateOf(false)
         private set
     var materialsTotals by mutableStateOf<MaterialsTotals?>(null)
+        private set
+
+    // ---- 生成前预检（信息不足先确认，90 秒未确认按默认方案生成） ----
+    var pendingConfirm by mutableStateOf<List<ConfirmQuestion>?>(null)
         private set
 
     // ---- 大纲 / 工作台 ----
@@ -281,7 +290,7 @@ class PptViewModel(private val repo: PptRepository) {
         )
     }
 
-    // ================= 大纲生成（流式 + 回退） =================
+    // ================= 大纲生成（生成前预检 + 流式 + 回退） =================
 
     private fun outlineBody(): Map<String, Any?> {
         val content = buildString {
@@ -313,29 +322,86 @@ class PptViewModel(private val repo: PptRepository) {
             status = "还有一份正在生成，请稍候"
             return
         }
+        if (pendingConfirm != null) return // 确认框还开着，等用户选择
         busy = true
+        AppState.pptLastError = null
+        outlineStage = "正在检查关键信息是否齐全…"
+        status = null
+        val body = outlineBody()
+        scope.launch {
+            // 生成前预检：信息不足时先向用户确认（每个问题附默认方案），避免 AI 瞎编；
+            // 预检接口失败一律放行，不阻塞生成
+            var questions: List<ConfirmQuestion> = emptyList()
+            when (val r = repo.precheck(body)) {
+                is ApiResult.Ok -> {
+                    val d = r.data.obj()
+                    if (d != null && d["sufficient"]?.toString()?.contains("false") == true) {
+                        questions = d["questions"].arr().mapNotNull { it.obj() }
+                            .map { ConfirmQuestion(it["question"].str(), it["default"].str()) }
+                            .filter { it.question.isNotBlank() }
+                    }
+                }
+                is ApiResult.Err -> Unit
+            }
+            if (questions.isNotEmpty()) {
+                busy = false
+                outlineStage = ""
+                pendingConfirm = questions
+                status = "生成前请确认几个关键信息（90 秒未确认将按默认方案生成）"
+            } else {
+                launchOutline(body)
+            }
+        }
+    }
+
+    /** 确认问题答案后生成；useAnswers=false 表示全部按默认方案 */
+    fun confirmAndGenerate(useAnswers: Boolean) {
+        val qs = pendingConfirm ?: return
+        pendingConfirm = null
+        val extra = buildString {
+            append("【生成前与用户确认的关键信息（以此为准，不得编造）】")
+            qs.forEach { q ->
+                val a = (if (useAnswers) q.answer else q.default).ifBlank { q.default }
+                append('\n').append(q.question).append("：")
+                    .append(a.ifBlank { "按政务汇报通用惯例处理" })
+            }
+        }
+        val body = outlineBody().toMutableMap()
+        body["content"] = (((body["content"] as? String) ?: "") + "\n\n" + extra).trim()
+        busy = true
+        status = null
+        scope.launch { launchOutline(body) }
+    }
+
+    /** 取消本次生成（既不想确认也不想按默认方案跑） */
+    fun cancelConfirm() {
+        pendingConfirm = null
+        status = null
+    }
+
+    /**
+     * 真正发起大纲生成（预检通过或用户确认后调用）：
+     * 全局标记保证切页不丢进度，结束（无论成败）一定复位。
+     */
+    private suspend fun launchOutline(body: Map<String, Any?>) {
         // 全局标记：切到别的页面再切回时据此显示「正在生成中」；生成结束（无论成败）复位
         AppState.pptOutlineGenerating = true
         AppState.pptLastError = null
         outlineStage = "正在理解材料与任务要求…"
-        status = null
-        val body = outlineBody()
-        scope.launch {
-            var ok = false
-            try {
-                ok = runOutline(body)
-            } catch (e: Exception) {
-                status = "大纲生成中断：${e.message ?: "未知错误"}"
-            } finally {
-                // 生成协程不随页面切换取消，这里保证标记一定复位，不会永久卡在「生成中」
-                busy = false
-                AppState.pptOutlineGenerating = false
-            }
-            // 失败原因记到全局：切走再切回时本地 status 会随 ViewModel 一起丢失，
-            // 用户只会看到干净的入口页，以为生成"没了"
-            AppState.pptLastError = if (ok) null
-            else status?.takeIf { it.isNotBlank() } ?: "大纲生成未完成，请重试"
+        var ok = false
+        try {
+            ok = runOutline(body)
+        } catch (e: Exception) {
+            status = "大纲生成中断：${e.message ?: "未知错误"}"
+        } finally {
+            // 生成协程不随页面切换取消，这里保证标记一定复位，不会永久卡在「生成中」
+            busy = false
+            AppState.pptOutlineGenerating = false
         }
+        // 失败原因记到全局：切走再切回时本地 status 会随 ViewModel 一起丢失，
+        // 用户只会看到干净的入口页，以为生成"没了"
+        AppState.pptLastError = if (ok) null
+        else status?.takeIf { it.isNotBlank() } ?: "大纲生成未完成，请重试"
     }
 
     /**
@@ -590,7 +656,7 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
-    /** 结构调整：add 在此页后新增 / split 拆分此页 / merge 与下一页合并（可撤销） */
+    /** 结构调整：add 在此页后新增 / split 拆分本页 / merge 与下一页合并（可撤销） */
     fun aiStructure(action: String) {
         if (slides.isEmpty()) return
         val i = selected.coerceIn(0, slides.size - 1)
