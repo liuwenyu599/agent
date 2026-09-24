@@ -19,12 +19,21 @@ data class PendingTemplateWrite(
 )
 
 /**
- * 应用全局状态：当前页面、服务器配置、登录态、当前用户。
+ * 应用全局状态：服务器配置、登录态、当前用户、跨页面生成任务标记。
  * token 只在 ApiClient 内存中，不落盘；用户信息仅保存展示所需字段。
+ *
+ * 多窗口：页面 / 导航抽屉 / 个人中心是「每个窗口一份」的状态（见 WindowSession），
+ * 这里的 screen / navDrawerOpen / personalCenterOpen 是路由到「当前焦点窗口」的便捷入口，
+ * 供.navigate()、登录、菜单点击等交互使用（交互必然发生在焦点窗口）。
+ * 生成任务标记（pptOutlineGenerating / writingGenerating 等）仍然是全局共享的：
+ * 一个窗口里跑生成，另一个窗口能看到进度，切回不丢任务不报错。
  */
 object AppState {
 
-    var screen by mutableStateOf(AppScreen.HOME)
+    /** 当前焦点窗口的页面（多窗口各自独立导航） */
+    var screen: AppScreen
+        get() = (WindowManager.active ?: WindowManager.ensureMain()).screen
+        set(value) { (WindowManager.active ?: WindowManager.ensureMain()).screen = value }
 
     /** 普通聊天中识别到写作意图时，跳转到工作台携带的一句话需求 */
     var pendingWritingIntent by mutableStateOf<String?>(null)
@@ -42,9 +51,11 @@ object AppState {
     var lastTemplateUseId by mutableStateOf<String?>(null)
     var lastTemplateUseValues by mutableStateOf<Map<String, String>>(emptyMap())
 
-    // ---- 导航形态 ----
+    // ---- 导航形态（按窗口路由到焦点窗口的会话） ----
     /** 全局导航抽屉（点击顶部品牌名打开） */
-    var navDrawerOpen by mutableStateOf(false)
+    var navDrawerOpen: Boolean
+        get() = (WindowManager.active ?: WindowManager.ensureMain()).navDrawerOpen
+        set(value) { (WindowManager.active ?: WindowManager.ensureMain()).navDrawerOpen = value }
 
     /** 工作区导航是否折叠为图标条 */
     var navCollapsed by mutableStateOf(false)
@@ -53,7 +64,9 @@ object AppState {
     var navWidth by mutableStateOf(236f)
 
     /** 个人中心抽屉（右上角入口） */
-    var personalCenterOpen by mutableStateOf(false)
+    var personalCenterOpen: Boolean
+        get() = (WindowManager.active ?: WindowManager.ensureMain()).personalCenterOpen
+        set(value) { (WindowManager.active ?: WindowManager.ensureMain()).personalCenterOpen = value }
 
     /** 工作区导航是否被固定展开（固定后不随页面切换自动收起） */
     var navPinned by mutableStateOf(true)
@@ -243,7 +256,7 @@ object AppState {
         writingLastError = null
     }
 
-    /** 统一导航入口：设置页面 + 管理后台 Tab + 关闭抽屉 */
+    /** 统一导航入口：设置页面 + 管理后台 Tab + 关闭抽屉（作用于焦点窗口） */
     fun navigate(screen: AppScreen, adminTab: Int = 0) {
         this.adminTab = adminTab
         this.screen = screen
