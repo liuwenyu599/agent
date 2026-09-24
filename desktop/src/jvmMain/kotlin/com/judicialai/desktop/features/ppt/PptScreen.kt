@@ -27,6 +27,7 @@ import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
+import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
@@ -74,7 +75,7 @@ fun slideTypeLabel(type: String) = SLIDE_TYPE_LABELS[type] ?: type
 /**
  * PPT 助手工作台（重设计）：
  * 新建 = 极简入口（材料 + 一句话意图 + 可选项，无技术参数）
- * → 生成前预检（信息不足先确认） → 流式大纲 → 可编辑大纲确认 → 三栏工作台；
+ * → 生成前预检（信息不足先确认） → 流式大纲（阶段可见、可取消） → 可编辑大纲确认 → 三栏工作台；
  * 我的 PPT = 打开续改 / 导入已有 PPT / 下载 / 删除；模板库保持不变。
  */
 @Composable
@@ -278,7 +279,46 @@ private fun PptEntryPane(vm: PptViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (vm.busy) vm.outlineStage.ifBlank { "生成中…" } else "生成大纲") }
 
+        // 生成过程可见：实时阶段 + 浅蓝进度 + 骨架屏 + 可取消
+        // （不再是没有进度、不能取消、看不到过程的空白等待）
+        if (vm.busy && vm.step == PptStep.ENTRY) {
+            OutlineGeneratingPanel(vm)
+        }
+
         PptStatus(vm)
+    }
+}
+
+/** 大纲生成中面板：阶段文案 + 进度条 + 浅蓝骨架屏 + 取消按钮 */
+@Composable
+private fun OutlineGeneratingPanel(vm: PptViewModel) {
+    Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
+        Column(Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("正在生成大纲", style = MaterialTheme.typography.subtitle2,
+                    color = MaterialTheme.colors.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    vm.outlineStage.ifBlank { "后端处理中，完成后自动进入大纲确认" },
+                    style = MaterialTheme.typography.caption, color = SecondaryText,
+                    modifier = Modifier.weight(1f))
+                TextButton(onClick = { vm.cancelOutline() }) {
+                    Text("取消生成", color = MaterialTheme.colors.error,
+                        style = MaterialTheme.typography.caption)
+                }
+            }
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = Color(0xFF64A8F0),
+                backgroundColor = Color(0xFFE3EBF5),
+            )
+            // 骨架屏：示意即将产出的大纲结构，而不是空白
+            SkeletonBar(Modifier.fillMaxWidth(0.55f).height(14.dp))
+            SkeletonBar(Modifier.fillMaxWidth(0.9f).height(10.dp))
+            SkeletonBar(Modifier.fillMaxWidth(0.8f).height(10.dp))
+            SkeletonBar(Modifier.fillMaxWidth(0.85f).height(10.dp))
+        }
     }
 }
 
