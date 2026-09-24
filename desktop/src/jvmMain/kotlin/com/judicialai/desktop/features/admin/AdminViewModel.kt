@@ -5,12 +5,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 
 class AdminViewModel(private val repo: AdminRepository) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -31,6 +33,11 @@ class AdminViewModel(private val repo: AdminRepository) {
 
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false); private set
+
+    // ---- 批量导入用户（Excel / CSV）----
+    var importBusy by mutableStateOf(false); private set
+    /** 最近一次导入结果（total/succeeded/failed/results[]），展示后由用户关闭 */
+    var importResult by mutableStateOf<JsonObject?>(null); private set
 
     fun loadStats() {
         scope.launch {
@@ -124,6 +131,28 @@ class AdminViewModel(private val repo: AdminRepository) {
             repo.createUser(mapOf("username" to username, "email" to email, "password" to password,
                 "real_name" to realName, "department_code" to departmentCode, "role" to role))
         }
+
+    /**
+     * 批量导入用户（.xlsx / .csv）。
+     * 初始密码缺省 123456，所有批量创建用户首次登录强制改密（服务端处理）。
+     */
+    fun importUsers(file: File) {
+        importBusy = true
+        importResult = null
+        scope.launch {
+            when (val r = repo.batchImportUsers(file)) {
+                is ApiResult.Ok -> {
+                    importResult = r.data.obj()
+                    status = "批量导入完成"
+                    loadUsers()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            importBusy = false
+        }
+    }
+
+    fun clearImportResult() { importResult = null }
 
     fun updateUser(id: String, realName: String, departmentCode: String, role: String) =
         act("修改成功") {
