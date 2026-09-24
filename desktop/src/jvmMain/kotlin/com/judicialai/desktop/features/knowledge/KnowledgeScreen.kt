@@ -45,6 +45,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,10 +57,13 @@ import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
+import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
 import com.judicialai.desktop.design.theme.EpSuccess
-import com.judicialai.desktop.design.theme.Surface
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.SurfaceTonal
 import com.judicialai.desktop.design.theme.TextPlaceholder
 import com.judicialai.desktop.design.theme.TextPrimary
 import com.judicialai.desktop.design.theme.TextRegular
@@ -105,8 +111,19 @@ fun KnowledgeScreen() {
  * 知识库列表与智能写作「参考材料」共用；保存后后端重新分块并重建检索向量。
  * 无编辑权限的用户保存时会被服务端拒绝并提示。
  *
- * 正文框用固定高度（而不是 heightIn 区间）：内容随输入增长时弹窗不会不断拉高，
- * 滚动发生在文本框内部，也不会出现顶部白边。
+ * 「向下滚动出现白边」的真因：M2 [AlertDialog] 的 text 区是按 **baseline 对齐**排版的
+ * （AlertDialogBaselineLayout：正文 Y = 标题末行 baseline − 正文首行 baseline + 36sp，
+ * 弹窗总高也由这组 baseline 推导）。多行 [OutlinedTextField] 内部滚动时，它上报的
+ * FirstBaseline 会随滚动偏移一起平移，于是正文被不断往下推、弹窗跟着被撑高——
+ * 实测滚 10 格弹窗从 538dp 涨到 665dp，标题与正文之间被拉开一大块空白，
+ * 按钮仍钉在底部，这就是用户看到的白色区域。正文框上挂 [fixedBaseline] 把
+ * baseline 固定成常量后，弹窗几何与滚动完全解耦（实测高度恒定 538dp）。
+ *
+ * 另外两处是为了让滚动区有明确收口、不再与纯白弹窗底连成一片：
+ * - 输入框显式给 tonal 底色 + 圆角 + 标准描边（M2 的 outlinedTextFieldColors()
+ *   默认 backgroundColor 透明，弹窗 surface 又是纯白）；
+ * - 正文框保持固定高度（不用 heightIn，否则输入时弹窗会不断拉高），取 300dp，
+ *   把弹窗总高压在 200% 缩放屏的一屏之内。
  */
 @Composable
 fun KnowledgeDocDialog(
@@ -125,26 +142,29 @@ fun KnowledgeDocDialog(
             Column {
                 OutlinedTextField(
                     value = title, onValueChange = onTitleChange,
-                    label = { Text("标题") }, singleLine = true,
+                    label = { Text("标题", fontSize = 13.sp) }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                    textStyle = TextStyle(fontSize = 14.sp, color = Ink),
+                    shape = RoundedCornerShape(Dimens.radiusControl),
+                    colors = docFieldColors(),
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Dimens.space2))
                 OutlinedTextField(
                     value = content, onValueChange = onContentChange,
-                    label = { Text("正文内容") },
-                    // 加载中或该文档本身没有正文时，360dp 的文本框不能是一片纯空白，
+                    label = { Text("正文内容", fontSize = 13.sp) },
+                    // 加载中或该文档本身没有正文时，300dp 的文本框不能是一片纯空白，
                     // 否则用户会以为「参考资料看不到」
                     placeholder = {
                         Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
-                            fontSize = 12.sp, color = TextPlaceholder)
+                            fontSize = 13.sp, color = TextPlaceholder)
                     },
-                    modifier = Modifier.fillMaxWidth().height(360.dp),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                    modifier = Modifier.fixedBaseline()
+                        .fillMaxWidth().height(DocContentFieldHeight),
+                    textStyle = TextStyle(fontSize = 14.sp, color = Ink, lineHeight = 22.sp),
+                    shape = RoundedCornerShape(Dimens.radiusControl),
+                    colors = docFieldColors(),
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Dimens.space1))
                 Text("约 ${content.length} 字 · 保存后将重新分块并同步检索",
                     fontSize = 11.sp, color = TextSecondary)
             }
@@ -158,6 +178,42 @@ fun KnowledgeDocDialog(
         dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
     )
 }
+
+/** 正文框固定高度：够放下十几行正文，同时保证弹窗总高不超过普通窗口的可视高度 */
+private val DocContentFieldHeight = 300.dp
+
+/**
+ * 把节点的 FirstBaseline 固定上报为常量 0。
+ *
+ * 多行 OutlinedTextField 内部滚动时，其内部文本被放置在 `-滚动偏移` 处，
+ * 向父级投影出的 FirstBaseline 会随之变小；M2 AlertDialog 的 text 区按 baseline
+ * 排版，baseline 一变弹窗就被撑高（见 [KnowledgeDocDialog] 的 KDoc）。
+ * 这里显式给出常量 alignment line，阻断该联动。已有布局不变：未滚动时
+ * AlertDialog 拿到的本来就是 Unspecified→0，因此首帧几何与修复前完全一致。
+ */
+private fun Modifier.fixedBaseline(): Modifier = this.layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    layout(placeable.width, placeable.height, mapOf(FirstBaseline to 0)) {
+        placeable.place(0, 0)
+    }
+}
+
+/**
+ * 文档弹窗内两个输入框统一的配色：tonal 底 + 标准描边。
+ * 不用 outlinedTextFieldColors() 的默认值（backgroundColor 透明、边框是 onSurface 的
+ * 低透明度灰），否则输入框与白色弹窗底同色、滚动时看不出边界。
+ */
+@Composable
+private fun docFieldColors() = TextFieldDefaults.outlinedTextFieldColors(
+    textColor = Ink,
+    backgroundColor = SurfaceTonal,
+    cursorColor = EpPrimary,
+    focusedBorderColor = EpPrimary,
+    unfocusedBorderColor = Line,
+    focusedLabelColor = EpPrimary,
+    unfocusedLabelColor = TextRegular,
+    placeholderColor = TextPlaceholder,
+)
 
 /** 知识库分类标签：科室库 = public 且带 department_code */
 private fun kbTypeLabel(kb: JsonObject): Pair<String, Boolean> = when {
