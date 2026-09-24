@@ -151,7 +151,8 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         viewingChat?.let { vm.openSession(it.id) }
     }
 
-    val base = if (filter == null) vm.allHistoryItems() else vm.historyItemsFor(filter)
+    val base = if (filter == null) vm.allHistoryItems()
+    else vm.historyItemsOf(filter!!)
     val items = base
         .filter {
             query.isBlank() || it.title.contains(query, ignoreCase = true) ||
