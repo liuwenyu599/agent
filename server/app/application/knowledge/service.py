@@ -177,7 +177,10 @@ class KnowledgeService:
         self.db.refresh(kb)
         return {"id": kb.id, "message": "Updated",
                 "type": kb.kb_type,
-                "department_code": getattr(kb, "department_code", "") or ""}
+                "department_code": getattr(kb, "department_code", "") or "",
+                # 返回生效后的类型中文名，前端据此核对「所选类型」与「实际生效类型」是否一致
+                "type_label": ("科室" if getattr(kb, "department_code", "") else
+                               ("公共" if kb.kb_type == "public" else "个人"))}
 
     def delete_kb(self, kb_id: str, user):
         kb = self.get_kb_managed(kb_id, user)
@@ -271,6 +274,48 @@ class KnowledgeService:
             kb_id=kb_id, status=effective_status, page=page, page_size=page_size
         )
         return {"total": total, "page": page, "page_size": page_size, "data": items}
+
+    def search_kb_documents(self, kb_id: str, user, query: str,
+                            limit: int = 50) -> dict:
+        """库内文档搜索：标题命中排前、内容命中排后，每篇文档只出现一次。
+
+        一次请求返回全部结果（不分多次查询），前端拿到即展示；
+        内容命中的条目附带命中片段（前后各约 40/60 字），便于不打开全文先判断。
+        """
+        self.get_kb_checked(kb_id, user)
+        needle = (query or "").strip().lower()
+        if not needle:
+            return {"total": 0, "data": []}
+        can_review = self._can_review(user)
+        q = select(DocumentModel).where(DocumentModel.kb_id == kb_id)
+        if not can_review:
+            q = q.where(DocumentModel.status == "published")
+        rows = self.db.scalars(
+            q.order_by(DocumentModel.created_at.desc())).all()
+
+        title_hits: List[DocumentModel] = []
+        content_hits: List[DocumentModel] = []
+        for m in rows:
+            if needle in (m.title or "").lower():
+                title_hits.append(m)
+            elif needle in (m.content or "").lower():
+                content_hits.append(m)
+
+        def to_item(m, match: str) -> dict:
+            d = dict(self.docs._display_dict(m))
+            d["match"] = match
+            if match == "content":
+                content = m.content or ""
+                idx = content.lower().find(needle)
+                if idx >= 0:
+                    start = max(0, idx - 40)
+                    d["snippet"] = content[start:idx + len(needle) + 60].strip()
+            return d
+
+        data = [to_item(m, "title") for m in title_hits]
+        data += [to_item(m, "content") for m in content_hits]
+        data = data[:max(1, min(limit, 200))]
+        return {"total": len(data), "data": data}
 
     def list_all_documents(self, user, status: str = "all",
                            page: int = 1, page_size: int = 20) -> dict:

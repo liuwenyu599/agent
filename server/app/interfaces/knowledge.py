@@ -197,6 +197,17 @@ def list_documents(kb_id: str, status: str = Query("published"),
     return svc.list_kb_documents(kb_id, user, status, page, page_size)
 
 
+@router.get("/{kb_id}/documents/search")
+def search_documents(kb_id: str, q: str = Query(""), limit: int = Query(50),
+                     user: User = Depends(get_current_user),
+                     svc: KnowledgeService = Depends(get_knowledge_service)):
+    """库内文档搜索：标题命中排前、内容命中排后，一次请求返回全部结果。
+
+    前端即输即搜：不需要等「多轮查询全部完成」才显示列表。
+    """
+    return svc.search_kb_documents(kb_id, user, q, limit)
+
+
 @router.post("/batch-upload")
 async def batch_upload(kb_id: str = Query(...), files: List[UploadFile] = File(...),
                        user: User = Depends(get_current_user),
@@ -250,7 +261,6 @@ def import_urls_text(req: UrlTextImportRequest, user: User = Depends(get_current
 @router.post("/import-urls-excel")
 async def import_urls_excel(kb_id: str = Query(...), file: UploadFile = File(...),
                             user: User = Depends(get_current_user),
-                            db: Session = Depends(get_db),
                             svc: KnowledgeService = Depends(get_knowledge_service)):
     kb = svc.check_kb_write(kb_id, user)
     filename = file.filename or ""
