@@ -18,20 +18,25 @@ import com.judicialai.desktop.features.training.TrainingScreen
 import com.judicialai.desktop.features.workflow.WorkflowScreen
 import com.judicialai.desktop.features.writing.WritingScreen
 
-/** 应用根组件：主题 + 登录门 + 外壳 */
+/**
+ * 应用根组件：主题 + 登录门 + 外壳。
+ * 页面读取走 LocalWindowSession（本窗口自己的导航状态），
+ * 多开窗口时各自浏览不同页面互不干扰。
+ */
 @Composable
 fun App() {
+    val session = LocalWindowSession.current
     AppTheme {
         if (!AppState.loggedIn) {
             LoginScreen()
             return@AppTheme
         }
         // 非管理员访问管理后台时回退工作台（对应 Web 路由 requiresAdmin 守卫）
-        if (AppState.screen == AppScreen.ADMIN && !AppState.isAdmin) {
-            AppState.screen = AppScreen.HOME
+        if (session.screen == AppScreen.ADMIN && !AppState.isAdmin) {
+            session.screen = AppScreen.HOME
         }
         AppShell(
-            current = AppState.screen,
+            current = session.screen,
             username = AppState.displayName,
             userRole = AppState.roleText,
             isAdmin = AppState.isAdmin,
@@ -39,7 +44,7 @@ fun App() {
             onHome = { AppState.navigate(AppScreen.HOME) },
             onLogout = { AppState.logout() },
         ) {
-            when (AppState.screen) {
+            when (session.screen) {
                 AppScreen.HOME -> HomeScreen()
                 AppScreen.DEPARTMENT -> DepartmentScreen()
                 AppScreen.WRITING -> WritingScreen()
