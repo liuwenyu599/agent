@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,8 +39,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
@@ -144,6 +147,22 @@ private fun StatsTab(vm: AdminViewModel) {
     }
 }
 
+/** 弹出系统文件选择器选择 .xlsx / .csv，选中后交给 ViewModel 上传导入 */
+private fun pickUserImportFile(vm: AdminViewModel) {
+    val dialog = java.awt.FileDialog(
+        null as java.awt.Frame?, "选择用户文件（.xlsx / .csv）", java.awt.FileDialog.LOAD)
+    dialog.setFilenameFilter { _, name ->
+        val n = name.lowercase()
+        n.endsWith(".xlsx") || n.endsWith(".csv")
+    }
+    dialog.isVisible = true
+    val dir = dialog.directory
+    val file = dialog.file
+    if (dir != null && file != null) {
+        vm.importUsers(java.io.File(dir, file))
+    }
+}
+
 @Composable
 private fun UsersTab(vm: AdminViewModel) {
     var showCreate by remember { mutableStateOf(false) }
@@ -153,9 +172,21 @@ private fun UsersTab(vm: AdminViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Eyebrow("账号、所属科室与角色", Modifier.weight(1f))
+            AppButton(
+                if (vm.importBusy) "导入中…" else "批量导入",
+                onClick = { pickUserImportFile(vm) },
+                enabled = !vm.importBusy,
+                kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY,
+                size = com.judicialai.desktop.design.components.AppButtonSize.SM)
+            Spacer(Modifier.width(Dimens.space2))
             AppButton("＋ 新建用户", onClick = { showCreate = true },
                 icon = Icons.Default.Add, size = com.judicialai.desktop.design.components.AppButtonSize.SM)
         }
+        Text(
+            "批量导入支持 .xlsx / .csv，表头：用户名、邮箱、姓名、科室代码、角色（普通用户/科室管理员）、初始密码；" +
+                "初始密码缺省 123456，导入的用户首次登录需修改密码。",
+            fontSize = 12.sp, color = Muted,
+        )
         AdminTable(
             headers = listOf(
                 "#" to 46, "用户名" to 110, "真实姓名" to 100, "邮箱" to 180,
@@ -206,7 +237,7 @@ private fun UsersTab(vm: AdminViewModel) {
         AppDialog(
             onDismissRequest = { resetUser = null },
             title = "重置密码",
-            subtitle = "用户：${u["username"].str()}",
+            subtitle = "用户：${u["username"].str()}，重置后该用户下次登录需修改密码",
             width = 460.dp,
             actions = {
                 AppButton("取消", onClick = { resetUser = null },
@@ -219,9 +250,43 @@ private fun UsersTab(vm: AdminViewModel) {
                 }, enabled = pwd.length >= 6)
             },
         ) {
-            AppTextField(pwd, { pwd = it }, label = "新密码", placeholder = "至少 6 位",
+            AppTextField(pwd, { pwd = it }, label = "新密码", placeholder = "初始密码可用 123456",
                 hint = if (pwd.isNotBlank() && pwd.length < 6) "密码至少 6 位" else null,
                 error = pwd.isNotBlank() && pwd.length < 6)
+        }
+    }
+
+    // 批量导入结果：逐行成功/失败明细
+    vm.importResult?.let { res ->
+        val rows = res["results"].arr().mapNotNull { it.obj() }
+        AppDialog(
+            onDismissRequest = { vm.clearImportResult() },
+            title = "批量导入结果",
+            subtitle = "共 ${res["total"].int()} 行：成功 ${res["succeeded"].int()}，" +
+                "失败 ${res["failed"].int()}。初始密码默认为 123456，用户首次登录需修改密码。",
+            width = 560.dp,
+            actions = {
+                AppButton("知道了", onClick = { vm.clearImportResult() })
+            },
+        ) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                rows.forEach { row ->
+                    val ok = row["ok"].bool()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("第${row["row"].int()}行", fontSize = 12.sp, color = Muted,
+                            modifier = Modifier.width(56.dp))
+                        Text(row["username"].str(), fontSize = 12.5.sp, color = Ink2,
+                            modifier = Modifier.width(110.dp),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(row["message"].str(), fontSize = 12.5.sp,
+                            color = if (ok) Ok else Danger)
+                    }
+                }
+            }
         }
     }
 }
@@ -299,7 +364,7 @@ private fun UserDialog(
             AppTextField(email, { email = it; error = null }, label = "邮箱",
                 placeholder = "name@example.com")
             AppTextField(password, { password = it; error = null }, label = "密码",
-                placeholder = "至少 6 位")
+                placeholder = "初始密码可用 123456，用户首次登录需改密")
         }
         AppTextField(realName, { realName = it }, label = "真实姓名", placeholder = "选填")
 
