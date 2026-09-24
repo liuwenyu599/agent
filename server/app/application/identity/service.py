@@ -130,6 +130,8 @@ class AuthService:
             raise PermissionDeniedError("系统已有用户，请登录后注册")
         if role != ROLE_DEVELOPER:
             raise AppError(400, "首次注册必须是系统管理员(developer)角色")
+        # 首个系统管理员的密码是真实使用密码，必须满足强度规则
+        validate_password_strength(password)
         dept_name, dept_code = _resolve_department(department, department_code)
         user = self._create_user_checked(username, email, password, real_name,
                                          dept_name, ROLE_DEVELOPER, dept_code)
@@ -155,16 +157,23 @@ class AuthService:
 
     def _create_user_checked(self, username, email, password, real_name, department, role,
                              department_code: str = "") -> User:
+        """管理员/注册创建用户：初始密码允许弱密码（如 123456），但 must_change_password=True，
+        首次登录后强制修改密码（强度规则在改密时校验）。"""
+        if not password:
+            raise AppError(400, "初始密码不能为空")
         if self.users.get_by_username(username):
             raise AppError(400, "用户名已存在")
         if self.users.get_by_email(email):
             raise AppError(400, "邮箱已存在")
         _check_assignable_role(role)
-        return self.users.add(User(
+        user = User(
             username=username, email=email, hashed_password=get_password_hash(password),
             real_name=real_name, department=department, role=role,
             department_code=department_code,
-        ))
+        )
+        # 初始密码允许 123456 等弱密码，但首次登录必须改密
+        user.must_change_password = True
+        return self.users.add(user)
 
 
 class UserService:
@@ -181,20 +190,26 @@ class UserService:
     def create_user(self, actor: User, username: str, email: str, password: str,
                     real_name: str = "", department: str = "", role: str = ROLE_USER,
                     department_code: str = "") -> User:
+        """管理员创建用户：初始密码允许弱密码（如 123456），但 must_change_password=True，
+        该用户首次登录后强制修改密码（强度规则在改密时校验）。"""
         if role == ROLE_DEVELOPER and actor.role != ROLE_DEVELOPER:
             raise PermissionDeniedError("只有系统管理员可以创建系统管理员")
         if actor.role == ROLE_KNOWLEDGE_ADMIN and role not in (ROLE_USER, ROLE_KNOWLEDGE_ADMIN):
             raise PermissionDeniedError("知识管理员只能创建普通用户和知识管理员")
+        if not password:
+            raise AppError(400, "初始密码不能为空")
         dept_name, dept_code = _resolve_department(department, department_code)
         if self.users.get_by_username(username):
             raise AppError(400, "Username exists")
         if self.users.get_by_email(email):
             raise AppError(400, "Email exists")
-        return self.users.add(User(
+        user = User(
             username=username, email=email, hashed_password=get_password_hash(password),
             real_name=real_name, department=dept_name, role=_check_assignable_role(role),
             department_code=dept_code,
-        ))
+        )
+        user.must_change_password = True
+        return self.users.add(user)
 
     def update_user(self, actor: User, user_id: str, real_name: Optional[str] = None,
                     department: Optional[str] = None, is_active: Optional[bool] = None,
@@ -223,12 +238,14 @@ class UserService:
     def reset_password(self, actor: User, user_id: str, password: str) -> User:
         """管理员重置他人密码：重置后强制该用户下次登录修改密码。
 
+        初始/重置密码允许 123456 等弱密码（用户登录后必须立即改密，强度在改密时校验）。
         审计只记录操作者、目标用户、时间与结果，不记录密码。
         """
+        if not password:
+            raise AppError(400, "新密码不能为空")
         user = self.users.get(user_id)
         if not user:
             raise NotFoundError("User not found")
-        validate_password_strength(password)
         user.hashed_password = get_password_hash(password)
         user.must_change_password = True
         updated = self.users.update(user)
