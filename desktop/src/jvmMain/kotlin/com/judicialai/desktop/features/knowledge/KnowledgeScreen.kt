@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
@@ -45,8 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.FirstBaseline
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +54,9 @@ import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
@@ -111,19 +111,9 @@ fun KnowledgeScreen() {
  * 知识库列表与智能写作「参考材料」共用；保存后后端重新分块并重建检索向量。
  * 无编辑权限的用户保存时会被服务端拒绝并提示。
  *
- * 「向下滚动出现白边」的真因：M2 [AlertDialog] 的 text 区是按 **baseline 对齐**排版的
- * （AlertDialogBaselineLayout：正文 Y = 标题末行 baseline − 正文首行 baseline + 36sp，
- * 弹窗总高也由这组 baseline 推导）。多行 [OutlinedTextField] 内部滚动时，它上报的
- * FirstBaseline 会随滚动偏移一起平移，于是正文被不断往下推、弹窗跟着被撑高——
- * 实测滚 10 格弹窗从 538dp 涨到 665dp，标题与正文之间被拉开一大块空白，
- * 按钮仍钉在底部，这就是用户看到的白色区域。正文框上挂 [fixedBaseline] 把
- * baseline 固定成常量后，弹窗几何与滚动完全解耦（实测高度恒定 538dp）。
- *
- * 另外两处是为了让滚动区有明确收口、不再与纯白弹窗底连成一片：
- * - 输入框显式给 tonal 底色 + 圆角 + 标准描边（M2 的 outlinedTextFieldColors()
- *   默认 backgroundColor 透明，弹窗 surface 又是纯白）；
- * - 正文框保持固定高度（不用 heightIn，否则输入时弹窗会不断拉高），取 300dp，
- *   把弹窗总高压在 200% 缩放屏的一屏之内。
+ * 使用统一 [AppDialog]：内容区可滚动、弹窗高度受限（maxHeight），
+ * 不再使用 M2 AlertDialog（其 baseline 排版会导致多行输入框滚动时弹窗被撑高、
+ * 标题与正文之间出现空白）。
  */
 @Composable
 fun KnowledgeDocDialog(
@@ -135,68 +125,45 @@ fun KnowledgeDocDialog(
     onSave: () -> Unit,
     onClose: () -> Unit,
 ) {
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onClose,
-        title = { Text("查看 / 编辑文档", fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = title, onValueChange = onTitleChange,
-                    label = { Text("标题", fontSize = 13.sp) }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(fontSize = 14.sp, color = Ink),
-                    shape = RoundedCornerShape(Dimens.radiusControl),
-                    colors = docFieldColors(),
-                )
-                Spacer(Modifier.height(Dimens.space2))
-                OutlinedTextField(
-                    value = content, onValueChange = onContentChange,
-                    label = { Text("正文内容", fontSize = 13.sp) },
-                    // 加载中或该文档本身没有正文时，300dp 的文本框不能是一片纯空白，
-                    // 否则用户会以为「参考资料看不到」
-                    placeholder = {
-                        Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
-                            fontSize = 13.sp, color = TextPlaceholder)
-                    },
-                    modifier = Modifier.fixedBaseline()
-                        .fillMaxWidth().height(DocContentFieldHeight),
-                    textStyle = TextStyle(fontSize = 14.sp, color = Ink, lineHeight = 22.sp),
-                    shape = RoundedCornerShape(Dimens.radiusControl),
-                    colors = docFieldColors(),
-                )
-                Spacer(Modifier.height(Dimens.space1))
-                Text("约 ${content.length} 字 · 保存后将重新分块并同步检索",
-                    fontSize = 11.sp, color = TextSecondary)
-            }
+        title = "查看 / 编辑文档",
+        width = 640.dp,
+        actions = {
+            AppButton("取消", onClick = onClose, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton(if (busy) "保存中…" else "保存", onClick = onSave, enabled = !busy)
         },
-        confirmButton = {
-            Button(
-                onClick = onSave, enabled = !busy,
-                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-            ) { Text(if (busy) "保存中…" else "保存", color = Color.White) }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("取消") } },
-    )
+    ) {
+        OutlinedTextField(
+            value = title, onValueChange = onTitleChange,
+            label = { Text("标题", fontSize = 13.sp) }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(fontSize = 14.sp, color = Ink),
+            shape = RoundedCornerShape(Dimens.radiusControl),
+            colors = docFieldColors(),
+        )
+        OutlinedTextField(
+            value = content, onValueChange = onContentChange,
+            label = { Text("正文内容", fontSize = 13.sp) },
+            // 加载中或该文档本身没有正文时，300dp 的文本框不能是一片纯空白，
+            // 否则用户会以为「参考资料看不到」
+            placeholder = {
+                Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
+                    fontSize = 13.sp, color = TextPlaceholder)
+            },
+            modifier = Modifier.fillMaxWidth().height(DocContentFieldHeight),
+            textStyle = TextStyle(fontSize = 14.sp, color = Ink, lineHeight = 22.sp),
+            shape = RoundedCornerShape(Dimens.radiusControl),
+            colors = docFieldColors(),
+        )
+        Text("约 ${content.length} 字 · 保存后将重新分块并同步检索",
+            fontSize = 11.sp, color = TextSecondary)
+    }
 }
 
 /** 正文框固定高度：够放下十几行正文，同时保证弹窗总高不超过普通窗口的可视高度 */
 private val DocContentFieldHeight = 300.dp
-
-/**
- * 把节点的 FirstBaseline 固定上报为常量 0。
- *
- * 多行 OutlinedTextField 内部滚动时，其内部文本被放置在 `-滚动偏移` 处，
- * 向父级投影出的 FirstBaseline 会随之变小；M2 AlertDialog 的 text 区按 baseline
- * 排版，baseline 一变弹窗就被撑高（见 [KnowledgeDocDialog] 的 KDoc）。
- * 这里显式给出常量 alignment line，阻断该联动。已有布局不变：未滚动时
- * AlertDialog 拿到的本来就是 Unspecified→0，因此首帧几何与修复前完全一致。
- */
-private fun Modifier.fixedBaseline(): Modifier = this.layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    layout(placeable.width, placeable.height, mapOf(FirstBaseline to 0)) {
-        placeable.place(0, 0)
-    }
-}
 
 /**
  * 文档弹窗内两个输入框统一的配色：tonal 底 + 标准描边。
@@ -229,10 +196,41 @@ private fun kbTypeValue(kb: JsonObject): String = when {
     else -> "personal"
 }
 
+/** 按角色可选的知识库类型选项：公共（系统管理员）/ 科室（科室管理员与系统管理员）/ 个人（均可） */
+private fun kbTypeOptions(): List<Pair<String, String>> = buildList {
+    if (AppState.isDeveloper) add("public" to "公共知识库（全员可见）")
+    if (AppState.isKnowledgeAdmin || AppState.isDeveloper)
+        add("department" to "科室知识库（本科室可见）")
+    add("personal" to "个人知识库（仅自己可见）")
+}
+
+/** 知识库类型单选列表（编辑 / 新建弹窗共用） */
+@Composable
+private fun KbTypeSelector(kbType: String, onSelect: (String) -> Unit) {
+    Text("类型", fontSize = 13.sp, color = TextRegular)
+    kbTypeOptions().forEach { (value, label) ->
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onSelect(value) }
+                .padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(
+                selected = kbType == value,
+                onClick = { onSelect(value) },
+                colors = RadioButtonDefaults.colors(selectedColor = EpPrimary),
+            )
+            Text(label, fontSize = 13.sp, color = TextPrimary)
+        }
+    }
+}
+
 /**
  * 知识库编辑弹窗（科室管理员 / 系统管理员）。
  * 可修改名称、描述与类型（个人 ↔ 科室 ↔ 公共）；
  * 类型的细粒度权限（谁能设公共、谁能设科室）由服务端按角色校验并返回明确提示。
+ * 使用统一 [AppDialog]（内容区可滚动、限高），避免溢出。
  */
 @Composable
 private fun KbEditDialog(
@@ -242,62 +240,32 @@ private fun KbEditDialog(
 ) {
     var name by remember { mutableStateOf(kb["name"].str()) }
     var desc by remember { mutableStateOf(kb["description"].str()) }
-    // 可选类型按角色给出：公共（系统管理员）/ 科室（科室管理员与系统管理员）/ 个人（均可）
-    val typeOptions = buildList {
-        if (AppState.isDeveloper) add("public" to "公共知识库（全员可见）")
-        if (AppState.isKnowledgeAdmin || AppState.isDeveloper)
-            add("department" to "科室知识库（本科室可见）")
-        add("personal" to "个人知识库（仅自己可见）")
-    }
     var kbType by remember { mutableStateOf(kbTypeValue(kb)) }
 
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
-        title = { Text("编辑知识库", fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column {
-                OutlinedTextField(value = name, onValueChange = { name = it },
-                    label = { Text("名称") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = desc, onValueChange = { desc = it },
-                    label = { Text("描述") }, modifier = Modifier.fillMaxWidth(),
-                    colors = TextFieldDefaults.outlinedTextFieldColors(
-                        focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
-                Spacer(Modifier.height(12.dp))
-                Text("类型", fontSize = 13.sp, color = TextRegular)
-                Spacer(Modifier.height(4.dp))
-                typeOptions.forEach { (value, label) ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { kbType = value }
-                            .padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = kbType == value,
-                            onClick = { kbType = value },
-                            colors = RadioButtonDefaults.colors(selectedColor = EpPrimary),
-                        )
-                        Text(label, fontSize = 13.sp, color = TextPrimary)
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                Text("改为科室/公共后，可见范围立即扩大；改为个人后仅创建者可见",
-                    fontSize = 11.sp, color = TextSecondary)
-            }
+        title = "编辑知识库",
+        width = 520.dp,
+        actions = {
+            AppButton("取消", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(Dimens.space2))
+            AppButton("保存", onClick = { if (name.isNotBlank()) onSave(name, desc, kbType) },
+                enabled = name.isNotBlank())
         },
-        confirmButton = {
-            Button(
-                onClick = { if (name.isNotBlank()) onSave(name, desc, kbType) },
-                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-            ) { Text("保存", color = Color.White) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+    ) {
+        OutlinedTextField(value = name, onValueChange = { name = it },
+            label = { Text("名称") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+        OutlinedTextField(value = desc, onValueChange = { desc = it },
+            label = { Text("描述") }, modifier = Modifier.fillMaxWidth(),
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+        KbTypeSelector(kbType) { kbType = it }
+        Text("改为科室/公共后，可见范围立即扩大；改为个人后仅创建者可见",
+            fontSize = 11.sp, color = TextSecondary)
+    }
 }
 
 @Composable
@@ -430,55 +398,30 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
     if (showCreate) {
         var name by remember { mutableStateOf("") }
         var desc by remember { mutableStateOf("") }
-        // 可选类型按角色给出：公共（系统管理员）/ 科室（科室管理员）/ 个人（所有人）
-        val typeOptions = buildList {
-            if (AppState.isDeveloper) add("public" to "公共知识库（全员可见）")
-            if (AppState.isKnowledgeAdmin || AppState.isDeveloper)
-                add("department" to "科室知识库（本科室可见）")
-            add("personal" to "个人知识库（仅自己可见）")
-        }
-        var kbType by remember { mutableStateOf(typeOptions.last().first) }
-        AlertDialog(
+        var kbType by remember { mutableStateOf(kbTypeOptions().last().first) }
+        AppDialog(
             onDismissRequest = { showCreate = false },
-            title = { Text("新建知识库") },
-            text = {
-                Column {
-                    OutlinedTextField(value = name, onValueChange = { name = it },
-                        label = { Text("名称") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(value = desc, onValueChange = { desc = it },
-                        label = { Text("描述") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(12.dp))
-                    Text("类型", fontSize = 13.sp, color = TextRegular)
-                    Spacer(Modifier.height(4.dp))
-                    typeOptions.forEach { (value, label) ->
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { kbType = value }
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = kbType == value,
-                                onClick = { kbType = value },
-                                colors = RadioButtonDefaults.colors(selectedColor = EpPrimary),
-                            )
-                            Text(label, fontSize = 13.sp, color = TextPrimary)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
+            title = "新建知识库",
+            width = 520.dp,
+            actions = {
+                AppButton("取消", onClick = { showCreate = false }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("创建", onClick = {
                     if (name.isNotBlank()) { vm.create(name, desc, kbType); showCreate = false }
-                }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-                    Text("创建", color = Color.White)
-                }
+                }, enabled = name.isNotBlank())
             },
-            dismissButton = { TextButton(onClick = { showCreate = false }) { Text("取消") } },
-        )
+        ) {
+            OutlinedTextField(value = name, onValueChange = { name = it },
+                label = { Text("名称") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = TextFieldDefaults.outlinedTextFieldColors(
+                    focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+            OutlinedTextField(value = desc, onValueChange = { desc = it },
+                label = { Text("描述") }, modifier = Modifier.fillMaxWidth(),
+                colors = TextFieldDefaults.outlinedTextFieldColors(
+                    focusedBorderColor = EpPrimary, cursorColor = EpPrimary))
+            KbTypeSelector(kbType) { kbType = it }
+        }
     }
 }
 
