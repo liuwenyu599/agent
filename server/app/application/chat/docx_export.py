@@ -8,6 +8,17 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.section import WD_ORIENT
 
+# ============ 政务公文规范字体（GB/T 9704）============
+# 标题：方正小标宋简体（无则仿宋_GB2312）
+# 正文：仿宋_GB2312
+# 一级标题：黑体
+# 二级标题：楷体_GB2312
+FONT_TITLE = '方正小标宋简体'   # 标题/红头，缺失时 Word 自动回退，可手动改为仿宋_GB2312
+FONT_TITLE_FALLBACK = '仿宋_GB2312'
+FONT_BODY = '仿宋_GB2312'      # 正文
+FONT_H1 = '黑体'              # 一级标题
+FONT_H2 = '楷体_GB2312'        # 二级标题
+
 
 def _set_font(run, name, size, bold=False, color=None):
     """设置字体"""
@@ -36,19 +47,29 @@ def _set_paragraph_format(p, alignment=None, first_line_indent=None,
         p.paragraph_format.space_after = space_after
 
 
+def _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12)):
+    """
+    添加通栏横线：用段落下边框实现（w:pBdr），宽度自动撑满版心，
+    不会像下划线字符那样换行或错位。
+    """
+    p = doc.add_paragraph()
+    _set_paragraph_format(p, space_after=space_after)
+    ppr = p._element.get_or_add_pPr()
+    ppr.append(parse_xml(
+        r'<w:pBdr {}><w:bottom w:val="single" w:sz="{}" w:space="1" w:color="{}"/></w:pBdr>'.format(
+            nsdecls('w'), size, color)
+    ))
+
+
 def _add_red_header(doc, title=""):
     """添加公文红头（发文机关标识）"""
     p = doc.add_paragraph()
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(6))
     run = p.add_run(title if title else "××司法局文件")
-    _set_font(run, '方正小标宋简体', Pt(22), color=RGBColor(0xFF, 0x00, 0x00))
+    _set_font(run, FONT_TITLE, Pt(22), color=RGBColor(0xFF, 0x00, 0x00))
 
-    # 添加红色分割线
-    p = doc.add_paragraph()
-    _set_paragraph_format(p, space_after=Pt(12))
-    # 通过下划线模拟分割线
-    run = p.add_run("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    _set_font(run, '宋体', Pt(12), color=RGBColor(0xFF, 0x00, 0x00))
+    # 红色分割线：通栏段落下边框，不换行
+    _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12))
 
 
 def _add_doc_number(doc, number=""):
@@ -56,7 +77,7 @@ def _add_doc_number(doc, number=""):
     p = doc.add_paragraph()
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
     run = p.add_run(number if number else "××司发〔2026〕××号")
-    _set_font(run, '仿宋', Pt(14))
+    _set_font(run, FONT_BODY, Pt(14))
 
 
 def _add_recipient(doc, recipient=""):
@@ -66,7 +87,7 @@ def _add_recipient(doc, recipient=""):
     p = doc.add_paragraph()
     _set_paragraph_format(p, space_after=Pt(6))
     run = p.add_run(recipient)
-    _set_font(run, '仿宋', Pt(16))
+    _set_font(run, FONT_BODY, Pt(16))
 
 
 def _parse_inline_formatting(p, text):
@@ -79,7 +100,7 @@ def _parse_inline_formatting(p, text):
         if part.startswith('**') and part.endswith('**'):
             run = p.add_run(part[2:-2])
             run.bold = True
-            _set_font(run, '仿宋', Pt(16))
+            _set_font(run, FONT_BODY, Pt(16))
         else:
             # 处理斜体 *text*
             sub_parts = re.split(r'((?<!\*)\*(?!\*).+?\*(?!\*))', part)
@@ -89,10 +110,10 @@ def _parse_inline_formatting(p, text):
                 if sub.startswith('*') and sub.endswith('*') and len(sub) > 2:
                     run = p.add_run(sub[1:-1])
                     run.italic = True
-                    _set_font(run, '仿宋', Pt(16))
+                    _set_font(run, FONT_BODY, Pt(16))
                 else:
                     run = p.add_run(sub)
-                    _set_font(run, '仿宋', Pt(16))
+                    _set_font(run, FONT_BODY, Pt(16))
 
 
 def _add_table(doc, lines, start_idx):
@@ -132,7 +153,7 @@ def _add_table(doc, lines, start_idx):
             for paragraph in hdr_cells[j].paragraphs:
                 _set_paragraph_format(paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
                 for run in paragraph.runs:
-                    _set_font(run, '黑体', Pt(12), bold=True)
+                    _set_font(run, FONT_H1, Pt(12), bold=True)
 
     # 设置数据行
     for row_idx, row_data in enumerate(data_rows):
@@ -143,7 +164,7 @@ def _add_table(doc, lines, start_idx):
                 for paragraph in row_cells[j].paragraphs:
                     _set_paragraph_format(paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
                     for run in paragraph.runs:
-                        _set_font(run, '仿宋', Pt(12))
+                        _set_font(run, FONT_BODY, Pt(12))
 
     return i
 
@@ -175,7 +196,7 @@ def _add_list_item(doc, line, level=0):
         prefix = ''
 
     run = p.add_run(prefix)
-    _set_font(run, '仿宋', Pt(16))
+    _set_font(run, FONT_BODY, Pt(16))
     _parse_inline_formatting(p, content)
 
     return p
@@ -201,7 +222,7 @@ def _add_blockquote(doc, lines, start_idx):
 
     full_text = ' '.join(quote_text)
     run = p.add_run(full_text)
-    _set_font(run, '楷体', Pt(15), color=RGBColor(0x66, 0x66, 0x66))
+    _set_font(run, FONT_H2, Pt(15), color=RGBColor(0x66, 0x66, 0x66))
 
     return i
 
@@ -233,11 +254,14 @@ def _add_code_block(doc, lines, start_idx):
 
 
 def _add_horizontal_rule(doc):
-    """添加水平分割线"""
+    """添加水平分割线（通栏段落下边框，不换行）"""
     p = doc.add_paragraph()
-    _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=Pt(6), space_after=Pt(6))
-    run = p.add_run('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    _set_font(run, '宋体', Pt(12), color=RGBColor(0xCC, 0xCC, 0xCC))
+    _set_paragraph_format(p, space_before=Pt(6), space_after=Pt(6))
+    ppr = p._element.get_or_add_pPr()
+    ppr.append(parse_xml(
+        r'<w:pBdr {}><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr>'.format(
+            nsdecls('w'))
+    ))
 
 
 def _add_page_setup(doc):
@@ -298,7 +322,7 @@ def _add_signature(doc, signature_text=""):
     p = doc.add_paragraph()
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.RIGHT, space_before=Pt(24), space_after=Pt(6))
     run = p.add_run(signature_text)
-    _set_font(run, '仿宋', Pt(16))
+    _set_font(run, FONT_BODY, Pt(16))
 
 
 def _add_date(doc, date_text=""):
@@ -309,7 +333,7 @@ def _add_date(doc, date_text=""):
     p = doc.add_paragraph()
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.RIGHT, space_after=Pt(12))
     run = p.add_run(date_text)
-    _set_font(run, '仿宋', Pt(16))
+    _set_font(run, FONT_BODY, Pt(16))
 
 
 def markdown_to_docx(text: str, title: str = "公文", 
@@ -351,7 +375,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
             run = p.add_run(title)
-            _set_font(run, '方正小标宋简体', Pt(22), bold=True)
+            _set_font(run, FONT_TITLE, Pt(22), bold=True)
 
     # 主送机关
     if recipient:
@@ -407,7 +431,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
             run = p.add_run(stripped[2:].strip())
-            _set_font(run, '方正小标宋简体', Pt(22), bold=True)
+            _set_font(run, FONT_TITLE, Pt(22), bold=True)
             i += 1
             continue
 
@@ -415,7 +439,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, space_before=Pt(12), space_after=Pt(6))
             run = p.add_run(stripped[3:].strip())
-            _set_font(run, '黑体', Pt(16), bold=True)
+            _set_font(run, FONT_H1, Pt(16), bold=True)
             i += 1
             continue
 
@@ -423,7 +447,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, space_before=Pt(6), space_after=Pt(3))
             run = p.add_run(stripped[4:].strip())
-            _set_font(run, '楷体', Pt(15), bold=True)
+            _set_font(run, FONT_H2, Pt(15), bold=True)
             i += 1
             continue
 
