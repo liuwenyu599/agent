@@ -159,7 +159,7 @@ def update_material(mid: str, name: str = Form(...), caption: str = Form(""),
 
 @router.delete("/materials/{mid}")
 def delete_material(mid: str, user: User = Depends(get_current_user),
-                    svc: PPTService = Depends(get_ppt_service)):
+                  svc: PPTService = Depends(get_ppt_service)):
     return svc.delete_material(mid, user)
 
 
@@ -274,6 +274,15 @@ def make_outline(body: OutlineIn,
                user: User = Depends(get_current_user),
                svc: PPTService = Depends(get_ppt_service)):
     return svc.make_outline(body, user)
+
+
+@router.post("/outline/precheck")
+def precheck_outline(body: OutlineIn,
+                     user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
+    """生成前预检：信息不足时返回需要向用户确认的关键问题（每个问题附默认方案），
+    防止 AI 在关键事实上瞎编；信息充足返回 sufficient=true 直接放行。"""
+    return svc.precheck_outline(body, user)
 
 
 @router.post("/outline/stream")
