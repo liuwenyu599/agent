@@ -26,6 +26,9 @@ class WorkflowViewModel(private val repo: WorkflowRepository) {
         private set
     var generatingNodeId by mutableStateOf<String?>(null)
         private set
+    /** AI 调整流程进行中（LLM 出节点清单 + 服务端落库，耗时与生成同级） */
+    var adjusting by mutableStateOf(false)
+        private set
 
     fun load() {
         scope.launch {
@@ -79,6 +82,30 @@ class WorkflowViewModel(private val repo: WorkflowRepository) {
         }
     }
 
+    /**
+     * AI 调整流程：工作流不是死模板，用户用自然语言说明怎么改
+     * （增/删节点、改写作要求、调顺序）。服务端返回调整后的完整实例，
+     * 直接替换 detail，并用 reply 如实告知保留/新增/移除了多少节点。
+     */
+    fun adjust(instId: String, instruction: String) {
+        if (instruction.isBlank() || adjusting) return
+        adjusting = true
+        status = "AI 正在按您的要求调整流程节点…"
+        scope.launch {
+            when (val r = repo.aiAdjust(instId, instruction.trim())) {
+                is ApiResult.Ok -> {
+                    val d = r.data.obj()
+                    if (d != null) detail = d
+                    status = d?.get("reply")?.str()?.takeIf { it.isNotBlank() }
+                        ?: "已按您的要求调整流程"
+                    load()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            adjusting = false
+        }
+    }
+
     fun generateNode(nodeInstId: String) {
         generatingNodeId = nodeInstId
         status = "节点生成中，请稍候…"
@@ -100,4 +127,3 @@ class WorkflowViewModel(private val repo: WorkflowRepository) {
         }
     }
 }
-

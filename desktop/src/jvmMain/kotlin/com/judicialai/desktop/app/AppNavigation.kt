@@ -37,7 +37,8 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
     KNOWLEDGE("知识库", Icons.Default.LibraryBooks),
     CHAT("历史记录", Icons.Default.History),
 
-    // 以下两个页面保留实现，入口收在「个人中心」，不占用主导航
+    // DOCUMENTS 保留实现，入口收在「个人中心」，不占用主导航；
+    // WORKFLOW 入口在「科室空间」（见 departmentItems）
     DOCUMENTS("我的文档", Icons.Default.Description),
     WORKFLOW("工作流", Icons.Default.Share),
 
@@ -76,14 +77,15 @@ object AppNav {
         NavItem(AppScreen.FORMAT_CHECK, desc = "公文规范逐条检查"),
     )
 
-    /** 科室空间：本科室资源空间（智能助手 + 常用业务 + 知识 + 模板），不是 Agent 选择器 */
+    /** 科室空间：本科室资源空间（智能助手 + 常用业务 + 工作流 + 知识 + 模板），不是 Agent 选择器 */
     val departmentItems: List<NavItem> = listOf(
         NavItem(AppScreen.DEPARTMENT, desc = "智能助手、常用业务、知识与模板"),
+        NavItem(AppScreen.WORKFLOW, desc = "会议与专项流程，节点可用 AI 调整"),
     )
 
     val businessItems: List<NavItem> = listOf(
         NavItem(AppScreen.KNOWLEDGE, desc = "公共 + 本科室 + 个人知识"),
-        NavItem(AppScreen.CHAT, desc = "我生成的对话、文档与 PPT"),
+        NavItem(AppScreen.CHAT, desc = "我生成的对话、文档、PPT 与工作流"),
     )
 
     /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档） */
@@ -101,7 +103,7 @@ object AppNav {
     /** 全局导航抽屉分组 */
     val groups: List<NavGroup> = listOf(
         NavGroup("core", "核心生产力", "日常公文办公的主入口", coreItems),
-        NavGroup("dept", "科室空间", "智能助手、知识与模板", departmentItems),
+        NavGroup("dept", "科室空间", "智能助手、工作流、知识与模板", departmentItems),
         NavGroup("business", "知识与记录", "资料与归档", businessItems),
     )
 

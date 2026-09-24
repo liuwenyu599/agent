@@ -40,6 +40,19 @@ class WorkflowRepository(private val api: ApiClient) {
             "workflow_context" to emptyMap<String, String>(),
         ))
 
+    /** PUT /workflow/instances/{id} {title} → 重命名工作流（历史记录入口共用） */
+    suspend fun renameInstance(id: String, title: String) =
+        api.put(Endpoints.Workflow.instance(id), mapOf("title" to title))
+
+    /**
+     * POST /workflow/instances/{id}/ai-adjust {instruction}
+     * AI 按自然语言要求调整节点（增/删/改名/改写作要求/调顺序），
+     * 返回调整后的完整实例 + reply 调整说明。耗时操作，走长超时。
+     */
+    suspend fun aiAdjust(id: String, instruction: String) =
+        api.post(Endpoints.Workflow.instance(id) + "/ai-adjust",
+            mapOf("instruction" to instruction), timeoutMs = 180_000)
+
     suspend fun deleteInstance(id: String) = api.del(Endpoints.Workflow.instance(id))
 
     /** POST /workflow/nodes/{id}/generate {instruction, save} */
@@ -54,4 +67,3 @@ class WorkflowRepository(private val api: ApiClient) {
             status?.let { put("status", it) }
         })
 }
-
