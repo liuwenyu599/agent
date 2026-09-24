@@ -208,6 +208,8 @@ class RagService:
             results.append({
                 "content": content,
                 "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
+                # 带出文档 id：调用方（写作规划的材料清单）要按文档去重并给出「查看」入口
+                "doc_id": doc_id,
                 "score": score,
                 "match_type": "hybrid" if (hit and kw) else ("vector" if hit else "keyword"),
                 "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),

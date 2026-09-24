@@ -154,9 +154,36 @@ class WritingTaskService:
             "version_no": t.version_no or 0,
             "status": t.status,
             "char_count": len(t.current_content or ""),
+            # 引用资料随任务落库：GET /writing/tasks/{id} 恢复任务时也要能带回来，
+            # 否则切走再切回页面后「依据」栏永远是空的
+            "references": list((t.context or {}).get("references") or []),
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "updated_at": t.updated_at.isoformat() if t.updated_at else None,
         }
+
+    # RAG 返回的 source 形如「文档标题（第N段）」，这里只用来剥掉段号取回文档标题
+    _CHUNK_SUFFIX_RE = re.compile(r"（第\d+段）\s*$")
+
+    @classmethod
+    def _reference_labels(cls, sources: List[Dict]) -> List[str]:
+        """把逐段命中的检索结果合并成「一份资料一条」的引用清单。
+
+        同一篇文档命中多段时，RAG 会返回多条只有段号不同的记录；
+        直接透传会让「依据」栏变成一屏重复、看不出差别的长串。
+        这里按文档去重，命中多段时用「（命中 N 段）」表达，保留真实信息不虚构。
+        """
+        order: List[str] = []
+        counts: Dict[str, int] = {}
+        for s in sources or []:
+            raw = (s or {}).get("source") or ""
+            if not raw:
+                continue
+            title = cls._CHUNK_SUFFIX_RE.sub("", raw).strip() or raw.strip()
+            if title not in counts:
+                counts[title] = 0
+                order.append(title)
+            counts[title] += 1
+        return [t if counts[t] <= 1 else f"{t}（命中 {counts[t]} 段）" for t in order]
 
     def create_task(self, user_id: str, message: str,
                     session_id: Optional[str] = None,
@@ -267,6 +294,7 @@ class WritingTaskService:
         ])).strip()
         if not query:
             return []
+        kb_ids: List[str] = []
         try:
             dept_code = org_ctx.get("dept_code") or ""
             scopes = org_ctx.get("scopes")
@@ -292,8 +320,35 @@ class WritingTaskService:
                 })
             return out
         except Exception as e:
-            logger.warning("[写作规划] 材料检索失败: %s", e)
+            logger.warning("[写作规划] 材料向量检索失败: %s", e)
+        # 向量库不可用（未建索引 / 依赖缺失）时回退混合检索：
+        # 写作时真正用的就是这条链路，规划阶段不能因为它不可用就把材料清单给空掉
+        return self._plan_materials_fallback(query, user_id, kb_ids)
+
+    def _plan_materials_fallback(self, query: str, user_id: str,
+                                 kb_ids: List[str]) -> List[Dict[str, Any]]:
+        """用 RagService.search（向量 + 关键词双路召回）兜底出材料清单。"""
+        try:
+            hits = self.rag.search(query=query, user_id=user_id,
+                                   kb_ids=kb_ids or None, top_k=8)
+        except Exception as e:
+            logger.warning("[写作规划] 材料检索回退失败: %s", e)
             return []
+        out, seen = [], set()
+        for h in hits or []:
+            doc_id = h.get("doc_id")
+            if not doc_id or doc_id in seen:
+                continue
+            seen.add(doc_id)
+            # source 形如「标题（第N段）」，剥掉段号取标题
+            raw = h.get("source") or ""
+            title = self._CHUNK_SUFFIX_RE.sub("", raw).strip()
+            if not title:
+                _doc = self.db.get(DocumentModel, doc_id)
+                title = (_doc.title if _doc else "") or "未命名材料"
+            out.append({"id": doc_id, "label": title,
+                        "selected": len(out) < 3, "note": ""})
+        return out
 
     def _plan_knowledge(self, user_id: str,
                         org_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -558,6 +613,9 @@ class WritingTaskService:
             ctx["document_number"] = doc_number
         if doc_date:
             ctx["document_date"] = doc_date
+        # 引用清单按文档去重后随任务落库，供后续 GET 任务时回放
+        references = self._reference_labels(sources)
+        ctx["references"] = references
         t.context = ctx
         t.current_content = text
         if not t.ai_draft:
@@ -577,14 +635,14 @@ class WritingTaskService:
         else:
             reply = (f"已按当前任务参数继续生成一版（v{ver}），上一版仍在「历史版本」中可随时查看/回退；"
                      "不满意可先修改左侧参数再点「继续生成」。")
-        if sources:
-            reply += f"本次检索到 {len(sources)} 份内部资料作为写作依据。"
+        if references:
+            reply += f"本次检索到 {len(references)} 份内部资料作为写作依据。"
         if ctx.get("missing_fields"):
             reply += "以下内容因缺少事实依据已标注：" + "、".join(ctx["missing_fields"]) + "。"
         reply += "您可以继续对话修改，或直接编辑正文后保存版本。"
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
                 "quality": quality, "postprocess_events": events,
-                "references": [s.get("source", "") for s in sources if s.get("source")]}
+                "references": references}
 
     # ---------------- 修改（核心：作用于当前文档） ----------------
 
@@ -616,6 +674,9 @@ class WritingTaskService:
             ctx["document_number"] = doc_number
         if doc_date:
             ctx["document_date"] = doc_date
+        # 改写同样带检索：有命中就更新引用清单，没命中保留上一版（不把已有依据清空）
+        references = self._reference_labels(sources) or list(ctx.get("references") or [])
+        ctx["references"] = references
         t.context = ctx
 
         t.current_content = revised
@@ -629,7 +690,8 @@ class WritingTaskService:
         if changes:
             reply += "任务信息同步更新：" + "；".join(changes) + "。"
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
-                "quality": quality, "postprocess_events": events, "context_changes": changes}
+                "quality": quality, "postprocess_events": events, "context_changes": changes,
+                "references": references}
 
     # ---------------- 版本 / 导出 ----------------
 

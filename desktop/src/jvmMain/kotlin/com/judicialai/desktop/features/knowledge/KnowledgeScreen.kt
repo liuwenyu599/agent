@@ -134,6 +134,12 @@ fun KnowledgeDocDialog(
                 OutlinedTextField(
                     value = content, onValueChange = onContentChange,
                     label = { Text("正文内容") },
+                    // 加载中或该文档本身没有正文时，360dp 的文本框不能是一片纯空白，
+                    // 否则用户会以为「参考资料看不到」
+                    placeholder = {
+                        Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
+                            fontSize = 12.sp, color = TextPlaceholder)
+                    },
                     modifier = Modifier.fillMaxWidth().height(360.dp),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
