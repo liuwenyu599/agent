@@ -145,7 +145,8 @@ class KnowledgeService:
             if not is_system_admin(user):
                 raise PermissionDeniedError("仅系统管理员可将知识库设为公共（全员可见）")
             kb.kb_type = KB_TYPE_PUBLIC
-            kb.department_code = None
+            # department_code 列 NOT NULL：清空归属必须写空串，写 None 会 500
+            kb.department_code = ""
             kb.owner_id = None
         elif kind == "department":
             if not (is_knowledge_admin(user) or is_system_admin(user)):
@@ -158,7 +159,8 @@ class KnowledgeService:
             kb.owner_id = None
         elif kind == "personal":
             kb.kb_type = KB_TYPE_PERSONAL
-            kb.department_code = None
+            # department_code 列 NOT NULL：清空归属必须写空串，写 None 会 500
+            kb.department_code = ""
             if not getattr(kb, "owner_id", None):
                 kb.owner_id = user.id
         else:
