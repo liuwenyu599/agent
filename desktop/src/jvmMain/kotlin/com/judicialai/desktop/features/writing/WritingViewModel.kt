@@ -245,10 +245,22 @@ class WritingViewModel(
 
     // ---------------- 入口 ----------------
 
+    /**
+     * 开新任务前的隔离动作：作废旧任务的跨页恢复标记、清掉残留的一次性跳转参数。
+     * 不做这一步，「创建期间切走再切回」会把上一个任务（连同它的工作内容）
+     * 恢复到本次新任务的工作台里，表现为上下文串话。
+     */
+    private fun isolateNewTask() {
+        AppState.pendingWritingTaskId = null
+        AppState.pendingWritingIntent = null
+        AppState.pendingWritingTemplate = null
+    }
+
     /** 一句话启动任务 */
     fun startFromIntent() {
         val text = entryInput.trim()
         if (text.isBlank() || busy) return
+        isolateNewTask()
         busy = true
         AppState.writingGenerating = true
         AppState.writingLastError = null
@@ -281,6 +293,7 @@ class WritingViewModel(
     fun planAndStart() {
         val text = entryInput.trim()
         if (text.isBlank() || busy) return
+        isolateNewTask()
         busy = true
         AppState.writingGenerating = true
         AppState.writingLastError = null
@@ -320,9 +333,15 @@ class WritingViewModel(
      * 模板中心「使用模板」直达：模板要素已在模板中心内联填好，
      * 这里直接创建绑定该模板的写作任务（template_id 随任务落库），
      * 成功后自动起草初稿——与智能写作工作台同一套对话/版本/导出能力。
+     *
+     * 注意：这是「开新任务」语义。即便当前已恢复出旧任务（例如页面未被销毁、
+     * hasTask 仍为 true），也必须先清场再建任务，否则旧任务的工作内容
+     * 会混进本次模板任务（上下文串话）。
      */
     fun startFromTemplate(p: PendingTemplateWrite) {
-        if (busy || hasTask) return
+        if (busy) return
+        isolateNewTask()
+        newTask()
         busy = true
         AppState.writingGenerating = true
         AppState.writingLastError = null
