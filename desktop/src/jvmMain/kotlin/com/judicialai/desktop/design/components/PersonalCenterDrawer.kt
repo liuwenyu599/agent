@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -76,9 +75,6 @@ import com.judicialai.desktop.features.personal.PersonalViewModel
 /**
  * 个人中心：承载「我的工作」与账号设置，使 HOME 只保留四大生产力入口。
  * 最近使用 / 我的文档 / 我的收藏 / 账号安全 / 个人设置 / 个性化。
- *
- * 左侧分区菜单下方另有「快捷入口」：收拢不占主导航的页面（工作流），
- * 与分区互斥切换不同，这里是跳转语义——点击后直接切页并关闭抽屉。
  */
 @Composable
 fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
@@ -134,18 +130,6 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                     Spacer(Modifier.height(Dimens.space1))
                 }
 
-                // 快捷入口：按 AppScreen 注释的约定，工作流不占主导航，入口收在个人中心
-                Spacer(Modifier.height(Dimens.space2))
-                Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
-                Spacer(Modifier.height(Dimens.space2))
-                DrawerJumpRow(
-                    icon = Icons.Default.Share,
-                    text = "工作流",
-                    onClick = {
-                        AppState.navigate(AppScreen.WORKFLOW)
-                        onDismiss()
-                    },
-                )
                 Spacer(Modifier.weight(1f))
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
@@ -551,26 +535,6 @@ private fun SettingsPanel(vm: PersonalViewModel) {
         ) {
             Text("退出登录", fontSize = 13.sp, color = Warn)
         }
-    }
-}
-
-/**
- * 抽屉快捷入口行：图标 + 文案，用于跳转到不占主导航的页面。
- * 排版沿用左侧分区行（Dimens.radiusSm / space3 / space2+2dp / 13.sp），
- * 文案用 Ink2、图标用 Muted2，区分于「选中态」的分区行。
- */
-@Composable
-private fun DrawerJumpRow(icon: ImageVector, text: String, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(Dimens.radiusSm))
-            .clickable { onClick() }
-            .padding(horizontal = Dimens.space3, vertical = Dimens.space2 + 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = Muted2, modifier = Modifier.size(Dimens.iconSm))
-        Spacer(Modifier.width(Dimens.space2))
-        Text(text, fontSize = 13.sp, color = Ink2)
     }
 }
 
