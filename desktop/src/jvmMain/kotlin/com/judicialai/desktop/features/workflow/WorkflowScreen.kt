@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
@@ -50,6 +49,9 @@ import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
 import com.judicialai.desktop.design.theme.EpSuccess
@@ -67,7 +69,7 @@ import kotlinx.serialization.json.JsonObject
 
 private val tplColors = listOf(QuickBlue, QuickGreen, QuickOrange, QuickPurple, QuickTeal)
 
-/** 工作流：1:1 还原 Web WorkflowsView（页头 + 分类 chips + 模板卡片 + 我的工作流） */
+/** 工作流程：1:1 还原 Web WorkflowsView（页头 + 分类 chips + 模板卡片 + 我的工作流） */
 @Composable
 fun WorkflowScreen() {
     val vm = remember { WorkflowViewModel(Repositories.workflow) }
@@ -107,7 +109,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
                     }
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("公共工作流", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                        Text("工作流程", fontSize = 18.sp, fontWeight = FontWeight.Bold,
                             color = TextPrimary)
                         Text("提供常用办公流程模板，支持一键创建，智能生成各类材料；创建后可用 AI 调整节点",
                             fontSize = 12.sp, color = TextSecondary)
@@ -188,26 +190,25 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
 
     showCreate?.let { tpl ->
         var title by remember { mutableStateOf(tpl["name"].str()) }
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showCreate = null },
-            title = { Text("新建工作流：${tpl["name"].str()}") },
-            text = {
-                OutlinedTextField(value = title, onValueChange = { title = it },
-                    label = { Text("工作流标题") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-            },
-            confirmButton = {
-                Button(onClick = {
-                    if (title.isNotBlank()) {
+            title = "新建工作流：${tpl["name"].str()}",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { showCreate = null },
+                    kind = AppButtonKind.SECONDARY)
+                AppButton("创建",
+                    onClick = {
                         vm.create(tpl["code"].str().ifBlank { tpl["id"].str() }, title)
                         showCreate = null
-                    }
-                }, colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
-                    Text("创建", color = Color.White)
-                }
+                    },
+                    enabled = title.isNotBlank())
             },
-            dismissButton = { TextButton(onClick = { showCreate = null }) { Text("取消") } },
-        )
+        ) {
+            OutlinedTextField(value = title, onValueChange = { title = it },
+                label = { Text("工作流标题") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
