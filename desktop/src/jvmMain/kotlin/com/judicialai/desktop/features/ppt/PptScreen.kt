@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
@@ -56,6 +57,7 @@ import com.judicialai.desktop.core.platform.rememberServerImage
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.theme.SecondaryText
+import kotlinx.coroutines.delay
 
 /** 页型中文标签（与服务端 10 种页型一致） */
 val SLIDE_TYPE_LABELS = linkedMapOf(
@@ -70,7 +72,7 @@ fun slideTypeLabel(type: String) = SLIDE_TYPE_LABELS[type] ?: type
 /**
  * PPT 助手工作台（重设计）：
  * 新建 = 极简入口（材料 + 一句话意图 + 可选项，无技术参数）
- * → 流式大纲 → 可编辑大纲确认 → 三栏工作台；
+ * → 生成前预检（信息不足先确认） → 流式大纲 → 可编辑大纲确认 → 三栏工作台；
  * 我的 PPT = 打开续改 / 导入已有 PPT / 下载 / 删除；模板库保持不变。
  */
 @Composable
@@ -90,6 +92,11 @@ fun PptScreen() {
     // 以 id 为 key：id 从 null 变为具体值时（生成完成）自动执行一次恢复
     LaunchedEffect(pendingDocId) {
         if (pendingDocId != null && vm.docId == null) vm.openDocument(pendingDocId)
+    }
+
+    // 生成前预检：信息不足时弹出关键信息确认框（90 秒未操作自动按默认方案生成）
+    vm.pendingConfirm?.let { qs ->
+        if (qs.isNotEmpty()) PptPrecheckDialog(vm, qs)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -120,6 +127,51 @@ fun PptScreen() {
             }
         }
     }
+}
+
+/**
+ * 生成前确认框：预检发现关键信息不足时列出待确认问题（预填默认方案）。
+ * 90 秒倒计时结束或点击「按默认方案生成」→ 用默认方案直接开跑；点「取消」放弃本次生成。
+ */
+@Composable
+private fun PptPrecheckDialog(vm: PptViewModel, questions: List<ConfirmQuestion>) {
+    var remaining by remember { mutableStateOf(90) }
+    LaunchedEffect(questions) {
+        while (remaining > 0 && vm.pendingConfirm != null) {
+            delay(1000)
+            remaining--
+        }
+        // 倒计时结束仍未操作：按最合理的默认方案先跑
+        if (vm.pendingConfirm != null) vm.confirmAndGenerate(useAnswers = false)
+    }
+    AlertDialog(
+        onDismissRequest = { vm.cancelConfirm() },
+        title = { Text("生成前请确认关键信息") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("为避免凭空编造，请确认以下信息；留空则按默认方案生成。",
+                    style = MaterialTheme.typography.caption, color = SecondaryText)
+                questions.forEach { q ->
+                    OutlinedTextField(
+                        value = q.answer, onValueChange = { q.answer = it },
+                        label = { Text(q.question) },
+                        modifier = Modifier.fillMaxWidth())
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { vm.confirmAndGenerate(useAnswers = true) }) { Text("确认并生成") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { vm.cancelConfirm() }) { Text("取消") }
+                Spacer(Modifier.width(4.dp))
+                TextButton(onClick = { vm.confirmAndGenerate(useAnswers = false) }) {
+                    Text("按默认方案生成（${remaining}s）")
+                }
+            }
+        },
+    )
 }
 
 /**
