@@ -5,10 +5,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import java.io.File
@@ -31,6 +34,21 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
 
     /** 知识库编辑弹窗（管理员）：名称 / 描述 / 类型 */
     var editingKb by mutableStateOf<JsonObject?>(null)
+
+    // ---- 库内文档搜索 ----
+    /** 当前搜索词；输入即搜（300ms 防抖） */
+    var searchQuery by mutableStateOf("")
+        private set
+    /**
+     * 搜索结果：null = 未在搜索（显示普通文档列表）；非 null = 搜索结果。
+     * 服务端一次请求返回全部结果（标题命中排前、内容命中排后），
+     * 拿到即替换显示，不等任何「后续查询」。
+     */
+    var searchResults by mutableStateOf<List<JsonObject>?>(null)
+        private set
+    var searching by mutableStateOf(false)
+        private set
+    private var searchJob: Job? = null
 
     // ---- 文档查看 / 编辑弹窗 ----
     var docDialogId by mutableStateOf<String?>(null)
@@ -59,6 +77,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun back() {
         currentKb = null
         docs = emptyList()
+        clearSearch()
     }
 
     fun loadKbs() {
@@ -75,6 +94,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
 
     fun select(kb: JsonObject) {
         currentKb = kb
+        clearSearch()
         loadDocs()
     }
 
@@ -88,6 +108,37 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         }
     }
 
+    // ---- 库内搜索：即输即搜，结果一返回就显示 ----
+
+    fun search(q: String) {
+        searchQuery = q
+        val kbId = currentKb?.get("id")?.str()
+        if (q.isBlank() || kbId == null) {
+            searchJob?.cancel()
+            searching = false
+            searchResults = null
+            return
+        }
+        // 防抖：连续输入只发最后一次；每次只发一个请求，响应到达立刻出列表
+        searchJob?.cancel()
+        searchJob = scope.launch {
+            searching = true
+            delay(300)
+            when (val r = repo.searchDocuments(kbId, q.trim())) {
+                is ApiResult.Ok -> searchResults = r.data
+                is ApiResult.Err -> status = r.message
+            }
+            searching = false
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        searchQuery = ""
+        searchResults = null
+        searching = false
+    }
+
     /** kbType：public（仅系统管理员）/ department（科室管理员）/ personal（普通用户） */
     fun create(name: String, desc: String, kbType: String) {
         scope.launch {
@@ -98,13 +149,34 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         }
     }
 
-    /** 编辑知识库（管理员）：类型可改为公共 / 科室 / 个人，细粒度权限由服务端按角色校验 */
+    /**
+     * 编辑知识库（管理员）：类型可改为公共 / 科室 / 个人。
+     * 保存后以服务端返回的「实际生效类型」核对所选类型：
+     * 旧版本服务端不支持改类型时会静默忽略，这里发现不一致必须明说，
+     * 不能提示「已更新」让人误以为类型改成功了。
+     */
     fun updateKb(id: String, name: String, desc: String, kbType: String) {
         scope.launch {
             when (val r = repo.updateKb(id, name, desc, kbType)) {
                 is ApiResult.Ok -> {
                     editingKb = null
-                    status = "知识库已更新"
+                    val d = r.data.obj()
+                    val effectiveType = d?.get("type")?.str().orEmpty()
+                    val deptCode = d?.get("department_code")?.str().orEmpty()
+                    val effectiveKind = when {
+                        deptCode.isNotBlank() -> "department"
+                        effectiveType == "public" -> "public"
+                        effectiveType.isBlank() -> kbType // 旧服务端不回传类型：无法核对，按成功处理
+                        else -> "personal"
+                    }
+                    status = if (effectiveKind == kbType) {
+                        "知识库已更新"
+                    } else {
+                        val label = when (effectiveKind) {
+                            "department" -> "科室"; "public" -> "公共"; else -> "个人"
+                        }
+                        "名称/描述已保存，但类型未生效（实际仍为「$label」）：可能是权限不足，或服务端版本过旧需要更新"
+                    }
                     loadKbs()
                 }
                 is ApiResult.Err -> status = r.message
@@ -119,6 +191,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
                     if (id == currentKb?.get("id")?.str()) {
                         currentKb = null
                         docs = emptyList()
+                        clearSearch()
                     }
                     loadKbs()
                 }
@@ -144,7 +217,13 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun deleteDocument(docId: String) {
         scope.launch {
             when (val r = repo.deleteDocument(docId)) {
-                is ApiResult.Ok -> loadDocs()
+                is ApiResult.Ok -> {
+                    loadDocs()
+                    // 正在搜索时同步删掉结果里的这一条
+                    searchResults?.let { list ->
+                        searchResults = list.filter { it["id"].str() != docId }
+                    }
+                }
                 is ApiResult.Err -> status = r.message
             }
         }

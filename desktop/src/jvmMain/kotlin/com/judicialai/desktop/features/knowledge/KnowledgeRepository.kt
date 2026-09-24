@@ -3,6 +3,7 @@ package com.judicialai.desktop.features.knowledge
 import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
+import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import kotlinx.serialization.json.JsonObject
@@ -34,6 +35,18 @@ class KnowledgeRepository(private val api: ApiClient) {
     suspend fun listDocuments(kbId: String): ApiResult<List<JsonObject>> =
         when (val r = api.get(Endpoints.Knowledge.documents(kbId))) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+            is ApiResult.Err -> r
+        }
+
+    /**
+     * 库内文档搜索：GET /knowledge/{kbId}/documents/search?q=。
+     * 服务端一次返回全部结果：标题命中排前（match=title）、内容命中排后（match=content，带 snippet）。
+     */
+    suspend fun searchDocuments(kbId: String, q: String): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.Knowledge.documents(kbId) + "/search?q=" +
+                java.net.URLEncoder.encode(q, "UTF-8"))) {
+            is ApiResult.Ok -> ApiResult.Ok(
+                r.data.obj()?.get("data").arr().mapNotNull { it.obj() })
             is ApiResult.Err -> r
         }
 
