@@ -10,8 +10,10 @@ import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -126,6 +128,15 @@ class PptViewModel(private val repo: PptRepository) {
     var selected by mutableStateOf(0)
     var outlineStage by mutableStateOf("")
         private set
+
+    /** 大纲生成协程句柄：「取消生成」用；切页不取消（协程独立于界面） */
+    private var outlineJob: Job? = null
+
+    // ---- 导出（生成 PPT）阶段与取消 ----
+    /** 导出阶段文案（底部状态栏展示）：保存草稿 → PPTAgent 渲染 → 写入文件 */
+    var exportStage by mutableStateOf("")
+        private set
+    private var exportJob: Job? = null
 
     // ---- 逐页真实预览（服务端渲染 PNG；404/失败时回退结构化预览卡） ----
     var previewPages by mutableStateOf(listOf<String>())
@@ -290,7 +301,7 @@ class PptViewModel(private val repo: PptRepository) {
         )
     }
 
-    // ================= 大纲生成（生成前预检 + 流式 + 回退） =================
+    // ================= 大纲生成（生成前预检 + 流式 + 回退 + 可取消） =================
 
     private fun outlineBody(): Map<String, Any?> {
         val content = buildString {
@@ -328,7 +339,7 @@ class PptViewModel(private val repo: PptRepository) {
         outlineStage = "正在检查关键信息是否齐全…"
         status = null
         val body = outlineBody()
-        scope.launch {
+        outlineJob = scope.launch {
             // 生成前预检：信息不足时先向用户确认（每个问题附默认方案），避免 AI 瞎编；
             // 预检接口失败一律放行，不阻塞生成
             var questions: List<ConfirmQuestion> = emptyList()
@@ -354,6 +365,17 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
+    /** 取消本次大纲生成：取消协程（底层 HTTP 请求随之中断），界面回到入口页 */
+    fun cancelOutline() {
+        outlineJob?.cancel()
+        outlineJob = null
+        pendingConfirm = null
+        busy = false
+        outlineStage = ""
+        AppState.pptOutlineGenerating = false
+        status = "已取消本次大纲生成"
+    }
+
     /** 确认问题答案后生成；useAnswers=false 表示全部按默认方案 */
     fun confirmAndGenerate(useAnswers: Boolean) {
         val qs = pendingConfirm ?: return
@@ -370,7 +392,7 @@ class PptViewModel(private val repo: PptRepository) {
         body["content"] = (((body["content"] as? String) ?: "") + "\n\n" + extra).trim()
         busy = true
         status = null
-        scope.launch { launchOutline(body) }
+        outlineJob = scope.launch { launchOutline(body) }
     }
 
     /** 取消本次生成（既不想确认也不想按默认方案跑） */
@@ -391,6 +413,9 @@ class PptViewModel(private val repo: PptRepository) {
         var ok = false
         try {
             ok = runOutline(body)
+        } catch (e: CancellationException) {
+            // 用户点了「取消生成」：向上抛出让协程正常结束，不当成失败
+            throw e
         } catch (e: Exception) {
             status = "大纲生成中断：${e.message ?: "未知错误"}"
         } finally {
@@ -591,7 +616,10 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
-    /** 生成并导出：先保存草稿，再渲染 pptx，最后让用户选保存位置 */
+    /**
+     * 生成并导出：先保存草稿，再由 PPTAgent 真实渲染 pptx，最后让用户选保存位置下载。
+     * 全程分阶段可见（exportStage），可取消。
+     */
     fun generateAndExport(target: File) {
         val id = docId ?: return
         // 同 startOutline：切回页面后 busy 已重置，仅靠 busy 挡不住重复导出，
@@ -603,13 +631,16 @@ class PptViewModel(private val repo: PptRepository) {
         busy = true
         AppState.pptExporting = true
         AppState.pptLastError = null
-        status = "正在生成 PPT（模板学习渲染）…"
-        scope.launch {
+        exportStage = "正在保存大纲草稿…"
+        status = null
+        exportJob = scope.launch {
             var failed: String? = null
             try {
                 repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
+                exportStage = "PPTAgent 正在按模板渲染 PPT…"
                 when (val r = repo.generate(id, outlineJson(), templateId)) {
                     is ApiResult.Ok -> {
+                        exportStage = "渲染完成，正在写入文件…"
                         status = when (val d = repo.downloadDocument(id, target)) {
                             is ApiResult.Ok -> d.data
                             is ApiResult.Err -> d.message.also { failed = it }
@@ -618,17 +649,31 @@ class PptViewModel(private val repo: PptRepository) {
                     }
                     is ApiResult.Err -> status = r.message.also { failed = it }
                 }
+            } catch (e: CancellationException) {
+                // 用户点了「取消」：不当成失败
+                throw e
             } catch (e: Exception) {
                 failed = "导出失败：${e.message ?: "未知错误"}"
                 status = failed
             } finally {
                 // 导出协程同样不随页面切换取消，这里保证标记一定复位
                 busy = false
+                exportStage = ""
                 AppState.pptExporting = false
             }
             // 切走期间导出失败时，本地 status 会随 ViewModel 一起丢失
             AppState.pptLastError = failed
         }
+    }
+
+    /** 取消导出：中断等待（服务端已渲染的部分不影响，本地不会写入半成品文件） */
+    fun cancelExport() {
+        exportJob?.cancel()
+        exportJob = null
+        busy = false
+        exportStage = ""
+        AppState.pptExporting = false
+        status = "已取消本次导出"
     }
 
     // ================= AI 助手（单页局部编辑优先） =================
