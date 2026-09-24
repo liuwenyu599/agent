@@ -463,8 +463,60 @@ class PPTService:
         d = self._get_doc_checked(doc_id, user)
         if d.file_path and os.path.exists(d.file_path):
             os.remove(d.file_path)
+        prev_dir = self.ppt_dir / "preview" / d.id
+        if prev_dir.exists():
+            shutil.rmtree(prev_dir, ignore_errors=True)
         self.documents.delete(d)
         return {"message": "已删除"}
+
+    # ================= 逐页预览（工作台中栏真实版式） =================
+    def preview_document(self, doc_id: str, user: User) -> dict:
+        """把当前草稿渲染成 pptx 并逐页转 PNG，供工作台中栏显示真实版式。
+        依赖容器内 LibreOffice（soffice）+ poppler（pdftoppm）；不可用时返回 500，
+        前端自动回退到结构化预览卡，不影响其它功能。"""
+        d = self._get_doc_checked(doc_id, user)
+        if not d.outline:
+            raise NotFoundError("文档不存在或内容为空")
+        template, trow = self._resolve_template(d.template_id, d.theme_id or "")
+        outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
+        data = ppt_engine.render_pptx(outline, template, base_pptx=self._tpl_base_bytes(trow))
+        prev_dir = self.ppt_dir / "preview" / d.id
+        if prev_dir.exists():
+            shutil.rmtree(prev_dir, ignore_errors=True)
+        prev_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            import subprocess
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                src = os.path.join(td, "prev.pptx")
+                with open(src, "wb") as f:
+                    f.write(data)
+                subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
+                                "--outdir", td, src], timeout=180, capture_output=True)
+                pdf = os.path.join(td, "prev.pdf")
+                if not os.path.exists(pdf):
+                    shutil.rmtree(prev_dir, ignore_errors=True)
+                    raise AppError(500, "预览渲染失败：LibreOffice 不可用")
+                subprocess.run(["pdftoppm", "-png", "-r", "90", pdf,
+                                os.path.join(str(prev_dir), "pg")],
+                               timeout=120, capture_output=True)
+        except AppError:
+            raise
+        except Exception as e:
+            shutil.rmtree(prev_dir, ignore_errors=True)
+            raise AppError(500, f"预览渲染失败：{e}")
+        names = sorted(p.name for p in prev_dir.glob("pg-*.png"))
+        return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in names],
+                "count": len(names)}
+
+    def preview_image(self, doc_id: str, name: str, user: User) -> Path:
+        """预览图下载（仅本人文档的预览目录，防目录穿越）。"""
+        d = self._get_doc_checked(doc_id, user)
+        root = (self.ppt_dir / "preview" / d.id).resolve()
+        p = (root / name).resolve()
+        if root != p.parent or not p.exists():
+            raise NotFoundError("预览图不存在")
+        return p
 
     # ================= 生成流程 =================
     def list_kbs(self) -> dict:
@@ -590,10 +642,11 @@ class PPTService:
 
     # ================= 材料分析（先看见分析结果，再生成大纲） =================
     async def analyze_materials(self, files, user: User) -> dict:
-        """上传材料并逐份分析：提取文本 + AI 摘要（重点 / 数据表 / 约束条件）。
+        """上传材料并逐份结构化分析：性质摘要 + 重点清单 + 数据表数量 + 提取文本。
 
-        让「上传完黑盒等待」变成可见的分析结果；返回的 text 供后续大纲步骤
-        拼接使用（前端不必再调 extract-text）。
+        让「上传完黑盒等待」变成可见的分析结果（已分析 N 份材料，提取 X 个重点，
+        识别 Y 张数据表）；返回的 text 供后续大纲步骤拼接使用（前端不必再调
+        extract-text）。
         """
         if not files:
             raise AppError(400, "请先选择材料文件")
@@ -604,32 +657,62 @@ class PPTService:
             if not data:
                 continue
             text = self._extract_any(f.filename or "unnamed", data)
-            summary = self._summarize_material(assistant, f.filename or "材料", text)
+            summary, key_points, tables = self._analyze_material(
+                assistant, f.filename or "材料", text)
             items.append({
                 "filename": f.filename, "chars": len(text),
                 "summary": summary,
+                "key_points": key_points,
+                "tables": tables,
                 "text": text[:4000],
             })
         if not items:
             raise AppError(400, "没有可解析的材料")
-        return {"items": items, "message": f"已分析 {len(items)} 份材料"}
+        totals = {
+            "materials": len(items),
+            "key_points": sum(len(i["key_points"]) for i in items),
+            "tables": sum(i["tables"] for i in items),
+        }
+        return {"items": items, "totals": totals,
+                "message": f"已分析 {totals['materials']} 份材料，"
+                           f"提取 {totals['key_points']} 个重点，"
+                           f"识别 {totals['tables']} 张数据表"}
 
     @staticmethod
-    def _summarize_material(assistant, filename: str, text: str) -> str:
-        """单份材料的一句话性质说明 + 重点/数据表/约束，失败时返回空串不阻断。"""
+    def _analyze_material(assistant, filename: str, text: str):
+        """单份材料结构化分析：一句话性质说明 + 重点清单 + 数据表数量。
+        返回 (summary, key_points, tables)；失败时返回 (\"\", [], 0) 不阻断。"""
         prompt = (
-            "请用 2~4 句简短中文分析这份材料，格式如："
-            "「工作总结类文档，包含 N 项重点工作；含案件数量等统计数据；"
-            "要求汇报控制在 10 分钟以内」。\n"
-            "只输出这段分析文字，不要标题、不要列表符号、不要其他内容。\n\n"
+            "请分析这份材料，只输出 JSON，不要输出任何其他内容：\n"
+            "{\"summary\": \"2~4 句简短中文，说明材料性质与核心内容\",\n"
+            " \"key_points\": [\"重点1\", \"重点2\"],\n"
+            " \"tables\": 0}\n"
+            "规则：key_points 提取 3~6 个对做汇报最有价值的事实/数据/结论，"
+            "每条一句话，含数字时必须照抄原文数字，不得改写；"
+            "tables 是材料中数据表格的数量，没有为 0；不确定的宁少勿多。\n\n"
             f"【文件名】{filename}\n【内容节选】\n{text[:2500]}")
         try:
             raw = assistant.complete(
                 [{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=300)
+                temperature=0.3, max_tokens=500)
         except Exception:
-            return ""
-        return (raw or "").strip()[:300]
+            return "", [], 0
+        raw = (raw or "").strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return raw[:300], [], 0
+        try:
+            obj = _json.loads(m.group(0))
+        except Exception:
+            return raw[:300], [], 0
+        summary = str(obj.get("summary") or "").strip()[:300]
+        key_points = [str(x).strip()[:120] for x in (obj.get("key_points") or [])
+                      if str(x).strip()][:6]
+        try:
+            tables = max(0, int(obj.get("tables") or 0))
+        except (TypeError, ValueError):
+            tables = 0
+        return summary, key_points, tables
 
     # ================= 大纲 =================
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
