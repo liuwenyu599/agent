@@ -7,6 +7,7 @@
 - 每次 AI 修改自动形成版本（复用 documents 版本快照）；
 - 所有查询按 user_id 隔离；
 - 起草支持流式（draft_stream）：模型边生成边推给前端，完成后落库与非流式一致。
+- 未产生实际改动时如实告知，不声称"已修改"、不生成新版本。
 """
 from app.core.timeutil import now_local
 import json
@@ -43,7 +44,9 @@ REVISION_RULES = (
     "3. 不得虚构数据、成效或日期；区分两类内容——外部事实（他人姓名、统计数字、"
     "具体日期、已有成效）材料中没有的用「⚠️ 缺少事实依据」标注，"
     "而工作计划、方案、举措等用户自主规划的内容应充分展开，不得整段标注占位；\n"
-    "4. 直接输出修改后的完整公文，不要解释、不要加前后缀。"
+    "4. 如果用户的要求在当前文档中已经满足、或不构成实质改动，"
+    "原样输出全文，不得为了显得有改动而做无谓变动；\n"
+    "5. 直接输出修改后的完整公文，不要解释、不要加前后缀。"
 )
 
 DRAFT_RULES = (
@@ -662,6 +665,15 @@ class WritingTaskService:
         revised = self._llm_revise(prompt, sources, attachment_ctx, user_id)
         if not revised.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
+
+        # 诚实校验：新旧正文逐字比对，没有实际改动就不得声称"已修改"，
+        # 也不生成新版本（版本链只记录真实变化）
+        if revised.strip() == current:
+            reply = ("对照您的要求检查了当前文档，没有需要实际改动的地方，"
+                     "正文保持原样，也未生成新版本。"
+                     "如果想调整得更准确，请指出具体要改的部分和方向。")
+            return {**self._to_dict(t), "reply": reply, "content_changed": False,
+                    "context_changes": []}
 
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         from app.application.writing.quality_gate import QualityGate
