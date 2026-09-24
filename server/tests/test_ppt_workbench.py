@@ -203,8 +203,16 @@ def test_analyze_materials_no_file_rejected(client, accounts):
 
 
 def test_analyze_materials_returns_summary_and_text(client, accounts, fake_llm):
-    """上传 txt：返回该份材料的 AI 摘要 + 提取文本，材料不再黑盒。"""
-    fake_llm._responder = lambda m: "工作总结类文档，含一季度案件统计数据。"
+    """上传 txt：返回该份材料的 AI 摘要 + 提取文本，材料不再黑盒。
+
+    v2 起材料分析升级为结构化输出（摘要 + 重点清单 + 数据表数量），
+    这里喂合法 JSON 以验证解析链路真的生效，而不是只验证降级兜底。
+    """
+    fake_llm._responder = lambda m: json.dumps({
+        "summary": "工作总结类文档，含一季度案件统计数据。",
+        "key_points": ["一季度受理 120 件", "办结 115 件"],
+        "tables": 1,
+    }, ensure_ascii=False)
     body = "行政复议案件办理情况：一季度受理120件，办结115件。".encode("utf-8")
     r = client.post(
         f"{BASE}/ppt/materials/analyze",
@@ -212,13 +220,19 @@ def test_analyze_materials_returns_summary_and_text(client, accounts, fake_llm):
         headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["message"] == "已分析 1 份材料"
+    # 文案带聚合统计后缀，只校验份数部分
+    assert data["message"].startswith("已分析 1 份材料")
     items = data["items"]
     assert len(items) == 1
     assert items[0]["filename"] == "案件材料.txt"
     assert items[0]["chars"] > 0
     assert "受理120件" in items[0]["text"]
     assert items[0]["summary"] == "工作总结类文档，含一季度案件统计数据。"
+    # 结构化字段真的解析出来了（不是兜底空值）
+    assert items[0]["key_points"] == ["一季度受理 120 件", "办结 115 件"]
+    assert items[0]["tables"] == 1
+    # 聚合统计与逐份结果一致
+    assert data["totals"] == {"materials": 1, "key_points": 2, "tables": 1}
     # 摘要确实走了模型通道（否则这段逻辑等于没接）
     assert len(fake_llm.calls) == 1
 
