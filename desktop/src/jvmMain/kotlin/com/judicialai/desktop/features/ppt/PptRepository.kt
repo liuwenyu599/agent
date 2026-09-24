@@ -49,6 +49,10 @@ class PptRepository(private val api: ApiClient) {
         api.postStream(Endpoints.Ppt.OUTLINE_STREAM, body,
             timeoutMs = 300_000, onEvent = onEvent)
 
+    /** 生成前预检 → {sufficient, questions: [{question, default}]}（失败时调用方直接放行） */
+    suspend fun precheck(body: Map<String, Any?>) =
+        api.post(Endpoints.Ppt.OUTLINE_PRECHECK, body, timeoutMs = 60_000)
+
     /** 材料分析：多文件上传，逐份返回 {filename, chars, summary, key_points, tables, text} + totals */
     suspend fun analyzeMaterials(files: List<File>) =
         api.upload(Endpoints.Ppt.MATERIALS_ANALYZE, "files", files, timeoutMs = 300_000)

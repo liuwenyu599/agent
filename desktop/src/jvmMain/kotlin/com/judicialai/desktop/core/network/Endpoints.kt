@@ -121,6 +121,8 @@ object Endpoints {
         const val OUTLINE = "/ppt/outline"
         /** 流式大纲（SSE）：stage 阶段事件 + done 携带权威大纲 */
         const val OUTLINE_STREAM = "/ppt/outline/stream"
+        /** 生成前预检：信息不足时返回待确认问题（附默认方案），防止瞎编 */
+        const val OUTLINE_PRECHECK = "/ppt/outline/precheck"
         /** 材料分析：多文件上传，逐份返回 AI 摘要与提取文本 */
         const val MATERIALS_ANALYZE = "/ppt/materials/analyze"
         const val GENERATE = "/ppt/generate"
