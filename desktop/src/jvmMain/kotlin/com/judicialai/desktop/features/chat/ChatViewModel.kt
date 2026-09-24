@@ -73,7 +73,7 @@ class ChatViewModel(
     var historyMessageError by mutableStateOf(false)
         private set
 
-    // ---- 文档内嵌查看：点文档不离开历史记录入口，左侧仍可切换其他记录 ----
+    // ---- 文档内嵌查看：点文档不离开历史记录入口，仍可切换其他记录 ----
     var openedDoc by mutableStateOf<JsonObject?>(null)
         private set
     var openedDocLoading by mutableStateOf(false)
@@ -125,7 +125,7 @@ class ChatViewModel(
     /**
      * 删除记录：四类共用同一入口（对话走 /chat/sessions/{id}，
      * 文档走 /documents/{id}，PPT 走 /ppt/documents/{id}，工作流走 /workflow/instances/{id}）。
-     * 删除的是当前打开的会话/文档时，右栏回到空态。
+     * 删除的是当前打开的会话/文档时，查看状态回到空态。
      */
     fun deleteHistory(item: HistoryItem) {
         if (historyBusy) return
@@ -216,6 +216,19 @@ class ChatViewModel(
         HistoryCategory.WORKFLOW -> historyWorkflows
     }
 
+    /** 全量历史（时间线视图用）：四类合并、按时间倒序 */
+    fun allHistoryItems(): List<HistoryItem> =
+        (historyChats + historyDocs + historyPpts + historyWorkflows)
+            .sortedByDescending { it.time }
+
+    /** 某分类的条目数（时间线页顶部统计用） */
+    fun historyCount(category: HistoryCategory): Int = when (category) {
+        HistoryCategory.CHAT -> historyChats.size
+        HistoryCategory.DOC -> historyDocs.size
+        HistoryCategory.PPT -> historyPpts.size
+        HistoryCategory.WORKFLOW -> historyWorkflows.size
+    }
+
     fun loadSessions() {
         scope.launch {
             when (val r = repo.listSessions()) {
@@ -258,7 +271,7 @@ class ChatViewModel(
         }
     }
 
-    /** 在历史记录入口内直接打开文档：不跳走，左侧仍可切换其他对话/文档/PPT/工作流 */
+    /** 打开文档预览（弹窗查看；需要编辑时再带 id 跳「我的文档」页） */
     fun openDocumentInline(id: String) {
         openedDocLoading = true
         openedDoc = null
@@ -281,17 +294,15 @@ class ChatViewModel(
 
     /**
      * 「继续」：
-     * - 对话 → 载入右栏继续聊；
-     * - 文档 → 在历史记录入口内直接打开（不离开本页），需要编辑时再带 id 跳文档页；
-     * - PPT → 带上文档 id 跳 PPT 工作台，由 PPT 页直接打开这条演示继续对话修改；
-     * - 工作流 → 跳工作流页（入口在「科室空间」）。
+     * - PPT → 带上文档 id 跳 PPT 工作台继续修改；
+     * - 工作流 → 跳工作流页（入口在「科室空间」）；
+     * - 对话 / 文档的查看由历史记录页弹窗处理（右侧对话区已移除）。
      */
     fun openHistoryItem(item: HistoryItem) {
         when (item.category) {
             HistoryCategory.CHAT -> openSession(item.id)
             HistoryCategory.DOC -> openDocumentInline(item.id)
             HistoryCategory.PPT -> {
-                // 先挂待消费参数再导航：PPT 页消费后直接打开这条记录，可继续对话修改
                 AppState.pendingPptDocId = item.id
                 AppState.navigate(AppScreen.PPT)
             }
@@ -319,7 +330,6 @@ class ChatViewModel(
                         currentSessionId = r.data.sessionId
                         loadSessions()
                     } else if (currentSessionId != null) {
-                        // 首轮后服务端会用 AI 总结替换占位标题，刷新列表让新标题即时可见
                         loadSessions()
                     }
                     attachments = emptyList()
