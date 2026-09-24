@@ -148,7 +148,7 @@ class PersonalViewModel {
     }
 
     /**
-     * 修改本人密码。强度规则与后端一致（≥8 位、字母+数字、含符号或 ≥10 位），
+     * 修改本人密码。强度规则与后端一致（≥8 位且同时包含大写字母、小写字母、数字、符号），
      * 这里只做即时反馈，最终以服务端校验为准；密码不落盘、不进日志。
      */
     fun changePassword(oldPassword: String, newPassword: String, confirm: String) {
@@ -163,15 +163,12 @@ class PersonalViewModel {
         if (newPassword == oldPassword) {
             changeError = "新密码不能与旧密码相同"; return
         }
-        if (newPassword.length < 8) {
-            changeError = "密码至少 8 位"; return
-        }
-        if (!(newPassword.any { it.isLetter() } && newPassword.any { it.isDigit() })) {
-            changeError = "密码必须同时包含字母和数字"; return
-        }
-        val strong = newPassword.any { !it.isLetterOrDigit() } || newPassword.length >= 10
-        if (!strong) {
-            changeError = "密码强度不足：请包含字母、数字与符号，或长度达到 10 位"; return
+        if (newPassword.length < 8
+            || !newPassword.any { it.isUpperCase() }
+            || !newPassword.any { it.isLowerCase() }
+            || !newPassword.any { it.isDigit() }
+            || !newPassword.any { !it.isLetterOrDigit() }) {
+            changeError = "密码至少 8 位，且必须同时包含大写字母、小写字母、数字和符号"; return
         }
         changing = true
         scope.launch {
