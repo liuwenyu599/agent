@@ -134,6 +134,17 @@ fun WritingScreen() {
         val jumping = AppState.pendingWritingTemplate != null || AppState.pendingWritingIntent != null
         if (!jumping && pendingTaskId != null && !vm.hasTask) vm.openTask(pendingTaskId)
     }
+    // 页面未被销毁（ViewModel 还活着、任务还开着）时，模板中心再次「生成」：
+    // 入口页不会重新组合，无法消费这次跳转参数，由这里直接按「开新任务」处理——
+    // startFromTemplate 内部会先清理旧任务，杜绝上一个任务的内容串进新任务。
+    val pendingTemplate = AppState.pendingWritingTemplate
+    LaunchedEffect(pendingTemplate) {
+        if (pendingTemplate != null && vm.hasTask) {
+            AppState.pendingWritingTemplate = null
+            AppState.pendingWritingIntent = null
+            vm.startFromTemplate(pendingTemplate)
+        }
+    }
     // 生成由「进行中」变为「结束」时刷新一次：起草可能是在离开页面之后才跑完的，
     // 那时恢复到的还是生成前的内容。用状态流转触发，不用定时器，离开组合即取消。
     LaunchedEffect(vm) {
@@ -263,6 +274,9 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
         // 模板中心「使用模板 → 生成」：创建绑定模板的任务并自动起草
         AppState.pendingWritingTemplate?.let { p ->
             AppState.pendingWritingTemplate = null
+            // 一次性跳转参数互斥：聊天页残留的写作意图一并作废，
+            // 防止它稍后被当成新任务需求再次启动（上下文串话来源之一）
+            AppState.pendingWritingIntent = null
             vm.startFromTemplate(p)
             return@LaunchedEffect
         }
