@@ -146,7 +146,7 @@ async def analyze_materials(files: List[UploadFile] = File(...),
                             user: User = Depends(get_current_user),
                             svc: PPTService = Depends(get_ppt_service)):
     """上传材料并逐份分析（doc/docx/pdf/txt/md/xlsx/xls/csv/pptx）：
-    返回每份文件的 AI 分析摘要 + 提取文本，让材料不再黑盒。"""
+    返回每份文件的 AI 分析摘要 + 重点清单 + 数据表数量 + 提取文本，让材料不再黑盒。"""
     return await svc.analyze_materials(files, user)
 
 
@@ -200,6 +200,14 @@ def save_draft(doc_id: str, body: DraftIn,
     return svc.save_draft(doc_id, body, user)
 
 
+@router.post("/documents/{doc_id}/preview")
+def preview_document(doc_id: str,
+                     user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
+    """把当前草稿渲染成逐页 PNG 预览（LibreOffice），供工作台中栏真实版式显示。"""
+    return svc.preview_document(doc_id, user)
+
+
 @router.post("/documents/{doc_id}/copy")
 def copy_document(doc_id: str, user: User = Depends(get_current_user),
                 svc: PPTService = Depends(get_ppt_service)):
@@ -226,6 +234,16 @@ def delete_document(doc_id: str, user: User = Depends(get_current_user),
     return svc.delete_document(doc_id, user)
 
 
+# ================= 逐页预览图 =================
+
+@router.get("/preview/{doc_id}/{name}")
+def preview_image(doc_id: str, name: str,
+                  user: User = Depends(get_current_user),
+                  svc: PPTService = Depends(get_ppt_service)):
+    p = svc.preview_image(doc_id, name, user)
+    return FileResponse(str(p), media_type="image/png")
+
+
 # ================= 生成流程 =================
 
 @router.get("/kbs")
@@ -235,8 +253,7 @@ def list_kbs(user: User = Depends(get_current_user),
 
 
 @router.post("/outline-from-kb")
-def outline_from_kb(kb_ids: str = Form(...), topic: str = Form(""),
-                    audience: str = Form(""), scene: str = Form(""),
+def outline_from_kb(kb_ids: str = Form(...), topic: str = Form(""), audience: str = Form(""), scene: str = Form(""),
                     slide_count: int = Form(10),
                     user: User = Depends(get_current_user),
                     svc: PPTService = Depends(get_ppt_service)):
