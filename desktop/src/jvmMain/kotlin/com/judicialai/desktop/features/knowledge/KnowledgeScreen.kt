@@ -426,7 +426,7 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
     }
 }
 
-/** 知识库详情：对应 Web KnowledgeDetailView（返回头 + 文档表格 + 上传） */
+/** 知识库详情：对应 Web KnowledgeDetailView（返回头 + 文档表格 + 上传 + 库内搜索） */
 @Composable
 private fun KnowledgeDetail(vm: KnowledgeViewModel) {
     val kb = vm.currentKb ?: return
@@ -456,63 +456,145 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
             }
         }
 
+        // 库内搜索：即输即搜，服务端一次返回全部结果（标题命中排前、内容命中排后），
+        // 响应到达立刻替换列表，不存在「等全部查完才显示」
+        OutlinedTextField(
+            value = vm.searchQuery,
+            onValueChange = { vm.search(it) },
+            placeholder = { Text("搜索本库文档：先列标题命中的，再列内容命中的", fontSize = 13.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
+            trailingIcon = {
+                if (vm.searchQuery.isNotBlank()) {
+                    TextButton(onClick = { vm.clearSearch() }) {
+                        Text("清空", fontSize = 12.sp, color = TextSecondary)
+                    }
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+        )
+
         Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
             modifier = Modifier.fillMaxWidth().weight(1f)) {
-            Column {
-                Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
-                    .padding(horizontal = 20.dp, vertical = 12.dp)) {
-                    Text("文档标题", Modifier.weight(2f), fontSize = 13.sp, color = TextSecondary)
-                    Text("类型", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
-                    Text("状态", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
-                    Text("上传时间", Modifier.width(160.dp), fontSize = 13.sp, color = TextSecondary)
-                    Text("操作", Modifier.width(170.dp), fontSize = 13.sp, color = TextSecondary)
-                }
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    if (vm.docs.isEmpty()) {
-                        Box(Modifier.fillMaxWidth().padding(40.dp),
-                            contentAlignment = Alignment.Center) {
-                            Text("暂无文档，点击右上角上传", color = TextSecondary, fontSize = 13.sp)
-                        }
+            val results = vm.searchResults
+            if (results != null) {
+                SearchResultList(vm, results)
+            } else {
+                Column {
+                    Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
+                        .padding(horizontal = 20.dp, vertical = 12.dp)) {
+                        Text("文档标题", Modifier.weight(2f), fontSize = 13.sp, color = TextSecondary)
+                        Text("类型", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
+                        Text("状态", Modifier.width(100.dp), fontSize = 13.sp, color = TextSecondary)
+                        Text("上传时间", Modifier.width(160.dp), fontSize = 13.sp, color = TextSecondary)
+                        Text("操作", Modifier.width(170.dp), fontSize = 13.sp, color = TextSecondary)
                     }
-                    vm.docs.forEach { d ->
-                        Row(Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { vm.openDocument(d["id"].str()) }
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(d["title"].str().ifBlank { d["filename"].str() },
-                                Modifier.weight(2f), fontSize = 14.sp, color = TextPrimary,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(d["doc_type"].str().ifBlank { "-" }, Modifier.width(100.dp),
-                                fontSize = 13.sp, color = TextRegular)
-                            Box(Modifier.width(100.dp)) {
-                                val s = d["status"].str()
-                                KbTag(
-                                    when (s) {
-                                        "published" -> "已发布"; "pending" -> "待审核"
-                                        "rejected" -> "已驳回"; else -> s.ifBlank { "-" }
-                                    },
-                                    s == "published",
-                                )
-                            }
-                            Text(d["created_at"].str().take(16).replace("T", " "),
-                                Modifier.width(160.dp), fontSize = 13.sp, color = TextRegular)
-                            Row(Modifier.width(170.dp)) {
-                                TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
-                                    Text("查看/编辑", color = EpPrimary, fontSize = 13.sp)
-                                }
-                                TextButton(onClick = { vm.deleteDocument(d["id"].str()) }) {
-                                    Icon(Icons.Default.Delete, null, tint = EpDanger,
-                                        modifier = Modifier.size(16.dp))
-                                }
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        if (vm.docs.isEmpty()) {
+                            Box(Modifier.fillMaxWidth().padding(40.dp),
+                                contentAlignment = Alignment.Center) {
+                                Text("暂无文档，点击右上角上传", color = TextSecondary, fontSize = 13.sp)
                             }
                         }
-                        Divider(color = Color(0xFFF2F4F8))
+                        vm.docs.forEach { d ->
+                            DocRow(vm, d, snippet = null)
+                            Divider(color = Color(0xFFF2F4F8))
+                        }
                     }
                 }
             }
         }
         vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
+    }
+}
+
+/** 搜索结果：标题命中一组在前，内容命中一组在后（带命中片段），点击即打开全文 */
+@Composable
+private fun SearchResultList(vm: KnowledgeViewModel, results: List<JsonObject>) {
+    val titleHits = results.filter { it["match"].str() != "content" }
+    val contentHits = results.filter { it["match"].str() == "content" }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (vm.searching) "正在搜索「${vm.searchQuery}」…"
+                else "「${vm.searchQuery}」共 ${results.size} 条结果",
+                fontSize = 12.5.sp, color = TextSecondary)
+        }
+        if (results.isEmpty() && !vm.searching) {
+            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                Text("没有找到匹配的文档", color = TextSecondary, fontSize = 13.sp)
+            }
+        }
+        if (titleHits.isNotEmpty()) {
+            SearchGroupHeader("标题命中（${titleHits.size}）")
+            titleHits.forEach { d ->
+                DocRow(vm, d, snippet = null)
+                Divider(color = Color(0xFFF2F4F8))
+            }
+        }
+        if (contentHits.isNotEmpty()) {
+            SearchGroupHeader("内容命中（${contentHits.size}）")
+            contentHits.forEach { d ->
+                DocRow(vm, d, snippet = d["snippet"].str().ifBlank { null })
+                Divider(color = Color(0xFFF2F4F8))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchGroupHeader(text: String) {
+    Text(text, fontSize = 12.sp, color = EpPrimary, fontWeight = FontWeight.Medium,
+        modifier = Modifier.fillMaxWidth()
+            .background(EpPrimary.copy(alpha = 0.06f))
+            .padding(horizontal = 20.dp, vertical = 6.dp))
+}
+
+/** 文档行（普通列表与搜索结果共用）：标题 / 类型 / 状态 / 时间 / 操作；搜索内容命中时多一行命中片段 */
+@Composable
+private fun DocRow(vm: KnowledgeViewModel, d: JsonObject, snippet: String?) {
+    Row(Modifier.fillMaxWidth()
+        .clip(RoundedCornerShape(4.dp))
+        .clickable { vm.openDocument(d["id"].str()) }
+        .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(2f)) {
+            Text(d["title"].str().ifBlank { d["filename"].str() },
+                fontSize = 14.sp, color = TextPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (snippet != null) {
+                Spacer(Modifier.height(3.dp))
+                Text("…$snippet…", fontSize = 12.sp, color = TextSecondary,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Text(d["doc_type"].str().ifBlank { "-" }, Modifier.width(100.dp),
+            fontSize = 13.sp, color = TextRegular)
+        Box(Modifier.width(100.dp)) {
+            val s = d["status"].str()
+            KbTag(
+                when (s) {
+                    "published" -> "已发布"; "pending" -> "待审核"
+                    "rejected" -> "已驳回"; else -> s.ifBlank { "-" }
+                },
+                s == "published",
+            )
+        }
+        Text(d["created_at"].str().take(16).replace("T", " "),
+            Modifier.width(160.dp), fontSize = 13.sp, color = TextRegular)
+        Row(Modifier.width(170.dp)) {
+            TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
+                Text("查看/编辑", color = EpPrimary, fontSize = 13.sp)
+            }
+            TextButton(onClick = { vm.deleteDocument(d["id"].str()) }) {
+                Icon(Icons.Default.Delete, null, tint = EpDanger,
+                    modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 
