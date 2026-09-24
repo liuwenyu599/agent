@@ -1,5 +1,6 @@
 package com.judicialai.desktop.features.ppt
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,20 +21,30 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.Card
 import androidx.compose.material.Divider
+import androidx.compose.material.DropdownMenu
+import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickSaveFile
+import com.judicialai.desktop.core.platform.rememberServerImage
+import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.design.theme.SecondaryText
 
 /**
- * 三栏工作台：左 = 页面导航（只读缩略列表）；中 = PPT 视觉焦点（本页预览 + 直接编辑）；
+ * 三栏工作台：左 = 页面导航（只读缩略列表）；中 = PPT 视觉焦点（模板渲染预览 + 直接编辑）；
  * 右 = AI 助手（单页局部编辑优先：润色/扩写/精简/重写/自定义，结构调整次之）。
  */
 @Composable
@@ -76,32 +87,81 @@ fun PptWorkbench(vm: PptViewModel) {
         // ---- 中栏：PPT 视觉焦点 + 直接编辑 ----
         val i = vm.selected.coerceIn(0, (vm.slides.size - 1).coerceAtLeast(0))
         val slide = vm.slides.getOrNull(i)
+        // 切换模板 / 手动刷新时递增，避免同一 URL 的预览图被缓存成旧版
+        var previewTick by remember { mutableStateOf(0) }
         Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())
             .padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (slide == null) {
                 Text("暂无页面", color = SecondaryText)
             } else {
-                // 预览卡（16:9 视觉焦点）
-                Card(Modifier.fillMaxWidth().height(300.dp), elevation = 3.dp) {
-                    Column(Modifier.fillMaxSize()) {
-                        Box(Modifier.fillMaxWidth().height(6.dp)
-                            .background(MaterialTheme.colors.primary))
-                        Column(Modifier.padding(20.dp)) {
-                            Text(slide.title.ifBlank { "（无标题）" },
-                                style = MaterialTheme.typography.h6)
-                            Spacer(Modifier.height(10.dp))
-                            slide.points().take(6).forEach { p ->
-                                Text("• $p", style = MaterialTheme.typography.body2,
-                                    modifier = Modifier.padding(vertical = 2.dp))
+                // 模板选择：在这里也能换，换完立刻按新模板重渲染预览
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("模板", style = MaterialTheme.typography.subtitle2)
+                    Spacer(Modifier.width(8.dp))
+                    var tplOpen by remember { mutableStateOf(false) }
+                    val curName = vm.templates
+                        .firstOrNull { it["id"].str() == vm.templateId }
+                        ?.get("name").str().ifBlank { "默认模板" }
+                    Box {
+                        OutlinedButton(onClick = { tplOpen = true },
+                            colors = sel(false)) { Text("$curName ▾") }
+                        DropdownMenu(tplOpen, { tplOpen = false }) {
+                            vm.templates.forEach { t ->
+                                DropdownMenuItem(onClick = {
+                                    vm.templateId = t["id"].str()
+                                    tplOpen = false
+                                    previewTick++
+                                    vm.refreshPreview()
+                                }) { Text(t["name"].str()) }
                             }
-                            if (slide.points().size > 6) {
-                                Text("……共 ${slide.points().size} 条要点",
-                                    style = MaterialTheme.typography.caption,
-                                    color = SecondaryText)
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(enabled = !vm.previewBusy, onClick = {
+                        previewTick++
+                        vm.refreshPreview()
+                    }) { Text(if (vm.previewBusy) "渲染中…" else "刷新预览") }
+                }
+
+                // 预览（16:9 视觉焦点）：优先显示服务端按当前模板真实渲染的 PNG；
+                // 服务端未渲染成功时回退为结构化预览卡
+                Card(Modifier.fillMaxWidth().height(300.dp), elevation = 3.dp) {
+                    val rawUrl = vm.previewPages.getOrNull(i)
+                    val pageUrl = rawUrl?.let {
+                        it + (if (it.contains("?")) "&" else "?") + "_=" + previewTick
+                    }
+                    val img = rememberServerImage(AppState.api, pageUrl)
+                    if (img != null) {
+                        Image(img, contentDescription = slide.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit)
+                    } else {
+                        Column(Modifier.fillMaxSize()) {
+                            Box(Modifier.fillMaxWidth().height(6.dp)
+                                .background(MaterialTheme.colors.primary))
+                            Column(Modifier.padding(20.dp)) {
+                                Text(slide.title.ifBlank { "（无标题）" },
+                                    style = MaterialTheme.typography.h6)
+                                Spacer(Modifier.height(10.dp))
+                                slide.points().take(6).forEach { p ->
+                                    Text("• $p", style = MaterialTheme.typography.body2,
+                                        modifier = Modifier.padding(vertical = 2.dp))
+                                }
+                                if (slide.points().size > 6) {
+                                    Text("……共 ${slide.points().size} 条要点",
+                                        style = MaterialTheme.typography.caption,
+                                        color = SecondaryText)
+                                }
                             }
                         }
                     }
                 }
+                Text(
+                    if (vm.previewPages.getOrNull(i) != null)
+                        "预览由所选模板真实渲染，与导出效果一致"
+                    else if (vm.previewBusy) "正在按模板渲染预览…"
+                    else "模板渲染预览暂不可用，当前为结构示意（不影响导出效果）",
+                    style = MaterialTheme.typography.caption, color = SecondaryText)
                 if (slide.sources.isNotEmpty()) {
                     Text("内容依据：" + slide.sources.joinToString("、"),
                         style = MaterialTheme.typography.caption, color = SecondaryText)
