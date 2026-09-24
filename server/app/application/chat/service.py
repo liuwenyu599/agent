@@ -3,7 +3,7 @@
 流程：会话获取/创建 → 附件绑定与上下文 → 参考模板/参考材料上下文 →
 写作意图澄清判断 → RAG 检索 + 范文检索 → WritingAssistant 生成 →
 写作类请求追加智能写作流水线（后处理 → 质量门 → 内容校验 → D 级重试）→
-消息入库 → 每 20 条消息触发会话总结。
+消息入库 → 首轮对话完成后 AI 总结会话标题 → 每 20 条消息触发会话总结。
 
 视觉链路：本轮上传的图片附件在配置了 VISION_MODEL_URL 时直接送视觉模型，
 不再只依赖 OCR 文本。
@@ -84,6 +84,21 @@ class ChatService:
         paths = [a.file_path for a in new_attachments
                  if getattr(a, "kind", "") == "image" and getattr(a, "file_path", "")]
         return paths[: settings.VISION_MAX_IMAGES]
+
+    def _ai_session_title(self, first_message: str, first_reply: str) -> str:
+        """AI 把首轮对话总结成简短会话标题；失败返回空串，保留占位标题。"""
+        prompt = (
+            "请把下面这段对话概括成一个不超过 15 个字的中文会话标题，"
+            "体现用户要办的事。只输出标题本身：不要引号、不要标点结尾、"
+            "不要解释、不要换行。\n\n"
+            f"用户：{first_message[:200]}\n助手：{first_reply[:200]}"
+        )
+        raw = self.assistant.complete(
+            [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=40
+        ) or ""
+        title = raw.strip().splitlines()[0].strip() if raw.strip() else ""
+        title = title.strip("\"'「」『』【】《》<>。！？!?，,、；;：:… .—-")
+        return title[:30]
 
     def send_message(self, user: User, message: str, session_id: Optional[str] = None,
                      use_rag: bool = True, system_prompt: Optional[str] = None,
@@ -237,6 +252,20 @@ class ChatService:
 
         # 每 20 条消息总结一次会话
         msg_count = self.messages.count_by_session(session.id)
+
+        # 首轮对话完成后：AI 总结一个简短标题，替换「首条消息前 30 字」的占位命名。
+        # 仅在标题仍是占位值（等于首条消息前 30 字）时替换，用户手动重命名过的不覆盖。
+        if msg_count <= 2 and (session.title or "") == message[:30]:
+            try:
+                ai_title = self._ai_session_title(message, reply)
+                if ai_title:
+                    session_row = self.sessions.get_model(session.id)
+                    if session_row is not None:
+                        session_row.title = ai_title
+                        self.db.commit()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[对话] AI 会话命名失败: %s", e)
+
         if msg_count > 0 and msg_count % 20 == 0:
             try:
                 self.memory.summarize_session(session.id, self.db)
