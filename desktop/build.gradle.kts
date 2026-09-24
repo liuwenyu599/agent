@@ -54,6 +54,7 @@ compose.desktop {
 
             windows {
                 perUserInstall = true
+                iconFile.set(project.file("app_logo.ico"))
             }
         }
     }
