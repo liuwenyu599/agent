@@ -44,7 +44,9 @@ import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppNav
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.app.LocalWindowSession
 import com.judicialai.desktop.app.NavItem
+import com.judicialai.desktop.app.WindowManager
 import com.judicialai.desktop.design.components.AppSearchField
 import com.judicialai.desktop.design.components.GlobalNavDrawer
 import com.judicialai.desktop.design.components.PersonalCenterDrawer
@@ -75,6 +77,9 @@ import com.judicialai.desktop.features.personal.PersonalViewModel
  * - 中：全局搜索（胶囊、弱底，不抢主权重）；
  * - 右：用户身份（第三层；个人中心收在头像下拉里）。
  * 导航只保留左上角抽屉，且与 Header 共用同一套视觉语言。
+ *
+ * 多窗口：抽屉开合状态按窗口（LocalWindowSession）各自独立；
+ * 「新开独立窗口」入口在右上角用户菜单。
  */
 @Composable
 fun AppShell(
@@ -88,6 +93,7 @@ fun AppShell(
     content: @Composable () -> Unit,
 ) {
     val personalVm: PersonalViewModel = remember { PersonalViewModel() }
+    val session = LocalWindowSession.current
 
     Box(Modifier.fillMaxSize().background(AppBg)) {
         Column(Modifier.fillMaxSize()) {
@@ -96,19 +102,19 @@ fun AppShell(
             Box(Modifier.weight(1f).fillMaxWidth()) { content() }
         }
 
-        if (AppState.navDrawerOpen) {
+        if (session.navDrawerOpen) {
             GlobalNavDrawer(
                 isAdmin = isAdmin,
                 onNavigate = onNavigate,
                 onHome = onHome,
-                onDismiss = { AppState.navDrawerOpen = false },
+                onDismiss = { session.navDrawerOpen = false },
             )
         }
 
-        if (AppState.personalCenterOpen) {
+        if (session.personalCenterOpen) {
             PersonalCenterDrawer(
                 vm = personalVm,
-                onDismiss = { AppState.personalCenterOpen = false },
+                onDismiss = { session.personalCenterOpen = false },
             )
         }
     }
@@ -123,6 +129,7 @@ private fun AppHeader(
 ) {
     var userMenuOpen by remember { mutableStateOf(false) }
     val group = AppNav.groupOf(current)
+    val session = LocalWindowSession.current
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -138,7 +145,7 @@ private fun AppHeader(
             // ---- 品牌区：徽标 + 平台名 + 当前业务位置 ----
             Row(
                 Modifier.clip(RoundedCornerShape(Dimens.radiusMd))
-                    .clickable { AppState.navDrawerOpen = true }
+                    .clickable { session.navDrawerOpen = true }
                     .padding(horizontal = Dimens.space2, vertical = Dimens.space1 + 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -185,7 +192,7 @@ private fun AppHeader(
             HeaderIconButton(
                 icon = Icons.Default.Menu,
                 description = "打开全局导航",
-                onClick = { AppState.navDrawerOpen = true },
+                onClick = { session.navDrawerOpen = true },
             )
 
             Spacer(Modifier.weight(1f))
@@ -196,7 +203,7 @@ private fun AppHeader(
                 onValueChange = { AppState.navQuery = it },
                 placeholder = "搜索功能，例如：模板、知识库、PPT",
                 modifier = Modifier.width(260.dp),
-                onFocusOpen = { AppState.navDrawerOpen = true },
+                onFocusOpen = { session.navDrawerOpen = true },
             )
 
             Spacer(Modifier.width(Dimens.space4))
@@ -234,8 +241,14 @@ private fun AppHeader(
                     // 个人中心入口收在头像下拉里（Header 不再单独放按钮）
                     DropdownMenuItem(onClick = {
                         userMenuOpen = false
-                        AppState.personalCenterOpen = true
+                        session.personalCenterOpen = true
                     }) { Text("个人中心", fontSize = 13.sp) }
+                    // 多开独立窗口：新窗口导航独立，生成任务等全局状态共享，
+                    // 一个窗口跑生成时另一个窗口可正常办公
+                    DropdownMenuItem(onClick = {
+                        userMenuOpen = false
+                        WindowManager.openNew()
+                    }) { Text("新开独立窗口", fontSize = 13.sp) }
                     DropdownMenuItem(onClick = {
                         userMenuOpen = false
                         AppState.navigate(AppScreen.SETTINGS)
