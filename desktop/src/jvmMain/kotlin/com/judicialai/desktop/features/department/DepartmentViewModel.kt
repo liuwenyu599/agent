@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
  *
  * 定位：本科室的「资源空间」，不是 Agent 选择器。
  * 用户不给选择 Agent，进入即按 department_code 自动绑定智能助手，
- * 这里只聚合四块内容：智能助手 / 常用业务 / 知识资源 / 本科室模板。
+ * 这里只聚合五块内容：智能助手 / 常用业务 / 知识资源 / 本科室模板 / 工作流程。
  *
  * 全部由服务端按登录用户解析（/organization/space），客户端不传 dept_code。
  * 界面不出现模型、检索范围、系统提示等技术概念。
@@ -59,6 +59,12 @@ class DepartmentViewModel {
         val version: Int, val operator: String, val note: String, val createdAt: String,
     )
 
+    /** 本科室可用工作流程（/workflow/templates，服务端按登录用户范围返回） */
+    data class WorkflowItem(
+        val code: String, val name: String, val description: String,
+        val category: String, val nodeCount: Int,
+    )
+
     var loading by mutableStateOf(true)
         private set
     var error by mutableStateOf<String?>(null)
@@ -78,6 +84,8 @@ class DepartmentViewModel {
     var knowledge by mutableStateOf(listOf<KnowledgeItem>())
         private set
     var templates by mutableStateOf(listOf<TemplateItem>())
+        private set
+    var workflows by mutableStateOf(listOf<WorkflowItem>())
         private set
 
     /** 维护面板：只有后端下发 can_manage = true 才允许打开 */
@@ -108,6 +116,21 @@ class DepartmentViewModel {
                 is ApiResult.Err -> error = r.message
             }
             loading = false
+        }
+        // 本科室工作流程列表：加载失败只留空列表，不影响科室空间主体
+        scope.launch {
+            when (val r = AppState.api.get(Endpoints.Workflow.TEMPLATES)) {
+                is ApiResult.Ok -> workflows = r.data.items().map { t ->
+                    WorkflowItem(
+                        code = t["code"].str().ifBlank { t["id"].str() },
+                        name = t["name"].str(),
+                        description = t["description"].str(),
+                        category = t["category"].str(),
+                        nodeCount = t["nodes"].arr().size,
+                    )
+                }.filter { it.name.isNotBlank() }
+                is ApiResult.Err -> Unit
+            }
         }
     }
 
