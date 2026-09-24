@@ -38,6 +38,7 @@ cryptography==49.0.0       # [需验证] 含 Rust 扩展，需 aarch64 wheel
 
 # ---- 数据库 ----
 SQLAlchemy==2.0.51         # SQLite 麒麟自带，无需额外驱动
+alembic>=1.14,<2.0         # 纯 Python，低风险；应用启动自迁移依赖它
 
 # ---- 文档处理 ----
 python-docx==1.2.0
