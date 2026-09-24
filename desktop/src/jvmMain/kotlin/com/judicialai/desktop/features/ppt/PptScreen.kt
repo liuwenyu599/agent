@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
@@ -56,6 +55,9 @@ import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.platform.rememberServerImage
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.SecondaryText
 import kotlinx.coroutines.delay
 
@@ -132,6 +134,7 @@ fun PptScreen() {
 /**
  * 生成前确认框：预检发现关键信息不足时列出待确认问题（预填默认方案）。
  * 90 秒倒计时结束或点击「按默认方案生成」→ 用默认方案直接开跑；点「取消」放弃本次生成。
+ * 使用统一 AppDialog：内容区可滚动、限高，避免问题较多时溢出。
  */
 @Composable
 private fun PptPrecheckDialog(vm: PptViewModel, questions: List<ConfirmQuestion>) {
@@ -144,34 +147,28 @@ private fun PptPrecheckDialog(vm: PptViewModel, questions: List<ConfirmQuestion>
         // 倒计时结束仍未操作：按最合理的默认方案先跑
         if (vm.pendingConfirm != null) vm.confirmAndGenerate(useAnswers = false)
     }
-    AlertDialog(
+    AppDialog(
         onDismissRequest = { vm.cancelConfirm() },
-        title = { Text("生成前请确认关键信息") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("为避免凭空编造，请确认以下信息；留空则按默认方案生成。",
-                    style = MaterialTheme.typography.caption, color = SecondaryText)
-                questions.forEach { q ->
-                    OutlinedTextField(
-                        value = q.answer, onValueChange = { q.answer = it },
-                        label = { Text(q.question) },
-                        modifier = Modifier.fillMaxWidth())
-                }
-            }
+        title = "生成前请确认关键信息",
+        subtitle = "为避免凭空编造，请确认以下信息；留空则按默认方案生成。",
+        width = 560.dp,
+        actions = {
+            AppButton("取消", onClick = { vm.cancelConfirm() }, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(8.dp))
+            AppButton("按默认方案生成（${remaining}s）",
+                onClick = { vm.confirmAndGenerate(useAnswers = false) },
+                kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(8.dp))
+            AppButton("确认并生成", onClick = { vm.confirmAndGenerate(useAnswers = true) })
         },
-        confirmButton = {
-            Button(onClick = { vm.confirmAndGenerate(useAnswers = true) }) { Text("确认并生成") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = { vm.cancelConfirm() }) { Text("取消") }
-                Spacer(Modifier.width(4.dp))
-                TextButton(onClick = { vm.confirmAndGenerate(useAnswers = false) }) {
-                    Text("按默认方案生成（${remaining}s）")
-                }
-            }
-        },
-    )
+    ) {
+        questions.forEach { q ->
+            OutlinedTextField(
+                value = q.answer, onValueChange = { q.answer = it },
+                label = { Text(q.question) },
+                modifier = Modifier.fillMaxWidth())
+        }
+    }
 }
 
 /**
