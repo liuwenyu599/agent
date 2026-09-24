@@ -683,6 +683,63 @@ class PPTService:
             return ""
         return (raw or "").strip()[:300]
 
+    # ================= 生成前预检（信息不足先确认，不瞎编） =================
+    def precheck_outline(self, body, user: User) -> dict:
+        """生成前预检：判断关键信息是否足以支撑一份不瞎编的 PPT。
+
+        信息不足时返回需要向用户确认的问题（最多 3 个，按重要性排序），
+        每个问题附带最合理的默认方案——用户 90 秒未确认或选择默认时按默认方案生成。
+        预检失败（模型不可用、返回无法解析等）一律放行，不阻塞生成。
+        """
+        topic = (body.topic or "").strip()
+        content = (body.content or "").strip()
+        materials = [m for m in (body.material_names or []) if m]
+        if not topic and not content:
+            raise AppError(400, "请先填写汇报主题，或上传材料")
+        # 材料正文足够详实时直接放行，不打扰用户
+        if len(content) >= 1500:
+            return {"sufficient": True, "questions": []}
+        prompt = (
+            "你是政务 PPT 助手的「生成前检查员」。根据用户提供的主题与材料，判断能否生成一份"
+            "内容扎实、不需要编造事实的 PPT 大纲。\n"
+            "只检查影响内容真实性的关键信息，例如：汇报对象与场合、汇报人与单位、时间范围、"
+            "必须覆盖的工作事项或数据。\n"
+            "以下情况视为信息充足：材料正文已较详细；或主题本身完整具体（含单位、事项、时间范围）。\n"
+            "不要因为文风、配色、页数等偏好提问——那些用默认值即可。\n"
+            "只输出 JSON：{\"sufficient\": true 或 false, \"questions\": "
+            "[{\"question\": \"需要向用户确认的问题\", \"default\": \"用户不回答时采用的最合理默认方案\"}]}。\n"
+            "questions 最多 3 个，按重要性排序；sufficient 为 true 时必须为空数组。\n\n"
+            f"【主题】{topic or '（未填写）'}\n"
+            f"【已填信息 / 材料正文节选】\n{content[:1500] or '（无）'}\n"
+            f"【材料文件】{'、'.join(materials) or '（无）'}")
+        try:
+            raw = self._ppt_assistant().complete(
+                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=400)
+        except Exception as e:
+            logger.warning("[PPT] 生成前预检失败，直接放行: %s", e)
+            return {"sufficient": True, "questions": []}
+        m = re.search(r"\{.*\}", raw or "", re.S)
+        if not m:
+            return {"sufficient": True, "questions": []}
+        try:
+            data = _json.loads(m.group(0))
+        except Exception:
+            return {"sufficient": True, "questions": []}
+        if data.get("sufficient"):
+            return {"sufficient": True, "questions": []}
+        questions = []
+        for q in (data.get("questions") or [])[:3]:
+            if not isinstance(q, dict):
+                continue
+            question = str(q.get("question") or "").strip()
+            default = str(q.get("default") or "").strip()
+            if question:
+                questions.append({"question": question[:100],
+                                  "default": (default or "按政务汇报通用惯例处理")[:200]})
+        if not questions:
+            return {"sufficient": True, "questions": []}
+        return {"sufficient": False, "questions": questions}
+
     # ================= 大纲 =================
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
@@ -712,7 +769,7 @@ class PPTService:
 
         大纲是结构化 JSON，不逐 token 上屏；流式的价值在过程可见：
         正在理解材料 → 正在梳理大纲 → 校验与保存。事件：
-          {"type":"stage","text":...} / {"type":"done","data":{doc_id,outline}}
+          {"type":"stage","text":...} / {"type":"done","data":{"doc_id,outline"}}
           / {"type":"error","message":...}
         """
         def _sse(obj) -> str:
