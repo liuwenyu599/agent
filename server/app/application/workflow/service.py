@@ -1,7 +1,11 @@
-"""工作流应用服务：模板初始化、实例管理、上下文解析、节点 AI 生成。
+"""工作流应用服务：模板初始化、实例管理、上下文解析、节点 AI 生成、AI 调整流程。
 
 上下文（workflow_context）统一存储在实例的 basic_info JSON 列中，
 沿用旧系统约定（字段键 meeting_name 等标准键 + 自由键）。
+
+工作流不是僵硬的固定模板：实例创建者或科室/系统管理员可以用自然语言
+让 AI 调整节点（增/删/改名/改写作要求/调顺序），结构调整发生在实例专属
+的模板副本上，公共模板不被污染，同名节点已生成的内容保留不丢。
 """
 import json
 import re
@@ -15,8 +19,9 @@ from app.application.workflow.builtin_data import (
     FIELD_LABEL_MAP,
     MEETING_STANDARD_FIELDS,
 )
-from app.core.exceptions import AppError, NotFoundError
+from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
 from app.core.logging import get_logger
+from app.domain.identity.authorization import is_knowledge_admin, is_system_admin
 from app.domain.identity.entities import User
 from app.domain.workflow.entities import (
     NodeInstance,
@@ -24,6 +29,7 @@ from app.domain.workflow.entities import (
     WorkflowNode,
     WorkflowTemplate,
 )
+from app.infrastructure.database.models.workflow import WorkflowInstanceModel
 from app.infrastructure.repositories.workflow import (
     SqlAlchemyNodeInstanceRepository,
     SqlAlchemyWorkflowInstanceRepository,
@@ -138,6 +144,150 @@ class WorkflowService:
         if not inst:
             raise NotFoundError("工作流不存在")
         return inst
+
+    # ========== AI 调整流程 ==========
+    def ai_adjust_instance(self, user: User, inst_id: str, instruction: str) -> dict:
+        """AI 调整工作流节点：增 / 删 / 改名 / 改写作要求 / 调顺序。
+
+        用户用自然语言说明怎么改，LLM 输出目标节点清单，服务端与现状对账后
+        落库——同名节点保留已生成的内容与状态，新增节点补默认写作要求。
+        结构调整发生在实例专属的模板副本上，公共模板不被污染。
+        权限：实例创建者本人，或科室/系统管理员。
+        """
+        inst = self._get_instance_checked(inst_id)
+        if inst.user_id != user.id and not (
+                is_system_admin(user) or is_knowledge_admin(user)):
+            raise PermissionDeniedError("只有创建者或科室管理员可以调整该工作流")
+        instruction = (instruction or "").strip()
+        if not instruction:
+            raise AppError(400, "请先说明想怎么调整（例如：去掉简报节点、在纪要后加整改清单）")
+
+        node_insts = self.node_instances.list_by_instance(inst.id)
+        node_map = {nd.id: nd for nd in
+                    self.nodes.list_by_ids([ni.node_id for ni in node_insts])}
+        current = []
+        for ni in node_insts:
+            nd = node_map.get(ni.node_id)
+            current.append({
+                "name": nd.name if nd else "",
+                "stage": (nd.stage if nd else "") or "",
+                "write_guide": (nd.write_guide if nd else "") or "",
+                "optional": bool(nd.optional) if nd else False,
+                "has_content": bool((ni.content or "").strip()),
+            })
+
+        prompt = f"""你是工作流程设计助手。下面是一个公文工作流当前的节点清单（JSON）和用户想要的调整。
+
+当前节点清单：
+{json.dumps(current, ensure_ascii=False, indent=2)}
+
+用户的调整要求：
+{instruction}
+
+请输出调整后的完整节点清单（JSON 数组），每个元素格式：
+{{"name": "节点名称", "stage": "阶段（如 前期/中期/后期）", "write_guide": "该节点的写作要求", "optional": false}}
+
+规则：
+1. 只输出 JSON 数组本身，不要任何解释、对话口吻或代码块标记；
+2. 用户没要求改动的节点请原样保留，名称一字不改（系统靠名字保留已写内容）；
+3. 删除用户明确要求去掉的节点；新增节点要给出合理的阶段和写作要求；
+4. 节点总数 1-15 个，名称不超过 20 字。"""
+        try:
+            raw = self.assistant.complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=1500,
+            )
+            raw = re.sub(r'^```json\s*', '', raw.strip())
+            raw = re.sub(r'\s*```$', '', raw.strip())
+            target = json.loads(raw)
+            if isinstance(target, dict):
+                target = target.get("nodes") or []
+        except Exception as e:
+            logger.exception("AI 调整工作流失败")
+            raise AppError(500, f"AI 调整失败: {e}")
+
+        cleaned: List[Dict[str, Any]] = []
+        seen = set()
+        for n in (target if isinstance(target, list) else []):
+            if not isinstance(n, dict):
+                continue
+            name = str(n.get("name") or "").strip()[:20]
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append({
+                "name": name,
+                "stage": str(n.get("stage") or "").strip()[:20] or "中期",
+                "write_guide": str(n.get("write_guide") or "").strip()[:500],
+                "optional": bool(n.get("optional", False)),
+            })
+        if not cleaned:
+            raise AppError(500, "AI 未给出有效的节点清单，请换个说法再试")
+        if len(cleaned) > 15:
+            raise AppError(400, "节点数量过多（最多 15 个）")
+
+        # 同名节点保留内容与状态
+        old_by_name: Dict[str, NodeInstance] = {}
+        for ni in node_insts:
+            nd = node_map.get(ni.node_id)
+            if nd and nd.name not in old_by_name:
+                old_by_name[nd.name] = ni
+
+        # 实例专属模板副本：首次调整时克隆，公共模板不被污染
+        tpl = self.templates.get(inst.template_id)
+        if not tpl or not (tpl.code or "").startswith("custom-"):
+            clone = self.templates.add(WorkflowTemplate(
+                name=f"{tpl.name}（自定义）" if tpl else "自定义流程",
+                code=f"custom-{inst.id}",
+                category=tpl.category if tpl else "通用",
+                description=tpl.description if tpl else "",
+                is_builtin=False,
+            ))
+            inst_row = self.db.get(WorkflowInstanceModel, inst.id)
+            if inst_row is not None:
+                inst_row.template_id = clone.id
+            inst.template_id = clone.id
+            tpl = clone
+        else:
+            # 已调整过的实例：清空专属模板上的旧节点，按新清单重建
+            for nd in self.nodes.list_by_template(tpl.id):
+                self.nodes.delete(nd)
+
+        # 重建：删除旧节点实例，按目标清单落新节点（同名保留内容/状态）
+        for ni in node_insts:
+            self.node_instances.delete(ni)
+
+        kept = added = 0
+        for i, spec in enumerate(cleaned):
+            nd = self.nodes.add(WorkflowNode(
+                template_id=tpl.id, name=spec["name"], stage=spec["stage"],
+                write_guide=spec["write_guide"], sort_order=i,
+                optional=spec["optional"],
+            ))
+            old = old_by_name.get(spec["name"])
+            if old is not None:
+                kept += 1
+                self.node_instances.add(NodeInstance(
+                    instance_id=inst.id, node_id=nd.id, sort_order=i,
+                    status=old.status, content=old.content or "",
+                ))
+            else:
+                added += 1
+                self.node_instances.add(NodeInstance(
+                    instance_id=inst.id, node_id=nd.id, sort_order=i,
+                    status="pending", content="",
+                ))
+        removed = max(0, len(node_insts) - kept)
+        self.db.commit()
+
+        reply = (f"已按您的要求调整流程：保留 {kept} 个节点"
+                 f"{'（已写内容不丢）' if kept else ''}，"
+                 f"新增 {added} 个，移除 {removed} 个。")
+        logger.info("[工作流] AI 调整: inst=%s kept=%d added=%d removed=%d",
+                    inst.id, kept, added, removed)
+        result = self._instance_to_dict(inst)
+        result["reply"] = reply
+        return result
 
     # ========== 上下文解析 ==========
     def parse_natural_language(self, inst_id: str, text: str) -> dict:

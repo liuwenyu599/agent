@@ -38,3 +38,7 @@ class ParseKeyValueRequest(BaseModel):
 class ConfirmContextRequest(BaseModel):
     workflow_context: Dict[str, Any]
     confirm_overrides: Optional[Dict[str, bool]] = Field(default_factory=dict)
+
+
+class AiAdjustRequest(BaseModel):
+    instruction: str

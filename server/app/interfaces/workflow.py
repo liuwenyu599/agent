@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.application.shared.writing_assistant import WritingAssistant
 from app.application.workflow.dto import (
+    AiAdjustRequest,
     ConfirmContextRequest,
     CreateInstanceRequest,
     GenerateNodeRequest,
@@ -65,6 +66,13 @@ def update_instance(inst_id: str, req: UpdateInstanceRequest,
 def delete_instance(inst_id: str, user: User = Depends(get_current_user),
                     svc: WorkflowService = Depends(get_workflow_service)):
     return svc.delete_instance(inst_id)
+
+
+@router.post("/instances/{inst_id}/ai-adjust")
+def ai_adjust_instance(inst_id: str, req: AiAdjustRequest,
+                       user: User = Depends(get_current_user),
+                       svc: WorkflowService = Depends(get_workflow_service)):
+    return svc.ai_adjust_instance(user, inst_id, req.instruction)
 
 
 @router.post("/instances/{inst_id}/parse-natural-language")
