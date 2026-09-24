@@ -208,13 +208,16 @@ class ChatViewModel(
         }
     }
 
-    /** 当前分类下的历史条目 */
-    fun historyItems(): List<HistoryItem> = when (historyCategory) {
+    /** 指定分类下的历史条目（时间线筛选用） */
+    fun historyItemsOf(category: HistoryCategory): List<HistoryItem> = when (category) {
         HistoryCategory.CHAT -> historyChats
         HistoryCategory.DOC -> historyDocs
         HistoryCategory.PPT -> historyPpts
         HistoryCategory.WORKFLOW -> historyWorkflows
     }
+
+    /** 当前分类下的历史条目 */
+    fun historyItems(): List<HistoryItem> = historyItemsOf(historyCategory)
 
     /** 全量历史（时间线视图用）：四类合并、按时间倒序 */
     fun allHistoryItems(): List<HistoryItem> =
