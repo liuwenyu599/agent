@@ -63,6 +63,8 @@ object Endpoints {
         /** 流式起草（SSE）：正文边生成边推，最后推 done 携带权威结果 */
         fun draftStream(id: String) = "/writing/tasks/$id/draft/stream"
         fun revise(id: String) = "/writing/tasks/$id/revise"
+        /** 上传图片并由视觉模型（Qwen2.5-VL 等）识别为文本，绑定到任务会话 */
+        fun images(id: String) = "/writing/tasks/$id/images"
         fun versions(id: String) = "/writing/tasks/$id/versions"
         fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
         /** 回退到指定历史版本（回退前当前内容自动保存为新版本） */
@@ -194,7 +196,7 @@ object Endpoints {
         fun sample(id: String) = "/training/samples/$id"
         fun sampleReview(id: String) = "/training/samples/$id/review"
         const val DATASETS = "/training/datasets"
-        fun datasetVersions(datasetId: String) = "/training/datasets/$datasetId/versions"
+        fun datasetVersions(datasetId: String) = "/training/datasets/$id/versions"
         const val JOBS = "/training/jobs"
         fun job(id: String) = "/training/jobs/$id"
         fun jobCancel(id: String) = "/training/jobs/$id/cancel"

@@ -4,6 +4,7 @@ import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
@@ -109,6 +110,26 @@ class WritingRepository(private val api: ApiClient) {
             if (!selection.isNullOrBlank()) put("selection", selection)
         }, timeoutMs = 300_000)) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    /**
+     * POST /writing/tasks/{id}/images 上传图片并由视觉模型（Qwen2.5-VL）识别为文本。
+     *
+     * 识别文本在服务端写回附件并绑定到任务会话：之后的起草/修改会自动把识别内容
+     * 作为「附件材料」注入模型上下文，无需前端再传。视觉识别可能较慢，放宽到 10 分钟。
+     * 返回 (识别条目, 是否走了视觉模型)。
+     */
+    suspend fun recognizeImages(
+        id: String, files: List<File>,
+    ): ApiResult<Pair<List<JsonObject>, Boolean>> =
+        when (val r = api.upload(Endpoints.WritingTasks.images(id), "files", files,
+            timeoutMs = 600_000)) {
+            is ApiResult.Ok -> {
+                val o = r.data.obj()
+                val items = o?.get("items")?.arr()?.mapNotNull { it.obj() } ?: emptyList()
+                ApiResult.Ok(items to (o?.get("vision")?.bool() ?: false))
+            }
             is ApiResult.Err -> r
         }
 
