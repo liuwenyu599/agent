@@ -23,27 +23,82 @@ import com.judicialai.desktop.design.layout.trackWindowMaximized
 import com.judicialai.desktop.design.layout.windowChromeActions
 import com.judicialai.desktop.design.theme.AppLogo
 import kotlinx.coroutines.delay
+import java.awt.EventQueue
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.concurrent.thread
 
 /** 窗口标题：对外显示的正式品牌名 */
 private const val APP_TITLE = "白云司法局智慧办公平台"
 
 /**
+ * 单实例握手端口（仅监听 127.0.0.1，不对外）。
+ * 作用：实现「再点一次图标 / 任务栏右键新开窗口」——第二个进程不另起一套应用，
+ * 而是通知已在运行的进程新开一个窗口后自己退出，登录态与生成任务全部共享，不丢进度。
+ */
+private const val SINGLE_INSTANCE_PORT = 47632
+
+/**
+ * 尝试把「新开窗口」请求转发给已在运行的实例。
+ * @return true = 已有实例接管，本进程应当直接退出
+ */
+private fun forwardToRunningInstance(): Boolean = try {
+    Socket().use { s ->
+        s.connect(InetSocketAddress("127.0.0.1", SINGLE_INSTANCE_PORT), 800)
+        s.getOutputStream().write("NEW_WINDOW\n".toByteArray())
+        s.getOutputStream().flush()
+    }
+    true
+} catch (_: Exception) {
+    false
+}
+
+/** 作为第一个实例：监听后续启动请求，每收到一次就在本进程内新开一个窗口 */
+private fun startInstanceServer() {
+    thread(isDaemon = true, name = "single-instance") {
+        try {
+            val server = ServerSocket(SINGLE_INSTANCE_PORT, 8,
+                InetAddress.getByName("127.0.0.1"))
+            while (true) {
+                try {
+                    server.accept().close()
+                    // 窗口状态改动回到 UI 线程执行
+                    EventQueue.invokeLater { WindowManager.openNew() }
+                } catch (_: Exception) {
+                    // 单次请求失败不影响后续监听
+                }
+            }
+        } catch (_: Exception) {
+            // 端口被占等极端情况：静默放弃转发能力，应用照常可用
+        }
+    }
+}
+
+/**
  * 启动窗口：先展示启动页（Logo + 名称），约 1.6 秒后进入应用主界面。
  *
  * 多开独立窗口：
+ * - 再点一次桌面/任务栏图标（或任务栏右键新开窗口）= 在已运行的实例里新开窗口，
+ *   第二个进程只做转发然后退出（见 [forwardToRunningInstance]）；
  * - WindowManager.sessions 里每个会话对应一个操作系统级独立窗口，
  *   各自导航互不干扰（页面状态见 WindowSession）；
  * - 登录态 / 生成任务等全局状态共享 AppState：一个窗口跑公文/PPT 生成时，
  *   另一个窗口正常办公，切回仍能看进度，不会因界面重建而报错；
  * - 关闭主窗口 = 退出应用；关闭其他窗口只关自己；
- * - 「新开窗口」入口在右上角用户菜单。
+ * - 「新开窗口」入口也在右上角用户菜单。
  *
  * 所有窗口均为无边框 + 透明底（undecorated + transparent），系统标题栏不再渲染，
  * 由 [WindowChrome] 裁圆角并提供拖拽带，窗口控制按钮画在 Header 右侧。
  */
-fun main() = application {
+fun main() {
+    // 已有实例在跑：把「新开窗口」转发过去，本进程退出（任务栏图标/快捷方式再点的行为）
+    if (forwardToRunningInstance()) return
+    startInstanceServer()
+    application {
     val windowIcon = remember { BitmapPainter(AppLogo.imageBitmap) }
     var showSplash by remember { mutableStateOf(true) }
     val mainSession = remember { WindowManager.ensureMain() }
@@ -120,5 +175,6 @@ fun main() = application {
                 }
             }
         }
+    }
     }
 }
