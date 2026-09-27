@@ -314,12 +314,28 @@ private fun WindowControlGroup(actions: WindowChromeActions) {
     }
 }
 
-/** 单个窗口控制按钮：32dp 方形，悬停出浅底；关闭按钮悬停为红底白图标 */
+/**
+ * 单个窗口控制按钮：32dp 方形。
+ *
+ * 与 Windows 原生标题栏一致——三个按钮**常态可见**，hover 只是「高亮」而非「显形」：
+ * 静息态即有淡底 + 浅描边 + 深色图标（与同文件 [HeaderIconButton] 同一套视觉语言），
+ * 避免浅灰图标落在白色 Header 上因对比度不足而被认为「按钮没了」。
+ *
+ * @param restBg 静息态底色（比 hover 更浅，保证 hover 仍有加深反馈）
+ * @param restTint 静息态图标色
+ * @param restBorder 静息态描边色
+ * @param hoverBg 悬停底色
+ * @param hoverTint 悬停图标色
+ * @param hoverBorder 悬停描边色
+ */
 @Composable
 private fun WindowControlButton(
     icon: ImageVector,
     description: String,
     onClick: () -> Unit,
+    restBg: Color = SurfaceTonal,
+    restTint: Color = Ink2,
+    restBorder: Color = Line,
     hoverBg: Color = SurfaceDeep,
     hoverTint: Color = Ink2,
     hoverBorder: Color = LineStrong,
@@ -329,13 +345,13 @@ private fun WindowControlButton(
     val shape = RoundedCornerShape(Dimens.radiusSm)
     Box(
         Modifier.size(32.dp).clip(shape)
-            .background(if (hovered) hoverBg else Color.Transparent)
-            .border(1.dp, if (hovered) hoverBorder else Color.Transparent, shape)
+            .background(if (hovered) hoverBg else restBg)
+            .border(1.dp, if (hovered) hoverBorder else restBorder, shape)
             .clickable(interactionSource = interaction, indication = null) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = description,
-            tint = if (hovered) hoverTint else Muted2,
+            tint = if (hovered) hoverTint else restTint,
             modifier = Modifier.size(Dimens.iconSm))
     }
 }

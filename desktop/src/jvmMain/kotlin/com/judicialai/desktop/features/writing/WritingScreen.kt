@@ -167,6 +167,10 @@ fun WritingScreen() {
         if (lastError != null && !generating) {
             WritingFailedBanner(lastError) { AppState.writingLastError = null }
         }
+        // 切回页面后正在从服务端取回任务：明确说明在做什么，别让人以为卡住/报错
+        if (vm.restoring) {
+            WritingProgressLine("正在取回上次未完成的写作任务…")
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (!vm.hasTask) {
                 TaskEntryScreen(vm)
@@ -466,10 +470,8 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                 }
             }
 
-            vm.status?.let {
-                Spacer(Modifier.height(Dimens.space3))
-                FieldError(it)
-            }
+            // 恢复中的中性提示由外层统一渲染（工作台与入口页都要看到），这里只出结果
+            WritingStatusLine(vm.status)
             Spacer(Modifier.height(Dimens.space6))
         }
     }
@@ -1145,9 +1147,62 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.height(Dimens.space2))
             AppLinkButton("加入训练数据", onClick = { vm.addToTraining() }, enabled = !vm.busy)
         }
-        vm.status?.let {
-            Spacer(Modifier.height(Dimens.space2))
-            FieldError(it)
+        WritingStatusLine(vm.status)
+    }
+}
+
+/**
+ * 状态提示条：只有真正的失败才用红色错误框。
+ *
+ * 写作台的 `status` 同时承载三类文案——失败原因（"导出失败：…"）、进行中提示
+ * （"上传材料中…"、"正在保存…"）和成功提示（"已保存版本 v3"、"已导出：xxx"）。
+ * 之前一律走 [FieldError]（恒为红色危险框，见 AppControls.kt:338），用户每切一次
+ * 页面就被红字迎面打一次，误以为"切换就会报错"。这里按语义分流。
+ */
+@Composable
+private fun WritingStatusLine(status: String?) {
+    val text = status?.takeIf { it.isNotBlank() } ?: return
+    Spacer(Modifier.height(Dimens.space3))
+    if (isWritingFailureText(text)) {
+        FieldError(text)
+    } else {
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(Dimens.radiusSm))
+                .background(AiSoft)
+                .border(1.dp, AiSoftStrong, RoundedCornerShape(Dimens.radiusSm))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text, fontSize = 12.sp, color = Ink, lineHeight = 18.sp)
         }
     }
+}
+
+/** 进行中 / 成功提示：中性浅蓝条，不吓人 */
+@Composable
+private fun WritingProgressLine(text: String) {
+    Spacer(Modifier.height(Dimens.space3))
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(Dimens.radiusSm))
+            .background(AiSoft)
+            .border(1.dp, AiSoftStrong, RoundedCornerShape(Dimens.radiusSm))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, fontSize = 12.sp, color = Ink, lineHeight = 18.sp)
+    }
+}
+
+/**
+ * 判定一条 status 是否为「失败」语义。
+ * 命中失败关键词 → 红色；其余（"已…"、"正在…"、普通说明）→ 中性提示。
+ */
+private fun isWritingFailureText(text: String): Boolean {
+    val failureHints = listOf(
+        "失败", "错误", "中断", "不存在", "已删除", "不可达", "超时",
+        "无法", "不能", "缺少", "请先", "仅支持", "已过期", "不合法", "异常",
+    )
+    return failureHints.any { text.contains(it) }
 }

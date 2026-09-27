@@ -57,6 +57,14 @@ class WritingViewModel(
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
 
+    /**
+     * 跨页面恢复任务（切回本页时按 [AppState.pendingWritingTaskId] 拉回任务上下文）的协程句柄。
+     *
+     * **必须与 [activeJob] 分开**：恢复不是"生成"，如果共用句柄，用户点「取消生成」
+     * 会取消这次恢复（界面上的 busy 状态还卡着），而真正跑着的生成反而没人能取消。
+     */
+    private var restoreJob: Job? = null
+
     var task by mutableStateOf(WritingTaskState())
         private set
     var content by mutableStateOf("")
@@ -76,6 +84,16 @@ class WritingViewModel(
     var versions by mutableStateOf(listOf<JsonObject>())
         private set
     var busy by mutableStateOf(false)
+        private set
+
+    /**
+     * 正在按全局 taskId 恢复上一次的写作任务（切到别的页面再切回时触发）。
+     *
+     * 与 [busy] 分开的意义：恢复是**正常的无感动作**，不是失败。
+     * 之前恢复进度写进 [status]，而界面把 status 一律按红色错误框渲染，
+     * 用户每切一次页面就看见一次红字，正是"切换就报错"的观感来源。
+     */
+    var restoring by mutableStateOf(false)
         private set
 
     /** 历史版本预览弹窗（查看 + 回退） */
@@ -182,34 +200,59 @@ class WritingViewModel(
      * 按 taskId 重新装载任务（切到别的页面再切回时 ViewModel 被重建、状态清零，
      * 但生成协程不会被取消，任务在服务端仍然存在）。
      * 复用 applyResponse 填充任务上下文 / 正文 / 版本号，并补拉版本链。
+     *
+     * 关于"切回页面就报错"：本方法过去把进度文案写进 [status]，而界面把 status
+     * 一律按红色错误框渲染；失败时还把服务端 detail 原样拼成
+     * 「恢复上次写作任务失败：xxx」。现在改为——
+     * - 进度走 [restoring]，不进 status，不染红；
+     * - 任务在服务端已不存在（HTTP 404）属于**无害的正常收尾**：静默回到入口页，
+     *   不再弹红字；
+     * - 其余错误给一句用户能照做的中文提示，不透传服务端原文。
      */
     fun openTask(id: String) {
-        if (id.isBlank() || busy) return
+        if (id.isBlank() || busy || restoring) return
         busy = true
-        status = "正在恢复上次的写作任务…"
-        activeJob = scope.launch {
-            when (val r = repo.getTask(id)) {
-                is ApiResult.Ok -> {
-                    val d = r.data
-                    if (d != null) {
-                        applyResponse(d)
-                        // 服务端正文可能为空（还没起草完）：这里无条件对齐，避免残留别的内容
-                        content = d["current_content"].str()
-                        serverContent = content
-                        refreshVersions()
-                        status = null
-                    } else {
-                        status = "任务不存在或已被删除"
+        restoring = true
+        status = null
+        restoreJob = scope.launch {
+            try {
+                when (val r = repo.getTask(id)) {
+                    is ApiResult.Ok -> {
+                        val d = r.data
+                        if (d != null) {
+                            applyResponse(d)
+                            // 服务端正文可能为空（还没起草完）：这里无条件对齐，避免残留别的内容
+                            content = d["current_content"].str()
+                            serverContent = content
+                            refreshVersions()
+                            status = null
+                            // 服务端已经有正文，说明上次生成其实成功了：
+                            // 「上次生成未完成」那条提示再挂着就是误导，这里清掉
+                            if (content.isNotBlank()) AppState.writingLastError = null
+                        } else {
+                            // 任务已被清理：静默回到入口页即可，不是错误
+                            AppState.pendingWritingTaskId = null
+                            AppState.writingLastError = null
+                        }
+                    }
+                    is ApiResult.Err -> {
+                        // 取不到就别再记着，避免每次切回页面都重试一次失败的请求
                         AppState.pendingWritingTaskId = null
+                        // 404 = 任务在服务端已不存在（删除 / 换账号 / 服务端清理），是无害情况
+                        if (r.status == 404) {
+                            AppState.writingLastError = null
+                        } else {
+                            val tip = "暂时没能取回上次的写作任务，已回到任务入口，可重新描述需求"
+                            status = tip
+                            AppState.writingLastError = tip
+                        }
                     }
                 }
-                is ApiResult.Err -> {
-                    status = "恢复上次写作任务失败：${r.message}"
-                    // 取不到就别再记着，避免每次切回页面都重试一次失败的请求
-                    AppState.pendingWritingTaskId = null
-                }
+            } finally {
+                // 无论成败都要放掉，否则界面会永久卡在"恢复中"、按钮全灰
+                busy = false
+                restoring = false
             }
-            busy = false
         }
     }
 
@@ -745,6 +788,10 @@ class WritingViewModel(
         // 用户明确放弃当前任务：清掉跨页面恢复标记与上次失败原因，切回页面不应再恢复它
         AppState.pendingWritingTaskId = null
         AppState.writingLastError = null
+        // 恢复请求随之作废：它拿到的仍是上一个任务，回来会把内容写进本次新任务
+        restoreJob?.cancel()
+        restoreJob = null
+        restoring = false
         task = WritingTaskState()
         content = ""
         serverContent = ""

@@ -59,6 +59,7 @@ import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.SecondaryText
 import kotlinx.coroutines.delay
@@ -330,11 +331,39 @@ private fun PptEntryPane(vm: PptViewModel) {
 
         TemplatePicker(vm)
 
-        Button(
-            enabled = !vm.busy && (vm.topic.isNotBlank() || vm.materials.isNotEmpty()),
+        // 「AI 智能设计」是主路径：用户不用手动挑模板、也不用在大纲确认页多停一步，
+        // 直接让 AI 逐页设计排版，所以给它最高的视觉权重（AI 渐变实心主按钮）。
+        val canGenerate = !vm.busy && (vm.topic.isNotBlank() || vm.materials.isNotEmpty())
+        AppButton(
+            text = if (vm.autoDesignAfterOutline) "AI 智能设计中…" else "AI 智能设计",
+            onClick = {
+                // 先定保存位置：任务跑完会自动落盘到这里。
+                // 用户在这里取消 = 什么都不发起（不生成大纲、不提交任务）
+                val target = pickSaveFile(
+                    (vm.topic.ifBlank { "演示文稿" }) + ".pptx") ?: return@AppButton
+                vm.startAiDesign(target)
+            },
+            enabled = canGenerate,
+            kind = AppButtonKind.AI,
+            size = AppButtonSize.LG,
+            loading = vm.autoDesignAfterOutline,
+            fill = true,
+        )
+        Text(
+            "AI 逐页设计排版，约 5–15 分钟；比“生成大纲”少一步确认，直接出片。" +
+                "模板只作内容结构参考，不必手动挑。",
+            style = MaterialTheme.typography.caption, color = SecondaryText)
+
+        // 次要路径：只出大纲，停在确认页自己逐页改
+        OutlinedButton(
+            enabled = canGenerate,
             onClick = { vm.startOutline() },
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (vm.busy) vm.outlineStage.ifBlank { "生成中…" } else "生成大纲") }
+        ) {
+            Text(
+                if (vm.busy && !vm.autoDesignAfterOutline)
+                    vm.outlineStage.ifBlank { "生成中…" } else "生成大纲")
+        }
 
         // 生成过程可见：实时阶段 + 浅蓝进度 + 骨架屏 + 可取消
         // （不再是没有进度、不能取消、看不到过程的空白等待）
@@ -622,7 +651,24 @@ private fun PptTemplatesPane(vm: PptViewModel) {
 internal fun PptStatus(vm: PptViewModel) {
     vm.status?.let {
         Text(it, style = MaterialTheme.typography.caption,
-            color = if (it.contains("完成") || it.contains("已保存") || it.contains("已"))
-                MaterialTheme.colors.primary else MaterialTheme.colors.error)
+            color = if (isFailureStatus(it)) MaterialTheme.colors.error
+            else MaterialTheme.colors.primary)
     }
+}
+
+/**
+ * 判定一条 status 是否为「失败」语义。
+ *
+ * 之前只认"完成/已保存/已"三个成功词，其余一律判红——于是
+ * 「正在打开文档…」「正在解析「xxx」…」这类**过程提示**也被染成红色错误字，
+ * 切回 PPT 页面瞬间就是一行红字。这里先排除失败关键词，再判中性/成功。
+ */
+private fun isFailureStatus(text: String): Boolean {
+    val failureHints = listOf(
+        "失败", "错误", "中断", "不存在", "已删除", "不可达", "超时",
+        "无法", "不能", "缺少", "请先", "仅支持", "已过期", "不合法", "异常",
+    )
+    if (failureHints.any { text.contains(it) }) return true
+    val neutralHints = listOf("完成", "已", "正在", "中…", "处理中")
+    return neutralHints.none { text.contains(it) }
 }
