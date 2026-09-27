@@ -420,7 +420,7 @@ private fun WorkflowCard(vm: DepartmentViewModel) {
                             }
                         }
                         if (w.nodeCount > 0) {
-                            TagChip("$w.nodeCount 个节点", fg = Primary, bg = PrimarySoft)
+                            TagChip("${w.nodeCount} 个节点", fg = Primary, bg = PrimarySoft)
                             Spacer(Modifier.width(Dimens.space2))
                         }
                         Text("进入 →", fontSize = 11.5.sp, color = Primary)

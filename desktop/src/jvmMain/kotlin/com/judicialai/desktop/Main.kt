@@ -17,10 +17,17 @@ import com.judicialai.desktop.app.App
 import com.judicialai.desktop.app.LocalWindowSession
 import com.judicialai.desktop.app.SplashScreen
 import com.judicialai.desktop.app.WindowManager
+import com.judicialai.desktop.design.layout.LocalWindowChrome
+import com.judicialai.desktop.design.layout.WindowChrome
+import com.judicialai.desktop.design.layout.trackWindowMaximized
+import com.judicialai.desktop.design.layout.windowChromeActions
 import com.judicialai.desktop.design.theme.AppLogo
 import kotlinx.coroutines.delay
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+
+/** 窗口标题：对外显示的正式品牌名 */
+private const val APP_TITLE = "白云司法局智慧办公平台"
 
 /**
  * 启动窗口：先展示启动页（Logo + 名称），约 1.6 秒后进入应用主界面。
@@ -32,6 +39,9 @@ import java.awt.event.WindowEvent
  *   另一个窗口正常办公，切回仍能看进度，不会因界面重建而报错；
  * - 关闭主窗口 = 退出应用；关闭其他窗口只关自己；
  * - 「新开窗口」入口在右上角用户菜单。
+ *
+ * 所有窗口均为无边框 + 透明底（undecorated + transparent），系统标题栏不再渲染，
+ * 由 [WindowChrome] 裁圆角并提供拖拽带，窗口控制按钮画在 Header 右侧。
  */
 fun main() = application {
     val windowIcon = remember { BitmapPainter(AppLogo.imageBitmap) }
@@ -46,28 +56,43 @@ fun main() = application {
     if (showSplash) {
         Window(
             onCloseRequest = ::exitApplication,
-            title = "司法智能办公辅助平台",
+            title = APP_TITLE,
             icon = windowIcon,
             state = rememberWindowState(width = 1280.dp, height = 800.dp),
-        ) { SplashScreen() }
+            undecorated = true,
+            transparent = true,
+        ) {
+            // 启动页只有 1.6 秒，不放窗口控制按钮，仅需圆角 + 拖拽带
+            WindowChrome(maximized = false, minimumSize = java.awt.Dimension(560, 420)) {
+                SplashScreen()
+            }
+        }
         return@application
     }
 
     WindowManager.sessions.forEach { session ->
         key(session.id) {
+            // 关闭逻辑集中定义：窗口控制按钮与 onCloseRequest 行为完全一致
+            val onCloseRequest: () -> Unit = {
+                if (session === mainSession || WindowManager.sessions.size <= 1) {
+                    exitApplication()
+                } else {
+                    WindowManager.close(session)
+                }
+            }
+            var maximized by remember { mutableStateOf(false) }
+
             Window(
-                onCloseRequest = {
-                    if (session === mainSession || WindowManager.sessions.size <= 1) {
-                        exitApplication()
-                    } else {
-                        WindowManager.close(session)
-                    }
-                },
-                title = "司法智能办公辅助平台",
+                onCloseRequest = onCloseRequest,
+                title = APP_TITLE,
                 icon = windowIcon,
                 state = rememberWindowState(width = 1280.dp, height = 800.dp),
+                undecorated = true,
+                transparent = true,
             ) {
                 LaunchedEffect(session.id) { WindowManager.activate(session) }
+                // 最大化状态：决定窗口圆角与 Header 上的最大化/还原图标
+                trackWindowMaximized { maximized = it }
                 // 焦点跟踪：全局导航调用（AppState.navigate 等）落在焦点窗口
                 DisposableEffect(session.id) {
                     val listener = object : WindowAdapter() {
@@ -79,7 +104,19 @@ fun main() = application {
                     onDispose { window.removeWindowFocusListener(listener) }
                 }
                 CompositionLocalProvider(LocalWindowSession provides session) {
-                    App()
+                    val chromeActions = windowChromeActions(
+                        maximized = maximized,
+                        close = onCloseRequest,
+                    )
+                    CompositionLocalProvider(LocalWindowChrome provides chromeActions) {
+                        // 顶部拖拽带双击 = 与 Header 最大化按钮同一套逻辑
+                        WindowChrome(
+                            maximized = maximized,
+                            onToggleMaximize = chromeActions.toggleMaximize,
+                        ) {
+                            App()
+                        }
+                    }
                 }
             }
         }

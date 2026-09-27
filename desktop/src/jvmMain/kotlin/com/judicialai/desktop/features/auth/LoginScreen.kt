@@ -66,7 +66,7 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
         ) {
             Column(Modifier.padding(28.dp)) {
                 Text(
-                    "🏛️ 司法智能办公辅助平台 V1.0",
+                    "白云司法局智慧办公平台",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     color = EpPrimaryDark,

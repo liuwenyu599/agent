@@ -26,8 +26,12 @@ import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CropSquare
+import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -54,6 +60,7 @@ import com.judicialai.desktop.design.theme.AiIndigo
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.BrandEnd
 import com.judicialai.desktop.design.theme.BrandStart
+import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.FeatureWriteInk
 import com.judicialai.desktop.design.theme.Ink
@@ -130,6 +137,8 @@ private fun AppHeader(
     var userMenuOpen by remember { mutableStateOf(false) }
     val group = AppNav.groupOf(current)
     val session = LocalWindowSession.current
+    // 无边框窗口下由 Header 自绘窗口控制按钮；非无边框环境为 null，自动隐藏
+    val chrome = LocalWindowChrome.current
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -195,7 +204,11 @@ private fun AppHeader(
                 onClick = { session.navDrawerOpen = true },
             )
 
-            Spacer(Modifier.weight(1f))
+            // 无边框窗口：Header 中间空白区域可拖动窗口（替代系统标题栏拖动）
+            Box(
+                Modifier.weight(1f).fillMaxHeight()
+                    .dragWindow(chrome?.window)
+            )
 
             // ---- 全局搜索 ----
             AppSearchField(
@@ -259,9 +272,71 @@ private fun AppHeader(
                     }) { Text("退出登录", fontSize = 13.sp, color = com.judicialai.desktop.design.theme.Danger) }
                 }
             }
+
+            // ---- 窗口控制：最小化 / 最大化·还原 / 关闭（无边框窗口自绘）----
+            if (chrome != null) {
+                Spacer(Modifier.width(Dimens.space3))
+                WindowControlGroup(chrome)
+            }
         }
             Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         }
+    }
+}
+
+/**
+ * 窗口控制按钮组（最小化 / 最大化·还原 / 关闭）。
+ * 仅在无边框窗口（[LocalWindowChrome] 非空）时显示。
+ */
+@Composable
+private fun WindowControlGroup(actions: WindowChromeActions) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        WindowControlButton(
+            icon = Icons.Default.Remove,
+            description = "最小化",
+            onClick = actions.minimize,
+        )
+        Spacer(Modifier.width(Dimens.space1))
+        WindowControlButton(
+            icon = if (actions.maximized) Icons.Default.FilterNone else Icons.Default.CropSquare,
+            description = if (actions.maximized) "向下还原" else "最大化",
+            onClick = actions.toggleMaximize,
+        )
+        Spacer(Modifier.width(Dimens.space1))
+        WindowControlButton(
+            icon = Icons.Default.Close,
+            description = "关闭",
+            onClick = actions.close,
+            hoverBg = Danger,
+            hoverTint = Color.White,
+            hoverBorder = Danger,
+        )
+    }
+}
+
+/** 单个窗口控制按钮：32dp 方形，悬停出浅底；关闭按钮悬停为红底白图标 */
+@Composable
+private fun WindowControlButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    hoverBg: Color = SurfaceDeep,
+    hoverTint: Color = Ink2,
+    hoverBorder: Color = LineStrong,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(Dimens.radiusSm)
+    Box(
+        Modifier.size(32.dp).clip(shape)
+            .background(if (hovered) hoverBg else Color.Transparent)
+            .border(1.dp, if (hovered) hoverBorder else Color.Transparent, shape)
+            .clickable(interactionSource = interaction, indication = null) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description,
+            tint = if (hovered) hoverTint else Muted2,
+            modifier = Modifier.size(Dimens.iconSm))
     }
 }
 

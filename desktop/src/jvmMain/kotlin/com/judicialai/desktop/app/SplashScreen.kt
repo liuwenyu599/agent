@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,11 +51,12 @@ fun SplashScreen() {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Image(
                 rememberAppLogo(), contentDescription = "应用 Logo",
-                modifier = Modifier.size(128.dp),
+                modifier = Modifier.size(112.dp),
+                contentScale = ContentScale.Fit,
             )
             Spacer(Modifier.height(24.dp))
             Text(
-                "司法智能办公辅助平台",
+                "白云司法局智慧办公平台",
                 color = Color.White, fontSize = 24.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = 4.sp,
             )
