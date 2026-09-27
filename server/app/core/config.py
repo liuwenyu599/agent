@@ -50,9 +50,100 @@ class Settings:
         self.PPT_MODEL_NAME = os.getenv("PPT_MODEL_NAME", "DeepPresenter-9B")
         self.PPT_MODEL_API_KEY = os.getenv("PPT_MODEL_API_KEY", "")
         self.PPT_MODEL_TIMEOUT = int(os.getenv("PPT_MODEL_TIMEOUT", "300"))
-        # PPTAgent Host 地址（自管流程模式：后端编排，预留下行渲染/导出集成；
-        # 容器网络内地址，如 http://justice-ppt-host:7861）
+        # PPTAgent Host 地址（渲染下行集成；容器网络内地址，如
+        # http://justice-ppt-host:7861）。留空 → 完全走本地 render_pptx，
+        # 行为与接入前一致；非空 → 优先走 PPTAgent，失败自动回退本地渲染。
         self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "")
+        # ---- PPTAgent 接口契约（第三方镜像 forceless/deeppresenter-host，
+        # HTTP 契约尚未真机验证，故路径 / 字段名全部可覆盖）----------------
+        # ⚠️ 下列默认值均为"最合理的 REST 形式"假设，**待真机联调确认**：
+        # 挂上服务后先看 http://<host>:7861/docs 的 OpenAPI，再据此改这几项。
+        # 支持 {task_id} 占位符；不写占位符时自动退化为 ?task_id=xxx 查询参数。
+        self.PPT_AGENT_SUBMIT_PATH = os.getenv("PPT_AGENT_SUBMIT_PATH", "/api/ppt/generate")
+        self.PPT_AGENT_STATUS_PATH = os.getenv("PPT_AGENT_STATUS_PATH", "/api/ppt/status/{task_id}")
+        self.PPT_AGENT_RESULT_PATH = os.getenv("PPT_AGENT_RESULT_PATH", "/api/ppt/result/{task_id}")
+        # 健康探测路径（判定"能否连上"，200/307/404 均算在线，5xx 才判不可用）。
+        # PPTAgent Host 的 7861 是 Gradio WebUI，根路径 "/" 一定在，故用它做探针。
+        self.PPT_AGENT_HEALTH_PATH = os.getenv("PPT_AGENT_HEALTH_PATH", "/")
+        # 提交响应的任务 ID 字段名；留空则按常见候选自动探测（task_id/id/job_id...）
+        self.PPT_AGENT_TASK_ID_FIELD = os.getenv("PPT_AGENT_TASK_ID_FIELD", "")
+        # 轮询状态视为"完成"/"失败"的字面量（逗号分隔，大小写不敏感）
+        self.PPT_AGENT_DONE_VALUES = os.getenv(
+            "PPT_AGENT_DONE_VALUES", "succeeded,success,completed,complete,done,finished")
+        self.PPT_AGENT_FAIL_VALUES = os.getenv(
+            "PPT_AGENT_FAIL_VALUES", "failed,failure,error,cancelled,canceled,aborted,timeout")
+        # 可选鉴权（GET/POST 都会带 Authorization 与 X-API-Key 头）
+        self.PPT_AGENT_API_KEY = os.getenv("PPT_AGENT_API_KEY", "")
+        # 超时（秒）：按真机实测的生成耗时设定——PPTAgent 是**聊天式 Agent**，
+        # 一次生成实测 5~15 分钟（300~900s），且需排队占 GPU。默认务必留足余量，
+        # 宁可让用户多等，也不能把正常任务判超时后回退成本地渲染（白等十分钟）。
+        # 提交：Gradio 若走 queue（/gradio_api/queue/join），入队本身也可能阻塞
+        self.PPT_AGENT_SUBMIT_TIMEOUT = int(os.getenv("PPT_AGENT_SUBMIT_TIMEOUT", "60"))
+        # 单次取结果/下载：pptx + pdf 一起落盘，磁盘慢时也要够
+        self.PPT_AGENT_RESULT_TIMEOUT = int(os.getenv("PPT_AGENT_RESULT_TIMEOUT", "300"))
+        # 整体预算（秒）：从提交到取回 pptx 的总上限 = 1800s（30 分钟），
+        # 覆盖 15 分钟生成 + 排队等待；超时才回退本地渲染
+        self.PPT_AGENT_TOTAL_TIMEOUT = int(os.getenv("PPT_AGENT_TOTAL_TIMEOUT", "1800"))
+        # 轮询间隔（秒）：长任务不需要秒级轮询，10s 兼顾及时性与日志量
+        self.PPT_AGENT_POLL_INTERVAL = int(os.getenv("PPT_AGENT_POLL_INTERVAL", "10"))
+
+        # ---- 取结果的**备用主通道**：直接读共享卷里的产物文件 ----------------
+        # PPTAgent 会把成品写到 <workspace>/<日期>/<job_id>/presentation.pptx。
+        # 若后端容器能以只读方式挂到同一目录，则无需猜 Gradio 的结果端点，
+        # 直接扫文件系统取最新产物，可靠性远高于未文档化的 HTTP 契约。
+        # 留空 = 走 HTTP 通道（submit → 轮询 → 取结果）；非空 = 走文件系统通道。
+        self.PPT_AGENT_WORKSPACE_DIR = os.getenv("PPT_AGENT_WORKSPACE_DIR", "")
+        # 产物文件名（PPTAgent 固定输出 presentation.pptx）
+        self.PPT_AGENT_RESULT_FILENAME = os.getenv("PPT_AGENT_RESULT_FILENAME", "presentation.pptx")
+        # 产物"新鲜度"判定：只认提交任务之后落盘的文件（秒，容错时钟偏差）
+        self.PPT_AGENT_WORKSPACE_FRESH_TOLERANCE = int(
+            os.getenv("PPT_AGENT_WORKSPACE_FRESH_TOLERANCE", "120"))
+
+        # ---- Gradio 真实契约（已在真机探查确认，见 deploy/pptagent/README.md）----
+        # 命名端点 /send_message：6 个入参（message, history, attachments,
+        # convert_type_value, template_value, num_pages_value），5 个出参，
+        # 其中第 4 个（0-based index 3）「📥 下载文件」是最终 pptx 的 FileData。
+        # 两个端点 queue=True → 提交返回 event_id，再消费 SSE 事件流取结果。
+        # Gradio 5 命名端点风格（默认）：
+        self.PPT_AGENT_SUBMIT_PATH = os.getenv(
+            "PPT_AGENT_SUBMIT_PATH", "/gradio_api/call/send_message")
+        self.PPT_AGENT_EVENT_PATH = os.getenv(
+            "PPT_AGENT_EVENT_PATH", "/gradio_api/call/send_message/{event_id}")
+        # 旧版 Gradio（4.x）queue 风格，可整体切换为：
+        #   SUBMIT=/gradio_api/queue/join
+        #   EVENT =/gradio_api/queue/data?session_hash={session_hash}
+        # 事件流句柄字段名；留空则自动探测 event_id / task_id / id
+        self.PPT_AGENT_EVENT_ID_FIELD = os.getenv("PPT_AGENT_EVENT_ID_FIELD", "")
+        # queue/join 需要的 fn_index（命名端点风格不需要，留空不下发）
+        self.PPT_AGENT_FN_INDEX = os.getenv("PPT_AGENT_FN_INDEX", "")
+        # queue/data 需要的 session_hash；留空时自动生成随机串
+        self.PPT_AGENT_SESSION_HASH = os.getenv("PPT_AGENT_SESSION_HASH", "")
+        # 出参索引（0-based）：3=📥 下载文件（pptx FileData）、4=Markdown（追问/说明）
+        self.PPT_AGENT_RESULT_OUTPUT_INDEX = int(
+            os.getenv("PPT_AGENT_RESULT_OUTPUT_INDEX", "3"))
+        self.PPT_AGENT_QUESTION_OUTPUT_INDEX = int(
+            os.getenv("PPT_AGENT_QUESTION_OUTPUT_INDEX", "4"))
+        # 入参 4/5/6 的固定取值（契约内的枚举字面量）
+        self.PPT_AGENT_CONVERT_TYPE = os.getenv(
+            "PPT_AGENT_CONVERT_TYPE", "自由生成 (freeform)")
+        self.PPT_AGENT_TEMPLATE = os.getenv("PPT_AGENT_TEMPLATE", "auto")
+        # 单条 message 的最大字符数（超出截断，避免请求体过大）
+        self.PPT_AGENT_MESSAGE_MAX_CHARS = int(
+            os.getenv("PPT_AGENT_MESSAGE_MAX_CHARS", "24000"))
+        # 附件目录映射（R2）："后端可见目录:PPTAgent容器内目录"，留空=不传附件。
+        # attachments 的 path 必须是 **PPTAgent 容器内** 的路径，跨容器传本地路径
+        # 它读不到；只有在两边挂了同一个共享卷、且知道容器内挂载点时才可启用。
+        self.PPT_AGENT_ATTACHMENT_MAP = os.getenv("PPT_AGENT_ATTACHMENT_MAP", "")
+
+        # ---- 目录扫描（仅用于实时进度；目录结构待真机核实，故全部可配置）----
+        # ⚠️ 用户给过的两份说明对目录结构说法不一致（是否有 slides/slide_NN.html
+        # 存疑），因此这里不写死，找不到就降级为"只有总进度、没有逐页预览"。
+        self.PPT_AGENT_PREVIEW_GLOB = os.getenv("PPT_AGENT_PREVIEW_GLOB", "preview/*.png")
+        self.PPT_AGENT_SLIDE_GLOB = os.getenv("PPT_AGENT_SLIDE_GLOB", "slides/*.html")
+        # 无进展判定（秒）：超过这个时长目录和事件流都没动静就判失败
+        self.PPT_AGENT_STALL_TIMEOUT = int(os.getenv("PPT_AGENT_STALL_TIMEOUT", "1800"))
+        # 进度扫描间隔（秒）
+        self.PPT_AGENT_PROGRESS_INTERVAL = int(os.getenv("PPT_AGENT_PROGRESS_INTERVAL", "5"))
 
         # 智能写作流水线（V1.3 推理层机制服务端化）
         # 生成后自动：后处理（文号/日期程序接管）→ 质量门 → 内容校验

@@ -68,3 +68,17 @@ class PPTDocumentModel(Base, IdMixin):
     slide_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
+
+    # ---- 异步生成任务（PPTAgent job，见 migration 011）----
+    job_status: Mapped[str] = mapped_column(String(24), default="")
+    job_phase: Mapped[str] = mapped_column(String(24), default="")
+    job_total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    job_current_page: Mapped[int] = mapped_column(Integer, default=0)
+    job_error: Mapped[Optional[str]] = mapped_column(Text)
+    job_question: Mapped[Optional[str]] = mapped_column(Text)
+    job_renderer: Mapped[str] = mapped_column(String(16), default="")
+    job_event_id: Mapped[str] = mapped_column(String(64), default="")
+    job_cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    job_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    job_finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    job_progress_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

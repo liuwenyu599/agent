@@ -1,0 +1,1001 @@
+"""PPTAgent Host 渲染客户端（HTTP / 同步）。
+
+部署契约见 ``deploy/pptagent/README.md``：
+
+    司法局 FastAPI :8000
+      → PPTAgent Host :7861（容器名 justice-ppt-host）
+          → 内部 Sandbox → OpenAI 兼容 → DeepPresenter-9B :8003
+
+⚠️ API 契约状态（务必先读）
+    ``forceless/deeppresenter-host`` 是第三方镜像。公开资料显示它的 7861 端口跑的
+    是 **Gradio WebUI**（容器内 ``python webui.py 0.0.0.0``），而不是文档化的 REST
+    服务。同时它的定位是"喂主题/材料，Agent 全权生成整套 PPT"，而非"渲染现成大纲"。
+    因此本客户端遵循两条原则：
+
+    1. **不臆造**：所有路径、任务 ID 字段名、状态字面量、结果字段名全部做成
+       配置项，默认值只取"最合理的 REST 形式"占位，并在
+       ``deploy/.env.example`` 中标注"待真机联调确认"。Gradio 若只能走
+       ``/gradio_api/...``，改 ``PPT_AGENT_SUBMIT_PATH`` 即可；
+       若提交一次即返回结果文件，客户端会自动识别并跳过轮询。
+    2. **不硬撑**：调用方（PPTService._render_and_store）必须在拿不到**合法
+       pptx** 时回退本地 ``render_pptx``。绝不把打不开的文件交给用户。
+
+已知（公开资料，非真机实测）：
+    - deeppresenter-host 容器内运行 Gradio UI + Agent Loop + MCP Server；
+    - deeppresenter-sandbox 由 host 通过 docker socket 按需拉起，不常驻、不开端口；
+    - PPTAgent 的内部三大工具链：any2markdown（材料转 MD）、task（任务编排）、
+      search（联网检索），HTML → PPTX 由 Node/Playwright 完成。
+
+待真机确认（拿到 7861 后第一步就是看它自己吐出来的 API 定义）：
+    1. Gradio 根路径 ``/`` 是否可匿名访问（健康探测依赖它）；
+    2. Gradio 的函数入口名（``/gradio_api/run/<fn>`` 或 ``/run/<fn>``）与入参结构；
+    3. 是"提交→轮询"两步，还是"一次请求等到出结果"；后者客户端已自动兼容；
+    4. 结果形态：Gradio FileData（``{"url"/"path", "orig_name": "x.pptx"}``）、
+       二进制直返、或 JSON 里的下载链接 / BASE64，三种本客户端均已处理。
+详见 deploy/.env.example 中 PPT_AGENT_* 段落注释。
+"""
+import base64
+import json as _json
+import time
+import uuid
+import zipfile
+from dataclasses import dataclass, field
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
+
+import httpx
+
+from app.core.config import settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+_PPTX_MIME_HINTS = (
+    "presentationml",
+    "vnd.ms-powerpoint",
+    "application/zip",
+    "application/octet-stream",
+)
+
+# 任务 ID 候选字段名（按命中概率排序）—— 待真机确认后可由 PPT_AGENT_TASK_ID_FIELD 覆盖
+_TASK_ID_FIELDS = ("task_id", "taskId", "job_id", "jobId", "id", "session_id",
+                   "sessionId", "run_id", "runId", "task", "result_id")
+
+# 状态值候选字段名
+_STATUS_FIELDS = ("status", "state", "stage", "phase")
+
+# 结果 URL 候选字段名
+_URL_FIELDS = ("download_url", "downloadUrl", "file_url", "fileUrl", "result_url",
+               "resultUrl", "pptx_url", "pptxUrl", "url", "path", "file", "link",
+               "output", "output_url")
+
+# 结果 base64 候选字段名
+_B64_FIELDS = ("file_base64", "fileBase64", "pptx_base64", "pptxBase64", "content",
+               "data_base64", "base64", "file_content")
+
+# 事件流句柄候选字段名（Gradio 5 命名端点 / Gradio 4 queue 风格）
+_EVENT_ID_FIELDS = ("event_id", "eventId", "task_id", "taskId", "job_id", "run_id", "id")
+
+
+class PPTAgentError(RuntimeError):
+    """PPTAgent 调用失败（网络 / 协议 / 返回非法文件），调用方应回退本地渲染。"""
+
+
+@dataclass
+class PPTAgentOutcome:
+    """一次 PPTAgent 交互的结果（异步 job 用）。
+
+    Attributes:
+        pptx: 成品 pptx 字节；拿到即为成功产物。
+        question: PPTAgent 的**追问**文本（R1：信息不足时它会先提问而不是生成）。
+        outputs: 原始出参列表（5 项），便于排障与后续扩展。
+        event_id: 事件流句柄，用于日志串联。
+        pending: True 表示既没拿到产物也没拿到追问（仍在进行/异常）。
+    """
+    pptx: Optional[bytes] = None
+    question: str = ""
+    outputs: List[Any] = field(default_factory=list)
+    event_id: str = ""
+
+    @property
+    def pending(self) -> bool:
+        """既无产物也无追问 —— 视为仍在进行中。"""
+        return self.pptx is None and not self.question.strip()
+
+
+def looks_like_pptx(data: Optional[bytes]) -> Tuple[bool, str]:
+    """校验字节流是否为可打开的 pptx。
+
+    pptx 本质是 OPC 包（zip），且必须含 ``ppt/presentation.xml``；这里只做
+    ``content_types`` 级别的廉价校验，足以挡住 HTML 错误页 / JSON / 空文件。
+
+    Args:
+        data: 待校验的字节流。
+
+    Returns:
+        (是否合法, 原因说明)
+    """
+    if not data:
+        return False, "返回内容为空"
+    if len(data) < 1024:
+        return False, f"返回内容过小（{len(data)} 字节），疑似错误页"
+    try:
+        if not zipfile.is_zipfile(BytesIO(data)):
+            return False, "返回内容不是 zip 包（pptx 应为 OPC zip 包）"
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            names = set(zf.namelist())
+            if "ppt/presentation.xml" not in names:
+                return False, "zip 包内缺少 ppt/presentation.xml，不是有效 pptx"
+    except Exception as e:  # noqa: BLE001 - 校验不应抛出，转为一律判定非法
+        return False, f"校验异常：{type(e).__name__}: {e}"
+    return True, "ok"
+
+
+def _dig(obj: Any, fields: Tuple[str, ...]) -> Optional[Any]:
+    """从响应体里按候选字段名取值，支持一层 data/result 包裹。
+
+    Gradio 的响应里 ``data`` 是**数组**（元素可能自带文件对象），故这里额外遍历
+    数组元素；这样对接 Gradio 原生端点时无需改代码。
+    """
+    if not isinstance(obj, dict):
+        return None
+    for f in fields:
+        if f in obj and obj[f] not in (None, ""):
+            return obj[f]
+    for wrapper in ("data", "result", "result_data", "output", "payload"):
+        sub = obj.get(wrapper)
+        if isinstance(sub, dict):
+            for f in fields:
+                if f in sub and sub[f] not in (None, ""):
+                    return sub[f]
+        elif isinstance(sub, list):
+            # Gradio: {"data": [{"url": "...", "orig_name": "x.pptx", ...}, ...]}
+            for item in sub:
+                if not isinstance(item, dict):
+                    continue
+                for f in fields:
+                    if f in item and item[f] not in (None, ""):
+                        return item[f]
+    return None
+
+
+def _gradio_file_url(obj: Any) -> str:
+    """提取 Gradio FileData 里的文件地址：优先 url，退化到 path。
+
+    Gradio FileData 形如 ``{"path": "/tmp/gradio/x.pptx", "url":
+    "/gradio_api/file=/tmp/gradio/x.pptx", "orig_name": "x.pptx",
+    "meta": {"_type": "gradio.FileData"}}``。``path`` 多为容器内绝对路径，
+    所以只在没有 ``url`` 时才用它（拼成绝对 URL 后多半 404，届时正常回退本地）。
+    """
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("url", "path", "tmp_url"):
+        v = obj.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    for wrapper in ("data", "result", "output"):
+        sub = obj.get(wrapper)
+        if isinstance(sub, dict):
+            got = _gradio_file_url(sub)
+            if got:
+                return got
+        elif isinstance(sub, list):
+            for item in sub:
+                got = _gradio_file_url(item)
+                if got:
+                    return got
+    return ""
+
+
+def _abs_url(base: str, maybe_url: str) -> str:
+    """把可能的结果 URL 拼成绝对地址。"""
+    maybe_url = (maybe_url or "").strip()
+    if not maybe_url:
+        return ""
+    if maybe_url.startswith(("http://", "https://")):
+        return maybe_url
+    return urljoin(base.rstrip("/") + "/", maybe_url.lstrip("/"))
+
+
+class PPTAgentClient:
+    """PPTAgent Host 的同步 HTTP 客户端：提交 / 轮询 / 取结果。
+
+    路径支持 ``{task_id}`` 占位符；未写占位符时自动退化为 query 参数
+    ``?task_id=xxx``（部分服务是这种风格）。
+
+    所有网络异常统一抛 ``PPTAgentError``，调用方捕获后回退本地渲染即可。
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        submit_path: str = "/api/ppt/generate",
+        status_path: str = "/api/ppt/status/{task_id}",
+        result_path: str = "/api/ppt/result/{task_id}",
+        health_path: str = "/",
+        api_key: str = "",
+        submit_timeout: int = 30,
+        poll_interval: int = 5,
+        total_timeout: int = 600,
+        task_id_field: str = "",
+        done_values: str = "succeeded,success,completed,complete,done,finished",
+        fail_values: str = "failed,failure,error,cancelled,canceled,aborted,timeout",
+        workspace_dir: str = "",
+        result_filename: str = "presentation.pptx",
+        fresh_tolerance: int = 120,
+        event_path: str = "/gradio_api/call/send_message/{event_id}",
+        event_id_field: str = "",
+        fn_index: str = "",
+        session_hash: str = "",
+        result_output_index: int = 3,
+        question_output_index: int = 4,
+        convert_type: str = "自由生成 (freeform)",
+        template_value: str = "auto",
+        message_max_chars: int = 24000,
+        preview_glob: str = "preview/*.png",
+        slide_glob: str = "slides/*.html",
+        attachment_map: str = "",
+        transport: Optional[Any] = None,
+    ) -> None:
+        self.base_url = (base_url or "").rstrip("/")
+        self.submit_path = submit_path or "/api/ppt/generate"
+        self.status_path = status_path or "/api/ppt/status/{task_id}"
+        self.result_path = result_path or "/api/ppt/result/{task_id}"
+        self.health_path = health_path or "/docs"
+        self.api_key = (api_key or "").strip()
+        self.submit_timeout = max(1, int(submit_timeout))
+        self.poll_interval = max(1, int(poll_interval))
+        self.total_timeout = max(self.submit_timeout, int(total_timeout))
+        self.task_id_field = (task_id_field or "").strip()
+        self.done_values = {v.strip().lower() for v in done_values.split(",") if v.strip()}
+        self.fail_values = {v.strip().lower() for v in fail_values.split(",") if v.strip()}
+        # 共享卷取产物通道（留空则走 HTTP 三步流程）
+        self.workspace_dir = (workspace_dir or "").strip()
+        self.result_filename = (result_filename or "presentation.pptx").strip()
+        self.fresh_tolerance = max(0, int(fresh_tolerance))
+        # ---- Gradio 真实契约相关 ----
+        self.event_path = event_path or "/gradio_api/call/send_message/{event_id}"
+        self.event_id_field = (event_id_field or "").strip()
+        self.fn_index = (fn_index or "").strip()
+        self.session_hash = (session_hash or "").strip() or uuid.uuid4().hex
+        self.result_output_index = max(0, int(result_output_index))
+        self.question_output_index = max(0, int(question_output_index))
+        self.convert_type = convert_type or "自由生成 (freeform)"
+        self.template_value = template_value or "auto"
+        self.message_max_chars = max(500, int(message_max_chars))
+        self.preview_glob = preview_glob or "preview/*.png"
+        self.slide_glob = slide_glob or "slides/*.html"
+        self.attachment_map = (attachment_map or "").strip()
+        self._transport = transport
+
+    # ---------------- 构造 ----------------
+
+    @classmethod
+    def from_settings(cls, transport: Optional[Any] = None) -> "PPTAgentClient":
+        """按全局配置构造客户端（测试可注入 transport / monkeypatch 配置）。"""
+        return cls(
+            base_url=settings.PPT_AGENT_URL,
+            submit_path=settings.PPT_AGENT_SUBMIT_PATH,
+            status_path=settings.PPT_AGENT_STATUS_PATH,
+            result_path=settings.PPT_AGENT_RESULT_PATH,
+            health_path=settings.PPT_AGENT_HEALTH_PATH,
+            api_key=settings.PPT_AGENT_API_KEY,
+            submit_timeout=settings.PPT_AGENT_SUBMIT_TIMEOUT,
+            poll_interval=settings.PPT_AGENT_POLL_INTERVAL,
+            total_timeout=settings.PPT_AGENT_TOTAL_TIMEOUT,
+            task_id_field=settings.PPT_AGENT_TASK_ID_FIELD,
+            done_values=settings.PPT_AGENT_DONE_VALUES,
+            fail_values=settings.PPT_AGENT_FAIL_VALUES,
+            workspace_dir=settings.PPT_AGENT_WORKSPACE_DIR,
+            result_filename=settings.PPT_AGENT_RESULT_FILENAME,
+            fresh_tolerance=settings.PPT_AGENT_WORKSPACE_FRESH_TOLERANCE,
+            event_path=settings.PPT_AGENT_EVENT_PATH,
+            event_id_field=settings.PPT_AGENT_EVENT_ID_FIELD,
+            fn_index=settings.PPT_AGENT_FN_INDEX,
+            session_hash=settings.PPT_AGENT_SESSION_HASH,
+            result_output_index=settings.PPT_AGENT_RESULT_OUTPUT_INDEX,
+            question_output_index=settings.PPT_AGENT_QUESTION_OUTPUT_INDEX,
+            convert_type=settings.PPT_AGENT_CONVERT_TYPE,
+            template_value=settings.PPT_AGENT_TEMPLATE,
+            message_max_chars=settings.PPT_AGENT_MESSAGE_MAX_CHARS,
+            preview_glob=settings.PPT_AGENT_PREVIEW_GLOB,
+            slide_glob=settings.PPT_AGENT_SLIDE_GLOB,
+            attachment_map=settings.PPT_AGENT_ATTACHMENT_MAP,
+            transport=transport,
+        )
+
+    @staticmethod
+    def is_enabled() -> bool:
+        """是否启用了 PPTAgent（URL 非空即启用）。"""
+        return bool((getattr(settings, "PPT_AGENT_URL", "") or "").strip())
+
+    # ---------------- 基础设施 ----------------
+
+    def _headers(self, *, json_body: bool = True) -> Dict[str, str]:
+        h: Dict[str, str] = {"Accept": "application/json, */*"}
+        if json_body:
+            h["Content-Type"] = "application/json"
+        if self.api_key:
+            # 不打印 key 本体，只在使用时附加
+            h["Authorization"] = f"Bearer {self.api_key}"
+            h["X-API-Key"] = self.api_key
+        return h
+
+    def _client(self, timeout: int) -> httpx.Client:
+        kwargs: Dict[str, Any] = {"timeout": timeout, "follow_redirects": True}
+        if self._transport is not None:
+            kwargs["transport"] = self._transport
+        return httpx.Client(**kwargs)
+
+    def _url(self, path_tpl: str, task_id: str = "") -> str:
+        """拼路径：支持 {task_id} 占位符；无占位符时退化为 query 参数。"""
+        path = (path_tpl or "").strip()
+        if not path.startswith("/"):
+            path = "/" + path
+        if "{task_id}" in path:
+            path = path.replace("{task_id}", task_id)
+            return self.base_url + path
+        if task_id:
+            sep = "&" if "?" in path else "?"
+            path = f"{path}{sep}task_id={task_id}"
+        return self.base_url + path
+
+    # ---------------- 健康探测 ----------------
+
+    def health_check(self) -> Tuple[bool, str]:
+        """健康探测：确认服务在线，返回 (是否健康, 原因)。
+
+        成功条件放宽为"能连上且非 5xx"——第三方服务的根路径可能是 WebUI HTML，
+        200/307/404 都算在线，只有连接失败 / 5xx 才判定不可用。
+        """
+        if not self.base_url:
+            return False, "未配置 PPT_AGENT_URL"
+        url = self._url(self.health_path)
+        try:
+            with httpx.Client(timeout=settings.PPT_AGENT_SUBMIT_TIMEOUT,
+                              follow_redirects=True,
+                              transport=self._transport) as c:
+                r = c.get(url)
+        except Exception as e:  # noqa: BLE001
+            return False, f"无法连接（{type(e).__name__}: {e}）"
+        if r.status_code >= 500:
+            return False, f"服务返回 {r.status_code}"
+        return True, f"HTTP {r.status_code}"
+
+    # ---------------- 三步：提交 / 轮询 / 取结果 ----------------
+
+    def submit(self, payload: Dict[str, Any]) -> Tuple[str, Optional[bytes]]:
+        """提交生成任务，返回 (任务 ID, 已内嵌的结果字节)。失败抛 PPTAgentError。
+
+        Gradio 端点是同步阻塞的：一次 POST 可能直接把成品文件带回响应体里。
+        这种情况下自动跳过轮询（任务 ID 返回空串），避免猜错轮询路径导致假失败。
+        """
+        url = self._url(self.submit_path)
+        logger.info("PPTAgent 提交任务：POST %s（超时 %ss）", url, self.submit_timeout)
+        try:
+            with self._client(self.submit_timeout) as c:
+                r = c.post(url, json=payload, headers=self._headers())
+        except Exception as e:  # noqa: BLE001
+            raise PPTAgentError(f"提交失败：{type(e).__name__}: {e}") from e
+        if r.status_code >= 400:
+            raise PPTAgentError(
+                f"提交失败：HTTP {r.status_code}，响应摘要 {self._snippet(r)}")
+        embedded = self._try_extract_pptx(r)
+        if embedded is not None:
+            ok, why = looks_like_pptx(embedded)
+            if ok:
+                logger.info("PPTAgent 提交即返回结果文件（%d 字节），跳过轮询", len(embedded))
+                return "", embedded
+            logger.warning("提交响应内含疑似文件但非法（%s），继续按任务 ID 流程处理", why)
+        task_id = self._parse_task_id(r)
+        if not task_id:
+            raise PPTAgentError(
+                "提交成功但未取到任务 ID：响应缺少已知字段，"
+                f"请设置 PPT_AGENT_TASK_ID_FIELD。响应摘要 {self._snippet(r)}")
+        logger.info("PPTAgent 任务已受理：task_id=%s", task_id)
+        return task_id, None
+
+    def _parse_task_id(self, r: httpx.Response) -> str:
+        """从提交响应里取任务 ID（先看 X-Task-Id 头，再看候选字段 / 自定义字段）。"""
+        for hk in ("X-Task-Id", "X-Job-Id", "X-Request-Id"):
+            v = r.headers.get(hk)
+            if v:
+                return v.strip()
+        try:
+            body = r.json()
+        except Exception:  # noqa: BLE001
+            body = r.text
+        if not isinstance(body, (dict, list)):
+            if isinstance(body, str) and body.strip():
+                return body.strip()
+            return ""
+        fields: Tuple[str, ...] = ((self.task_id_field,) if self.task_id_field
+                                   else tuple()) + _TASK_ID_FIELDS
+        raw = _dig(body, fields) if isinstance(body, dict) else None
+        if isinstance(raw, str):
+            return raw.strip()
+        if isinstance(raw, (int, float)):
+            return str(raw)
+        if isinstance(body, str):
+            return body.strip()
+        return ""
+
+    def poll_status(self, task_id: str, deadline: float) -> Tuple[bool, Optional[bytes]]:
+        """轮询状态直到完成/失败/超时。
+
+        Returns:
+            (是否成功完成, 若状态响应里已带 pptx 则一并返回)
+        """
+        url = self._url(self.status_path, task_id)
+        logger.info("PPTAgent 轮询状态：GET %s（间隔 %ss）", url, self.poll_interval)
+        while True:
+            if time.monotonic() >= deadline:
+                raise PPTAgentError(f"轮询超时：超过 {self.total_timeout}s 未完成")
+            with self._client(max(5, self.submit_timeout)) as c:
+                r = c.get(url, headers=self._headers())
+            if r.status_code >= 400:
+                raise PPTAgentError(
+                    f"轮询失败：HTTP {r.status_code}，摘要 {self._snippet(r)}")
+            embedded = self._try_extract_pptx(r)
+            if embedded is not None:
+                ok, why = looks_like_pptx(embedded)
+                if ok:
+                    logger.info("PPTAgent 状态响应直接携带 pptx（%d 字节）", len(embedded))
+                    return True, embedded
+                logger.warning("PPTAgent 状态响应含疑似文件但非法：%s", why)
+            status = self._parse_status(r)
+            if status:
+                sval = str(status).strip().lower()
+                if sval in self.fail_values:
+                    raise PPTAgentError(
+                        f"任务失败：status={status}，详情 {self._snippet(r)}")
+                if sval in self.done_values:
+                    logger.info("PPTAgent 任务完成：status=%s", status)
+                    return True, None
+                logger.debug("PPTAgent 任务进行中：status=%s", status)
+            else:
+                # 状态字段缺失：服务可能直接返回结果体，交给上层按成功处理
+                logger.debug("PPTAgent 轮询响应未识别到状态字段，摘要 %s",
+                             self._snippet(r))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PPTAgentError(f"轮询超时：超过 {self.total_timeout}s 未完成")
+            time.sleep(min(self.poll_interval, remaining))
+
+    def _parse_status(self, r: httpx.Response) -> Optional[str]:
+        try:
+            body = r.json()
+        except Exception:  # noqa: BLE001
+            return None
+        raw = _dig(body, _STATUS_FIELDS)
+        return str(raw).strip().lower() if raw is not None else None
+
+    def fetch_result(self, task_id: str) -> bytes:
+        """取回结果 pptx 字节；非法直接抛 PPTAgentError。"""
+        url = self._url(self.result_path, task_id)
+        logger.info("PPTAgent 取结果：GET %s", url)
+        with self._client(settings.PPT_AGENT_RESULT_TIMEOUT) as c:
+            r = c.get(url, headers=self._headers())
+        if r.status_code >= 400:
+            raise PPTAgentError(
+                f"取结果失败：HTTP {r.status_code}，摘要 {self._snippet(r)}")
+        data = self._try_extract_pptx(r)
+        if data is None:
+            raise PPTAgentError(
+                f"取结果失败：响应未见二进制/下载链接/BASE64，摘要 {self._snippet(r)}")
+        ok, why = looks_like_pptx(data)
+        if not ok:
+            raise PPTAgentError(f"取到的文件不是合法 pptx：{why}")
+        logger.info("PPTAgent 结果已取回：%d 字节", len(data))
+        return data
+
+    # ============================================================
+    # 真实契约：命名端点 /send_message（6 入参 / 5 出参 / queue + SSE）
+    # 契约来源：真机探查（见 deploy/pptagent/README.md「Gradio 契约」一节）。
+    # 入参顺序：message, history, attachments, convert_type_value,
+    #          template_value, num_pages_value
+    # 出参顺序：Chatbot / Textbox / File(list) / 📥下载文件(pptx) / Markdown
+    # ============================================================
+
+    def build_message_payload(self, message: str, history: Optional[List[Any]] = None,
+                              attachments: Optional[List[Any]] = None,
+                              num_pages: Optional[int] = None) -> Dict[str, Any]:
+        """组装 Gradio 请求体 ``{"data": [6 个入参]}``（顺序与契约严格一致）。"""
+        text = (message or "").strip()[:self.message_max_chars]
+        num_pages_value = "auto"
+        if num_pages and int(num_pages) > 0:
+            num_pages_value = str(int(num_pages))
+        body: Dict[str, Any] = {
+            "data": [
+                text,                       # 1 message
+                history or [],              # 2 history
+                attachments or [],          # 3 attachments（R2：默认不传）
+                self.convert_type,          # 4 convert_type_value
+                self.template_value,        # 5 template_value
+                num_pages_value,            # 6 num_pages_value（字符串）
+            ]
+        }
+        # 仅 Gradio 4 的 queue/join 风格需要这两个字段；命名端点风格下发会被忽略
+        if self.fn_index:
+            body["fn_index"] = int(self.fn_index) if self.fn_index.isdigit() else self.fn_index
+        if "session_hash" in (self.event_path or "") or "queue/join" in (self.submit_path or ""):
+            body["session_hash"] = self.session_hash
+        return body
+
+    def submit_message(self, message: str, history: Optional[List[Any]] = None,
+                       attachments: Optional[List[Any]] = None,
+                       num_pages: Optional[int] = None) -> str:
+        """提交生成请求，返回事件流句柄 event_id。失败抛 PPTAgentError。"""
+        payload = self.build_message_payload(message, history, attachments, num_pages)
+        url = self._url(self.submit_path)
+        logger.info("PPTAgent 提交生成请求：POST %s（message %d 字符）", url, len(message or ""))
+        try:
+            with self._client(self.submit_timeout) as c:
+                r = c.post(url, json=payload, headers=self._headers())
+        except Exception as e:  # noqa: BLE001
+            raise PPTAgentError(f"提交失败：{type(e).__name__}: {e}") from e
+        if r.status_code >= 400:
+            raise PPTAgentError(
+                f"提交失败：HTTP {r.status_code}，摘要 {self._snippet(r)}")
+        event_id = self._extract_event_id(r)
+        if not event_id:
+            raise PPTAgentError(
+                "提交成功但未取到事件流句柄：响应缺少 event_id/task_id，"
+                f"请设置 PPT_AGENT_EVENT_ID_FIELD。摘要 {self._snippet(r)}")
+        logger.info("PPTAgent 任务已受理：event_id=%s", event_id)
+        return event_id
+
+    def _extract_event_id(self, r: httpx.Response) -> str:
+        """从提交响应里取事件流句柄（先看响应头，再看候选字段）。"""
+        for hk in ("X-Event-Id", "X-Task-Id", "X-Job-Id"):
+            v = r.headers.get(hk)
+            if v:
+                return v.strip()
+        try:
+            body = r.json()
+        except Exception:  # noqa: BLE001
+            body = r.text
+        if isinstance(body, str) and body.strip():
+            return body.strip()
+        if not isinstance(body, dict):
+            return ""
+        fields: Tuple[str, ...] = ((self.event_id_field,) if self.event_id_field
+                                   else tuple()) + _EVENT_ID_FIELDS
+        raw = _dig(body, fields)
+        if raw is None and self.event_id_field:
+            raw = body.get(self.event_id_field)
+        return str(raw).strip() if raw is not None else ""
+
+    def _event_url(self, event_id: str) -> str:
+        """拼事件流地址，支持 {event_id} / {session_hash} 占位符。"""
+        path = (self.event_path or "").replace("{event_id}", event_id) \
+                                      .replace("{session_hash}", self.session_hash)
+        if not path.startswith("/"):
+            path = "/" + path
+        return self.base_url + path
+
+    @staticmethod
+    def _data_from_event(obj: Any) -> Optional[List[Any]]:
+        """从一条 SSE 载荷里取出参数组（兼容 Gradio 5 与 4 两种形态）。"""
+        # Gradio 5：event: complete 后 data 直接是入/出参数组
+        if isinstance(obj, list):
+            return obj
+        if isinstance(obj, dict):
+            out = obj.get("output")
+            if isinstance(out, dict) and isinstance(out.get("data"), list):
+                return out["data"]
+            if isinstance(obj.get("data"), list):
+                return obj["data"]
+        return None
+
+    @staticmethod
+    def _is_terminal_event(obj: Any, event_name: str) -> bool:
+        """该事件是否意味着流程结束（成功或失败都算结束）。"""
+        if event_name in ("complete", "close_stream"):
+            return True
+        if isinstance(obj, dict):
+            return obj.get("msg") in ("process_completed", "close_stream")
+        return False
+
+    def consume_event_stream(self, event_id: str, deadline: float,
+                             on_event=None) -> Optional[List[Any]]:
+        """消费 SSE 事件流直到终态，返回出参数组；超时/失败抛 PPTAgentError。
+
+        Args:
+            event_id: :meth:`submit_message` 返回的句柄。
+            deadline: ``time.monotonic()`` 形式的截止时间。
+            on_event: 可选回调，每收到一条事件就调用一次（用于进度日志）。
+        """
+        url = self._event_url(event_id)
+        logger.info("PPTAgent 消费事件流：GET %s", url)
+        final: Optional[List[Any]] = None
+        # 读超时=剩余预算：流一直空闲时由 httpx 到点抛错，避免线程无限挂住
+        remaining = max(1.0, deadline - time.monotonic())
+        read_timeout = max(1.0, min(remaining, float(self.total_timeout)))
+        try:
+            with self._client(read_timeout) as c:
+                with c.stream("GET", url, headers=self._headers()) as r:
+                    if r.status_code >= 400:
+                        raise PPTAgentError(f"事件流 HTTP {r.status_code}")
+                    event_name = ""
+                    for raw_line in r.iter_lines():
+                        if time.monotonic() >= deadline:
+                            raise PPTAgentError("事件流超时：超过整体预算仍未结束")
+                        line = (raw_line or "").strip()
+                        if not line:
+                            continue
+                        if line.startswith("event:"):
+                            event_name = line[len("event:"):].strip()
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[len("data:"):].strip()
+                        if not payload:
+                            continue
+                        try:
+                            obj = _json.loads(payload)
+                        except Exception:  # noqa: BLE001 - 非 JSON 行（心跳等）直接跳过
+                            continue
+                        if on_event:
+                            on_event(obj)
+                        if isinstance(obj, dict) and obj.get("msg") in (
+                                "process_failed", "queue_full"):
+                            raise PPTAgentError(
+                                f"PPTAgent 处理失败：{str(obj)[:300]}")
+                        got = self._data_from_event(obj)
+                        if got is not None:
+                            final = got
+                        if self._is_terminal_event(obj, event_name):
+                            logger.info("PPTAgent 事件流结束：event=%s", event_name or "-")
+                            return final
+        except PPTAgentError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # 空闲到点的读超时也算超时，措辞统一，便于上层识别"该回退了"
+            if "imeout" in type(e).__name__:
+                raise PPTAgentError(
+                    f"事件流超时：{self.total_timeout}s 内未收到终态事件") from e
+            raise PPTAgentError(f"事件流读取失败：{type(e).__name__}: {e}") from e
+        # 流正常结束但没等到终态：到点了同样按超时处理
+        if time.monotonic() >= deadline:
+            raise PPTAgentError(f"事件流超时：{self.total_timeout}s 内未收到终态事件")
+        return final
+
+    @staticmethod
+    def _at(outputs: List[Any], index: int) -> Any:
+        """按下标取出参，越界返回 None（契约变化时不能抛异常）。"""
+        if isinstance(outputs, list) and 0 <= index < len(outputs):
+            return outputs[index]
+        return None
+
+    def _bytes_from_filedata(self, item: Any) -> Optional[bytes]:
+        """把出参里的 FileData 转成字节；取不到或非法都返回 None（由调用方回退）。"""
+        candidates: List[Any] = []
+        if isinstance(item, dict):
+            candidates.append(item)
+        elif isinstance(item, list):
+            candidates.extend([x for x in item if isinstance(x, dict)])
+        for fd in candidates:
+            url = _gradio_file_url(fd)
+            if not url:
+                continue
+            data = self._download(_abs_url(self.base_url, url))
+            if not data:
+                continue
+            ok, why = looks_like_pptx(data)
+            if ok:
+                return data
+            logger.warning("下载到的文件不是合法 pptx：%s（%s）", why, url)
+        return None
+
+    def parse_outputs(self, outputs: List[Any], event_id: str = "") -> PPTAgentOutcome:
+        """按契约索引解析出参 → 产物或追问（R1）。
+
+        产物优先级：契约指定索引（第 4 项 📥 下载文件）→ 其余项全量扫描。
+        拿不到产物时，取 Markdown 项作为**追问**文本返回给前端。
+        """
+        out = PPTAgentOutcome(outputs=list(outputs or []), event_id=event_id)
+        if not isinstance(outputs, list) or not outputs:
+            return out
+        pptx = self._bytes_from_filedata(self._at(outputs, self.result_output_index))
+        if pptx is None:
+            # 索引对不上时退化为全量扫描，避免一次契约微调就完全拿不到产物
+            for item in outputs:
+                pptx = self._bytes_from_filedata(item)
+                if pptx is not None:
+                    logger.warning("产物不在约定索引 %s 上，已通过全量扫描兜底",
+                                   self.result_output_index)
+                    break
+        if pptx is not None:
+            out.pptx = pptx
+            return out
+        # 没有产物 → 极可能是 PPTAgent 在先确认需求（R1）
+        question = self._at(outputs, self.question_output_index)
+        if isinstance(question, str) and question.strip():
+            out.question = question.strip()[:2000]
+            return out
+        for item in outputs:
+            if isinstance(item, str) and item.strip():
+                out.question = item.strip()[:2000]
+                break
+        return out
+
+    def generate_deck(self, message: str, *, history: Optional[List[Any]] = None,
+                      attachments: Optional[List[Any]] = None,
+                      num_pages: Optional[int] = None,
+                      deadline: Optional[float] = None,
+                      on_event=None) -> PPTAgentOutcome:
+        """一步到位：健康检查 → 提交 → 消费事件流 → 解析产物/追问。
+
+        不阻塞调用方语义之外：本方法本身是同步长调用，**只应在后台线程里调用**
+        （异步 job 由 PPTAgentJobRunner 负责起线程）。
+        """
+        ok, why = self.health_check()
+        if not ok:
+            raise PPTAgentError(f"健康探测未通过：{why}")
+        logger.info("PPTAgent 健康探测通过（%s）", why)
+        event_id = self.submit_message(message, history=history,
+                                       attachments=attachments, num_pages=num_pages)
+        dl = deadline if deadline is not None else time.monotonic() + self.total_timeout
+        outputs = self.consume_event_stream(event_id, dl, on_event=on_event)
+        if outputs is None:
+            return PPTAgentOutcome(outputs=[], event_id=event_id)
+        return self.parse_outputs(outputs, event_id=event_id)
+
+    # ============================================================
+    # 目录扫描：仅用于实时进度与产物兜底（目录结构待真机核实 → 全部可配置）
+    # ============================================================
+
+    def scan_progress(self, since_ts: float, workspace: str = "") -> Dict[str, Any]:
+        """扫描共享卷里的进度产物，用于逐页实时预览。
+
+        ⚠️ 目录结构尚未真机核实（用户两份说明不一致），因此：
+        - 路径全部走配置项（preview_glob / slide_glob）；
+        - **找不到就返回零值，绝不抛异常**，上层据此降级为"只有总进度"。
+
+        Returns:
+            ``{"slides": int, "previews": int, "has_pptx": bool,
+               "preview_files": List[str]}``
+        """
+        info: Dict[str, Any] = {"slides": 0, "previews": 0, "has_pptx": False,
+                                "preview_files": []}
+        root_str = (workspace or self.workspace_dir or "").strip()
+        if not root_str:
+            return info
+        root = Path(root_str)
+        if not root.is_dir():
+            return info
+        threshold = since_ts - self.fresh_tolerance
+        try:
+            pngs = [p for p in root.rglob(self.preview_glob)
+                    if p.is_file() and p.stat().st_mtime >= threshold]
+            htmls = [p for p in root.rglob(self.slide_glob)
+                     if p.is_file() and p.stat().st_mtime >= threshold]
+            pptx = [p for p in root.rglob(self.result_filename)
+                    if p.is_file() and p.stat().st_mtime >= threshold]
+        except OSError as e:  # noqa: BLE001 - 扫描失败只降级，不影响 job
+            logger.debug("进度扫描失败（降级为无逐页预览）：%s", e)
+            return info
+        info["slides"] = len(htmls)
+        info["previews"] = len(pngs)
+        info["has_pptx"] = bool(pptx)
+        info["preview_files"] = [str(p) for p in sorted(pngs, key=lambda x: str(x))]
+        return info
+
+    def wait_for_workspace_result(self, since_ts: float, deadline: float) -> bytes:
+        """共享卷通道：等产物文件落盘并校验，取结果**不依赖**未文档化的 HTTP 端点。
+
+        PPTAgent 的成品稳定落在 ``<workspace>/<日期>/<job_id>/presentation.pptx``。
+        提交成功后这里递归扫描，取"本次提交之后新落盘、且最新"的那个文件。
+        这样即使完全拿不到 job_id、也猜不对结果端点，仍能把正确产物取回来。
+
+        Args:
+            since_ts: 提交任务时的 Unix 时间戳（秒），用于判定产物是否本次生成。
+            deadline: ``time.monotonic()`` 形式的截止时间。
+
+        Raises:
+            PPTAgentError: 目录不可读，或到截止时间仍未出现合法的 pptx。
+        """
+        root = Path(self.workspace_dir)
+        if not self.workspace_dir:
+            raise PPTAgentError("未配置工作区目录（PPT_AGENT_WORKSPACE_DIR）")
+        if not root.is_dir():
+            raise PPTAgentError(f"工作区目录不存在或不可读：{root}")
+        logger.info("PPTAgent 走共享卷通道：扫描 %s 下的 %s（只认 %s 之后落盘的文件）",
+                    root, self.result_filename,
+                    time.strftime("%H:%M:%S", time.localtime(since_ts)))
+        # 容忍两端时钟偏差，避免产物因"看起来更旧"被漏掉
+        threshold = since_ts - self.fresh_tolerance
+        warned_half_written = False
+        while True:
+            newest: Optional[Path] = None
+            newest_mtime = 0.0
+            try:
+                for p in root.rglob(self.result_filename):
+                    try:
+                        mtime = p.stat().st_mtime
+                    except OSError:
+                        continue
+                    if mtime >= threshold and mtime > newest_mtime:
+                        newest, newest_mtime = p, mtime
+            except OSError as e:  # noqa: BLE001
+                raise PPTAgentError(f"扫描工作区失败：{e}") from e
+            if newest is not None:
+                try:
+                    data = newest.read_bytes()
+                except OSError as e:  # noqa: BLE001
+                    raise PPTAgentError(f"读取产物失败：{e}") from e
+                ok, why = looks_like_pptx(data)
+                if ok:
+                    logger.info("共享卷取到产物：%s（%d 字节）", newest, len(data))
+                    return data
+                # 文件可能正在写入中（半包），下一轮再看
+                if not warned_half_written:
+                    logger.warning("产物已出现但尚不完整（%s），继续等待", why)
+                    warned_half_written = True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PPTAgentError(
+                    f"等待产物超时：{self.total_timeout}s 内 {root} 下未出现合法的 "
+                    f"{self.result_filename}")
+            time.sleep(min(self.poll_interval, remaining))
+
+    def _try_extract_pptx(self, r: httpx.Response) -> Optional[bytes]:
+        """从响应中提取 pptx 字节：二进制直返 / JSON 内 URL / BASE64。
+
+        Returns:
+            bytes 表示已提取到疑似文件；None 表示没识别出来（由调用方决定后续）。
+        """
+        ctype = (r.headers.get("content-type") or "").lower()
+        looks_binary = any(h in ctype for h in _PPTX_MIME_HINTS) or (
+            "json" not in ctype and "html" not in ctype and "xml" not in ctype)
+        if looks_binary and r.content:
+            return r.content
+        body: Any = None
+        try:
+            body = r.json()
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(body, dict):
+            return None
+        # Gradio FileData 优先（它的字段名藏在 data 数组里，通用 _dig 命中率低于此）
+        gradio_url = _gradio_file_url(body)
+        if gradio_url:
+            return self._download(_abs_url(self.base_url, gradio_url))
+        maybe_url = _dig(body, _URL_FIELDS)
+        if isinstance(maybe_url, str) and maybe_url.strip():
+            return self._download(_abs_url(self.base_url, maybe_url))
+        maybe_b64 = _dig(body, _B64_FIELDS)
+        if isinstance(maybe_b64, str) and maybe_b64.strip():
+            raw = maybe_b64.strip()
+            if "," in raw and raw.split(",")[0].endswith("base64"):
+                raw = raw.split(",", 1)[1]
+            try:
+                return base64.b64decode(raw)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("BASE64 解码失败：%s", e)
+                return None
+        return None
+
+    def _download(self, url: str) -> Optional[bytes]:
+        """按下载链接取字节；失败只记日志并返回 None，由上层决定是否回退。"""
+        logger.info("PPTAgent 结果内含下载链接：%s", url)
+        try:
+            with self._client(settings.PPT_AGENT_RESULT_TIMEOUT) as c:
+                sub = c.get(url, headers=self._headers())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("下载链接请求失败：%s: %s", type(e).__name__, e)
+            return None
+        if sub.status_code >= 400 or not sub.content:
+            logger.warning("下载链接返回 HTTP %s（%d 字节）", sub.status_code, len(sub.content))
+            return None
+        return sub.content
+
+    @staticmethod
+    def _snippet(r: httpx.Response, limit: int = 300) -> str:
+        """响应摘要（截断），用于排障日志；不含任何凭据。"""
+        try:
+            text = r.text or ""
+        except Exception:  # noqa: BLE001
+            text = "<binary>"
+        text = " ".join(text.split())
+        if len(text) > limit:
+            text = text[:limit] + "..."
+        return f"[{r.status_code}] {text}"
+
+    # ---------------- 对外主入口 ----------------
+
+    def render(self, *, topic: str, content_markdown: str, slide_count: int,
+               template_hint: str = "", language: str = "zh-CN") -> bytes:
+        """三步走完并取回合法 pptx 字节；任何失败都抛 PPTAgentError。
+
+        Args:
+            topic: PPT 主题 / 标题。
+            content_markdown: 大纲正文（Markdown 文本），后端已完成 outline 编排。
+            slide_count: 期望页数。
+            template_hint: 模板/主题风格提示，供 PPTAgent 参考排版。
+            language: 输出语言。
+
+        Raises:
+            PPTAgentError: 提交/轮询/取结果任一环节失败，或结果不是合法 pptx。
+        """
+        payload: Dict[str, Any] = {
+            "topic": topic,
+            "title": topic,
+            "prompt": content_markdown,
+            "content": content_markdown,
+            "markdown": content_markdown,
+            "outline": content_markdown,
+            "slide_count": slide_count,
+            "num_slides": slide_count,
+            "language": language,
+            "template": template_hint,
+            "theme": template_hint,
+            "format": "pptx",
+            "return_format": "pptx",
+        }
+        logger.debug("PPTAgent 生效配置：base_url=%s submit=%s status=%s result=%s",
+                     self.base_url, self.submit_path, self.status_path,
+                     self.result_path)
+        ok, why = self.health_check()
+        if not ok:
+            raise PPTAgentError(f"健康探测未通过：{why}")
+        logger.info("PPTAgent 健康探测通过（%s）", why)
+
+        started_at = time.time()
+        deadline = time.monotonic() + self.total_timeout
+        task_id, embedded = self.submit(payload)
+        if embedded is not None:
+            # 一次请求就拿到结果（Gradio 同步端点常见），无需轮询状体
+            return embedded
+        # 共享卷通道优先：产物路径稳定已知，不必依赖未文档化的结果端点
+        if self.workspace_dir:
+            return self.wait_for_workspace_result(started_at, deadline)
+        done, embedded = self.poll_status(task_id, deadline)
+        if not done:
+            raise PPTAgentError("任务未完成即退出轮询")
+        if embedded:
+            ok, why = looks_like_pptx(embedded)
+            if not ok:
+                raise PPTAgentError(f"状态响应内的文件非法：{why}")
+            return embedded
+        return self.fetch_result(task_id)
+
+
+def build_outline_markdown(outline: dict) -> str:
+    """把内部 outline 结构序列化为 PPTAgent 易读的 Markdown 文本。
+
+    保持与 PPTAgent「喂材料 / 主题，由它全权排版」的输入习惯一致：既有结构化
+    标题层级，也保留每页要点与备注。
+
+    Args:
+        outline: ``{"title","subtitle","slides":[{"title","points","notes",...}]}``
+
+    Returns:
+        Markdown 文本（UTF-8）。
+    """
+    title = (outline or {}).get("title") or "未命名演示文稿"
+    subtitle = (outline or {}).get("subtitle") or ""
+    lines: List[str] = [f"# {title}"]
+    if subtitle:
+        lines.append(f"> {subtitle}")
+    lines.append("")
+    slides: List[Dict[str, Any]] = (outline or {}).get("slides") or []
+    for i, s in enumerate(slides, start=1):
+        stitle = (s or {}).get("title") or f"第 {i} 页"
+        lines.append(f"## 第 {i} 页：{stitle}")
+        for p in (s or {}).get("points") or []:
+            text = p if isinstance(p, str) else str((p or {}).get("text") or p)
+            if text:
+                lines.append(f"- {text}")
+        for sub_k in ("subtitle", "summary"):
+            v = (s or {}).get(sub_k)
+            if v:
+                lines.append(f"- {v}")
+        if (s or {}).get("notes"):
+            lines.append(f"（备注：{s['notes']}）")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"

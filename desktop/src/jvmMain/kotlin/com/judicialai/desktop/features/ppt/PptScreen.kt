@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,6 +90,8 @@ fun PptScreen() {
     // 读取发生在组合内，生成完成后（可能是离开页面之后才跑完）id 一写入就会触发重组并自动恢复。
     val pendingDocId = AppState.pendingPptDocId
     val generating = AppState.pptOutlineGenerating
+    // 异步生成任务号：切走再切回时据此重新挂上轮询（进度在服务端，不会丢）
+    val pendingJobId = AppState.pendingPptJobId
 
     LaunchedEffect(Unit) { vm.loadTemplates(); vm.loadDocuments() }
 
@@ -97,9 +100,31 @@ fun PptScreen() {
         if (pendingDocId != null && vm.docId == null) vm.openDocument(pendingDocId)
     }
 
+    // 异步生成任务：回到页面时重新挂上（续接轮询 / 补一次落盘）
+    LaunchedEffect(pendingJobId) {
+        if (pendingJobId != null) vm.resumeJob()
+    }
+
+    // 离开页面必须停掉轮询协程，否则每个页面都会留下一条永远跑着的轮询。
+    // 任务状态与目标文件都在服务端与全局 PptJobEngine 里，回来时 resumeJob 会续上。
+    DisposableEffect(Unit) {
+        onDispose { vm.stopJobPolling() }
+    }
+
     // 生成前预检：信息不足时弹出关键信息确认框（90 秒未操作自动按默认方案生成）
     vm.pendingConfirm?.let { qs ->
         if (qs.isNotEmpty()) PptPrecheckDialog(vm, qs)
+    }
+
+    // PPTAgent 追问：信息不足时它会先反问而不是直接生成。
+    // 后端刻意不自动代答（自动代答等于替用户编需求），所以必须把问题抛给用户：
+    // 回答后 POST /clarify 带着上下文续跑同一个任务。任务状态是全局的，
+    // 所以即便用户当时在别的页面、切回来也还能看到这个追问框。
+    val pendingQuestion = vm.job
+    // 只认状态、不认 question 是否为空：万一后端给了状态却没给问题文本，
+    // 也必须让用户能作答，否则任务会永远卡在「等待补充信息」没人能推动
+    if (pendingQuestion != null && pendingQuestion.status == PptJobStatus.CLARIFYING) {
+        PptJobClarifyDialog(vm, pendingQuestion)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -111,14 +136,21 @@ fun PptScreen() {
         // 还没拿到 doc_id 就切回来了：明确告诉用户生成仍在进行（协程并未被取消），
         // 不要呈现一片空白让人以为生成丢了
         val lastError = AppState.pptLastError
-        if (generating && vm.docId == null) {
-            PptGeneratingBanner(vm)
-        } else if (lastError != null && vm.docId == null) {
-            // 上次生成（可能发生在切走期间）失败了：本地 status 已随 ViewModel 丢失，
-            // 只有全局记录还在，必须让用户知道失败原因
-            PptFailedBanner(lastError) { AppState.pptLastError = null }
+        // 异步生成任务进度（全局 PptJobEngine，不随页面销毁）
+        val job = vm.job
+        when {
+            generating && vm.docId == null -> PptGeneratingBanner(vm)
+            lastError != null && vm.docId == null ->
+                // 上次生成（可能发生在切走期间）失败了：本地 status 已随 ViewModel 丢失，
+                // 只有全局记录还在，必须让用户知道失败原因
+                PptFailedBanner(lastError) { AppState.pptLastError = null }
+            // 生成中 / 等待补充信息，但用户在别的 Tab：给一条提示，避免以为任务没了
+            job != null && (job.isActive || job.status == PptJobStatus.CLARIFYING) &&
+                tab != 0 -> PptJobRunningBanner(job)
         }
         when {
+            // 异步生成任务存在（生成中 / 完成 / 失败 / 已取消）→ 展示生成工作台
+            tab == 0 && vm.jobVisible -> PptAsyncWorkbench(vm)
             tab == 0 && vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
             tab == 0 && vm.step == PptStep.OUTLINE -> OutlineConfirmPane(vm)
             else -> Column(Modifier.padding(12.dp)) {
@@ -189,6 +221,31 @@ private fun PptGeneratingBanner(vm: PptViewModel) {
         Spacer(Modifier.width(8.dp))
         Text(vm.outlineStage.ifBlank { "生成完成后会自动回到工作台，可先去其他页面" },
             style = MaterialTheme.typography.caption, color = SecondaryText)
+    }
+}
+
+/**
+ * 异步生成进行中提示条：用户在别的 Tab（如「我的 PPT」）时也要能看到任务还在跑，
+ * 否则会以为提交完就没下文了。等待补充信息时给出更明确的引导。
+ */
+@Composable
+private fun PptJobRunningBanner(job: PptJobProgress) {
+    val clarifying = job.status == PptJobStatus.CLARIFYING
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colors.primary.copy(alpha = 0.08f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (clarifying) "PPT 生成等你补充信息" else "PPT 正在生成",
+            style = MaterialTheme.typography.subtitle2,
+            color = MaterialTheme.colors.primary)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (clarifying) "AI 需要你回答一个问题才能继续，请切到「新建 PPT」查看"
+            else job.stageText.ifBlank { "生成完成后会自动保存，可先去其他页面" },
+            style = MaterialTheme.typography.caption, color = SecondaryText,
+            modifier = Modifier.weight(1f))
     }
 }
 

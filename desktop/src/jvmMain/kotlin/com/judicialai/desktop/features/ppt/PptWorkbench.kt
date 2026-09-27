@@ -282,9 +282,9 @@ private fun PreviewPane(vm: PptViewModel) {
     }
 }
 
-/** 预览骨架屏：浅蓝呼吸块，示意标题区 + 要点区 */
+/** 预览骨架屏：浅蓝呼吸块，示意标题区 + 要点区（异步生成的中栏也复用） */
 @Composable
-private fun PreviewSkeleton() {
+internal fun PreviewSkeleton() {
     Column(Modifier.fillMaxSize().padding(28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SkeletonBar(Modifier.fillMaxWidth(0.45f).height(22.dp))
@@ -318,8 +318,9 @@ private fun StructuredFallback(slide: SlideEdit) {
 
 // ================= 右栏：AI 面板 =================
 
+/** 右栏 AI 面板（异步生成工作台复用同一套） */
 @Composable
-private fun AiPanel(vm: PptViewModel) {
+internal fun AiPanel(vm: PptViewModel) {
     val i = vm.selected.coerceIn(0, (vm.slides.size - 1).coerceAtLeast(0))
     val slide = vm.slides.getOrNull(i)
     Column(
@@ -449,14 +450,16 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
                 onDismiss()
                 val target = pickSaveFile(
                     (vm.outlineTitle.ifBlank { "演示文稿" }) + ".pptx") ?: return@AppButton
-                vm.generateAndExport(target)
+                // 异步：提交即返回，逐页出图，跑完自动落盘（服务端没部署 /ppt/jobs 时自动回退同步）
+                vm.startGenerateAsync(target)
             })
         },
     ) {
         Text("共 ${vm.slides.size} 页 · 模板：$curName", fontSize = 13.sp, color = Ink)
         Spacer(Modifier.height(6.dp))
-        Text("生成过程约需 1–2 分钟：保存草稿 → PPTAgent 渲染 → 下载文件。" +
-            "进度显示在底部状态栏，期间可随时取消；也可以先切到其他页面，完成后文件照常保存。",
+        Text("生成约需 5–15 分钟（PPTAgent 真实渲染）。提交后可立刻切到其他页面，" +
+            "每生成完一页就能在这里看到缩略图；全部完成后自动保存到刚才选择的位置。" +
+            "期间可随时取消。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp)
     }
 }

@@ -70,3 +70,24 @@ class PPTDocument:
     slide_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # ================= 异步生成任务（PPTAgent job）=================
+    # 复用本表承载 job，避免新建表；job_status 为空串表示「不是 job」。
+    # 取值：pending / running / awaiting_clarification / succeeded /
+    #       failed / cancelled
+    job_status: str = ""
+    # 进度阶段：submitting / researching / outlining / designing /
+    #           finalizing / succeeded / failed
+    job_phase: str = ""
+    job_total_pages: int = 0
+    job_current_page: int = 0
+    job_error: str = ""
+    # PPTAgent 信息不足时的追问文本（R1），非空即等待用户回答
+    job_question: str = ""
+    job_renderer: str = ""          # 最终产物来源：pptagent / local
+    job_event_id: str = ""          # Gradio 事件流句柄，便于日志串联
+    job_cancel_requested: bool = False
+    job_started_at: Optional[datetime] = None
+    job_finished_at: Optional[datetime] = None
+    # 最近一次"有进展"的时刻，用于 30 分钟无进展判失败
+    job_progress_at: Optional[datetime] = None

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.application.ppt import agent_job
 from app.application.ppt.dto import (
     BlankIn,
     CloudCfgIn,
@@ -14,6 +15,8 @@ from app.application.ppt.dto import (
     DraftIn,
     GenerateIn,
     ImportUrlIn,
+    JobClarifyIn,
+    JobSubmitIn,
     OutlineIn,
     SlideActionIn,
     StructureIn,
@@ -22,6 +25,7 @@ from app.application.ppt.dto import (
 )
 from app.application.ppt.service import PPTService
 from app.application.shared.writing_assistant import WritingAssistant
+from app.core.exceptions import AppError, NotFoundError
 from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway
 from app.infrastructure.database import get_db
@@ -376,3 +380,95 @@ def generate_cloud(body: CloudGenIn,
                  user: User = Depends(get_current_user),
                  svc: PPTService = Depends(get_ppt_service)):
     return svc.generate_cloud(body, user)
+
+
+# ================= 异步生成任务（PPTAgent） =================
+# 说明：本 router 自身前缀是 /ppt，main.py 挂载时会再套一层 /api/v1，
+# 因此实际可达路径是 /api/v1/ppt/jobs/...（与桌面端 apiBase + "/ppt" 一致）。
+
+@router.post("/jobs")
+def submit_ppt_job(body: JobSubmitIn,
+                   user: User = Depends(get_current_user),
+                   svc: PPTService = Depends(get_ppt_service)):
+    """提交异步生成任务，**立即返回**（后台线程接管，不阻塞十几分钟）。"""
+    doc = svc.documents.get_for_user(body.doc_id, user.id)
+    if not doc:
+        raise NotFoundError("文档不存在")
+    return agent_job.submit_job(doc.id, user.id, body.message or "")
+
+
+@router.get("/jobs/{job_id}/status")
+def ppt_job_status(job_id: str,
+                   user: User = Depends(get_current_user),
+                   svc: PPTService = Depends(get_ppt_service)):
+    """轮询任务状态：状态 / 阶段 / 页数 / 耗时 / 预计剩余 / 追问。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    return agent_job.job_status(doc)
+
+
+@router.get("/jobs/{job_id}/preview")
+def ppt_job_preview(job_id: str,
+                    user: User = Depends(get_current_user),
+                    svc: PPTService = Depends(get_ppt_service)):
+    """已生成页的预览图列表；目录结构与预期不符时返回空列表（降级，不报错）。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    files = agent_job.list_previews(job_id)
+    pages = [{"index": i, "url": f"/api/v1/ppt/jobs/{job_id}/preview/{i}.png"}
+             for i in range(len(files))]
+    return {"job_id": job_id, "count": len(pages), "pages": pages}
+
+
+@router.get("/jobs/{job_id}/preview/{page}.png")
+def ppt_job_preview_image(job_id: str, page: str,
+                          user: User = Depends(get_current_user),
+                          svc: PPTService = Depends(get_ppt_service)):
+    """单页预览图。路径经白名单校验（必须落在工作区内），防目录穿越。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    if not page.isdigit():
+        raise AppError(400, "页码必须是数字")
+    path = agent_job.resolve_preview(job_id, int(page))
+    if path is None:
+        raise NotFoundError("预览图不存在")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@router.post("/jobs/{job_id}/cancel")
+def ppt_job_cancel(job_id: str,
+                   user: User = Depends(get_current_user),
+                   svc: PPTService = Depends(get_ppt_service)):
+    """请求取消：停止等待（PPTAgent 侧已启动的生成无法远程终止）。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    return agent_job.cancel_job(job_id)
+
+
+@router.post("/jobs/{job_id}/clarify")
+def ppt_job_clarify(job_id: str, body: JobClarifyIn,
+                    user: User = Depends(get_current_user),
+                    svc: PPTService = Depends(get_ppt_service)):
+    """回答 PPTAgent 的追问（R1），带上下文续跑同一任务。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    return agent_job.answer_clarification(job_id, user.id, body.answer or "")
+
+
+@router.get("/jobs/{job_id}/export")
+def ppt_job_export(job_id: str,
+                   user: User = Depends(get_current_user),
+                   svc: PPTService = Depends(get_ppt_service)):
+    """下载任务产物；任务未完成时 404（绝不返回半成品或空文件）。"""
+    doc = svc.documents.get_for_user(job_id, user.id)
+    if not doc:
+        raise NotFoundError("任务不存在")
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        raise NotFoundError("任务尚未完成，暂无可下载的文件")
+    return FileResponse(str(doc.file_path), media_type=_PPTX_MIME,
+                        filename=f"{doc.title or 'PPT'}.pptx")

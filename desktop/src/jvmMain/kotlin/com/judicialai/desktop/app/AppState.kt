@@ -122,6 +122,22 @@ object AppState {
     var pptLastError by mutableStateOf<String?>(null)
 
     /**
+     * PPT 异步生成任务号（跨页面恢复用，对应后端 POST /ppt/jobs 返回的 job_id）。
+     * 由 features.ppt.PptJobEngine 在提交成功时写入、任务终态时按情况保留或清空：
+     * - 生成中（SUBMITTED/GENERATING）：切走再切回时据此重新挂上轮询，进度不丢；
+     * - 成功并落盘后：保留到用户「返回编辑」（reset）为止，切回来还能看到缩略图与下载按钮；
+     * - 失败 / 取消 / 退出登录 / 提交新任务：清空。
+     * 任务进度本身挂在 PptJobEngine（全局），这里只放「去哪儿找这个任务」的句柄。
+     */
+    var pendingPptJobId by mutableStateOf<String?>(null)
+
+    /**
+     * PPT 是否有一个异步生成任务占着工作台（跨页面可见）。
+     * 用途同 [pptOutlineGenerating]：切回页面时据此直接展示生成工作台而不是空的入口页。
+     */
+    var pptJobActive by mutableStateOf(false)
+
+    /**
      * 智能写作「当前任务 id」（跨页面恢复用）。
      * 由 WritingViewModel.applyResponse 在拿到后端 task_id 时写入；
      * WritingScreen 重建时消费：本地尚无任务则按此 id 调 GET /writing/tasks/{id} 恢复
@@ -251,6 +267,9 @@ object AppState {
         pptOutlineGenerating = false
         pptExporting = false
         pptLastError = null
+        // 异步生成任务属于上一个账号：只清句柄，轮询协程自己在下一次循环发现未登录时会停
+        pendingPptJobId = null
+        pptJobActive = false
         pendingWritingTaskId = null
         writingGenerating = false
         writingLastError = null

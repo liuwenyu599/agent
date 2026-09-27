@@ -144,6 +144,29 @@ object Endpoints {
         const val AI_SLIDE_ACTION = "/ppt/ai/slide-action"
         /** 结构调整（新增/拆分/合并页） */
         const val AI_STRUCTURE = "/ppt/ai/structure"
+
+        /**
+         * 异步生成任务（PPTAgent 一次生成要 5–15 分钟，必须「提交即返回 + 轮询 + 逐页预览」）。
+         *
+         * 注意：这里只写 `/ppt/...` 段——服务端 router 前缀是 `/ppt`，
+         * 而 `/api/v1` 由 [com.judicialai.desktop.core.storage.ServerConfig.apiBase] 统一补上
+         * （见 server/app/main.py 的 `include_router(r, prefix="/api/v1")`）。
+         * 但 preview 返回的 `png_url` 是**服务器根相对路径**（不带 /api/v1），
+         * 图片加载走 ApiClient.imageBytes（baseUrl），两边不要混用。
+         */
+        object Jobs {
+            /** POST：提交任务，立即返回 {job_id, status, phase, message} */
+            const val CREATE = "/ppt/jobs"
+            fun status(id: String) = "/ppt/jobs/$id/status"
+            fun preview(id: String) = "/ppt/jobs/$id/preview"
+            /** 单页预览图（index 从 0 开始，与 GET preview 里的 index 一致） */
+            fun previewPage(id: String, index: Int) = "/ppt/jobs/$id/preview/$index.png"
+            fun cancel(id: String) = "/ppt/jobs/$id/cancel"
+            /** POST：回答 PPTAgent 的追问 {answer}，带着上下文续跑同一任务 */
+            fun clarify(id: String) = "/ppt/jobs/$id/clarify"
+            /** GET：下载 pptx */
+            fun export(id: String) = "/ppt/jobs/$id/export"
+        }
     }
 
     object Workflow {

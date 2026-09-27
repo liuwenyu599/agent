@@ -256,8 +256,13 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
 
     // ---------- 通用 JSON ----------
 
-    suspend fun get(path: String, params: Map<String, String> = emptyMap()) =
-        req(HttpMethod.Get, path, null, params)
+    /**
+     * GET。默认沿用全局超时（用户在设置页可调，不在这里改）；
+     * 轮询类接口由调用方显式传更小的 [timeoutMs]，让卡住的请求快速失败进入重试。
+     */
+    suspend fun get(
+        path: String, params: Map<String, String> = emptyMap(), timeoutMs: Long? = null,
+    ) = req(HttpMethod.Get, path, null, params, timeoutMs)
 
     suspend fun post(path: String, body: Any? = null, timeoutMs: Long? = null) =
         req(HttpMethod.Post, path, body, emptyMap(), timeoutMs)
@@ -460,10 +465,21 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         }
     }
 
-    suspend fun downloadPost(path: String, body: Map<String, Any?>, target: File): ApiResult<String> {
+    /**
+     * POST 导出（请求体 + 落盘文件）。
+     *
+     * [timeoutMs] 默认 5 分钟（与加参数前完全一致，其它调用点行为不变）。
+     * PPTAgent 这类 5–15 分钟的长任务由调用方显式传更长的超时（见 PptRepository），
+     * 这里**不改全局默认超时**：全局超时是用户在设置页可调的，动它会波及所有接口。
+     * 另：socketTimeoutMillis 与 requestTimeoutMillis 绑的是同一个值（见 client()），
+     * 所以放宽请求超时不会出现「socket 空闲超时先炸」。
+     */
+    suspend fun downloadPost(
+        path: String, body: Map<String, Any?>, target: File, timeoutMs: Long = 300_000,
+    ): ApiResult<String> {
         val url = configProvider().apiBase + path
         return try {
-            client(300_000).use { c ->
+            client(timeoutMs).use { c ->
                 val r = c.post(url) {
                     auth(); contentType(ContentType.Application.Json); setBody(body.toJsonElement())
                 }
@@ -483,13 +499,19 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         }
     }
 
-    /** 拉取图片字节（模板预览图等） */
+    /**
+     * 拉取图片字节（模板预览图、PPT 逐页预览图等）。
+     *
+     * 带上 token：预览图接口（/ppt/preview/...、/ppt/jobs/{id}/preview/{i}.png）
+     * 都是 `Depends(get_current_user)`，不带 Authorization 会 401，
+     * 界面上就永远是「生成中」占位图而看不到图。
+     */
     suspend fun imageBytes(pathOrUrl: String): ByteArray? {
         val url = if (pathOrUrl.startsWith("http")) pathOrUrl
         else configProvider().baseUrl.trimEnd('/') + pathOrUrl
         return try {
             client().use { c ->
-                val r = c.get(url)
+                val r = c.get(url) { auth() }
                 if (r.status.isSuccess()) r.body<ByteArray>() else null
             }
         } catch (e: Exception) { null }

@@ -903,7 +903,8 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     Text(vm.task.documentNumber, fontSize = 11.5.sp, color = Muted)
                     Spacer(Modifier.width(Dimens.space3))
                 }
-                AppLinkButton(if (editing) "完成编辑" else "编辑正文") { editing = !editing }
+                AppLinkButton(if (editing) "完成编辑" else "编辑正文",
+                    onClick = { editing = !editing })
             }
             Spacer(Modifier.height(Dimens.space4))
             if (vm.task.title.isNotBlank()) {

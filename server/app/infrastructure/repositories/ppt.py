@@ -30,7 +30,12 @@ _MAT_FIELDS = ["id", "user_id", "name", "caption", "file_path", "file_size",
                "width", "height", "mime_type", "created_at"]
 _DOC_FIELDS = ["id", "user_id", "title", "subtitle", "source_content", "template_id",
                "theme_id", "source_type", "status", "is_favorite", "outline",
-               "file_path", "slide_count", "created_at", "updated_at"]
+               "file_path", "slide_count", "created_at", "updated_at",
+               # 异步生成任务（PPTAgent job）
+               "job_status", "job_phase", "job_total_pages", "job_current_page",
+               "job_error", "job_question", "job_renderer", "job_event_id",
+               "job_cancel_requested", "job_started_at", "job_finished_at",
+               "job_progress_at"]
 _FAV_FIELDS = ["id", "user_id", "template_id", "created_at"]
 
 
@@ -244,6 +249,13 @@ class SqlAlchemyPPTDocumentRepository(PPTDocumentRepository):
             theme_id=doc.theme_id, source_type=doc.source_type, status=doc.status,
             is_favorite=doc.is_favorite, outline=doc.outline,
             file_path=doc.file_path, slide_count=doc.slide_count,
+            job_status=doc.job_status, job_phase=doc.job_phase,
+            job_total_pages=doc.job_total_pages, job_current_page=doc.job_current_page,
+            job_error=doc.job_error, job_question=doc.job_question,
+            job_renderer=doc.job_renderer, job_event_id=doc.job_event_id,
+            job_cancel_requested=doc.job_cancel_requested,
+            job_started_at=doc.job_started_at, job_finished_at=doc.job_finished_at,
+            job_progress_at=doc.job_progress_at,
         )
         self.db.add(m)
         self.db.commit()

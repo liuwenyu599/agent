@@ -7,7 +7,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,6 +40,37 @@ _CLOUD_DEFAULT = {
     "mode": "general",               # general=模板模式 / creative=创意模式
     "template_id": "summary_01",
 }
+
+
+def _parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
+    """从模型输出里宽松提取一个 JSON 对象。
+
+    模型常常带 ```json 代码围栏或前后废话（"好的，结果如下："），这里统一剥掉
+    再解析；解析不出来返回 None，由调用方降级处理，**不抛异常**。
+
+    Args:
+        raw: 模型返回的原始文本。
+
+    Returns:
+        解析出的 dict；解析失败或不是对象时返回 None。
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        text = text[start:end + 1]
+    try:
+        obj = _json.loads(text)
+    except Exception:  # noqa: BLE001 - 非法 JSON 是预期内的情况，交给调用方降级
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 class PPTService:
@@ -642,10 +673,14 @@ class PPTService:
 
     # ================= 材料分析（先看见分析结果，再生成大纲） =================
     async def analyze_materials(self, files, user: User) -> dict:
-        """上传材料并逐份分析：提取文本 + AI 摘要（重点 / 数据表 / 约束条件）。
+        """上传材料并逐份分析：提取文本 + AI 结构化摘要（摘要 / 重点 / 数据表数）。
 
         让「上传完黑盒等待」变成可见的分析结果；返回的 text 供后续大纲步骤
         拼接使用（前端不必再调 extract-text）。
+
+        返回结构（桌面端 PptViewModel 按此消费）：
+            items: [{filename, chars, summary, key_points, tables, text}, ...]
+            totals: {materials: 份数, key_points: 重点总条数, tables: 数据表总数}
         """
         if not files:
             raise AppError(400, "请先选择材料文件")
@@ -656,32 +691,82 @@ class PPTService:
             if not data:
                 continue
             text = self._extract_any(f.filename or "unnamed", data)
-            summary = self._summarize_material(assistant, f.filename or "材料", text)
+            analysis = self._summarize_material(assistant, f.filename or "材料", text)
             items.append({
                 "filename": f.filename, "chars": len(text),
-                "summary": summary,
+                "summary": analysis.get("summary", ""),
+                "key_points": analysis.get("key_points") or [],
+                "tables": analysis.get("tables") or 0,
                 "text": text[:4000],
             })
         if not items:
             raise AppError(400, "没有可解析的材料")
-        return {"items": items, "message": f"已分析 {len(items)} 份材料"}
+        # 聚合统计：桌面端「材料聚合统计」直接读这三个数
+        totals = {
+            "materials": len(items),
+            "key_points": sum(len(i["key_points"]) for i in items),
+            "tables": sum(i["tables"] for i in items),
+        }
+        return {"items": items, "totals": totals,
+                "message": f"已分析 {len(items)} 份材料"}
 
     @staticmethod
-    def _summarize_material(assistant, filename: str, text: str) -> str:
-        """单份材料的一句话性质说明 + 重点/数据表/约束，失败时返回空串不阻断。"""
+    def _summarize_material(assistant, filename: str, text: str) -> Dict[str, Any]:
+        """单份材料的结构化分析：摘要 + 重点清单 + 数据表数量。
+
+        桌面端（PptViewModel.kt materials 解析）按 ``{summary, key_points, tables}``
+        三个字段消费，因此这里必须产出**同名同类型**的字段：
+        ``summary``=字符串 / ``key_points``=字符串数组 / ``tables``=整数。
+
+        模型返回非法 JSON、调用失败、字段缺失时一律降级为「摘要=原文截断、
+        key_points=空数组、tables=0」，**绝不抛异常**打断整批材料分析。
+
+        Args:
+            assistant: 模型助手（PPT 专用模型或主模型）。
+            filename: 材料文件名，作为模型上下文。
+            text: 材料提取出的文本。
+
+        Returns:
+            ``{"summary": str, "key_points": List[str], "tables": int}``
+        """
         prompt = (
-            "请用 2~4 句简短中文分析这份材料，格式如："
-            "「工作总结类文档，包含 N 项重点工作；含案件数量等统计数据；"
-            "要求汇报控制在 10 分钟以内」。\n"
-            "只输出这段分析文字，不要标题、不要列表符号、不要其他内容。\n\n"
+            "请分析这份材料，只输出一个 JSON 对象，不要输出解释、标题或代码块标记。\n"
+            "JSON 结构：\n"
+            '{"summary": "材料性质与内容的一句话说明", '
+            '"key_points": ["重点1", "重点2"], "tables": 0}\n'
+            "字段要求：\n"
+            "1. summary：字符串，2~4 句简短中文，说明材料性质与主要内容；\n"
+            "2. key_points：字符串数组，3~6 条材料重点（关键数字、结论、事项），"
+            "每条不带序号或列表符号；\n"
+            "3. tables：整数，材料中数据表/统计表格的数量，没有则填 0。\n\n"
             f"【文件名】{filename}\n【内容节选】\n{text[:2500]}")
         try:
             raw = assistant.complete(
                 [{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=300)
-        except Exception:
-            return ""
-        return (raw or "").strip()[:300]
+                temperature=0.3, max_tokens=500)
+        except Exception as e:  # noqa: BLE001 - 模型不可用不能拖垮整批材料分析
+            logger.warning("材料分析调用模型失败，降级为空摘要：%s", type(e).__name__)
+            return {"summary": "", "key_points": [], "tables": 0}
+
+        obj = _parse_json_object(raw or "")
+        if obj is None:
+            # 降级：模型没按 JSON 返回，就把原文当摘要用，重点与表数留空
+            logger.warning("材料分析返回非 JSON，降级为原文摘要：%s", filename)
+            return {"summary": (raw or "").strip()[:300], "key_points": [], "tables": 0}
+
+        summary = str(obj.get("summary") or "").strip()[:300]
+        key_points: List[str] = []
+        raw_points = obj.get("key_points")
+        if isinstance(raw_points, list):
+            key_points = [str(p).strip() for p in raw_points if str(p).strip()]
+        elif isinstance(raw_points, str):
+            # 有些模型把清单写成换行分隔的一段文字
+            key_points = [s.strip() for s in raw_points.splitlines() if s.strip()]
+        try:
+            tables = max(0, int(obj.get("tables") or 0))
+        except (TypeError, ValueError):
+            tables = 0
+        return {"summary": summary, "key_points": key_points[:8], "tables": tables}
 
     # ================= 生成前预检（信息不足先确认，不瞎编） =================
     def precheck_outline(self, body, user: User) -> dict:
@@ -844,12 +929,86 @@ class PPTService:
                 return ppt_engine.template_to_dict(t), t
         return ppt_engine.template_to_dict(spec), None
 
+    def _render_pptx_bytes(self, d: PPTDocument, outline: dict, template: Dict,
+                           base_pptx: Optional[bytes]) -> Tuple[bytes, str]:
+        """渲染 pptx 字节：优先走 PPTAgent，失败一律回退本地 render_pptx。
+
+        开关语义：
+        - ``PPT_AGENT_URL`` 为空 → 直接走本地 ``render_pptx``（与接入前完全一致）；
+        - 非空 → 先试 PPTAgent；**任何**失败 / 超时 / 返回非法文件 → 回退本地渲染。
+        回退目标始终是真实可用的本地渲染结果，绝不会返回空文件或占位文件。
+
+        Args:
+            d: 当前 PPT 文档（提供标题与素材上下文）。
+            outline: 已解析（图片路径已就位）的大纲。
+            template: 模板字典（本地渲染用；PPTAgent 只取风格提示）。
+            base_pptx: 模板底稿字节（本地渲染用）。
+
+        Returns:
+            (pptx 字节, 渲染来源 ``"pptagent"`` / ``"local"``)
+        """
+        def local_render() -> bytes:
+            """本地渲染唯一的真源：回退永远回到这里。"""
+            return ppt_engine.render_pptx(outline, template, base_pptx=base_pptx)
+
+        if not (settings.PPT_AGENT_URL or "").strip():
+            logger.debug("PPTAgent 未配置（PPT_AGENT_URL 为空），走本地渲染")
+            return local_render(), "local"
+
+        # PPTAgent 走的是「喂主题 + 材料，由它全权排版」的形态，故把结构化大纲
+        # 序列化成 Markdown 正文，并补上原始素材作为上下文。
+        try:
+            from app.infrastructure.ppt.ppt_agent_client import (
+                PPTAgentClient, PPTAgentError, build_outline_markdown, looks_like_pptx,
+            )
+            md = build_outline_markdown(outline)
+            material = (d.source_content or "").strip()
+            content_md = md if not material else f"{md}\n\n# 原始素材\n{material}\n"
+            client = PPTAgentClient.from_settings()
+            data = client.render(
+                topic=(outline.get("title") or d.title or "未命名演示文稿"),
+                content_markdown=content_md,
+                slide_count=len(outline.get("slides") or []),
+                template_hint=(template or {}).get("name") or (template or {}).get("id") or "",
+            )
+            ok, why = looks_like_pptx(data)
+            if not ok:
+                raise PPTAgentError(f"结果非法：{why}")
+            logger.info("PPTAgent 渲染成功：doc_id=%s，%d 字节", d.id, len(data))
+            return data, "pptagent"
+        except Exception as e:  # noqa: BLE001 - 任何异常都必须落到本地渲染
+            # 注意：不打印凭据，只打印类型与原因
+            logger.warning("PPTAgent 渲染失败，回退本地渲染：%s: %s",
+                           type(e).__name__, str(e)[:300])
+            return local_render(), "local"
+
+    def render_local_pptx(self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
+        """**只走本地渲染**：用于 PPTAgent 失败后的兜底通道。
+
+        与 :meth:`_render_pptx_bytes` 的区别：本方法无条件调用
+        ``ppt_engine.render_pptx``，因此在 ``PPT_AGENT_URL`` 已配置的情况下也能
+        安全地作为兜底，不会二次触发 PPTAgent（否则会来回死循环）。
+
+        Args:
+            d: 文档（提供模板与主题）。
+            outline: 大纲。
+            user_id: 用户 ID（用于解析素材图片）。
+
+        Returns:
+            pptx 字节。
+        """
+        template, trow = self._resolve_template(d.template_id, d.theme_id or "")
+        outline = ppt_engine.resolve_slide_images(outline, self._user_images(user_id))
+        return ppt_engine.render_pptx(outline, template,
+                                      base_pptx=self._tpl_base_bytes(trow))
+
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str]) -> str:
         """渲染 pptx 并落盘，更新文档状态。返回文件路径。"""
         template, trow = self._resolve_template(template_id or d.template_id, d.theme_id or "")
         outline = ppt_engine.resolve_slide_images(outline, self._user_images(user.id))
-        data = ppt_engine.render_pptx(outline, template, base_pptx=self._tpl_base_bytes(trow))
+        data, renderer = self._render_pptx_bytes(
+            d, outline, template, self._tpl_base_bytes(trow))
         fname = f"{uuid.uuid4().hex}.pptx"
         path = self.ppt_dir / "generated" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -867,6 +1026,8 @@ class PPTService:
             trow.use_count = (trow.use_count or 0) + 1
             self.templates.update(trow)
         self.documents.update(d)
+        logger.info("PPT 渲染落盘：doc_id=%s，来源=%s，%d 字节，路径=%s",
+                    d.id, renderer, len(data), path)
         return str(path)
 
     def generate(self, body, user: User) -> dict:

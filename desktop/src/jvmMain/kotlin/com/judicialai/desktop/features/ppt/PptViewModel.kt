@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.core.logging.ClientLog
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
@@ -137,6 +138,16 @@ class PptViewModel(private val repo: PptRepository) {
     var exportStage by mutableStateOf("")
         private set
     private var exportJob: Job? = null
+
+    // ---- 异步生成任务（PPTAgent 5–15 分钟：提交即返回 + 轮询 + 逐页预览） ----
+    /**
+     * 当前生成任务进度。句柄挂在 PptJobEngine（全局单例）上，
+     * 所以切走页面再切回时 remember 重建 ViewModel 也不会丢——这里只是读它的入口。
+     */
+    val job: PptJobProgress? get() = PptJobEngine.current
+
+    /** 有任务占着工作台（含已完成的），界面据此展示生成工作台而不是普通工作台 */
+    val jobVisible: Boolean get() = PptJobEngine.current != null
 
     // ---- 逐页真实预览（服务端渲染 PNG；404/失败时回退结构化预览卡） ----
     var previewPages by mutableStateOf(listOf<String>())
@@ -641,7 +652,9 @@ class PptViewModel(private val repo: PptRepository) {
                 when (val r = repo.generate(id, outlineJson(), templateId)) {
                     is ApiResult.Ok -> {
                         exportStage = "渲染完成，正在写入文件…"
-                        status = when (val d = repo.downloadDocument(id, target)) {
+                        // 紧跟 PPTAgent 渲染的这次下载按长任务放宽（默认 5 分钟可能不够）
+                        status = when (val d = repo.downloadDocument(
+                            id, target, timeoutMs = PptRepository.TIMEOUT_EXPORT_MS)) {
                             is ApiResult.Ok -> d.data
                             is ApiResult.Err -> d.message.also { failed = it }
                         }
@@ -664,6 +677,142 @@ class PptViewModel(private val repo: PptRepository) {
             // 切走期间导出失败时，本地 status 会随 ViewModel 一起丢失
             AppState.pptLastError = failed
         }
+    }
+
+    // ================= 异步生成（主路径）：提交 → 轮询 → 逐页预览 → 落盘 =================
+
+    /**
+     * 提交生成任务并立即返回（不等渲染）：POST /ppt/jobs → job_id。
+     * 之后由 PptJobEngine 轮询进度，界面按阶段出缩略图，跑完自动把 pptx 写到 [target]。
+     *
+     * 服务端尚未部署 /ppt/jobs（HTTP 404/405）时**回退到同步导出**，
+     * 保证后端没跟上时功能不倒退（同步路径的超时已放宽到 20 分钟）。
+     */
+    fun startGenerateAsync(target: File, overrideMessage: String? = null) {
+        val id = docId ?: return
+        // 同 startOutline：切回页面后 busy 已重置，仅靠 busy 挡不住重复发起
+        if (AppState.pptExporting) {
+            status = "还有一份正在导出，请稍候"
+            return
+        }
+        if (job?.isActive == true) {
+            status = "有一个生成任务正在进行，请等待完成或先取消"
+            return
+        }
+        // 重试时用提交时的原始需求：ViewModel 可能已被重建（切过页面），本地字段会是空的
+        val message = overrideMessage?.takeIf { it.isNotBlank() } ?: buildJobMessage()
+        busy = true
+        AppState.pptExporting = true
+        AppState.pptLastError = null
+        exportStage = ""
+        status = null
+        scope.launch {
+            // 大纲走服务端已存的 doc.outline（PPTAgent 直接读它算页数、拼需求），
+            // 所以提交前必须先落一次草稿，否则服务端拿到的是上一次的大纲
+            repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
+            val r = PptJobEngine.submit(repo, id, message, target)
+            // 提交只是「登记任务」，秒回；真正的等待交给轮询，
+            // 这里必须把 busy / 全局导出标记放掉，否则用户没法再操作（也挡住了回退路径）
+            busy = false
+            AppState.pptExporting = false
+            when (r) {
+                is ApiResult.Ok -> if (r.data.status == "failed") {
+                    // 后端明确拒绝（未配置 PPT_AGENT_URL 之类）：HTTP 仍是 200，只有 status 能看出来
+                    ClientLog.warn("异步生成被服务端拒绝，回退同步导出：" + r.data.hint)
+                    PptJobEngine.reset()
+                    generateAndExport(target)
+                } else {
+                    status = "已提交生成任务，可先去其他页面，完成后会自动回到这里"
+                }
+                is ApiResult.Err -> {
+                    if (r.status == 404 || r.status == 405) {
+                        ClientLog.warn("异步生成接口不可用（HTTP ${r.status}），回退同步导出")
+                        PptJobEngine.reset()
+                        generateAndExport(target)
+                    } else {
+                        AppState.pptLastError = r.message
+                        status = r.message
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 给 PPTAgent 的补充需求（正文与页数由服务端已存的大纲带过去）。
+     *
+     * **不写页数**：后端 `num_pages = len(doc.outline["slides"])`，页数就是大纲条数，
+     * message 里再写「请生成 N 页」会和大纲冲突（后端同学明确要求）。
+     * 只写用户能确认的事实，不替他编需求。
+     */
+    private fun buildJobMessage(): String = buildString {
+        if (topic.isNotBlank()) append("主题：").append(topic).append('\n')
+        if (outlineTitle.isNotBlank() && outlineTitle != topic)
+            append("标题：").append(outlineTitle).append('\n')
+        if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
+        if (reportDate.isNotBlank()) append("汇报时间：").append(reportDate).append('\n')
+        if (materials.isNotEmpty())
+            append("参考材料：").append(materials.joinToString("、") { it.filename }).append('\n')
+    }.trim()
+
+    /**
+     * 回答 PPTAgent 的追问：POST /ppt/jobs/{id}/clarify。
+     * 后端带着「它问了什么 / 用户答了什么」的上下文续跑**同一个任务**，不会从头再来。
+     */
+    fun submitClarify(answer: String) {
+        PptJobEngine.clarify(answer)
+    }
+
+    /**
+     * 取消当前异步任务。
+     * 语义是**停止等待**——PPTAgent 侧已启动的生成无法远程终止，会在服务端跑完（产物无人取），
+     * 所以文案说「已停止等待」，不说「已终止生成」。
+     */
+    fun cancelJob() {
+        PptJobEngine.cancel()
+        status = "已停止等待本次生成（服务端会跑完，但不会保存到你的文件）"
+    }
+
+    /** 取消 / 完成后回到普通编辑工作台（清掉任务句柄，文件已保存则保留提示） */
+    fun dismissJob() {
+        PptJobEngine.reset()
+        loadDocuments()
+        status = null
+    }
+
+    /** FAILED / CANCELLED 后重试：复用提交时的需求与保存位置重新提交 */
+    fun retryJob() {
+        val p = PptJobEngine.current ?: return
+        val target = p.targetFile
+        if (target == null) {
+            status = "请先重新选择保存位置"
+            return
+        }
+        val message = p.message
+        PptJobEngine.reset()
+        startGenerateAsync(target, message)
+    }
+
+    /**
+     * DONE 状态下再下一份 pptx。
+     * [target] 为 null 表示沿用提交时选好的位置；两者都没有时提示用户先选位置。
+     */
+    fun downloadJobResult(target: File? = null) {
+        if (!PptJobEngine.download(target)) status = "请先选择保存位置"
+    }
+
+    /** 切回页面：把仍在跑的全局任务重新挂上（必要时续接轮询 / 补一次落盘） */
+    fun resumeJob() {
+        PptJobEngine.resumeIfNeeded(repo)
+    }
+
+    /**
+     * 离开页面：停掉轮询协程。
+     * 任务状态与目标文件都在服务端与全局对象里，回来时 [resumeJob] 会续上，
+     * 不这样处理每个页面都会留下一条永远跑着的轮询协程。
+     */
+    fun stopJobPolling() {
+        PptJobEngine.stopPolling()
     }
 
     /** 取消导出：中断等待（服务端已渲染的部分不影响，本地不会写入半成品文件） */

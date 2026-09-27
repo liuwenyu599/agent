@@ -50,6 +50,20 @@ class GenerateIn(BaseModel):
     outline: Optional[dict] = None
 
 
+class JobSubmitIn(BaseModel):
+    """提交异步生成任务（PPTAgent）。
+
+    doc_id 同时作为 job_id：一个文档同时只允许一个进行中的任务。
+    """
+    doc_id: str
+    message: str = ""
+
+
+class JobClarifyIn(BaseModel):
+    """回答 PPTAgent 的追问（R1）。"""
+    answer: str = Field("", description="对追问的答复；空串表示「按你的判断继续」")
+
+
 class BlankIn(BaseModel):
     title: str = "未命名PPT"
     subtitle: str = ""

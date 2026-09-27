@@ -136,8 +136,15 @@ def accounts(client):
             "password": PWD, "department": "行政复议科", "role": "user",
         }, headers=_hdr(dev))
         assert r.status_code == 200, r.text
-        return client.post(f"{BASE}/auth/login", json={
+        tok = client.post(f"{BASE}/auth/login", json={
             "username": username, "password": PWD}).json()["access_token"]
+        # 管理员代建的账号首登必须改密（真实业务流程）：未改密前业务端点一律 403
+        changed = client.post(f"{BASE}/auth/change-password", json={
+            "old_password": PWD, "new_password": "Changed@2026",
+            "confirm_password": "Changed@2026",
+        }, headers=_hdr(tok))
+        assert changed.status_code == 200, changed.text
+        return tok
 
     return {"dev": dev, "a": reg("ppt_user_a"), "b": reg("ppt_user_b")}
 
@@ -235,6 +242,64 @@ def test_analyze_materials_returns_summary_and_text(client, accounts, fake_llm):
     assert data["totals"] == {"materials": 1, "key_points": 2, "tables": 1}
     # 摘要确实走了模型通道（否则这段逻辑等于没接）
     assert len(fake_llm.calls) == 1
+
+
+def test_analyze_materials_degrades_on_non_json_summary(client, accounts, fake_llm):
+    """模型返回非法 JSON（纯文本）时降级：摘要用原文，重点/表数留空，不抛异常。
+
+    这条是兜底路径的护栏——结构化解析绝不能因为没有 JSON 就把整批材料分析打断。
+    """
+    fake_llm._responder = lambda m: "这不是 JSON，只是一段普通文本摘要"
+    r = client.post(
+        f"{BASE}/ppt/materials/analyze",
+        files=[("files", ("材料.txt", "一季度受理120件".encode("utf-8"), "text/plain"))],
+        headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    assert item["summary"] == "这不是 JSON，只是一段普通文本摘要"
+    assert item["key_points"] == []
+    assert item["tables"] == 0
+    # 聚合统计同步降级，不能 KeyError
+    assert r.json()["totals"] == {"materials": 1, "key_points": 0, "tables": 0}
+
+
+def test_analyze_materials_accepts_fenced_json(client, accounts, fake_llm):
+    """模型用 ```json 代码围栏包裹、或前后带废话时，也要能解析出结构化字段。"""
+    fenced = (
+        "好的，分析结果如下：\n"
+        "```json\n"
+        '{"summary": "一季度案件办理情况表", "key_points": ["受理120件", "办结115件"],'
+        ' "tables": 2}\n'
+        "```\n"
+    )
+    fake_llm._responder = lambda m: fenced
+    r = client.post(
+        f"{BASE}/ppt/materials/analyze",
+        files=[("files", ("案件.txt", "受理120件，办结115件".encode("utf-8"), "text/plain"))],
+        headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    assert item["summary"] == "一季度案件办理情况表"
+    assert item["key_points"] == ["受理120件", "办结115件"]
+    assert item["tables"] == 2
+
+
+def test_analyze_materials_missing_fields_degrade(client, accounts, fake_llm):
+    """JSON 里缺字段/类型不对时按类型兜底，不能抛异常或把脏值透给桌面端。"""
+    fake_llm._responder = lambda m: json.dumps(
+        {"summary": "只有摘要", "key_points": "not-a-list", "tables": "很多"},
+        ensure_ascii=False)
+    r = client.post(
+        f"{BASE}/ppt/materials/analyze",
+        files=[("files", ("残缺.txt", "一些内容".encode("utf-8"), "text/plain"))],
+        headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    assert item["summary"] == "只有摘要"
+    # key_points 必须是数组：字符串按行拆成单条
+    assert item["key_points"] == ["not-a-list"]
+    # tables 必须是不小于 0 的整数：非数字降级为 0
+    assert item["tables"] == 0
 
 
 def test_analyze_materials_multi_format(client, accounts, fake_llm):
