@@ -264,7 +264,10 @@ fun AppTextField(
             enabled = enabled,
             singleLine = singleLine,
             minLines = minLines,
-            maxLines = maxLines,
+            // 防御：minLines > maxLines 会让 Compose 直接抛
+            // IllegalArgumentException（heightInLines 校验），整页崩掉。
+            // 调用方只传 minLines 时默认 maxLines=8，很容易踩到，这里兜底保证 min <= max。
+            maxLines = maxOf(maxLines, minLines),
             modifier = Modifier.fillMaxWidth()
                 .heightIn(min = Dimens.hControl),
             shape = RoundedCornerShape(Dimens.radiusControl),

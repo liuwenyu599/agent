@@ -646,6 +646,7 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
                 placeholder = "AI 调整结果",
                 singleLine = false,
                 minLines = 10,
+                maxLines = 24,
             )
             InlineNotice(
                 if (asDept) "确认无误后保存；科室归属由服务端写入，不会保存到其他科室"
