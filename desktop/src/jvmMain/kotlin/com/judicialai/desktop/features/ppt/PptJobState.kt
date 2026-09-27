@@ -375,7 +375,14 @@ object PptJobEngine {
     private fun finish(p: PptJobProgress, s: PptJobStatusSnapshot) {
         stopPolling()
         when (p.status) {
-            PptJobStatus.DONE -> autoExport(p)
+            PptJobStatus.DONE -> {
+                // 生成阶段已成功：全局"正在生成"标记必须立刻复位，否则切到别的页面后
+                // 会一直挂着「PPT 正在生成」的提示。
+                // pendingPptJobId 先留着——落盘是在 autoExport 里异步做的，
+                // 万一落盘失败还要靠这个句柄回到页面补一次导出；落盘成功后才清。
+                AppState.pptJobActive = false
+                autoExport(p)
+            }
             PptJobStatus.FAILED -> {
                 p.errorMsg = s.errorMsg?.takeIf { it.isNotBlank() } ?: "生成失败，请重试"
                 AppState.pptLastError = p.errorMsg
@@ -466,6 +473,15 @@ object PptJobEngine {
                 p.exportError = "保存失败：" + (e.message ?: "未知错误")
             } finally {
                 p.exporting = false
+                // 落盘成功才收尾：清掉全局失败痕迹与恢复句柄。
+                // 不清的话，任务早已 succeeded，回到 PPT 页时
+                // （ViewModel 重建后 docId 为 null）顶部会一直挂着上一次的红横幅，
+                // 并且还会拿这个已结束的任务号去发起恢复。
+                if (p.exportedPath != null) {
+                    AppState.pptLastError = null
+                    AppState.pendingPptJobId = null
+                    AppState.pptJobActive = false
+                }
             }
         }
     }
