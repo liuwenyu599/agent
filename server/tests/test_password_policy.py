@@ -172,11 +172,28 @@ def test_admin_reset_success_forces_change(client, accounts):
     assert ok.status_code == 200
 
 
-def test_admin_reset_weak_password_rejected(client, accounts):
+def test_admin_reset_accepts_weak_password_but_forces_change(client, accounts):
+    """管理员重置他人密码：允许弱密码，但必须强制该用户改密。
+
+    与 `_create_user_checked()` 默认行为、批量导入初始密码 123456 属同一条设计链：
+    管理员为他人设的初始密码 → 允许弱 → 强制改密 → 强度在改密时校验。
+    因此这里**不**要求 400，而是钉死「弱密码可接受 + must_change_password=True」。
+    """
     r = client.post(f"{BASE}/users/{accounts['user_id']}/reset-password",
                     json={"password": "12345678"},
                     headers=_hdr(accounts["dev"]))
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json()["must_change_password"] is True, "弱重置密码必须附带强制改密标记"
+
+    # 弱密码可以登录，但业务接口仍被拦截，直到本人改成强密码
+    login = client.post(f"{BASE}/auth/login", json={
+        "username": "pwd_user", "password": "12345678"})
+    assert login.status_code == 200
+    assert login.json()["must_change_password"] is True
+
+    blocked = client.get(f"{BASE}/knowledge/list", headers=_hdr(login.json()["access_token"]))
+    assert blocked.status_code == 403
+    assert "请先修改初始密码" in blocked.json()["detail"]
 
 
 # ---------------------------------------------------------------- 审计

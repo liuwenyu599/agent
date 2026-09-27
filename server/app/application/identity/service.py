@@ -133,8 +133,11 @@ class AuthService:
         # 首个系统管理员的密码是真实使用密码，必须满足强度规则
         validate_password_strength(password)
         dept_name, dept_code = _resolve_department(department, department_code)
+        # 密码已通过强度校验，是管理员自己设定的真实使用密码，不能再强制首登改密：
+        # 否则 deps.get_current_user() 会对该管理员的全部业务端点返回 403，全新部署直接卡死。
         user = self._create_user_checked(username, email, password, real_name,
-                                         dept_name, ROLE_DEVELOPER, dept_code)
+                                         dept_name, ROLE_DEVELOPER, dept_code,
+                                         must_change_password=False)
         token = create_access_token(
             {"sub": user.id, "username": user.username, "role": user.role}
         )
@@ -156,9 +159,17 @@ class AuthService:
                                          dept_name, role, dept_code)
 
     def _create_user_checked(self, username, email, password, real_name, department, role,
-                             department_code: str = "") -> User:
-        """管理员/注册创建用户：初始密码允许弱密码（如 123456），但 must_change_password=True，
-        首次登录后强制修改密码（强度规则在改密时校验）。"""
+                             department_code: str = "",
+                             must_change_password: bool = True) -> User:
+        """管理员/注册创建用户：初始密码允许弱密码（如 123456），但默认 must_change_password=True，
+        首次登录后强制修改密码（强度规则在改密时校验）。
+
+        Args:
+            must_change_password: 是否要求该用户首次登录后必须改密。默认 True，适用于
+                管理员为他人建号（初始密码可能很弱）的场景。调用方若已对密码做强度校验、
+                且该密码就是用户本人的真实使用密码（如 register_first 首个系统管理员），
+                应显式传 False，避免把用户锁在「必须先改密」状态从而导致业务端点一律 403。
+        """
         if not password:
             raise AppError(400, "初始密码不能为空")
         if self.users.get_by_username(username):
@@ -171,8 +182,8 @@ class AuthService:
             real_name=real_name, department=department, role=role,
             department_code=department_code,
         )
-        # 初始密码允许 123456 等弱密码，但首次登录必须改密
-        user.must_change_password = True
+        # 初始密码允许 123456 等弱密码，但首次登录必须改密（首个管理员自建强密码的情况除外）
+        user.must_change_password = must_change_password
         return self.users.add(user)
 
 

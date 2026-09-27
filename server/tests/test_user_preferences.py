@@ -166,8 +166,15 @@ def accounts(client):
             "department": dept, "role": role,
         }, headers=_hdr(dev))
         assert rr.status_code == 200, rr.text
-        return client.post(f"{BASE}/auth/login", json={
+        tok = client.post(f"{BASE}/auth/login", json={
             "username": username, "password": PWD}).json()["access_token"]
+        # 管理员代建的账号首登必须改密（真实业务流程）：未改密前业务端点一律 403
+        changed = client.post(f"{BASE}/auth/change-password", json={
+            "old_password": PWD, "new_password": "Changed@2026",
+            "confirm_password": "Changed@2026",
+        }, headers=_hdr(tok))
+        assert changed.status_code == 200, changed.text
+        return tok
 
     return {
         "dev": dev,

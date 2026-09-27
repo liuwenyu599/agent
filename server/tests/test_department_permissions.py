@@ -96,6 +96,12 @@ def users(client):
         assert r.status_code == 200, r.text
         tok = client.post(f"{BASE}/auth/login", json={
             "username": username, "password": "Passw0rd!2026"}).json()["access_token"]
+        # 管理员代建的账号首登必须改密（真实业务流程）：未改密前业务端点一律 403
+        changed = client.post(f"{BASE}/auth/change-password", json={
+            "old_password": "Passw0rd!2026", "new_password": "Changed@2026",
+            "confirm_password": "Changed@2026",
+        }, headers=_hdr(tok))
+        assert changed.status_code == 200, changed.text
         return tok
 
     return {
