@@ -25,11 +25,15 @@ import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.core.platform.pickSaveFile
@@ -41,8 +45,17 @@ import com.judicialai.desktop.design.components.AppCard
 import com.judicialai.desktop.design.components.EmptyView
 import com.judicialai.desktop.design.components.ErrorText
 import com.judicialai.desktop.design.components.LoadingView
+import com.judicialai.desktop.design.components.MarkdownView
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Muted
 
-/** 我的文档：草稿列表 + 在线编辑 + 版本管理 + 导出 Word。 */
+/**
+ * 我的文档：草稿列表 + 在线编辑 + 版本管理 + 导出 Word。
+ *
+ * 右侧编辑台默认是「预览」：正文按 Markdown 轻量渲染（标题/粗体/列表），
+ * 屏上就能看到与导出 docx 对应的层级版式，不再是满屏无格式 txt；
+ * 点「编辑正文」切回源文编辑框，改完「完成编辑」回到预览。
+ */
 @Composable
 fun DocumentsScreen() {
     val vm = remember { DocumentsViewModel(Repositories.documents) }
@@ -98,21 +111,36 @@ fun DocumentsScreen() {
 
             val preview = vm.previewVersion
             if (preview != null) {
-                // 历史版本只读预览
+                // 历史版本只读预览：同样按格式渲染，不是裸 txt
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("历史版本 v${preview["version_no"].int()}（只读）",
                         style = MaterialTheme.typography.subtitle1)
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = { vm.closePreview() }) { Text("返回当前版本") }
                 }
-                Text(preview["content"].str(),
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    style = MaterialTheme.typography.body1)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    MarkdownView(preview["content"].str())
+                }
             } else {
-                OutlinedTextField(
-                    value = vm.title, onValueChange = { vm.title = it },
-                    label = { Text("标题") }, modifier = Modifier.fillMaxWidth(),
-                )
+                // 编辑台：默认预览（带格式），「编辑正文」切到源文编辑框。
+                // 按 currentId 记忆开关：换一篇文档时回到预览态。
+                var editing by remember(vm.currentId) { mutableStateOf(false) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (editing) {
+                        OutlinedTextField(
+                            value = vm.title, onValueChange = { vm.title = it },
+                            label = { Text("标题") }, modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        Text(vm.title.ifBlank { "未命名文档" },
+                            style = MaterialTheme.typography.h6, color = Ink,
+                            modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { editing = !editing }) {
+                        Text(if (editing) "完成编辑" else "编辑正文")
+                    }
+                }
                 if (vm.docNumber.isNotBlank() || vm.docDate.isNotBlank()) {
                     Text(
                         listOfNotNull(
@@ -124,11 +152,25 @@ fun DocumentsScreen() {
                         color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
                     )
                 }
-                OutlinedTextField(
-                    value = vm.content, onValueChange = { vm.content = it },
-                    label = { Text("正文（每次保存生成一个新版本）") },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                )
+                if (editing) {
+                    OutlinedTextField(
+                        value = vm.content, onValueChange = { vm.content = it },
+                        label = { Text("正文（每次保存生成一个新版本）") },
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                } else {
+                    Column(
+                        Modifier.fillMaxWidth().weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        if (vm.content.isBlank()) {
+                            Text("（暂无正文，点右上角「编辑正文」开始撰写）",
+                                fontSize = 13.sp, color = Muted)
+                        } else {
+                            MarkdownView(vm.content)
+                        }
+                    }
+                }
 
                 // 质检 / 内容核查摘要
                 vm.quality?.let { q ->
