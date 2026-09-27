@@ -206,6 +206,11 @@ fun WritingScreen() {
             onClose = { vm.closeDocument() },
         )
     }
+
+    // 图片识别结果弹窗（视觉模型识别文本，可查看 / 一键插入正文）
+    if (vm.imageResults.isNotEmpty()) {
+        ImageRecognizeDialog(vm)
+    }
 }
 
 /**
@@ -253,6 +258,60 @@ private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
             MarkdownText(body)
         }
     }
+}
+
+/** 图片识别结果弹窗：逐张展示视觉模型识别出的文字，可一键插入正文末尾 */
+@Composable
+private fun ImageRecognizeDialog(vm: WritingViewModel) {
+    AppDialog(
+        onDismissRequest = { vm.dismissImageResults() },
+        title = "图片识别结果",
+        subtitle = "识别文本已作为材料绑定本次写作，起草/修改时自动参考；也可插入正文",
+        width = 640.dp,
+        actions = {
+            AppButton("关闭", onClick = { vm.dismissImageResults() },
+                kind = AppButtonKind.SECONDARY)
+        },
+    ) {
+        // AppDialog 内容区本身可滚动，这里直接平铺，不再嵌套 verticalScroll
+        vm.imageResults.forEach { item ->
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusMd))
+                    .background(SurfaceTonal)
+                    .padding(Dimens.space3),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(item.filename, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                        color = Ink, modifier = Modifier.weight(1f), maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    if (item.text.isNotBlank()) {
+                        AppLinkButton("插入正文末尾") { vm.insertImageText(item) }
+                    }
+                }
+                if (item.note.isNotBlank()) {
+                    Text(item.note, fontSize = 11.sp, color = Muted)
+                }
+                Spacer(Modifier.height(Dimens.space1))
+                if (item.text.isBlank()) {
+                    Text("（未识别到文字内容）", fontSize = 12.sp, color = Muted)
+                } else {
+                    Text(item.text, fontSize = 12.5.sp, color = Ink2, lineHeight = 19.sp)
+                }
+            }
+        }
+    }
+}
+
+/** 左栏「上传图片识别」按钮（SpecPanel / TaskPanel 共用） */
+@Composable
+private fun UploadImageRecognizeButton(vm: WritingViewModel) {
+    AppButton(
+        if (vm.recognizingImages) "识别中…" else "上传图片识别",
+        onClick = { vm.recognizeImages(pickFiles("选择要识别的图片", multi = true)) },
+        kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true,
+        enabled = !vm.busy && !vm.recognizingImages,
+    )
 }
 
 // ---------------- Markdown 轻量渲染（预览模式） ----------------
@@ -627,6 +686,8 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
         AppButton("上传材料", onClick = {
             vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
         }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
+        Spacer(Modifier.height(Dimens.space2))
+        UploadImageRecognizeButton(vm)
         if (vm.materials.isNotEmpty()) {
             Spacer(Modifier.height(Dimens.space2))
             vm.materials.forEach { a ->
@@ -746,6 +807,8 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
         AppButton("上传材料", onClick = {
             vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
         }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
+        Spacer(Modifier.height(Dimens.space2))
+        UploadImageRecognizeButton(vm)
         if (vm.materials.isEmpty()) {
             Spacer(Modifier.height(Dimens.space1))
             Text("未上传材料（可先起草，随时补充）", fontSize = 11.5.sp, color = Muted)
