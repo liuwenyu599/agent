@@ -36,6 +36,7 @@
 """
 import base64
 import json as _json
+import re
 import time
 import uuid
 import zipfile
@@ -85,6 +86,32 @@ _TEMP_FILE_PREFIXES = ("~$", ".~")
 # 小于此字节数的 .pptx 一定不是成品（真实的 pptx 至少几十 KB），
 # 用于挡住 PPTAgent 刚创建、尚未写入完成的空壳文件。
 _MIN_PPTX_SIZE = 8 * 1024
+
+
+def gradio_contract_conflict(submit_path: str) -> str:
+    """诊断「同步 REST 通道被指向 Gradio 端点」这种必失败配置。
+
+    ``render()`` 发的是 REST 请求体（``topic``/``content``/...），Gradio 命名端点
+    只认 ``{"data": [6 个入参]}``，两者不可能同时对得上：请求一定会拿到 4xx/5xx，
+    然后在调用方静默回退本地渲染。这本是部署策略问题（要不要让同步导出也走
+    PPTAgent），不宜由客户端擅自拦死，所以这里**只返回说明文本**供日志提示，
+    不改变任何调用行为。
+
+    Args:
+        submit_path: 提交地址（``PPT_AGENT_SUBMIT_PATH`` 的当前值）。
+
+    Returns:
+        冲突说明；无冲突时返回空串。
+    """
+    if "/gradio_api/" not in (submit_path or ""):
+        return ""
+    return (
+        f"PPT_AGENT_SUBMIT_PATH={submit_path} 是 Gradio 命名端点，"
+        "但同步 render 通道只能发 REST 请求体，本次请求必然失败并回退本地渲染。"
+        "若希望导出也用 PPTAgent，请走异步链路 POST /ppt/jobs"
+        "（agent_job 内部走 submit_message + SSE 事件流）；"
+        "若希望同步通道保持可用，请把该项改回非 Gradio 的 REST 地址。"
+    )
 
 
 def split_patterns(raw: str) -> Tuple[str, ...]:
@@ -144,6 +171,139 @@ def collect_files(root: Path, patterns: Tuple[str, ...], threshold: float,
             logger.debug("扫描模式 %s 失败（已跳过）：%s", pattern, e)
             continue
     return [found[k] for k in sorted(found)]
+
+
+# Gradio FileData 自身的字段；用于判断某个 dict "是不是 FileData 本体"
+# ——只有确认不是本体时，才允许继续往下剥包装，避免把 FileData 的字段误拆。
+_FILEDATA_KEYS = frozenset(
+    {"path", "url", "orig_name", "meta", "tmp_url", "is_stream", "size", "mime_type"}
+)
+
+# Gradio 组件更新会把值包进 {"value": X, "__type__": "update"}，多个组件的出参
+# 组成 data 数组时，**每个元素都带这层壳**。少解这层就等于产物摆在眼前取不回来。
+_VALUE_WRAPPER_KEYS = ("value", "data", "result", "result_data", "output", "payload")
+
+_MAX_UNWRAP_DEPTH = 6
+
+# ---- OUT[4] Markdown 末尾的运行统计：必须整段丢掉，不能当追问弹给用户 ------
+# ⚠️ 真机样本（20260927）是**中文、无 emoji**的整块统计，形如：
+#     ## Token 使用统计
+#     **Research Agent** (Model: `DeepPresenter-9B`)
+#     - 输入: 33,320 tokens
+#     - 输出: 2,609 tokens
+#     ...
+#     **总计**  - 输入: 316,242 tokens
+# 只靠"含 marker 且带数字"的逐行过滤是拦不住的：标题行 `## Token 使用统计`、
+# Agent 名行、**总计** 行都**不带数字**，过滤完照样拼成一段"看起来像追问"的文本。
+# 所以主防线必须是**整块判定**：认出统计块的起始标题行，从那一行起整段丢弃。
+
+# 统计块的起始标题行判定：该行同时出现 token 与统计/用量语义词。
+_TOKEN_KEYWORD_RE = re.compile(r"\btokens?\b", re.I)
+_TOKEN_STATS_WORD_RE = re.compile(r"统计|用量|使用量|消耗|概况|usage|statistics", re.I)
+
+# 逐行兜底：命中这些 marker **且同行带数字**的行才丢掉。
+# 要求带数字是为了不误伤正文里提到"成本控制""统计工作"的普通句子。
+_TOKEN_STAT_LINE_RE = re.compile(r"(🔤|💰|💵|⏱|\btokens?\b|\bcost\b)", re.I)
+_DIGIT_RE = re.compile(r"\d")
+
+
+def unwrap_value(obj: Any, _depth: int = 0) -> Any:
+    """剥掉 Gradio 组件的更新包装，拿到真正的值。
+
+    真机一次 ``event: complete`` 的 data 形如（每个元素一层壳）::
+
+        [ Chatbot, Textbox, File,
+          {"value": {"path": "/tmp/x.pptx",
+                     "url": "/gradio_api/file=/tmp/x.pptx",
+                     "orig_name": "x.pptx",
+                     "meta": {"_type": "gradio.FileData"}}, "__type__": "update"},
+          {"value": "## 请确认汇报对象…", "__type__": "update"} ]
+
+    早期实现只认 data/result/output 三种 wrapper，**漏了 value**，于是每个出参都
+    被当成"没字段的字典"跳过，产物永远取不到。这里改成通用解包：
+    只要 dict 带 value/data/... 且自身不是 FileData，就继续往下剥，直到稳定。
+
+    Args:
+        obj: 可能是包装层、FileData、也可能是普通值。
+        _depth: 递归深度保护，防止异常结构导致无限递归。
+
+    Returns:
+        解包后的对象；无法再剥时原样返回。
+    """
+    if _depth >= _MAX_UNWRAP_DEPTH:
+        return obj
+    if isinstance(obj, dict):
+        # 命中 FileData 本体就停手，绝不把它的内部字段拆出来
+        if obj.keys() & _FILEDATA_KEYS:
+            return obj
+        for key in _VALUE_WRAPPER_KEYS:
+            if key in obj:
+                inner = obj[key]
+                # File 组件常见 {"value": None, "__type__": "update"} —— 必须把
+                # None 原样解出来（而不是把整个包装层返回去），否则下游会把它当成一个
+                # "没有 url 的 dict"反复尝试，语义上完全错位。
+                if isinstance(inner, (dict, list)):
+                    return unwrap_value(inner, _depth + 1)
+                return inner
+    return obj
+
+
+def find_token_stats_block(text: str) -> int:
+    """定位 Markdown 里「Token 使用统计」块的起始位置（行首下标），没有则返回 -1。
+
+    Args:
+        text: Markdown 原始文本。
+
+    Returns:
+        统计块标题行的行首下标；未命中返回 -1。
+    """
+    pos = 0
+    for line in (text or "").splitlines(keepends=True):
+        if _TOKEN_KEYWORD_RE.search(line) and _TOKEN_STATS_WORD_RE.search(line):
+            return pos
+        pos += len(line)
+    return -1
+
+
+def strip_token_stats(text: str) -> str:
+    """去掉 Markdown 出参里的 token 统计块，留下真正要说的话。
+
+    PPTAgent 成功生成后，会在 Markdown 出参（OUT[4]）里写一段**运行统计**：
+
+        ## Token 使用统计
+        **Research Agent** (Model: `DeepPresenter-9B`)
+        - 输入: 33,320 tokens  ·  - 输出: 2,609 tokens
+        ...
+        **总计** - 输入: 316,242 tokens
+
+    它既不是追问、也不是给用户看的内容，若当成 question 弹出去，用户会对着一屏
+    数字不知所措。过滤分两级：
+
+    1. **整块判定（主防线）**：认出统计块的标题行，**从那一行起整段丢弃**。
+       这一步必须有——真机是中文无 emoji 的块，标题行/Agent 名行/总计行都不带
+       数字，只靠逐行过滤拦不住。
+    2. **逐行剔除（兜底）**：没有成块标题时（比如只散落几行 ``🔤 Tokens: 123``），
+       再按行剔除。要求"命中 marker 且同行带数字"，避免误伤正文里提到
+       "成本控制""统计工作"的普通句子。
+
+    Args:
+        text: 原始 Markdown 文本。
+
+    Returns:
+        剔除统计后的文本；全是统计时返回空串（调用方据此判定"没有追问"）。
+    """
+    raw = text or ""
+    # ① 整块判定：统计块是追加在末尾的，命中就把它连同之后的内容全部切掉
+    pos = find_token_stats_block(raw)
+    if pos >= 0:
+        return raw[:pos].strip()
+    # ② 逐行兜底
+    kept: List[str] = []
+    for line in raw.splitlines():
+        if _TOKEN_STAT_LINE_RE.search(line) and _DIGIT_RE.search(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 class PPTAgentError(RuntimeError):
@@ -208,10 +368,14 @@ def _dig(obj: Any, fields: Tuple[str, ...]) -> Optional[Any]:
     """
     if not isinstance(obj, dict):
         return None
+    # Gradio 出参带 {"value": ...} 壳，先剥掉再按候选字段名取值
+    obj = unwrap_value(obj)
+    if not isinstance(obj, dict):
+        return None
     for f in fields:
         if f in obj and obj[f] not in (None, ""):
             return obj[f]
-    for wrapper in ("data", "result", "result_data", "output", "payload"):
+    for wrapper in _VALUE_WRAPPER_KEYS:
         sub = obj.get(wrapper)
         if isinstance(sub, dict):
             for f in fields:
@@ -238,21 +402,26 @@ def _gradio_file_url(obj: Any) -> str:
     """
     if not isinstance(obj, dict):
         return ""
+    # 先剥一层 {"value": FileData, "__type__": "update"}；少这一步就取不到产物
+    obj = unwrap_value(obj)
+    if isinstance(obj, list):
+        for item in obj:
+            got = _gradio_file_url(item)
+            if got:
+                return got
+        return ""
+    if not isinstance(obj, dict):
+        return ""
     for key in ("url", "path", "tmp_url"):
         v = obj.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
-    for wrapper in ("data", "result", "output"):
+    for wrapper in _VALUE_WRAPPER_KEYS:
         sub = obj.get(wrapper)
-        if isinstance(sub, dict):
+        if isinstance(sub, (dict, list)):
             got = _gradio_file_url(sub)
             if got:
                 return got
-        elif isinstance(sub, list):
-            for item in sub:
-                got = _gradio_file_url(item)
-                if got:
-                    return got
     return ""
 
 
@@ -757,12 +926,20 @@ class PPTAgentClient:
         return None
 
     def _bytes_from_filedata(self, item: Any) -> Optional[bytes]:
-        """把出参里的 FileData 转成字节；取不到或非法都返回 None（由调用方回退）。"""
+        """把出参里的 FileData 转成字节；取不到或非法都返回 None（由调用方回退）。
+
+        入参可能已经是裸 FileData，也可能是被 ``{"value": ..., "__type__": "update"}``
+        包过的组件更新，还可能是一组文件（list）——三种都要能穿透。
+        """
         candidates: List[Any] = []
-        if isinstance(item, dict):
-            candidates.append(item)
-        elif isinstance(item, list):
-            candidates.extend([x for x in item if isinstance(x, dict)])
+        for candidate in (item, unwrap_value(item)):
+            if isinstance(candidate, dict):
+                candidates.append(candidate)
+            elif isinstance(candidate, list):
+                candidates.extend([x for x in candidate if isinstance(x, dict)])
+                # list 里的元素自己还可能带着 value 壳（File 组件常见）
+                candidates.extend([unwrap_value(x) for x in candidate
+                                   if isinstance(x, dict)])
         for fd in candidates:
             url = _gradio_file_url(fd)
             if not url:
@@ -776,11 +953,33 @@ class PPTAgentClient:
             logger.warning("下载到的文件不是合法 pptx：%s（%s）", why, url)
         return None
 
+    def _question_from(self, raw: Any) -> str:
+        """从 Markdown 出参里提取**真正的追问**文本。
+
+        两个坑：
+        1. 出参带 ``{"value": ...}`` 壳，不解包会得到 dict 而非字符串；
+        2. Markdown 出参末尾常附带 ``🔤 Tokens: 12,345 · 💰 Cost: $0.012`` 这类
+           运行统计——它不是追问，直接弹给用户只会让人对着数字发愣，必须先剔除，
+           剔除后如果什么都不剩，就当作"没有追问"（而不是把统计原文丢出去）。
+        """
+        text = raw
+        if not isinstance(text, str):
+            if isinstance(text, dict) and isinstance(text.get("value"), str):
+                text = text["value"]
+            else:
+                return ""
+        cleaned = strip_token_stats(text)
+        return cleaned[:2000]
+
     def parse_outputs(self, outputs: List[Any], event_id: str = "") -> PPTAgentOutcome:
         """按契约索引解析出参 → 产物或追问（R1）。
 
+        ⚠️ 真机出参的**每个元素**都被 Gradio 包成 ``{"value": X, "__type__":
+        "update"}``。直接在 row 上找 ``url`` / ``path`` 必然一无所获（早期版本踩过：
+        产物明明生成了却判定 pending），所以每一步取值前都要先 :func:`unwrap_value`。
+
         产物优先级：契约指定索引（第 4 项 📥 下载文件）→ 其余项全量扫描。
-        拿不到产物时，取 Markdown 项作为**追问**文本返回给前端。
+        拿不到产物时，取 Markdown 项作为**追问**文本返回给前端（已剔除运行统计）。
         """
         out = PPTAgentOutcome(outputs=list(outputs or []), event_id=event_id)
         if not isinstance(outputs, list) or not outputs:
@@ -798,14 +997,19 @@ class PPTAgentClient:
             out.pptx = pptx
             return out
         # 没有产物 → 极可能是 PPTAgent 在先确认需求（R1）
-        question = self._at(outputs, self.question_output_index)
-        if isinstance(question, str) and question.strip():
-            out.question = question.strip()[:2000]
+        # ⚠️ 只认约定索引，不做"扫到任意字符串就当追问"的兜底：真机出参里还有
+        # Textbox 的 job id（"job-18da4fbb"）这类纯标识串，自由扫描会把它们当作
+        # 追问弹给用户，用户对着一串 id 完全不知道该怎么回答。契约已经规定了
+        # Markdown 出参的下标（可用 PPT_AGENT_QUESTION_OUTPUT_INDEX 覆盖），
+        # 这一个位置没有内容就是没有追问，宁可按 pending 处理回退本地渲染。
+        question = self._question_from(self._at(outputs, self.question_output_index))
+        if question.strip():
+            out.question = question.strip()
             return out
-        for item in outputs:
-            if isinstance(item, str) and item.strip():
-                out.question = item.strip()[:2000]
-                break
+        if not isinstance(self._at(outputs, self.question_output_index), (str, dict)):
+            logger.warning(
+                "PPTAgent 出参缺第 %s 项（Markdown/追问），无可判定的追问内容，"
+                "本次按 pending 处理并回退本地渲染", self.question_output_index)
         return out
 
     def generate_deck(self, message: str, *, history: Optional[List[Any]] = None,
@@ -1029,6 +1233,14 @@ class PPTAgentClient:
         logger.debug("PPTAgent 生效配置：base_url=%s submit=%s status=%s result=%s",
                      self.base_url, self.submit_path, self.status_path,
                      self.result_path)
+        # 契约冲突诊断（**只提示、不阻断**）：同步 render 通道发的是 REST 请求体，
+        # 而 Gradio 命名端点只认 {"data":[6 个入参]}，两者不可能同时成立。既然默认
+        # SUBMIT_PATH 就是 Gradio 路径，不提示的话排障的人会把"必然失败"当成
+        # "PPTAgent 偶发抽风"。是否让同步导出也走 PPTAgent 属于部署策略，交给上层
+        # 决定（上层会正常兜底本地渲染），这里只负责把原因讲清楚。
+        conflict = gradio_contract_conflict(self.submit_path)
+        if conflict:
+            logger.warning("PPTAgent 契约冲突：%s", conflict)
         ok, why = self.health_check()
         if not ok:
             raise PPTAgentError(f"健康探测未通过：{why}")

@@ -54,17 +54,33 @@ class Settings:
         # http://justice-ppt-host:7861）。留空 → 完全走本地 render_pptx，
         # 行为与接入前一致；非空 → 优先走 PPTAgent，失败自动回退本地渲染。
         self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "")
-        # ---- PPTAgent 接口契约（第三方镜像 forceless/deeppresenter-host，
-        # HTTP 契约尚未真机验证，故路径 / 字段名全部可覆盖）----------------
-        # ⚠️ 下列默认值均为"最合理的 REST 形式"假设，**待真机联调确认**：
-        # 挂上服务后先看 http://<host>:7861/docs 的 OpenAPI，再据此改这几项。
-        # 支持 {task_id} 占位符；不写占位符时自动退化为 ?task_id=xxx 查询参数。
-        self.PPT_AGENT_SUBMIT_PATH = os.getenv("PPT_AGENT_SUBMIT_PATH", "/api/ppt/generate")
-        self.PPT_AGENT_STATUS_PATH = os.getenv("PPT_AGENT_STATUS_PATH", "/api/ppt/status/{task_id}")
-        self.PPT_AGENT_RESULT_PATH = os.getenv("PPT_AGENT_RESULT_PATH", "/api/ppt/result/{task_id}")
+        # ---- PPTAgent：两条链路共用项 --------------------------------------
         # 健康探测路径（判定"能否连上"，200/307/404 均算在线，5xx 才判不可用）。
         # PPTAgent Host 的 7861 是 Gradio WebUI，根路径 "/" 一定在，故用它做探针。
+        # ⚠️ 这一项**两条链路都用**：异步 Job 的 generate_deck() 与同步导出的
+        # render() 都会先探活，不要当成旧契约残留删掉。
         self.PPT_AGENT_HEALTH_PATH = os.getenv("PPT_AGENT_HEALTH_PATH", "/")
+        # 可选鉴权（GET/POST 都会带 Authorization 与 X-API-Key 头）
+        self.PPT_AGENT_API_KEY = os.getenv("PPT_AGENT_API_KEY", "")
+
+        # ---- 旧 REST 三步流程遗留（⚠️ 仅同步 render() 通道在用）--------------
+        # 下面 5 项属于"提交 → 轮询状态 → 取结果"这套**非 Gradio** 契约的假设。
+        # 真机确认 7861 跑的是 Gradio 5（openapi: DeepPresenter 5.50.0，命名端点
+        # /send_message）之后，异步 Job 链路（POST /ppt/jobs）**完全不使用这些**：
+        # 它走 submit_message() → consume_event_stream() → parse_outputs()，
+        # 靠事件流出参取产物，不轮询状态、也不另发取结果请求。
+        #
+        # 唯一仍在用的是 PPTService._render_pptx_bytes 的**同步导出**通道。保留的
+        # 三个理由：① 该通道的回退行为有测试覆盖，删配置会连带破坏用例；
+        # ② 若将来换成真 REST 形态的 PPT 服务，这里是唯一的挂载点；
+        # ③ 显式留着并标注清楚，比让人以为"配了就该生效"更安全。
+        # 支持 {task_id} 占位符；不写占位符时自动退化为 ?task_id=xxx 查询参数。
+        #
+        # ⚠️ 不要在这里补 PPT_AGENT_SUBMIT_PATH：它在下方 Gradio 段统一定义。
+        # 历史上这里曾重复赋值一次（旧值 /api/ppt/generate），靠"后赋值覆盖前赋值"
+        # 侥幸没造成故障，但读代码的人很容易据此认为默认值是 REST 路径。
+        self.PPT_AGENT_STATUS_PATH = os.getenv("PPT_AGENT_STATUS_PATH", "/api/ppt/status/{task_id}")
+        self.PPT_AGENT_RESULT_PATH = os.getenv("PPT_AGENT_RESULT_PATH", "/api/ppt/result/{task_id}")
         # 提交响应的任务 ID 字段名；留空则按常见候选自动探测（task_id/id/job_id...）
         self.PPT_AGENT_TASK_ID_FIELD = os.getenv("PPT_AGENT_TASK_ID_FIELD", "")
         # 轮询状态视为"完成"/"失败"的字面量（逗号分隔，大小写不敏感）
@@ -72,8 +88,6 @@ class Settings:
             "PPT_AGENT_DONE_VALUES", "succeeded,success,completed,complete,done,finished")
         self.PPT_AGENT_FAIL_VALUES = os.getenv(
             "PPT_AGENT_FAIL_VALUES", "failed,failure,error,cancelled,canceled,aborted,timeout")
-        # 可选鉴权（GET/POST 都会带 Authorization 与 X-API-Key 头）
-        self.PPT_AGENT_API_KEY = os.getenv("PPT_AGENT_API_KEY", "")
         # 超时（秒）：按真机实测的生成耗时设定——PPTAgent 是**聊天式 Agent**，
         # 一次生成实测 5~15 分钟（300~900s），且需排队占 GPU。默认务必留足余量，
         # 宁可让用户多等，也不能把正常任务判超时后回退成本地渲染（白等十分钟）。
@@ -106,12 +120,19 @@ class Settings:
         self.PPT_AGENT_WORKSPACE_FRESH_TOLERANCE = int(
             os.getenv("PPT_AGENT_WORKSPACE_FRESH_TOLERANCE", "120"))
 
-        # ---- Gradio 真实契约（已在真机探查确认，见 deploy/pptagent/README.md）----
+        # ---- Gradio 真实契约（已真机探查确认，见 deploy/pptagent/README.md）----
+        # GET /gradio_api/info → openapi title "DeepPresenter" version 5.50.0，
+        # named_endpoints: /send_message（另有契约完全相同的 /send_message_1，
+        # 那是 Gradio 自动生成的重复端点，用 /send_message 即可）。
         # 命名端点 /send_message：6 个入参（message, history, attachments,
         # convert_type_value, template_value, num_pages_value），5 个出参，
         # 其中第 4 个（0-based index 3）「📥 下载文件」是最终 pptx 的 FileData。
         # 两个端点 queue=True → 提交返回 event_id，再消费 SSE 事件流取结果。
-        # Gradio 5 命名端点风格（默认）：
+        #
+        # ⚠️ PPT_AGENT_SUBMIT_PATH **只在本文件这一处赋值**。它是异步 Job 链路
+        # （submit_message）与同步导出链路（render）共用的提交地址；同步链路发的
+        # 是 REST 形态的请求体，配成 Gradio 端点时永远不可能成功，会在 render()
+        # 里被显式拦下来（见 ppt_agent_client.render 的 Gradio 端点保护）。
         self.PPT_AGENT_SUBMIT_PATH = os.getenv(
             "PPT_AGENT_SUBMIT_PATH", "/gradio_api/call/send_message")
         self.PPT_AGENT_EVENT_PATH = os.getenv(

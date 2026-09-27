@@ -117,11 +117,27 @@ PPT_AGENT_WORKSPACE_DIR=/mnt/pptagent-workspace
 2. 若两套服务**不在同一台宿主机**，共享卷通道不成立，`PPT_AGENT_WORKSPACE_DIR`
    必须留空，只能走 HTTP 通道。
 
-## 超时（重要，别调小）
+## 超时，以及两条调用通道的区别（重要）
+
+### ⚠️ 要让 PPTAgent 生成 PPT，必须走异步 job
+
+后端有两条调用 PPTAgent 的通道，**只有异步通道能得到 PPTAgent 的产物**：
+
+| 通道 | 入口 | 产物来源 | 结论 |
+|---|---|---|---|
+| **异步 job（唯一可用）** | `POST /api/v1/ppt/jobs` → 轮询 `/jobs/{id}/status` → `/jobs/{id}/export` | SSE 出参 `[3]` 的 FileData → 下�� `/gradio_api/file=<path>` | ✅ 走 PPTAgent，成功率高，不依赖共享卷 |
+| **同步导出（默认必定回退）** | `/api/v1/ppt/documents/{id}/export` 等老接口 | `render()` 发 REST 请求体 → Gradio 不认 | ❌ 拿不到产物，**回退后端本地 `render_pptx`** |
+
+同步通道回退不是故障：它发的请求体是 REST 形态（`topic`/`content`/…），而 Gradio
+命名端点只认 `{"data": [6 个入参]}`，两者在结构上就不可能对齐。后端会在日志里打印
+明确诊断（`PPTAgent 契约冲突：…`）。**部署验收请以异步 job 为准。**
+
+### 超时（别调小）
 
 PPTAgent 是聊天式 Agent，实测一次生成 **5~15 分钟**且需排队占 GPU。后端默认
 `PPT_AGENT_TOTAL_TIMEOUT=1800`（30 分钟）已留足余量——调小会导致正常任务被判
 超时后回退本地渲染，用户白等十几分钟还拿不到 PPTAgent 的产物。
+（实测样本：4 页简单任务约 2 分钟；复杂任务仍按 15 分钟量级预留。）
 
 ## 契约探查（7861 是 Gradio，不是 REST）
 

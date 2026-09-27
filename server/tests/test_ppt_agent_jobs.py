@@ -20,6 +20,8 @@ import time
 import uuid
 from pathlib import Path
 
+from typing import Any, Dict, List
+
 import httpx
 import pytest
 
@@ -125,6 +127,74 @@ def _make_pptx_bytes(tag: str, pages: int = 3) -> bytes:
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
+
+
+def _wrapped(value: Any) -> Dict[str, Any]:
+    """模拟 Gradio 组件更新包装 —— 真机出参的**每个元素**都带这层壳。"""
+    return {"value": value, "__type__": "update"}
+
+
+# 真机 OUT[4] 的原文（team-lead 实测）：**中文、无 emoji**的整块运行统计。
+# 早期我按 "🔤 Tokens: 12,345 · 💰 Cost: $0.012" 推断，与真机完全不符 —— 真机
+# 标题行 / Agent 名行 / 总计行都**不带数字**，纯逐行过滤拦不住，必须整块判定。
+REAL_TOKEN_STATS = (
+    "## Token 使用统计\n\n"
+    "**Research Agent** (Model: `DeepPresenter-9B`)  \n"
+    "- 输入: 33,320 tokens  \n"
+    "- 输出: 2,609 tokens  \n"
+    "- 小计: 35,929 tokens  \n\n"
+    "**Design Agent** (Model: `DeepPresenter-9B`)  \n"
+    "- 输入: 282,922 tokens  \n"
+    "- 输出: 20,802 tokens  \n"
+    "- 小计: 303,724 tokens  \n\n\n"
+    "---\n\n"
+    "**总计**  \n"
+    "- 输入: 316,242 tokens  \n"
+    "- 输出: 23,411 tokens  \n"
+    "- 小计: 339,653 tokens"
+)
+
+
+def _real_outputs(*, pptx_path: str = None, pptx_url: str = None,
+                  markdown: str = REAL_TOKEN_STATS) -> List[Any]:
+    """按**真机原始 payload** 造 5 个出参（每项一层 value 壳）。
+
+    真机样本（20260927，team-lead 实测打印），与早期推测有四处出入，已全部校正：
+    - 产物文件名是 ``manuscript.pptx``（中文标题名只存在于 **workspace 目录扫描**
+      那条通道，走 FileData 下载这条路 Gradio 给的是 /tmp/gradio/<hash>/ 下的固定名）；
+    - ``url`` 是**完整绝对 URL**（Gradio 按 Host 头生成），不是相对路径；
+    - ``OUT[2]`` 的 ``value`` 是 ``None``，不是空 dict；
+    - ``OUT[1]`` Textbox 是空串（有些版本会给 job id，两种都不许当追问）。
+    """
+    path = pptx_path or (
+        "/tmp/gradio/87faa30d18310b4681cda1e8f7b21b78a3dd1028da801856c6a9c3232f2"
+        "68da0/manuscript.pptx")
+    url = pptx_url or (
+        "http://127.0.0.1:18061/gradio_api/file="
+        "/tmp/gradio/87faa30d18310b4681cda1e8f7b21b78a3dd1028da801856c6a9c3232f2"
+        "68da0/manuscript.pptx")
+    file_data = {
+        "path": path,
+        "url": url,
+        "size": None,
+        "orig_name": "manuscript.pptx",
+        "mime_type": None,
+        "is_stream": False,
+        "meta": {"_type": "gradio.FileData"},
+    }
+    return [
+        _wrapped([                                        # [0] Chatbot
+            {"role": "user", "metadata": None, "content": "生成一份 1 页的测试演示文稿",
+             "options": None},
+            {"role": "assistant", "metadata": None,
+             "content": "⚙️ **System Message**\n\nDeepPresenter running in ...",
+             "options": None},
+        ]),
+        _wrapped(""),                                     # [1] Textbox（真机是空串）
+        _wrapped(None),                                   # [2] File（value 是 None）
+        _wrapped(file_data),                              # [3] 📥 下载文件
+        _wrapped(markdown),                               # [4] Markdown（token 统计）
+    ]
 
 
 def _filedata(idx: int = 3):
@@ -259,6 +329,190 @@ def test_generate_deck_non_pptx_result_is_not_accepted(monkeypatch):
     assert out.pptx is None
 
 
+# ============================================================ 真机 value 包装（阻塞缺陷）
+
+def test_parse_outputs_handles_real_payload(monkeypatch):
+    """【真机缺陷】出参每项包在 {"value":…,"__type__":"update"} 里。
+
+    早期 wrapper 白名单只有 data/result/output，漏了 value → 产物明明生成了却
+    判定 pending=True、pptx=0。
+    """
+    pptx_bytes = _make_pptx_bytes("REAL")
+    _install(monkeypatch, _handler_with(pptx_bytes, outputs=_real_outputs()))
+    c = PPTAgentClient.from_settings()
+    out = c.generate_deck("生成司法行政工作简报")
+
+    assert out.pending is False, "产物在眼前却判定为进行中"
+    assert out.pptx == pptx_bytes, "必须取到真实的 pptx 字节"
+    assert looks_like_pptx(out.pptx)[0]
+    assert not out.question, f"真机 OUT[4] 是运行统计，不该变成追问：{out.question!r}"
+
+
+def test_parse_outputs_handles_absolute_download_url(monkeypatch):
+    """真机 url 是完整绝对 URL（Gradio 按 Host 头生成），不是相对路径。
+
+    两条都要覆盖：绝对 URL 由 ``_abs_url`` 直接放行，相对路径要拼上 base_url。
+    """
+    good = _make_pptx_bytes("ABS")
+    seen: List[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return _handler_with(good, outputs=_real_outputs())(request)
+
+    _install(monkeypatch, handler)
+    c = PPTAgentClient.from_settings()
+    # 绝对 URL 指向 127.0.0.1:18061，与 base_url(fake-ppt-agent) 不同，
+    # 若被错误拼接就取不到文件 → 断言拿到字节即证明走了原样直连
+    out = c.generate_deck("生成汇报")
+    assert out.pptx == good
+    assert any("127.0.0.1:18061" in u for u in seen), "绝对 URL 必须原样使用"
+
+
+def test_relative_download_url_is_joined_with_base(monkeypatch):
+    """相对路径形态（/gradio_api/file=...）必须拼上 base_url —— 老 fixture 分支。"""
+    good = _make_pptx_bytes("REL")
+    outs = _real_outputs(pptx_url="/gradio_api/file=/tmp/gradio/manuscript.pptx")
+    _install(monkeypatch, _handler_with(good, outputs=outs))
+    c = PPTAgentClient.from_settings()
+    assert c.generate_deck("生成汇报").pptx == good
+
+
+def test_real_token_stats_are_not_a_question(monkeypatch):
+    """真机 OUT[4] 原文（中文、无 emoji 的整块统计）不能当追问。
+
+    ⚠️ 这条是最关键的回归点：早期只做"含 marker 且带数字"的逐行过滤，真机标题行
+    ``## Token 使用统计``、Agent 名行、``**总计**`` 行都不带数字，过滤完照样拼成
+    一段"看起来像追问"的文本 —— 等于没修。必须靠整块判定。
+    """
+    outs = _real_outputs(markdown=REAL_TOKEN_STATS)
+    outs[3] = None                       # 产物通道为空
+    _install(monkeypatch, _handler_with(b"", outputs=outs))
+    c = PPTAgentClient.from_settings()
+    out = c.generate_deck("生成汇报")
+    assert out.question == "", f"运行统计不能冒充追问：{out.question!r}"
+    assert "Token" not in out.question and "tokens" not in out.question
+    assert "总计" not in out.question and "Research" not in out.question
+    assert out.pending is True, "既无产物也无追问 → 仍视为 pending"
+
+
+def test_english_token_stats_block_is_also_stripped():
+    """英文形态的统计块同样要识别（防止只认中文）。"""
+    from app.infrastructure.ppt.ppt_agent_client import strip_token_stats
+
+    assert strip_token_stats("Intro\n## Token Usage\n- input: 100 tokens") == "Intro"
+    assert strip_token_stats("## Token Statistics\n- in: 5 tokens") == ""
+    assert strip_token_stats("## Tokens 使用统计\n- 输入: 5 tokens") == ""
+
+
+def test_question_is_extracted_from_wrapped_markdown(monkeypatch):
+    """真追问即使被 value 包着，也要能取出来。"""
+    outs = _real_outputs(
+        markdown="请问本次汇报面向的是上级机关还是内部会议？")
+    outs[3] = None
+    _install(monkeypatch, _handler_with(b"", outputs=outs))
+    c = PPTAgentClient.from_settings()
+    out = c.generate_deck("生成汇报")
+    assert "上级机关" in out.question
+    assert out.pending is False
+
+
+def test_question_keeps_text_and_drops_appended_stats(monkeypatch):
+    """追问在前、统计块在后：保留追问、整段丢掉统计。"""
+    outs = _real_outputs(markdown=(
+        "请问本次汇报面向的是上级机关还是内部会议？\n\n"
+        "## Token 使用统计\n\n"
+        "**Design Agent** (Model: `DeepPresenter-9B`)  \n"
+        "- 输入: 282,922 tokens  \n"))
+    outs[3] = None
+    _install(monkeypatch, _handler_with(b"", outputs=outs))
+    c = PPTAgentClient.from_settings()
+    out = c.generate_deck("生成汇报")
+    assert "上级机关" in out.question
+    assert "tokens" not in out.question and "282,922" not in out.question
+    assert "Design Agent" not in out.question
+
+
+def test_strip_token_stats_preserves_ordinary_sentences():
+    """统计剔除不能误伤正文里提到成本/统计的普通句子。"""
+    from app.infrastructure.ppt.ppt_agent_client import strip_token_stats
+
+    assert strip_token_stats("本次汇报需说明成本控制情况。") == \
+        "本次汇报需说明成本控制情况。"
+    assert strip_token_stats("请确认汇报对象。\n🔤 Tokens: 999") == "请确认汇报对象。"
+    assert strip_token_stats(REAL_TOKEN_STATS) == ""
+
+
+def test_unwrap_value_returns_none_for_null_wrapped_component():
+    """真机 OUT[2] 是 {"value": None, "__type__": "update"}。
+
+    解包必须得到 None（而不是把包装层原样返回成一个"没有 url 的 dict"），
+    且后续取值时不能抛异常。
+    """
+    from app.infrastructure.ppt.ppt_agent_client import (
+        _gradio_file_url, unwrap_value)
+
+    assert unwrap_value({"value": None, "__type__": "update"}) is None
+    assert _gradio_file_url({"value": None, "__type__": "update"}) == ""
+
+    # ⚠️ 必须注入 MockTransport：真机 url 是 http://127.0.0.1:18061/...，
+    # 不加桩这条用例会真的走网络（本机到实验室的隧道确实可达），既慢又不可控。
+    def _offline(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"测试不应发起真实网络请求：{request.url}")
+
+    c = PPTAgentClient(base_url=AGENT_URL,
+                       transport=httpx.MockTransport(_offline))
+    # 不能抛异常，取不到就是 None
+    assert c._bytes_from_filedata({"value": None, "__type__": "update"}) is None
+    # 整组出参里混着 value=None 也要能正常解析完（不抛异常、结果结构完整）
+    outs = _real_outputs()
+    outs[2] = {"value": None, "__type__": "update"}
+    outcome = c.parse_outputs(outs)
+    assert outcome.outputs == outs
+    assert outcome.question == "", "OUT[4] 是统计，不该变成追问"
+
+
+def test_unwrap_value_stops_at_filedata():
+    """FileData 本体不能被继续剥开（否则会把 url/path 拆丢）。"""
+    from app.infrastructure.ppt.ppt_agent_client import unwrap_value
+
+    fd = {"path": "/tmp/a.pptx", "url": "/gradio_api/file=/tmp/a.pptx",
+          "orig_name": "a.pptx", "meta": {"_type": "gradio.FileData"}}
+    assert unwrap_value(fd) is fd
+    assert unwrap_value({"value": fd, "__type__": "update"}) is fd
+    assert unwrap_value({"value": {"value": fd}}) is fd
+    # 异常深度的结构不会无限递归，也不会崩（到保护深度就停手）
+    deep: Any = fd
+    for _ in range(30):
+        deep = {"value": deep}
+    got = unwrap_value(deep)
+    assert isinstance(got, (dict, list)), "深度保护必须能正常返回，不能抛异常"
+
+
+def test_product_prefers_agreed_index_over_other_outputs(monkeypatch):
+    """约定索引（3）命中时，不应该顺位去扫中间产物（避免取错文件）。"""
+    good = _make_pptx_bytes("FINAL")
+    bad = _make_pptx_bytes("INTERMEDIATE")
+    outs = _real_outputs()
+    outs[2] = {"value": [{"path": "/tmp/mid.pptx",
+                          "url": "/gradio_api/file=/tmp/mid.pptx",
+                          "orig_name": "mid.pptx",
+                          "meta": {"_type": "gradio.FileData"}}],
+               "__type__": "update"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/gradio_api/file=" in request.url.path:
+            body = bad if request.url.path.endswith("mid.pptx") else good
+            return httpx.Response(200, content=body,
+                                  headers={"content-type": "application/octet-stream"})
+        return _handler_with(good, outputs=outs)(request)
+
+    _install(monkeypatch, handler)
+    c = PPTAgentClient.from_settings()
+    out = c.generate_deck("生成汇报")
+    assert out.pptx == good, "必须取 📥 下载文件（索引 3），而不是中间产物列表"
+
+
 def test_generate_deck_event_stream_timeout(monkeypatch):
     """事件流迟迟不结束 → 抛 PPTAgentError（上层据此回退本地渲染）。"""
 
@@ -386,6 +640,49 @@ def test_split_patterns_handles_multiple_candidates():
     assert split_patterns(" .slide_images-*/*.jpg , preview/*.png ") == (
         ".slide_images-*/*.jpg", "preview/*.png")
     assert split_patterns("a/*.jpg;a/*.png,a/*.jpg") == ("a/*.jpg", "a/*.png")
+
+
+def test_submit_and_event_path_default_to_gradio_named_endpoint(monkeypatch):
+    """默认值必须指向 Gradio 命名端点，不能被改回旧 REST 路径（否则一提交就 404）。
+
+    真机契约：GET /gradio_api/info → DeepPresenter 5.50.0，命名端点 /send_message。
+    """
+    from app.core.config import Settings
+
+    monkeypatch.delenv("PPT_AGENT_SUBMIT_PATH", raising=False)
+    monkeypatch.delenv("PPT_AGENT_EVENT_PATH", raising=False)
+    s = Settings()
+    assert s.PPT_AGENT_SUBMIT_PATH == "/gradio_api/call/send_message"
+    assert s.PPT_AGENT_EVENT_PATH == "/gradio_api/call/send_message/{event_id}"
+    # 两条路径的根必须是同一个命名端点，否则 event_id 拿不到对应事件
+    assert s.PPT_AGENT_EVENT_PATH.startswith(s.PPT_AGENT_SUBMIT_PATH + "/")
+    assert "api/ppt/generate" not in s.PPT_AGENT_SUBMIT_PATH
+
+
+def test_submit_path_is_assigned_only_once(monkeypatch):
+    """PPT_AGENT_SUBMIT_PATH 在 Settings.__init__ 里只能有一处赋值。
+
+    历史上这里被赋值过两次（先 /api/ppt/generate，后 /gradio_api/call/send_message），
+    靠"后覆盖前"侥幸没出事，但会让人误判默认值。这条用例挡住它复发。
+    """
+    import inspect
+    import re
+
+    from app.core.config import Settings
+
+    src = inspect.getsource(Settings.__init__)
+    hits = re.findall(r"self\.PPT_AGENT_SUBMIT_PATH\s*=", src)
+    assert len(hits) == 1, f"PPT_AGENT_SUBMIT_PATH 被赋值了 {len(hits)} 次，应为 1 次"
+
+
+def test_gradio_contract_conflict_is_reported_but_not_fatal():
+    """同步通道指向 Gradio 端点时能被诊断出来；但**只提示，不阻断**（策略交由上层）。"""
+    from app.infrastructure.ppt.ppt_agent_client import gradio_contract_conflict
+
+    assert gradio_contract_conflict("/api/ppt/generate") == ""
+    msg = gradio_contract_conflict("/gradio_api/call/send_message")
+    assert msg, "Gradio 端点应被诊断出来"
+    assert "/ppt/jobs" in msg, "提示里必须指名可用的替代通道"
 
 
 # ============================================================ 接口层
