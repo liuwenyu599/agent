@@ -1177,6 +1177,10 @@ class PPTService:
         if resp.status_code != 200:
             raise AIServiceError(f"云端接口返回 {resp.status_code}：{resp.text[:300]}")
 
+        # 同 qwen.py：响应头未声明 charset 时 requests 按 ISO-8859-1 解码会产出中文乱码。
+        # OpenAI 兼容端点一律 UTF-8，显式声明；不用 apparent_encoding（会把流整体缓冲）。
+        resp.encoding = "utf-8"
+
         content = ""
         try:
             for line in resp.iter_lines(decode_unicode=True):

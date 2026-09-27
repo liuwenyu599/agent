@@ -154,6 +154,13 @@ class QwenGateway:
             "stream": True,
         }, stream=True)
 
+        # requests 在响应头未声明 charset 时按 ISO-8859-1 解码（HTTP 文本类型的历史默认），
+        # 会把模型返回的 UTF-8 中文解成 'è¿\x9bä¸...' 乱码并随 delta 落库。
+        # OpenAI 兼容端点的 SSE data 载荷是 JSON（RFC 8259 规定 UTF-8），故直接声明 UTF-8：
+        # 不用 apparent_encoding，因为它会读 r.content 把整个响应缓冲进内存，
+        # 使 stream=True 失去边收边发的意义（实测 _content_consumed=True）。
+        response.encoding = "utf-8"
+
         finish_reason = None
         for raw in response.iter_lines(decode_unicode=True):
             if not raw:
