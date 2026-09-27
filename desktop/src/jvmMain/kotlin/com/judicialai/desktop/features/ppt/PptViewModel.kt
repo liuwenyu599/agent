@@ -538,13 +538,50 @@ class PptViewModel(private val repo: PptRepository) {
     }
     fun backToOutline() { if (docId != null) step = PptStep.OUTLINE }
     /**
-     * 回到极简入口页：用户明确放弃当前这份文档，
-     * 清掉跨页面恢复标记与上次失败原因，避免下次进页面又自动打开它、或一直挂着旧错误。
+     * 从大纲确认页回到入口修改初始需求。
+     * 保留 [docId] 和大纲内容，便于用户继续修改；关闭已打开文档请使用 [closeDocument]。
      */
     fun backToEntry() {
         step = PptStep.ENTRY
         AppState.pendingPptDocId = null
         AppState.pptLastError = null
+    }
+
+    /**
+     * 关闭当前文档并回到新建入口。
+     *
+     * 与 [backToEntry] 的区别：[backToEntry] 只是从「大纲确认页」退回改初始需求，
+     * 文档还在；这里是**真正退出这份 PPT**——必须把 `docId` 与大纲一起清掉，
+     * 否则 `PptScreen` 里 `tab == 0 && step == WORKBENCH` 优先级更高，
+     * 回到入口页后会立刻掉回工作台，用户永远出不去。
+     *
+     * 当前文档绑定、大纲与预览状态都会被清空；PPTAgent 生成任务是独立的长任务，
+     * 仅在没有任务或任务已终态时清理其句柄，避免误删仍在生成、
+     * 或正等待用户补充信息（CLARIFYING）的任务。
+     */
+    fun closeDocument() {
+        step = PptStep.ENTRY
+        docId = null
+        slides.clear()
+        outlineTitle = ""
+        outlineSubtitle = ""
+        exportStage = ""
+        previewPages = emptyList()
+        previewBusy = false
+        selected = 0
+        status = null
+        AppState.pendingPptDocId = null
+        AppState.pptLastError = null
+
+        val jobStatus = PptJobEngine.current?.status
+        val jobIsRunning = jobStatus == PptJobStatus.SUBMITTED ||
+            jobStatus == PptJobStatus.GENERATING ||
+            jobStatus == PptJobStatus.CLARIFYING
+        if (!jobIsRunning) {
+            PptJobEngine.stopPolling()
+            PptJobEngine.reset()
+            AppState.pendingPptJobId = null
+        }
     }
 
     // ================= 打开已有文档 / 导入 PPT 续改 =================
@@ -617,13 +654,17 @@ class PptViewModel(private val repo: PptRepository) {
         previewBusy = true
         scope.launch {
             repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
-            when (val r = repo.preview(id)) {
-                is ApiResult.Ok ->
-                    previewPages = r.data.obj()?.get("pages").arr().map { it.str() }
-                        .filter { it.isNotBlank() }
-                is ApiResult.Err -> previewPages = emptyList() // 服务端未部署/无 LibreOffice
+            val result = repo.preview(id)
+            // 用户可能在渲染期间关闭文档或打开了另一份；旧请求不得回写新界面的预览状态。
+            if (docId == id) {
+                when (result) {
+                    is ApiResult.Ok ->
+                        previewPages = result.data.obj()?.get("pages").arr().map { it.str() }
+                            .filter { it.isNotBlank() }
+                    is ApiResult.Err -> previewPages = emptyList() // 服务端未部署/无 LibreOffice
+                }
+                previewBusy = false
             }
-            previewBusy = false
         }
     }
 

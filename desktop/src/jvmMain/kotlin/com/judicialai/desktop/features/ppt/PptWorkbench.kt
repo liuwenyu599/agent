@@ -49,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
@@ -92,17 +93,19 @@ internal fun SkeletonBar(modifier: Modifier = Modifier) {
 }
 
 /**
- * 三栏工作台（按参考 UI 规范）：
- * - 左：16:9 缩略图列表，圆角 6dp，选中态左侧 3dp 深蓝竖条；
- * - 中：16:9 白色预览卡（圆角 8dp、轻投影、四周留白 32dp），渲染中显示浅蓝骨架屏；
- * - 右：AI 面板（浅灰底 #F9FAFB，白底圆角输入框，深蓝发送按钮）；
- * - 底部：56dp 状态栏（白底、上边框 1dp、浅蓝进度条 + 取消 + 保存/生成按钮）。
+ * PPT 编辑工作台：顶部文档操作栏 + 三栏编辑区 + 底部状态栏。
+ * 顶部把关闭文档和 AI 生成设为明确的一级操作，避免用户被困在已打开的文档中。
  */
 @Composable
 fun PptWorkbench(vm: PptViewModel) {
     var showGenConfirm by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
+        WorkbenchTopBar(
+            vm = vm,
+            onClose = { vm.closeDocument() },
+            onGenerate = { showGenConfirm = true },
+        )
         Row(Modifier.weight(1f).fillMaxWidth()) {
             ThumbRail(vm)
             Box(Modifier.width(1.dp).fillMaxHeight().background(Line))
@@ -110,11 +113,54 @@ fun PptWorkbench(vm: PptViewModel) {
             Box(Modifier.width(1.dp).fillMaxHeight().background(Line))
             AiPanel(vm)
         }
-        StatusBar(vm, onGenerate = { showGenConfirm = true })
+        StatusBar(vm)
     }
 
     if (showGenConfirm) {
         GenerateConfirmDialog(vm, onDismiss = { showGenConfirm = false })
+    }
+}
+
+/** 顶部文档标题栏：显示当前文档，并提供显式关闭与 AI 设计入口。 */
+@Composable
+private fun WorkbenchTopBar(
+    vm: PptViewModel,
+    onClose: () -> Unit,
+    onGenerate: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().background(Surface)) {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = vm.outlineTitle.ifBlank { "未命名演示文稿" },
+                    style = MaterialTheme.typography.subtitle1,
+                    color = Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "共 ${vm.slides.size} 页",
+                    style = MaterialTheme.typography.caption,
+                    color = SecondaryText,
+                )
+            }
+            OutlinedButton(onClick = onClose) {
+                Text("关闭", fontSize = 12.5.sp)
+            }
+            Spacer(Modifier.width(10.dp))
+            Button(
+                enabled = !vm.busy && vm.docId != null,
+                onClick = onGenerate,
+                colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("AI 生成 PPT", color = Color.White, fontSize = 13.sp)
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
     }
 }
 
@@ -387,7 +433,7 @@ internal fun AiPanel(vm: PptViewModel) {
 // ================= 底部状态栏 =================
 
 @Composable
-private fun StatusBar(vm: PptViewModel, onGenerate: () -> Unit) {
+private fun StatusBar(vm: PptViewModel) {
     val exporting = AppState.pptExporting
     Column {
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
@@ -415,19 +461,9 @@ private fun StatusBar(vm: PptViewModel, onGenerate: () -> Unit) {
                 }
             }
             Spacer(Modifier.weight(1f))
-            // 右：次按钮白底描边（保存草稿），主按钮深蓝填充（生成 PPT）
+            // AI 生成入口已提升到顶部；底部仅保留草稿操作，避免两个主按钮重复。
             OutlinedButton(enabled = !vm.busy,
                 onClick = { vm.saveDraft() }) { Text("保存草稿", fontSize = 12.5.sp) }
-            Spacer(Modifier.width(10.dp))
-            Button(
-                enabled = !vm.busy && vm.docId != null,
-                onClick = onGenerate,
-                colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
-                shape = RoundedCornerShape(8.dp),
-            ) {
-                Text(if (exporting) "生成中…" else "生成 PPT",
-                    color = Color.White, fontSize = 13.sp)
-            }
         }
     }
 }
@@ -440,7 +476,7 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
         ?.get("name").str().ifBlank { "默认模板" }
     AppDialog(
         onDismissRequest = onDismiss,
-        title = "生成 PPT",
+        title = "AI 生成 PPT",
         subtitle = "将按当前大纲与所选模板，由 PPTAgent 真实渲染生成 .pptx 文件。",
         width = 480.dp,
         actions = {
@@ -457,9 +493,15 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
     ) {
         Text("共 ${vm.slides.size} 页 · 模板：$curName", fontSize = 13.sp, color = Ink)
         Spacer(Modifier.height(6.dp))
-        Text("生成约需 5–15 分钟（PPTAgent 真实渲染）。提交后可立刻切到其他页面，" +
-            "每生成完一页就能在这里看到缩略图；全部完成后自动保存到刚才选择的位置。" +
-            "期间可随时取消。",
+        Text(
+            "这是 AI 智能设计路线：PPTAgent 会结合当前大纲和所选模板逐页设计并排版，" +
+                "不是简单套用本地模板。预计需要 5–15 分钟。底部的“保存草稿”仅保存当前内容，" +
+                "不会触发 AI 设计。",
+            fontSize = 12.sp, color = Ink2, lineHeight = 18.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text("提交后可立刻切到其他页面，每生成完一页就能在这里看到缩略图；" +
+            "全部完成后自动保存到刚才选择的位置。期间可随时取消。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp)
     }
 }
