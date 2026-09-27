@@ -156,3 +156,6 @@ deploy/.env
 # pycache under force-included model dirs
 **/__pycache__/
 *.py[cod]
+
+# 本地临时下载目录（LibreOffice 安装包等，不入库）
+.tmp/
