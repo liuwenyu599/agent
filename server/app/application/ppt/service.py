@@ -17,6 +17,7 @@ from app.application.ppt.ppt_engine import BUILTIN_TEMPLATES, DEFAULT_COLORS, DE
 from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
 from app.core.exceptions import AppError, AIServiceError, NotFoundError, PermissionDeniedError
+from app.core.llm_json import LLMJsonError, loads_lenient, loads_llm_object
 from app.core.logging import get_logger
 from app.domain.identity.entities import User
 from app.domain.ppt.entities import PPTDocument, PPTMaterial, PPTTemplate, PPTTemplateFavorite
@@ -29,6 +30,12 @@ from app.infrastructure.repositories.ppt import (
 )
 
 logger = get_logger(__name__)
+
+# 大纲流式接口的兜底错误文案（不得回传原始异常文本）
+_OUTLINE_UNEXPECTED_ERROR_MSG = (
+    "大纲生成中断：AI 服务本次返回异常（已记录日志）。"
+    "本次没有生成任何文档，可以放心重试；若多次失败，可尝试缩短材料正文或减少页数要求。"
+)
 
 _PPTX_MIME = ("application/vnd.openxmlformats-officedocument."
               "presentationml.presentation")
@@ -56,19 +63,11 @@ def _parse_json_object(raw: str) -> Optional[Dict[str, Any]]:
     """
     if not raw:
         return None
-    text = raw.strip()
-    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.S)
-    if fenced:
-        text = fenced.group(1).strip()
-    if not text.startswith("{"):
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        text = text[start:end + 1]
     try:
-        obj = _json.loads(text)
-    except Exception:  # noqa: BLE001 - 非法 JSON 是预期内的情况，交给调用方降级
+        obj = loads_lenient(raw)
+    except LLMJsonError as e:
+        # 非法 JSON 是预期内的情况，交给调用方降级处理，不抛异常
+        logger.warning("[PPT] 模型输出解析失败（已尝试宽容解析）：%s", e.message)
         return None
     return obj if isinstance(obj, dict) else None
 
@@ -803,12 +802,9 @@ class PPTService:
         except Exception as e:
             logger.warning("[PPT] 生成前预检失败，直接放行: %s", e)
             return {"sufficient": True, "questions": []}
-        m = re.search(r"\{.*\}", raw or "", re.S)
-        if not m:
-            return {"sufficient": True, "questions": []}
-        try:
-            data = _json.loads(m.group(0))
-        except Exception:
+        data = loads_llm_object(raw)
+        if data is None:
+            # 预检只是"帮忙多问一句"，解析不出来就降级放行，不打断用户
             return {"sufficient": True, "questions": []}
         if data.get("sufficient"):
             return {"sufficient": True, "questions": []}
@@ -869,11 +865,14 @@ class PPTService:
                 images, max(6, min(body.slide_count, 18)), body.audience, body.scene,
                 material_names=body.material_names)
         except RuntimeError as e:
+            # generate_outline 抛出的已是用户可读文案（含重试失败说明）
             yield _sse({"type": "error", "message": str(e)})
             return
         except Exception as e:
-            logger.exception("PPT 大纲生成失败")
-            yield _sse({"type": "error", "message": f"大纲生成中断：{e}"})
+            # 兜底：绝不把原始异常（如 JSONDecodeError 的英文报错）回传客户端，
+            # 只记日志，给用户的文案必须说明"没有生成任何文档，可放心重试"
+            logger.exception("PPT 大纲生成失败：%s", e)
+            yield _sse({"type": "error", "message": _OUTLINE_UNEXPECTED_ERROR_MSG})
             return
         yield _sse({"type": "stage", "text": "大纲已就绪，正在校验与保存…"})
         d = self.documents.add(PPTDocument(

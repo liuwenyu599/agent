@@ -9,7 +9,6 @@
 
 引擎本身不依赖 FastAPI / 数据库；AI 调用通过 WritingAssistant 注入。
 """
-import json as _json
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -21,6 +20,7 @@ from docx.shared import Cm, Pt
 
 from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
+from app.core.llm_json import LLMJsonError, loads_lenient
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -478,10 +478,14 @@ class FormatCheckEngine:
             )
             if not reply:
                 return None
-            m = re.search(r'\[.*\]', reply, re.S)
-            if not m:
+            try:
+                items = loads_lenient(reply)
+            except LLMJsonError as e:
+                # AI 辅助判断是"锦上添花"，解析不出来就当作没有问题，不阻断主流程
+                logger.warning("AI 辅助判断返回内容无法解析：%s", e.message)
                 return []
-            items = _json.loads(m.group(0))
+            if not isinstance(items, list):
+                return []
             result = []
             for it in items[:20]:
                 result.append({

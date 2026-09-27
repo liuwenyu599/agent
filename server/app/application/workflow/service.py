@@ -8,7 +8,6 @@
 的模板副本上，公共模板不被污染，同名节点已生成的内容保留不丢。
 """
 import json
-import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -20,6 +19,7 @@ from app.application.workflow.builtin_data import (
     MEETING_STANDARD_FIELDS,
 )
 from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
+from app.core.llm_json import LLMJsonError, extract_json_array, extract_json_block, loads_lenient
 from app.core.logging import get_logger
 from app.domain.identity.authorization import is_knowledge_admin, is_system_admin
 from app.domain.identity.entities import User
@@ -197,11 +197,20 @@ class WorkflowService:
                 [{"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=1500,
             )
-            raw = re.sub(r'^```json\s*', '', raw.strip())
-            raw = re.sub(r'\s*```$', '', raw.strip())
-            target = json.loads(raw)
+            # 期望 JSON 数组；模型也可能包一层 {"nodes":[...]}，两种都兼容。
+            # 用括号配平提取，避免把 JSON 后面的说明文字一起吞进来。
+            block = extract_json_array(raw) or extract_json_block(raw)
+            if block is None:
+                raise LLMJsonError("模型输出中找不到完整的工作流节点数组", "")
+            target = loads_lenient(block)
             if isinstance(target, dict):
                 target = target.get("nodes") or []
+            if not isinstance(target, list):
+                raise LLMJsonError("模型输出的工作流节点不是数组", "")
+        except LLMJsonError as e:
+            logger.warning("AI 调整工作流返回内容无法解析：%s", e.message)
+            raise AppError(500, "AI 调整失败：AI 这次返回的内容格式不规范，"
+                                "工作流未被修改，请重试")
         except Exception as e:
             logger.exception("AI 调整工作流失败")
             raise AppError(500, f"AI 调整失败: {e}")
@@ -320,10 +329,13 @@ JSON："""
                 [{"role": "user", "content": prompt}],
                 temperature=0.1, max_tokens=800,
             )
-            raw = re.sub(r'^```json\s*', '', raw.strip())
-            raw = re.sub(r'\s*```$', '', raw.strip())
-            parsed = json.loads(raw)
+            parsed = loads_lenient(raw)
+            if not isinstance(parsed, dict):
+                raise LLMJsonError("模型输出的自然语言解析结果不是 JSON 对象", "")
             parsed = {k: v for k, v in parsed.items() if v is not None and str(v).strip()}
+        except LLMJsonError as e:
+            logger.warning("自然语言解析失败（模型输出无法解析）：%s", e.message)
+            raise AppError(500, "解析失败：AI 这次返回的内容格式不规范，请换个说法再试")
         except Exception as e:
             logger.exception("自然语言解析失败")
             raise AppError(500, f"解析失败: {e}")

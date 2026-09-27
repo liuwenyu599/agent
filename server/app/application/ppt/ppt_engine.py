@@ -20,9 +20,26 @@ import re
 import uuid
 from typing import Dict, List, Optional
 
+from app.core.llm_json import LLMJsonError, loads_lenient, truncate_for_log
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 首次解析失败后重试时追加的严格格式约束（temperature 同步降到 0.2）
+_STRICT_JSON_RULE = """
+
+【重要·输出格式硬性约束（本次必须严格遵守）】
+1. 只输出一个 JSON 对象，前后不要有任何说明文字；
+2. 不要用 markdown 代码块包裹（不要出现 ```）；
+3. JSON 的最后一个 } 之后立即停止，不要追加"以上就是本次大纲"之类的话；
+4. 不要出现尾随逗号（例如 ["a",] 或 {"a":1,}）；
+5. 字符串内部不要出现真实换行，需要换行请写成 \\n；
+6. 键名和字符串一律使用英文双引号（半角 "），不要用中文全角引号。"""
+
+_OUTLINE_PARSE_FAILED_MSG = (
+    "AI 这次返回的大纲格式不规范（已自动重试一次仍未成功）。"
+    "本次没有生成任何文档，可以放心重试；若多次失败，可尝试缩短材料正文或减少页数要求。"
+)
 
 # ================= 内置官方模板（含完整版式体系） =================
 BUILTIN_TEMPLATES = [
@@ -156,20 +173,96 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             "（从清单中选择，可多选；确实无依据则为空数组）。\n"
             "凡含数字、日期、排名的内容必须标注来源；"
             "禁止使用清单之外的旧数据充当本次数据。")
+    raw = _call_outline_model(assistant, prompt, temperature=0.5)
+    outline = _parse_outline(raw)
+    if outline is None:
+        # 第一次解析失败：降温度 + 追加严格格式约束，自动重试一次（不重试第三次，
+        # 大纲生成本就耗时 10~30s，重试超过一次会明显拖慢体感）
+        logger.warning("[PPT] 大纲首次解析失败，自动重试一次（temperature=0.2）。"
+                       "原始输出：%s", truncate_for_log(raw, 800))
+        raw = _call_outline_model(assistant, prompt + _STRICT_JSON_RULE, temperature=0.2)
+        outline = _parse_outline(raw)
+        if outline is None:
+            logger.warning("[PPT] 大纲重试后仍解析失败，原始输出：%s",
+                           truncate_for_log(raw, 800))
+            raise RuntimeError(_OUTLINE_PARSE_FAILED_MSG)
+    return normalize_outline(outline)
+
+
+def _call_outline_model(assistant, prompt: str, temperature: float) -> str:
+    """调用模型生成大纲原始文本，统一处理调用层错误。
+
+    Args:
+        assistant: 模型助手（WritingAssistant）。
+        prompt: 完整用户提示词。
+        temperature: 采样温度；重试时传 0.2 以提高格式稳定性。
+
+    Returns:
+        模型返回的原始文本。
+
+    Raises:
+        RuntimeError: 模型调用失败，或返回了系统错误占位文本。
+    """
     try:
         raw = assistant.complete(
             [{"role": "system", "content": "你是 PPT 大纲策划模块，只输出 JSON。"},
              {"role": "user", "content": prompt}],
-            temperature=0.5, max_tokens=4096,
+            temperature=temperature, max_tokens=4096,
         )
     except Exception as e:
         raise RuntimeError(f"调用模型失败: {e}")
     if raw.startswith("【系统错误】") or raw.startswith("调用模型失败"):
         raise RuntimeError(raw)
-    m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        raise RuntimeError("AI 未返回有效大纲，请重试")
-    return normalize_outline(json.loads(m.group(0)))
+    return raw
+
+
+def _parse_outline(raw: str) -> Optional[Dict]:
+    """宽容解析模型返回的大纲 JSON。
+
+    模型的 JSON 常常带尾随逗号、字符串内裸换行、代码围栏或收尾废话，
+    这里统一交给 app.core.llm_json 逐级抢救；解析不出来返回 None，
+    由调用方决定重试或报错，**原始输出只写日志不回传客户端**。
+
+    Args:
+        raw: 模型返回的原始文本。
+
+    Returns:
+        解析出的 dict；解析失败或不是对象时返回 None。
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        parsed = loads_lenient(raw)
+    except LLMJsonError as e:
+        logger.warning("[PPT] 大纲 JSON 解析失败：%s", e.message)
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _loads_ai_json(raw: str, err_msg: str) -> Dict:
+    """宽容解析 AI 单页 / 可视化 / 结构操作返回的 JSON。
+
+    Args:
+        raw: 模型返回的原始文本。
+        err_msg: 解析失败时抛给调用方的用户可读文案。
+
+    Returns:
+        解析出的 dict。
+
+    Raises:
+        RuntimeError: 模型未返回内容，或内容无法解析为 JSON 对象。
+    """
+    if not raw or not raw.strip():
+        raise RuntimeError("AI 未返回有效结果，请重试")
+    try:
+        parsed = loads_lenient(raw)
+    except LLMJsonError as e:
+        logger.warning("[PPT] AI 返回内容无法解析：%s", e.message)
+        raise RuntimeError(err_msg)
+    if not isinstance(parsed, dict):
+        logger.warning("[PPT] AI 返回内容不是 JSON 对象：%s", truncate_for_log(raw, 300))
+        raise RuntimeError(err_msg)
+    return parsed
 
 
 def normalize_outline(outline: Dict) -> Dict:
@@ -788,10 +881,7 @@ def ai_slide_action(assistant, action: str, slide: Dict, instruction: str = "") 
         [{"role": "system", "content": _SLIDE_SYSTEM},
          {"role": "user", "content": prompt}],
         temperature=0.5, max_tokens=1500)
-    m = re.search(r"\{.*\}", raw or "", re.S)
-    if not m:
-        raise RuntimeError("AI 未返回有效结果，请重试")
-    updated = json.loads(m.group(0))
+    updated = _loads_ai_json(raw, "AI 这次返回的内容格式不规范，页面未被修改，请重试该操作")
     merged = {**slide, **updated, "id": slide.get("id") or uuid.uuid4().hex[:8]}
     merged.pop("_image", None)
     # 注意：normalize_outline() 会恒定保证"首屏 cover、末屏 closing"，对单页调用时
@@ -826,10 +916,7 @@ def ai_generate_visual(assistant, kind: str, slide: Dict, instruction: str = "")
         [{"role": "system", "content": _SLIDE_SYSTEM},
          {"role": "user", "content": prompt}],
         temperature=0.4, max_tokens=1200)
-    m = re.search(r"\{.*\}", raw or "", re.S)
-    if not m:
-        raise RuntimeError("AI 未返回有效结果，请重试")
-    result = json.loads(m.group(0))
+    result = _loads_ai_json(raw, "AI 这次返回的可视化数据格式不规范，页面未被修改，请重试该操作")
     if result.get("error"):
         raise RuntimeError(result["error"])
     updated = dict(slide)
@@ -856,10 +943,8 @@ def ai_structure_action(assistant, action: str, slides: List[Dict], index: int,
         raw = assistant.complete([{"role": "system", "content": _SLIDE_SYSTEM},
                                   {"role": "user", "content": prompt}],
                                  temperature=0.5, max_tokens=1200)
-        m = re.search(r"\{.*\}", raw or "", re.S)
-        if not m:
-            raise RuntimeError("AI 未返回有效结果")
-        new_slide = json.loads(m.group(0))
+        new_slide = _loads_ai_json(
+            raw, "AI 这次返回的内容格式不规范，没有新增页面，请重试该操作")
         new_slide["id"] = uuid.uuid4().hex[:8]
         new_slide.setdefault("type", "content")
         new_slide.setdefault("points", [])

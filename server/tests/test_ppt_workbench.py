@@ -507,7 +507,11 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
 
 
 def test_outline_stream_emits_error_without_done(client, accounts, fake_llm):
-    """模型返回非 JSON：只推 2 个 stage + error，不推 done。"""
+    """模型返回非 JSON：只推 2 个 stage + error，不推 done。
+
+    解析失败会自动重试一次（temperature 降到 0.2 并追加严格格式约束），
+    因此模型共被调用 2 次；两次都失败才推 error，且绝不落库。
+    """
     fake_llm._responder = lambda m: "抱歉，我无法完成这个请求。"
     r = client.post(f"{BASE}/ppt/outline/stream", json={
         "source_type": "topic", "topic": "随便一个主题",
@@ -516,7 +520,44 @@ def test_outline_stream_emits_error_without_done(client, accounts, fake_llm):
     events = _parse_sse(r.text)
     assert [e["type"] for e in events] == ["stage", "stage", "error"], events
     assert events[-1]["message"]
-    assert len(fake_llm.calls) == 1
+    # 错误文案必须对用户可读：说明"没有生成任何文档"，且不带原始异常/英文报错
+    message = events[-1]["message"]
+    assert "没有生成任何文档" in message
+    assert "Expecting" not in message and "JSONDecodeError" not in message
+    # 首次失败 + 自动重试一次 = 2 次调用，重试温度降为 0.2
+    assert len(fake_llm.calls) == 2, fake_llm.calls
+    assert fake_llm.calls[0]["temperature"] == 0.5
+    assert fake_llm.calls[1]["temperature"] == 0.2
+    # 重试的 prompt 末尾追加了严格格式约束
+    assert "只输出一个 JSON 对象" in fake_llm.calls[1]["messages"][-1]["content"]
+
+
+def test_outline_stream_rescues_malformed_json_without_retry(client, accounts, fake_llm):
+    """模型输出带尾随逗号 / 字符串内裸换行 / JSON 后追加说明：宽容解析直接救回。
+
+    这是本次修复的核心场景：旧实现用贪婪正则 `\\{.*\\}` 吃到 JSON 后面的说明
+    文字，再被零容错的 json.loads 抛成
+    "Expecting property name enclosed in double quotes: ... (char 745)"。
+    现在应当一次调用即成功，不产生额外重试开销。
+    """
+    malformed = (
+        '{"title":"行政复议工作汇报","subtitle":"2026年第一季度","slides":['
+        '{"type":"cover","title":"封面","subtitle":"副标题"},'
+        '{"type":"content","title":"第一行\n第二行","points":["受理案件120件",],},'
+        ']} 以上就是本次大纲，请查收。'
+    )
+    fake_llm._responder = lambda m: malformed
+    r = client.post(f"{BASE}/ppt/outline/stream", json={
+        "source_type": "topic", "topic": "随便一个主题",
+    }, headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+    events = _parse_sse(r.text)
+    assert [e["type"] for e in events] == ["stage", "stage", "stage", "done"], events
+    assert len(fake_llm.calls) == 1, fake_llm.calls  # 宽容解析救回，无需重试
+    outline = events[-1]["data"]["outline"]
+    titles = [s["title"] for s in outline["slides"]]
+    assert titles[0] == "封面"
+    assert "第一行\n第二行" in titles  # 字符串内裸换行被正确还原为换行
 
 
 def test_outline_stream_slide_count_clamped(client, accounts, fake_llm,

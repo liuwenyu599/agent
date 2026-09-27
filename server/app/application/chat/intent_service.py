@@ -10,13 +10,12 @@
 - 疑问形式且没有明确指令口吻 → 一律当提问直接答；
 - 宁可当提问直接答，也不要误当指令去改东西。
 """
-import json
-import re
 from typing import Dict, List, Optional
 
 from jinja2 import Template
 
 from app.application.shared.writing_assistant import WritingAssistant
+from app.core.llm_json import loads_llm_object
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -144,10 +143,10 @@ class IntentService:
             if not raw or raw.startswith("【系统错误】") or raw.startswith("调用模型失败"):
                 return None
 
-            m = re.search(r"\{.*\}", raw, re.S)
-            if not m:
+            result = loads_llm_object(raw)
+            if result is None:
+                # 解析不出来只是"少问一句"，回退为直接生成，不影响主流程
                 return None
-            result = json.loads(m.group(0))
 
             if result.get("ready"):
                 return None

@@ -12,8 +12,6 @@
 2. 工作台中栏的人工正文修改经 ``update_record_content`` 显式保存后直接写回
    ``{id}.docx``（人工修改成为新基线），同时重置 applied/resolved 状态。
 """
-import json as _json
-import re
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -29,6 +27,7 @@ from app.application.format_check.check_engine import (
 from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
+from app.core.llm_json import LLMJsonError, loads_lenient
 from app.core.logging import get_logger
 from app.domain.format_check.entities import (
     VALID_RULE_TARGETS,
@@ -742,13 +741,13 @@ class FormatCheckService:
             raise AppError(502, f"AI 生成校验项失败：{e}")
         if not reply:
             raise AppError(502, "AI 未返回结果，请换个更具体的描述再试")
-        m = re.search(r'\{.*\}', reply, re.S)
-        if not m:
-            raise AppError(502, "AI 返回内容无法解析，请换个更具体的描述再试")
         try:
-            parsed = _json.loads(m.group(0))
-        except ValueError:
-            raise AppError(502, "AI 返回内容无法解析，请换个更具体的描述再试")
+            parsed = loads_lenient(reply)
+        except LLMJsonError as e:
+            logger.warning("规则校验项 AI 返回内容无法解析：%s", e.message)
+            raise AppError(502, "AI 这次返回的内容格式不规范，请换个更具体的描述再试")
+        if not isinstance(parsed, dict):
+            raise AppError(502, "AI 这次返回的内容格式不规范，请换个更具体的描述再试")
 
         checks = _sanitize_checks(target, parsed.get("checks"))
         if not checks:
