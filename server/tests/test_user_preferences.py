@@ -76,10 +76,15 @@ class FakeGateway:
 
     @property
     def last_system(self) -> str:
-        """最近一次调用的 system prompt。"""
-        for m in self.calls[-1]["messages"]:
-            if m.get("role") == "system":
-                return m["content"]
+        """最近一条带有 system 消息的调用中的 prompt。
+
+        一次 ``/chat/send`` 会依次调用需求分析、最终作答和会话标题生成；
+        标题生成只有 user 消息，不能用 ``calls[-1]`` 代表最终作答。
+        """
+        for call in reversed(self.calls):
+            for message in call["messages"]:
+                if message.get("role") == "system":
+                    return message["content"]
         return ""
 
 
