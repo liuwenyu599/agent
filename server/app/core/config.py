@@ -88,13 +88,20 @@ class Settings:
         self.PPT_AGENT_POLL_INTERVAL = int(os.getenv("PPT_AGENT_POLL_INTERVAL", "10"))
 
         # ---- 取结果的**备用主通道**：直接读共享卷里的产物文件 ----------------
-        # PPTAgent 会把成品写到 <workspace>/<日期>/<job_id>/presentation.pptx。
+        # PPTAgent 会把成品写到 <workspace>/<日期>/<job_id>/<标题>.pptx。
         # 若后端容器能以只读方式挂到同一目录，则无需猜 Gradio 的结果端点，
         # 直接扫文件系统取最新产物，可靠性远高于未文档化的 HTTP 契约。
         # 留空 = 走 HTTP 通道（submit → 轮询 → 取结果）；非空 = 走文件系统通道。
         self.PPT_AGENT_WORKSPACE_DIR = os.getenv("PPT_AGENT_WORKSPACE_DIR", "")
-        # 产物文件名（PPTAgent 固定输出 presentation.pptx）
-        self.PPT_AGENT_RESULT_FILENAME = os.getenv("PPT_AGENT_RESULT_FILENAME", "presentation.pptx")
+        # 产物文件名（**glob 模式**，不是固定名）：真机实测产物是 <job目录>/<标题>.pptx，
+        # 标题为中文且随用户请求动态变化（如「司法局工作汇报.pptx」），写死必然找不到。
+        # 故默认通配 *.pptx，由代码在候选里挑"最新且能通过 pptx 合法性校验"的那个，
+        # 并自动跳过 Office/LibreOffice 临时文件（~$xxx.pptx）。
+        # 旧环境变量 PPT_AGENT_RESULT_FILENAME 仍作别名兼容（其值可以是固定名或 glob）。
+        self.PPT_AGENT_RESULT_GLOB = (
+            os.getenv("PPT_AGENT_RESULT_GLOB")
+            or os.getenv("PPT_AGENT_RESULT_FILENAME")
+            or "*.pptx")
         # 产物"新鲜度"判定：只认提交任务之后落盘的文件（秒，容错时钟偏差）
         self.PPT_AGENT_WORKSPACE_FRESH_TOLERANCE = int(
             os.getenv("PPT_AGENT_WORKSPACE_FRESH_TOLERANCE", "120"))
@@ -135,10 +142,19 @@ class Settings:
         # 它读不到；只有在两边挂了同一个共享卷、且知道容器内挂载点时才可启用。
         self.PPT_AGENT_ATTACHMENT_MAP = os.getenv("PPT_AGENT_ATTACHMENT_MAP", "")
 
-        # ---- 目录扫描（仅用于实时进度；目录结构待真机核实，故全部可配置）----
-        # ⚠️ 用户给过的两份说明对目录结构说法不一致（是否有 slides/slide_NN.html
-        # 存疑），因此这里不写死，找不到就降级为"只有总进度、没有逐页预览"。
-        self.PPT_AGENT_PREVIEW_GLOB = os.getenv("PPT_AGENT_PREVIEW_GLOB", "preview/*.png")
+        # ---- 目录扫描（真机结构已核实，见 deploy/pptagent/README.md「目录结构」）----
+        # 实测一个 job 目录的结构（<ws>/<日期>/<job_id>/）：
+        #   ├─ <标题>.pptx / .md / .pdf      ← 产物名随标题动态变化，不能写死
+        #   ├─ .slide_images-pdf-<标题>/     ← 预览图在这（**jpg**，目录名含动态标题）
+        #   │    └─ slide_01.jpg ... slide_NN.jpg
+        #   ├─ slides/slide_NN.html          ← HTML 稿，页数以它为准
+        #   ├─ assets/ .history/ intermediate_output.json
+        # 因此预览图必须走通配；多个候选模式用逗号分隔，命中任一即算数（去重后排序），
+        # 这样换渲染后端（pdf→html）或改扩展名都不会导致预览整块失效。
+        self.PPT_AGENT_PREVIEW_GLOB = os.getenv(
+            "PPT_AGENT_PREVIEW_GLOB",
+            ".slide_images-*/*.jpg,.slide_images-*/*.png,preview/*.jpg,preview/*.png")
+        # 页数基准：slides/slide_NN.html 的文件数（这条已验证成立）
         self.PPT_AGENT_SLIDE_GLOB = os.getenv("PPT_AGENT_SLIDE_GLOB", "slides/*.html")
         # 无进展判定（秒）：超过这个时长目录和事件流都没动静就判失败
         self.PPT_AGENT_STALL_TIMEOUT = int(os.getenv("PPT_AGENT_STALL_TIMEOUT", "1800"))

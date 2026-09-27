@@ -320,11 +320,15 @@ def test_b_gradio_one_shot_submit_returns_file(monkeypatch, ctx):
 
 
 def _seed_workspace(root: Path, payload: bytes, *, age_seconds: float = 0.0,
-                    job: str = "job-abc") -> Path:
-    """造一个 PPTAgent 风格的产物目录：<root>/<日期>/<job>/presentation.pptx。"""
+                    job: str = "job-abc", filename: str = "presentation.pptx") -> Path:
+    """造一个 PPTAgent 风格的产物目录：<root>/<日期>/<job>/<文件>。
+
+    ``filename`` 默认 ``presentation.pptx``（老约定），真机实测产物名是**中文标题**
+    （如 ``司法局工作汇报.pptx``），故允许显式指定以覆盖动态标题场景。
+    """
     job_dir = root / time.strftime("%Y-%m-%d") / job
     job_dir.mkdir(parents=True, exist_ok=True)
-    f = job_dir / "presentation.pptx"
+    f = job_dir / filename
     f.write_bytes(payload)
     stamp = time.time() - age_seconds
     os.utime(f, (stamp, stamp))
@@ -372,6 +376,29 @@ def test_workspace_channel_picks_newest_and_ignores_stale(monkeypatch, ctx, tmp_
     data, renderer = svc._render_pptx_bytes(doc, doc.outline, template, None)
     assert renderer == "pptagent"
     assert data == fresh_pptx
+
+
+def test_workspace_channel_finds_dynamic_chinese_title(monkeypatch, ctx, tmp_path):
+    """真机产物名是 `<标题>.pptx`（中文动态），不能再写死 presentation.pptx。
+
+    同时在该目录里放 Office 锁文件 `~$...` 与一个半成品，验证两者都被跳过、
+    仍能准确取到真正的成品。
+    """
+    svc, doc, user = ctx
+    agent_pptx = _make_pptx_bytes("中文标题产物")
+    _seed_workspace(tmp_path, agent_pptx, job="f8439174",
+                    filename="司法局工作汇报.pptx")
+    # 干扰项：Office 锁文件 + 一个只有几 KB 的空壳 pptx
+    _seed_workspace(tmp_path, b"0" * 512, job="f8439174", filename="~$司法局工作汇报.pptx")
+    _seed_workspace(tmp_path, b"0" * 512, job="f8439174", filename="草稿.pptx")
+    monkeypatch.setattr(settings, "PPT_AGENT_URL", AGENT_URL)
+    _install_agent(monkeypatch, _agent_handler(submit_body={"task_id": "T-TITLE"}),
+                   workspace_dir=str(tmp_path), total_timeout=20, poll_interval=1)
+
+    template, _trow = svc._resolve_template(None, doc.theme_id or "")
+    data, renderer = svc._render_pptx_bytes(doc, doc.outline, template, None)
+    assert renderer == "pptagent"
+    assert data == agent_pptx, "必须取到那个能通过 pptx 校验的成品"
 
 
 def test_workspace_channel_half_written_then_timeout_falls_back(monkeypatch, ctx, tmp_path):

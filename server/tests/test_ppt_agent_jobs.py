@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import httpx
@@ -61,8 +62,14 @@ def _hdr(token: str) -> dict:
 def _dev_token() -> str:
     """取管理员令牌。
 
-    多个测试文件共用同一个库（DATA_DIR 由最先导入的模块决定），因此逐级兜底：
-    register-first → 登录已建账号 → 直接为库内管理员签发。
+    多个测试文件共用同一个库（``DATA_DIR`` 由**最先导入**的模块决定），且首个管理员
+    只能注册一次，所以这里逐级兜底，保证单独跑本文件、或两个文件以任意顺序跑都能过：
+
+    1. ``register-first`` 抢注成功 → 直接用它的 token；
+    2. 已初始化 → 用 job_dev 账号登录；
+    3. 登录也被挡（如 must_change_password）→ 按用户名查库，直接签发 token；
+    4. 库里连 job_dev 都没有 → 退而求其次取任意 developer/admin；
+    5. 连管理员都没有（别的测试文件先把库初始化了）→ 直接建一个 developer。
     """
     r = client.post(f"{BASE}/auth/register-first", json={
         "username": "job_dev", "email": "job_dev@test.local",
@@ -77,15 +84,32 @@ def _dev_token() -> str:
 
     from sqlalchemy import select
 
-    from app.core.security import create_access_token
+    from app.core.security import create_access_token, get_password_hash
     from app.infrastructure.database import SessionLocal
     from app.infrastructure.database.models.identity import UserModel
 
     db = SessionLocal()
     try:
-        row = db.scalar(select(UserModel).where(
-            UserModel.role.in_(("developer", "admin"))))
-        assert row is not None, "库中没有可用的管理员账号"
+        row = db.scalar(select(UserModel).where(UserModel.username == "job_dev"))
+        if row is None:
+            row = db.scalar(select(UserModel).where(
+                UserModel.role.in_(("developer", "admin"))))
+        if row is None:
+            # 其它测试文件已初始化过这个库且没留管理员 —— 自己插一个 developer
+            row = UserModel(id=f"job-dev-{uuid.uuid4().hex[:12]}",
+                            username="job_dev", email="job_dev@test.local",
+                            hashed_password=get_password_hash(PWD),
+                            real_name="管理员", role="developer",
+                            department="行政复议科", is_active=True,
+                            must_change_password=False)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+        if row.role not in ("developer", "admin"):
+            row.role = "developer"
+            row.must_change_password = False
+            db.commit()
+            db.refresh(row)
         return create_access_token(
             {"sub": row.id, "username": row.username, "role": row.role})
     finally:
@@ -283,7 +307,7 @@ def test_scan_progress_degrades_when_structure_unknown(tmp_path):
 
 
 def test_scan_progress_finds_previews(tmp_path):
-    """有 preview/*.png 时能数出页数（目录结构核实后即可生效）。"""
+    """有 preview/*.png 时能数出页数（旧结构仍要兼容）。"""
     d = tmp_path / "2026-09-27" / "job-1" / "preview"
     d.mkdir(parents=True)
     for i in range(4):
@@ -292,6 +316,76 @@ def test_scan_progress_finds_previews(tmp_path):
     info = c.scan_progress(time.time() - 10)
     assert info["previews"] == 4
     assert len(info["preview_files"]) == 4
+
+
+def test_scan_progress_matches_real_structure(tmp_path):
+    """R3 真机结构：中文动态标题 + `.slide_images-pdf-<标题>/slide_NN.jpg`。
+
+    这是用户在服务器上 `ls -laR` 实测到的目录形态，预览图有三个特征必须同时命中：
+    目录名动态（含中文标题）、隐藏目录（以点开头）、扩展名是 jpg 而非 png。
+    """
+    root = tmp_path / "20260927" / "f8439174"
+    prev = root / ".slide_images-pdf-司法局工作汇报"
+    prev.mkdir(parents=True)
+    for i in range(1, 5):
+        (prev / f"slide_{i:02d}.jpg").write_bytes(b"\xff\xd8\xff" + b"0" * 64)
+    (root / "slides").mkdir()
+    for i in range(1, 5):
+        (root / "slides" / f"slide_{i:02d}.html").write_text("<html></html>")
+
+    c = PPTAgentClient(base_url=AGENT_URL, workspace_dir=str(tmp_path))
+    info = c.scan_progress(time.time() - 10)
+    assert info["previews"] == 4, info
+    assert info["slides"] == 4, info
+    # 排序必须是页序（字典序 == 零填充的页序）
+    assert info["preview_files"][0].endswith("slide_01.jpg")
+    assert info["preview_files"][-1].endswith("slide_04.jpg")
+
+
+def test_scan_progress_detects_dynamic_title_pptx(tmp_path):
+    """产物文件名随标题动态变化（<标题>.pptx），不能再写死 presentation.pptx。"""
+    root = tmp_path / "20260927" / "f8439174"
+    root.mkdir(parents=True)
+    (root / "司法局工作汇报.pptx").write_bytes(_make_pptx_bytes("TITLE"))
+    c = PPTAgentClient(base_url=AGENT_URL, workspace_dir=str(tmp_path))
+    info = c.scan_progress(time.time() - 10)
+    assert info["has_pptx"] is True, info
+
+
+def test_scan_progress_ignores_office_temp_and_unfinished_files(tmp_path):
+    """`~$xxx.pptx` 锁文件、以及小于 8KB 的半成品，都不能被当成产物。"""
+    root = tmp_path / "20260927" / "f8439174"
+    root.mkdir(parents=True)
+    (root / "~$司法局工作汇报.pptx").write_bytes(b"0" * 4096)
+    (root / "司法局工作汇报.pptx").write_bytes(b"0" * 100)  # 刚开始写，还没内容
+    c = PPTAgentClient(base_url=AGENT_URL, workspace_dir=str(tmp_path))
+    info = c.scan_progress(time.time() - 10)
+    assert info["has_pptx"] is False, "半成品/锁文件不能被认作产物"
+
+
+def test_result_glob_default_and_legacy_alias(monkeypatch):
+    """产物模式默认通配 *.pptx；老变量名 PPT_AGENT_RESULT_FILENAME 仍作别名兼容。"""
+    from app.core.config import Settings
+
+    monkeypatch.delenv("PPT_AGENT_RESULT_GLOB", raising=False)
+    monkeypatch.delenv("PPT_AGENT_RESULT_FILENAME", raising=False)
+    assert Settings().PPT_AGENT_RESULT_GLOB == "*.pptx"
+
+    monkeypatch.setenv("PPT_AGENT_RESULT_FILENAME", "presentation.pptx")
+    assert Settings().PPT_AGENT_RESULT_GLOB == "presentation.pptx"
+
+    monkeypatch.setenv("PPT_AGENT_RESULT_GLOB", "成品/*.pptx")
+    assert Settings().PPT_AGENT_RESULT_GLOB == "成品/*.pptx"
+
+
+def test_split_patterns_handles_multiple_candidates():
+    """多个候选模式用逗号/分号分隔，去重后返回。"""
+    from app.infrastructure.ppt.ppt_agent_client import split_patterns
+
+    assert split_patterns("") == ()
+    assert split_patterns(" .slide_images-*/*.jpg , preview/*.png ") == (
+        ".slide_images-*/*.jpg", "preview/*.png")
+    assert split_patterns("a/*.jpg;a/*.png,a/*.jpg") == ("a/*.jpg", "a/*.png")
 
 
 # ============================================================ 接口层
@@ -484,6 +578,7 @@ def test_preview_endpoint_and_path_traversal_guard(monkeypatch, doc_and_token, t
 
     ok = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/0.png", headers=_hdr(token))
     assert ok.status_code == 200
+    assert ok.headers["content-type"].startswith("image/png")
 
     # 越界序号 / 非数字 / 穿越尝试
     assert client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/999.png",
@@ -492,6 +587,38 @@ def test_preview_endpoint_and_path_traversal_guard(monkeypatch, doc_and_token, t
                       headers=_hdr(token)).status_code in (400, 404)
     assert client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/abc.png",
                       headers=_hdr(token)).status_code == 400
+
+
+def test_preview_url_carries_real_jpg_extension(monkeypatch, doc_and_token, tmp_path):
+    """PPTAgent 实测产出 jpg：url 必须带真实扩展名，且 png/jpg/无后缀三种请求都能拿到图。"""
+    token, doc_id = doc_and_token
+    monkeypatch.setattr(settings, "PPT_AGENT_WORKSPACE_DIR", str(tmp_path))
+    from app.core.timeutil import now_local
+    agent_job._update_job(doc_id, job_started_at=now_local())
+
+    # 完全按真机结构造：日期/job_id/.slide_images-pdf-<中文标题>/slide_NN.jpg
+    prev = tmp_path / "20260927" / "f8439174" / ".slide_images-pdf-司法局工作汇报"
+    prev.mkdir(parents=True)
+    jpg = b"\xff\xd8\xff\xe0" + b"0" * 64
+    for i in range(1, 4):
+        (prev / f"slide_{i:02d}.jpg").write_bytes(jpg)
+
+    r = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview", headers=_hdr(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 3, body
+    assert body["pages"][0]["url"].endswith("/preview/0.jpg"), body["pages"][0]
+
+    for suffix in (".jpg", ".png", ""):
+        got = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/0{suffix}",
+                         headers=_hdr(token))
+        assert got.status_code == 200, (suffix, got.text)
+        assert got.content == jpg
+        assert got.headers["content-type"].startswith("image/jpeg"), suffix
+
+    # 不支持的扩展名直接 400，不当 404 兜着
+    bad = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/0.exe", headers=_hdr(token))
+    assert bad.status_code == 400
 
 
 def test_double_submit_does_not_start_twice(monkeypatch, doc_and_token):

@@ -159,8 +159,13 @@ object Endpoints {
             const val CREATE = "/ppt/jobs"
             fun status(id: String) = "/ppt/jobs/$id/status"
             fun preview(id: String) = "/ppt/jobs/$id/preview"
-            /** 单页预览图（index 从 0 开始，与 GET preview 里的 index 一致） */
-            fun previewPage(id: String, index: Int) = "/ppt/jobs/$id/preview/$index.png"
+            /**
+             * 单页预览图（index 从 0 开始，与 GET preview 里的 index 一致）。
+             * 不带扩展名：PPTAgent 实际产出是 jpg（`slide_01.jpg`），路由已改为
+             * `/preview/{page}`（`0` / `0.jpg` / `0.png` 都能取到）。
+             * 客户端一律优先用 `/preview` 返回的 url，这里只是兜底。
+             */
+            fun previewPage(id: String, index: Int) = "/ppt/jobs/$id/preview/$index"
             fun cancel(id: String) = "/ppt/jobs/$id/cancel"
             /** POST：回答 PPTAgent 的追问 {answer}，带着上下文续跑同一任务 */
             fun clarify(id: String) = "/ppt/jobs/$id/clarify"

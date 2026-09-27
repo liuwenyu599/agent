@@ -131,8 +131,8 @@ if [ -d "$WS_DEFAULT" ]; then
         fi
     fi
 else
-    log "默认工作区 ${WS_DEFAULT} 不存在，搜索包含 presentation.pptx 的目录："
-    timeout 60 find /data -maxdepth 6 -name 'presentation.pptx' -printf '%p  %s字节  %TY-%Tm-%Td %TH:%TM\n' 2>/dev/null | head -20 | tee -a "$OUT"
+    log "默认工作区 ${WS_DEFAULT} 不存在，搜索产物目录（文件名随标题动态变化，用 *.pptx）："
+    timeout 60 find /data -maxdepth 7 -name '*.pptx' -printf '%p  %s字节  %TY-%Tm-%Td %TH:%TM\n' 2>/dev/null | head -20 | tee -a "$OUT"
 fi
 log ""
 

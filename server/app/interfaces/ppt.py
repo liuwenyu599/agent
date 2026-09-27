@@ -1,5 +1,7 @@
 """PPT 助手路由。路径与响应结构与旧系统一致（/ppt/...）。"""
 import os
+import re
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -33,6 +35,23 @@ from app.interfaces.deps import get_current_user
 
 # PPTX（OOXML 演示文稿）MIME，供导出/下载响应使用
 _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+# 预览图页码：纯数字，或数字 + 图片扩展名（PPTAgent 实测产出 jpg，老客户端按 png 请求）
+_PREVIEW_PAGE_RE = re.compile(r"^(\d+)(\.[A-Za-z0-9]{1,5})?$")
+
+# 允许的预览图扩展名 → MIME；未知后缀一律按 jpeg 返回（文件本体由白名单保证安全）
+_IMAGE_MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _ext_of(path_like: str) -> str:
+    """取预览图真实扩展名（小写），取不到时退化为空串。
+
+    预览列表的 url 必须带上**真实**扩展名：PPTAgent 实测产出的是 ``slide_NN.jpg``，
+    若一律写成 ``.png``，部分图片解码器的 sniffing 会失败。
+    """
+    suffix = Path(str(path_like)).suffix.lower()
+    return suffix if suffix in _IMAGE_MIMES else ""
 
 router = APIRouter(prefix="/ppt", tags=["智能PPT"])
 
@@ -412,30 +431,43 @@ def ppt_job_status(job_id: str,
 def ppt_job_preview(job_id: str,
                     user: User = Depends(get_current_user),
                     svc: PPTService = Depends(get_ppt_service)):
-    """已生成页的预览图列表；目录结构与预期不符时返回空列表（降级，不报错）。"""
+    """已生成页的预览图列表；目录结构与预期不符时返回空列表（降级，不报错）。
+
+    ``url`` 里的扩展名取自**真实文件**（PPTAgent 实测产出 ``slide_NN.jpg``），
+    因此可能是 ``.jpg`` 而不是 ``.png``——取值时请以返回的 url 为准。
+    """
     doc = svc.documents.get_for_user(job_id, user.id)
     if not doc:
         raise NotFoundError("任务不存在")
     files = agent_job.list_previews(job_id)
-    pages = [{"index": i, "url": f"/api/v1/ppt/jobs/{job_id}/preview/{i}.png"}
-             for i in range(len(files))]
+    pages = [{"index": i, "url": f"/api/v1/ppt/jobs/{job_id}/preview/{i}{_ext_of(f)}"}
+             for i, f in enumerate(files)]
     return {"job_id": job_id, "count": len(pages), "pages": pages}
 
 
-@router.get("/jobs/{job_id}/preview/{page}.png")
+@router.get("/jobs/{job_id}/preview/{page}")
 def ppt_job_preview_image(job_id: str, page: str,
                           user: User = Depends(get_current_user),
                           svc: PPTService = Depends(get_ppt_service)):
-    """单页预览图。路径经白名单校验（必须落在工作区内），防目录穿越。"""
+    """单页预览图。路径经白名单校验（必须落在工作区内），防目录穿越。
+
+    ``page`` 接受 ``0``、``0.png``、``0.jpg`` 三种形式：
+    PPTAgent 实测产出 jpg，但老客户端按 ``0.png`` 请求，两者都要能命中。
+    """
     doc = svc.documents.get_for_user(job_id, user.id)
     if not doc:
         raise NotFoundError("任务不存在")
-    if not page.isdigit():
-        raise AppError(400, "页码必须是数字")
-    path = agent_job.resolve_preview(job_id, int(page))
+    m = _PREVIEW_PAGE_RE.match(page or "")
+    if not m:
+        raise AppError(400, "页码必须是数字（可带 .png/.jpg 扩展名）")
+    suffix = (m.group(2) or "").lower()
+    if suffix and suffix not in _IMAGE_MIMES:
+        raise AppError(400, "预览图扩展名不支持")
+    path = agent_job.resolve_preview(job_id, int(m.group(1)))
     if path is None:
         raise NotFoundError("预览图不存在")
-    return FileResponse(str(path), media_type="image/png")
+    media = _IMAGE_MIMES.get(path.suffix.lower(), "image/jpeg")
+    return FileResponse(str(path), media_type=media)
 
 
 @router.post("/jobs/{job_id}/cancel")

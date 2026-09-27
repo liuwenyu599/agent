@@ -502,7 +502,8 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
     /**
      * 拉取图片字节（模板预览图、PPT 逐页预览图等）。
      *
-     * 带上 token：预览图接口（/ppt/preview/...、/ppt/jobs/{id}/preview/{i}.png）
+     * 带上 token：预览图接口（/ppt/preview/...、/ppt/jobs/{id}/preview/{i}，后者返回的是
+     * PPTAgent 的真实字节，实测为 jpg 但由 Skia 按字节嗅探解码，不依赖扩展名与 MIME）
      * 都是 `Depends(get_current_user)`，不带 Authorization 会 401，
      * 界面上就永远是「生成中」占位图而看不到图。
      */

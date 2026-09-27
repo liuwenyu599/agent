@@ -56,13 +56,38 @@ docker exec justice-office-server curl -s http://justice-ppt-host:7861/
 
 ## 产物路径与「共享卷取结果」通道（可选，同机部署时推荐）
 
-PPTAgent 生成完成后，成品落在宿主机文件系统（实测）：
+PPTAgent 生成完成后，成品落在宿主机文件系统（**真机实测**，job `20260927/f8439174`，
+标题「司法局工作汇报」，4 页，耗时约 2 分钟）：
 
 ```
-/data/pptagent/workspace/<日期>/<job_id>/presentation.pptx
-                                         presentation.pdf
-                                         preview/*.png
+/data/pptagent/workspace/20260927/f8439174/
+├── .input_request.json                    提交入参（最早的日志：10:22）
+├── 司法局工作汇报.md / .pdf / .pptx        ← 都跟着标题走，**文件名随标题动态变化**
+├── intermediate_output.json               最后更新（10:24）
+├── assets/                                图表素材（problems_analysis.png 等）
+├── .history/                              各类日志 + Design/Research history jsonl
+├── .slide_images-pdf-司法局工作汇报/        ← 预览图在这（隐藏目录，名字含动态标题）
+│   ├── slide_01.jpg  36KB
+│   ├── slide_02.jpg  68KB
+│   ├── slide_03.jpg  73KB
+│   └── slide_04.jpg  31KB
+└── slides/
+    ├── global.css
+    ├── slide_01.html ~ slide_04.html       ← 页数基准
 ```
+
+三条**已确认**的推断（据此定了后端默认值）：
+
+1. **产物文件名不是固定的 `presentation.pptx`**，而是 `<标题>.pptx`（中文、动态）
+   → 后端不再匹配固定名，改为 glob（`PPT_AGENT_RESULT_GLOB`，默认 `*.pptx`），
+   在候选里挑"最新且能通过 pptx 合法性校验"的那个，并自动跳过 `~$xxx.pptx`
+   之类的 Office 锁文件和小于 8KB 的半成品。
+2. **预览图不在 `preview/`、也不是 png**，而是 `.slide_images-pdf-<标题>/slide_NN.jpg`
+   → `PPT_AGENT_PREVIEW_GLOB` 默认配置多个候选模式，命中任一即算数：
+   `.slide_images-*/*.jpg,.slide_images-*/*.png,preview/*.jpg,preview/*.png`
+   （这样换渲染后端或改扩展名都不会让预览整块失效）。
+3. `slides/slide_NN.html` 这条**猜对了**，`PPT_AGENT_SLIDE_GLOB=slides/*.html` 不变，
+   `current_page` 取它的文件数成立。
 
 后端取结果有两条通道，二选一（由 `PPT_AGENT_WORKSPACE_DIR` 是否为空决定）：
 
@@ -150,25 +175,39 @@ out[5] 是一段提问。后端处理：**不做自动代答**，把 job 置为
 `PPT_AGENT_ATTACHMENT_MAP="<后端可见目录>:<PPTAgent容器内目录>"`。
 ⚠️ 不要为了传附件去改 PPTAgent 的启动参数或重建它的容器。
 
-### R3：目录结构尚未确认，别假设
+### R3：目录结构已确认（job `20260927/f8439174`）
 
-用户两份说明不一致（是否真有 `slides/slide_NN.html` 存疑）。后端扫描走配置项
-`PPT_AGENT_PREVIEW_GLOB` / `PPT_AGENT_SLIDE_GLOB`，**找不到就降级为「只有总
-进度、没有逐页预览」，不会让 job 失败**。
+见上面「产物路径」一节的实测树。结论：
 
-确认真实结构请在 PPTAgent 宿主机执行（**只读**）：
+| 维度 | 配置项 | 默认值 | 状态 |
+|---|---|---|---|
+| 产物 pptx | `PPT_AGENT_RESULT_GLOB` | `*.pptx` | ✅ 已按实测改为通配（旧别名 `PPT_AGENT_RESULT_FILENAME` 仍兼容） |
+| 预览图 | `PPT_AGENT_PREVIEW_GLOB` | `.slide_images-*/*.jpg,.slide_images-*/*.png,preview/*.jpg,preview/*.png` | ✅ 已按实测改为多候选模式 |
+| 页数基准 | `PPT_AGENT_SLIDE_GLOB` | `slides/*.html` | ✅ 原假设成立，无需改动 |
+
+多模式用逗号（或分号）分隔；找不到就降级为「只有总进度、没有逐页预览」，
+**不会让 job 失败**。
+
+⚠️ 预览图是 **jpg**，所以 `/ppt/jobs/{id}/preview` 返回的 `url` 可能是
+`.../preview/0.jpg` 而不是 `0.png`——取值请以返回的 url 为准。后端同时接受
+`0`、`0.png`、`0.jpg` 三种请求形式（同一条路由），老客户端不会被打破。
+
+### 还想读 Pipeline 阶段的话（只读）
+
+`.history/task.log` 与 `intermediate_output.json` 可能比"数文件"更准地反映当前
+阶段。若后续要做更精细的 phase 展示，可在 PPTAgent 宿主机执行（**纯只读**，
+不触发生成、不占 GPU）：
 
 ```bash
-D=$(ls -1t /data/pptagent/workspace | head -1)          # 最新日期目录
-ls -la /data/pptagent/workspace/
-ls -la "/data/pptagent/workspace/$D"
-J=$(ls -1t "/data/pptagent/workspace/$D" | head -1)     # 最新 job 目录
-ls -laR "/data/pptagent/workspace/$D/$J"
+cd /data/pptagent/workspace/20260927/f8439174
+cat intermediate_output.json
+cat .input_request.json
+ls -la .history/
+tail -80 .history/task.log
 ```
 
-重点确认三点：① 是否有 `slides/` 目录、里面是不是 `slide_NN.html`；
-② `preview/` 下 PNG 的命名规律；③ `presentation.pptx` 是否在 job 目录根下。
-把输出发回后据此调整两个 GLOB 配置即可。
+重点看有没有一个可直接读的 **阶段字段**（Research / Design / Review 之类），
+有了它就能替换掉现在"靠文件数推断 phase"的启发式逻辑。
 
 ## 网络与容器名对齐
 

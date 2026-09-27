@@ -549,7 +549,8 @@ object PptJobEngine {
  * 生成任务页图的绝对地址。
  *
  * 后端 `/preview` 给的 `url` 是**以 /api/v1 开头的服务器绝对路径**
- * （如 `/api/v1/ppt/jobs/{id}/preview/0.png`，见 interfaces/ppt.py:420），
+ * （如 `/api/v1/ppt/jobs/{id}/preview/0.jpg`，见 interfaces/ppt.py），
+ * 扩展名按 PPTAgent 实际产出走（实测是 jpg），客户端不自己拼扩展名；
  * 必须拼在 **origin**（scheme://host:port）后面，不能拼在 baseUrl 后面——
  * 一旦用户在设置里把 baseUrl 配成带路径前缀的地址，就会拼出 `/api/v1/.../api/v1/...` 而 404。
  * 未出图的页返回 null，界面显示占位、**不发请求**。

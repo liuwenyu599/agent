@@ -78,6 +78,73 @@ _B64_FIELDS = ("file_base64", "fileBase64", "pptx_base64", "pptxBase64", "conten
 # 事件流句柄候选字段名（Gradio 5 命名端点 / Gradio 4 queue 风格）
 _EVENT_ID_FIELDS = ("event_id", "eventId", "task_id", "taskId", "job_id", "run_id", "id")
 
+# Office / LibreOffice 打开文档时产生的锁文件与临时副本，扫描产物时必须跳过，
+# 否则会拿到 0 字节或一个读写中的半成品。
+_TEMP_FILE_PREFIXES = ("~$", ".~")
+
+# 小于此字节数的 .pptx 一定不是成品（真实的 pptx 至少几十 KB），
+# 用于挡住 PPTAgent 刚创建、尚未写入完成的空壳文件。
+_MIN_PPTX_SIZE = 8 * 1024
+
+
+def split_patterns(raw: str) -> Tuple[str, ...]:
+    """把配置项里的 glob 模式拆成元组，支持逗号或分号分隔的多个候选模式。
+
+    预览图目录名与产物文件名都**随 PPT 标题动态变化**（例如真实 job 目录里的
+    ``.slide_images-pdf-司法局工作汇报/slide_01.jpg``），单个模式一旦对不上就整块
+    失效，因此允许配置多个候选、命中任一即算数。
+
+    Args:
+        raw: 原始配置值，如 ``".slide_images-*/*.jpg,preview/*.png"``。
+
+    Returns:
+        去空去重后的模式元组；输入为空时返回空元组。
+    """
+    parts = (raw or "").replace(";", ",").split(",")
+    seen: List[str] = []
+    for p in parts:
+        p = p.strip()
+        if p and p not in seen:
+            seen.append(p)
+    return tuple(seen)
+
+
+def collect_files(root: Path, patterns: Tuple[str, ...], threshold: float,
+                  min_size: int = 0) -> List[Path]:
+    """按多个 glob 模式递归搜集文件：**去重后按路径字典序排序**。
+
+    ``rglob`` 会对每个模式各 walking 一次，多个模式可能命中同一文件，所以这里用
+    绝对路径做键去重。排序保证 ``slide_01..slide_NN`` 的页序稳定可预测（文件名是
+    零填充的两位数，字典序 == 页序）。
+
+    Args:
+        root: 扫描根目录（共享卷挂载的工作区）。
+        patterns: :func:`split_patterns` 得到的模式元组。
+        threshold: mtime 下限（Unix 秒），用于只认本次任务之后落盘的文件。
+        min_size: 最小字节数，用于过滤尚未写完的空壳文件。
+
+    Returns:
+        命中的文件路径列表；任何 OSError 都被吞掉并降级为空列表——远端目录
+        随时在变，扫描失败绝不能影响主流程。
+    """
+    found: Dict[str, Path] = {}
+    for pattern in patterns:
+        try:
+            for p in root.rglob(pattern):
+                if p.name.startswith(_TEMP_FILE_PREFIXES):
+                    continue
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                if not p.is_file() or st.st_mtime < threshold or st.st_size < min_size:
+                    continue
+                found[str(p)] = p
+        except OSError as e:  # noqa: BLE001 - 扫描失败只降级
+            logger.debug("扫描模式 %s 失败（已跳过）：%s", pattern, e)
+            continue
+    return [found[k] for k in sorted(found)]
+
 
 class PPTAgentError(RuntimeError):
     """PPTAgent 调用失败（网络 / 协议 / 返回非法文件），调用方应回退本地渲染。"""
@@ -224,7 +291,7 @@ class PPTAgentClient:
         done_values: str = "succeeded,success,completed,complete,done,finished",
         fail_values: str = "failed,failure,error,cancelled,canceled,aborted,timeout",
         workspace_dir: str = "",
-        result_filename: str = "presentation.pptx",
+        result_glob: str = "",
         fresh_tolerance: int = 120,
         event_path: str = "/gradio_api/call/send_message/{event_id}",
         event_id_field: str = "",
@@ -235,7 +302,8 @@ class PPTAgentClient:
         convert_type: str = "自由生成 (freeform)",
         template_value: str = "auto",
         message_max_chars: int = 24000,
-        preview_glob: str = "preview/*.png",
+        preview_glob: str = ".slide_images-*/*.jpg,.slide_images-*/*.png,"
+                             "preview/*.jpg,preview/*.png",
         slide_glob: str = "slides/*.html",
         attachment_map: str = "",
         transport: Optional[Any] = None,
@@ -254,7 +322,10 @@ class PPTAgentClient:
         self.fail_values = {v.strip().lower() for v in fail_values.split(",") if v.strip()}
         # 共享卷取产物通道（留空则走 HTTP 三步流程）
         self.workspace_dir = (workspace_dir or "").strip()
-        self.result_filename = (result_filename or "presentation.pptx").strip()
+        # 产物匹配模式（glob，支持多模式；默认为 *.pptx —— 产物名随标题动态变化）
+        self.result_glob = (
+            (result_glob or "").strip() or getattr(settings, "PPT_AGENT_RESULT_GLOB", "*.pptx")
+            or "*.pptx")
         self.fresh_tolerance = max(0, int(fresh_tolerance))
         # ---- Gradio 真实契约相关 ----
         self.event_path = event_path or "/gradio_api/call/send_message/{event_id}"
@@ -266,7 +337,7 @@ class PPTAgentClient:
         self.convert_type = convert_type or "自由生成 (freeform)"
         self.template_value = template_value or "auto"
         self.message_max_chars = max(500, int(message_max_chars))
-        self.preview_glob = preview_glob or "preview/*.png"
+        self.preview_glob = preview_glob or ".slide_images-*/*.jpg"
         self.slide_glob = slide_glob or "slides/*.html"
         self.attachment_map = (attachment_map or "").strip()
         self._transport = transport
@@ -290,7 +361,7 @@ class PPTAgentClient:
             done_values=settings.PPT_AGENT_DONE_VALUES,
             fail_values=settings.PPT_AGENT_FAIL_VALUES,
             workspace_dir=settings.PPT_AGENT_WORKSPACE_DIR,
-            result_filename=settings.PPT_AGENT_RESULT_FILENAME,
+            result_glob=settings.PPT_AGENT_RESULT_GLOB,
             fresh_tolerance=settings.PPT_AGENT_WORKSPACE_FRESH_TOLERANCE,
             event_path=settings.PPT_AGENT_EVENT_PATH,
             event_id_field=settings.PPT_AGENT_EVENT_ID_FIELD,
@@ -311,6 +382,20 @@ class PPTAgentClient:
     def is_enabled() -> bool:
         """是否启用了 PPTAgent（URL 非空即启用）。"""
         return bool((getattr(settings, "PPT_AGENT_URL", "") or "").strip())
+
+    # ---------------- 扫描模式（多候选，抗目录结构漂移） ----------------
+
+    def preview_patterns(self) -> Tuple[str, ...]:
+        """预览图的 glob 模式元组（如 ``.slide_images-*/*.jpg``）。"""
+        return split_patterns(self.preview_glob)
+
+    def slide_patterns(self) -> Tuple[str, ...]:
+        """HTML 稿的 glob 模式元组（页数基准，默认 ``slides/*.html``）。"""
+        return split_patterns(self.slide_glob)
+
+    def result_patterns(self) -> Tuple[str, ...]:
+        """产物 pptx 的 glob 模式元组（默认 ``*.pptx``）。"""
+        return split_patterns(self.result_glob)
 
     # ---------------- 基础设施 ----------------
 
@@ -752,9 +837,20 @@ class PPTAgentClient:
     def scan_progress(self, since_ts: float, workspace: str = "") -> Dict[str, Any]:
         """扫描共享卷里的进度产物，用于逐页实时预览。
 
-        ⚠️ 目录结构尚未真机核实（用户两份说明不一致），因此：
-        - 路径全部走配置项（preview_glob / slide_glob）；
-        - **找不到就返回零值，绝不抛异常**，上层据此降级为"只有总进度"。
+        真机结构（已核实，见 ``deploy/pptagent/README.md``）::
+
+            <ws>/<日期>/<job_id>/
+              ├─ .slide_images-pdf-<标题>/slide_01.jpg   ← 预览图（目录名动态）
+              ├─ slides/slide_01.html                    ← 页数基准
+              └─ <标题>.pptx                             ← 成品（文件名动态）
+
+        因为目录名/文件名都随标题变化，这里**全部走通配多模式匹配**：
+        - 每个维度可配多个候选模式，命中任一即算数；
+        - 找不到/扫描失败就返回零值，**绝不抛异常**，上层据此降级为"只有总进度"。
+
+        Args:
+            since_ts: 本次任务提交的 Unix 时间戳（秒），用于判定"是不是本次产物"。
+            workspace: 覆盖默认工作区目录（测试用）。
 
         Returns:
             ``{"slides": int, "previews": int, "has_pptx": bool,
@@ -770,27 +866,26 @@ class PPTAgentClient:
             return info
         threshold = since_ts - self.fresh_tolerance
         try:
-            pngs = [p for p in root.rglob(self.preview_glob)
-                    if p.is_file() and p.stat().st_mtime >= threshold]
-            htmls = [p for p in root.rglob(self.slide_glob)
-                     if p.is_file() and p.stat().st_mtime >= threshold]
-            pptx = [p for p in root.rglob(self.result_filename)
-                    if p.is_file() and p.stat().st_mtime >= threshold]
+            pngs = collect_files(root, self.preview_patterns(), threshold)
+            htmls = collect_files(root, self.slide_patterns(), threshold)
+            # 产物加 min_size：过滤刚创建还没写内容（<8KB）的空壳 pptx
+            pptxs = collect_files(root, self.result_patterns(), threshold,
+                                  min_size=_MIN_PPTX_SIZE)
         except OSError as e:  # noqa: BLE001 - 扫描失败只降级，不影响 job
             logger.debug("进度扫描失败（降级为无逐页预览）：%s", e)
             return info
         info["slides"] = len(htmls)
         info["previews"] = len(pngs)
-        info["has_pptx"] = bool(pptx)
-        info["preview_files"] = [str(p) for p in sorted(pngs, key=lambda x: str(x))]
+        info["has_pptx"] = bool(pptxs)
+        info["preview_files"] = [str(p) for p in pngs]
         return info
 
     def wait_for_workspace_result(self, since_ts: float, deadline: float) -> bytes:
         """共享卷通道：等产物文件落盘并校验，取结果**不依赖**未文档化的 HTTP 端点。
 
-        PPTAgent 的成品稳定落在 ``<workspace>/<日期>/<job_id>/presentation.pptx``。
-        提交成功后这里递归扫描，取"本次提交之后新落盘、且最新"的那个文件。
-        这样即使完全拿不到 job_id、也猜不对结果端点，仍能把正确产物取回来。
+        产物文件名**随标题动态变化**（真机实测为 ``<标题>.pptx``，如
+        ``司法局工作汇报.pptx``），所以这里按 glob 模式搜集候选，再从中挑
+        "最新且能通过 pptx 合法性校验"的那个，而不是认死一个文件名。
 
         Args:
             since_ts: 提交任务时的 Unix 时间戳（秒），用于判定产物是否本次生成。
@@ -804,35 +899,29 @@ class PPTAgentClient:
             raise PPTAgentError("未配置工作区目录（PPT_AGENT_WORKSPACE_DIR）")
         if not root.is_dir():
             raise PPTAgentError(f"工作区目录不存在或不可读：{root}")
+        patterns = self.result_patterns()
         logger.info("PPTAgent 走共享卷通道：扫描 %s 下的 %s（只认 %s 之后落盘的文件）",
-                    root, self.result_filename,
+                    root, " / ".join(patterns) or "<无匹配模式>",
                     time.strftime("%H:%M:%S", time.localtime(since_ts)))
         # 容忍两端时钟偏差，避免产物因"看起来更旧"被漏掉
         threshold = since_ts - self.fresh_tolerance
         warned_half_written = False
         while True:
-            newest: Optional[Path] = None
-            newest_mtime = 0.0
-            try:
-                for p in root.rglob(self.result_filename):
-                    try:
-                        mtime = p.stat().st_mtime
-                    except OSError:
-                        continue
-                    if mtime >= threshold and mtime > newest_mtime:
-                        newest, newest_mtime = p, mtime
-            except OSError as e:  # noqa: BLE001
-                raise PPTAgentError(f"扫描工作区失败：{e}") from e
-            if newest is not None:
+            candidates = collect_files(root, patterns, threshold,
+                                       min_size=_MIN_PPTX_SIZE)
+            # 按修改时间倒序：优先取最新产物；若它还没写完就顺位看次新的
+            candidates.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            for p in candidates:
                 try:
-                    data = newest.read_bytes()
-                except OSError as e:  # noqa: BLE001
-                    raise PPTAgentError(f"读取产物失败：{e}") from e
+                    data = p.read_bytes()
+                except OSError as e:  # noqa: BLE001 - 文件可能正被删除/重写
+                    logger.debug("读取产物候选失败，跳过：%s（%s）", p, e)
+                    continue
                 ok, why = looks_like_pptx(data)
                 if ok:
-                    logger.info("共享卷取到产物：%s（%d 字节）", newest, len(data))
+                    logger.info("共享卷取到产物：%s（%d 字节）", p, len(data))
                     return data
-                # 文件可能正在写入中（半包），下一轮再看
+                # 文件可能正在写入中（半包），换个候选或下一轮再看
                 if not warned_half_written:
                     logger.warning("产物已出现但尚不完整（%s），继续等待", why)
                     warned_half_written = True
@@ -840,7 +929,7 @@ class PPTAgentClient:
             if remaining <= 0:
                 raise PPTAgentError(
                     f"等待产物超时：{self.total_timeout}s 内 {root} 下未出现合法的 "
-                    f"{self.result_filename}")
+                    f"{' / '.join(patterns) or '<无匹配模式>'}")
             time.sleep(min(self.poll_interval, remaining))
 
     def _try_extract_pptx(self, r: httpx.Response) -> Optional[bytes]:
