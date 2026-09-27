@@ -64,6 +64,7 @@ import com.judicialai.desktop.design.components.AppIconButton
 import com.judicialai.desktop.design.components.AppTextField
 import com.judicialai.desktop.design.components.Hairline
 import com.judicialai.desktop.design.components.LoadingBlock
+import com.judicialai.desktop.design.components.MarkdownView
 import com.judicialai.desktop.design.components.NoticeBar
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Danger
@@ -474,7 +475,10 @@ private fun ChatViewDialog(
     }
 }
 
-/** 文档预览：弹窗内只读查看；需要编辑/存版本/导出时带 id 跳「我的文档」页 */
+/**
+ * 文档预览：弹窗内只读查看；需要编辑/存版本/导出时带 id 跳「我的文档」页。
+ * 正文用共享的 [MarkdownView] 带格式渲染（标题/粗体/列表），不再是裸 txt。
+ */
 @Composable
 private fun DocPreviewDialog(vm: ChatViewModel) {
     val doc = vm.openedDoc
@@ -501,12 +505,12 @@ private fun DocPreviewDialog(vm: ChatViewModel) {
             vm.openedDocLoading -> LoadingBlock("正在打开文档…")
             doc == null -> Text("文档加载失败或已被删除", fontSize = 13.sp, color = Muted)
             else -> SelectionContainer {
-                Text(
-                    doc["content"].str().ifBlank { "（暂无内容）" },
-                    fontSize = 13.5.sp, lineHeight = 22.sp, color = Ink,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 440.dp)
                         .verticalScroll(rememberScrollState()),
-                )
+                ) {
+                    MarkdownView(doc["content"].str().ifBlank { "（暂无内容）" })
+                }
             }
         }
     }
