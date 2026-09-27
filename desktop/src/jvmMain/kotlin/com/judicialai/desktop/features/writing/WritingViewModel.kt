@@ -25,6 +25,14 @@ import java.io.File
 /** 工作台对话消息 */
 data class TaskChatMessage(val role: String, val content: String)
 
+/** 图片识别结果（写作台「上传图片识别」，服务端视觉模型 Qwen2.5-VL 识别） */
+data class RecognizedImage(
+    val filename: String,
+    val text: String,
+    val note: String,
+    val ok: Boolean,
+)
+
 /**
  * 写作任务状态（对应后端 task_context）。
  * 所有字段的权威来源是后端返回；前端字段可编辑，编辑后 PATCH 同步回后端。
@@ -121,6 +129,12 @@ class WritingViewModel(
 
     /** 规划失败原因（后端不支持 / 模型不可用时的真实提示） */
     var planError by mutableStateOf<String?>(null)
+        private set
+
+    /** 图片识别（视觉模型）：进行中标记与最近一批识别结果 */
+    var recognizingImages by mutableStateOf(false)
+        private set
+    var imageResults by mutableStateOf(listOf<RecognizedImage>())
         private set
 
     val hasTask: Boolean get() = task.taskId != null
@@ -643,6 +657,54 @@ class WritingViewModel(
         }
     }
 
+    // ---------------- 图片识别（视觉模型） ----------------
+
+    /**
+     * 上传图片并由服务端视觉模型（Qwen2.5-VL）识别为文字。
+     * 识别结果同时由服务端绑定到任务会话：之后的起草/修改自动把识别文本
+     * 作为材料注入上下文，无需再手动粘贴。结果在弹窗中展示，可一键插入正文。
+     */
+    fun recognizeImages(files: List<File>) {
+        val id = task.taskId ?: return
+        if (files.isEmpty() || busy || recognizingImages) return
+        recognizingImages = true
+        status = "正在识别图片（视觉模型，图片较多时可能需要一两分钟）…"
+        scope.launch {
+            when (val r = repo.recognizeImages(id, files)) {
+                is ApiResult.Ok -> {
+                    val (items, vision) = r.data
+                    imageResults = imageResults + items.map {
+                        RecognizedImage(
+                            filename = it["filename"].str(),
+                            text = it["text"].str(),
+                            note = it["parse_note"].str(),
+                            ok = it["parse_status"].str() != "failed",
+                        )
+                    }
+                    status = if (vision) {
+                        "已识别 ${items.size} 张图片；识别文本已作为材料绑定本次写作，" +
+                            "下次起草/修改会自动参考"
+                    } else {
+                        "服务端未配置视觉模型（VISION_MODEL_URL），本次走 OCR/文本通道"
+                    }
+                }
+                is ApiResult.Err -> fail(r.message)
+            }
+            recognizingImages = false
+        }
+    }
+
+    /** 把某条识别结果追加到正文末尾（作为用户手改，不影响服务端版本链） */
+    fun insertImageText(item: RecognizedImage) {
+        if (item.text.isBlank()) return
+        content = (content.trimEnd() + "\n\n" + item.text.trim()).trim()
+        status = "已把「${item.filename}」的识别文本插入正文末尾"
+    }
+
+    fun dismissImageResults() {
+        imageResults = emptyList()
+    }
+
     // ---------------- 版本 / 导出 / 训练 ----------------
 
     fun saveVersion(note: String? = null) {
@@ -805,6 +867,8 @@ class WritingViewModel(
         chatInput = ""
         status = null
         versionPreview = null
+        imageResults = emptyList()
+        recognizingImages = false
         closeDocument()
     }
 
