@@ -364,6 +364,53 @@ class TemplateService:
                 ""]
         return "\n".join(head) + (src.content_template or "")
 
+    def _inherit_from_source(self, body: dict) -> dict:
+        """要素缺失时从源模板继承填写要素与写作配置（防御性兜底）。
+
+        触发条件：``params_schema`` 为空（前端漏传字段 / 旧客户端调用）且请求带了
+        ``source_template_id``。命中后把源模板的 ``params_schema``、``structure``、
+        ``system_prompt``、``writing_guide``、``writing_style``、``word_count`` 与
+        ``need_*`` 标志一并继承过来，避免落库出「无需填写要素」的空模板。
+
+        源模板取不到（ID 不存在 / 已被删除 / 查询异常）时原样返回，不抛异常。
+
+        Args:
+            body: 客户端提交的请求体，不会被就地修改。
+
+        Returns:
+            补全后的新 dict；无需继承时返回原 ``body``。
+        """
+        if body.get("params_schema"):
+            return body
+        source_id = str(body.get("source_template_id") or "").strip()
+        if not source_id:
+            return body
+        try:
+            src = self.templates.get(source_id)
+        except Exception as e:  # 源模板查询异常不应阻断保存
+            logger.warning("[模板] 源模板读取失败，跳过要素继承: %s", e)
+            return body
+        if not src:
+            logger.warning("[模板] 源模板不存在(%s)，跳过要素继承", source_id)
+            return body
+
+        merged = dict(body)
+        merged.update({
+            "params_schema": getattr(src, "params_schema", None) or [],
+            "structure": getattr(src, "structure", None) or [],
+            "system_prompt": getattr(src, "system_prompt", None) or "",
+            "writing_guide": getattr(src, "writing_guide", None) or "",
+            "writing_style": getattr(src, "writing_style", None) or "正式公文",
+            "word_count": getattr(src, "word_count", None) or 1000,
+            "need_red_header": bool(getattr(src, "need_red_header", False)),
+            "need_signature": bool(getattr(src, "need_signature", True)),
+            "need_date": bool(getattr(src, "need_date", True)),
+            "need_doc_number": bool(getattr(src, "need_doc_number", False)),
+        })
+        logger.info("[模板] 科室模板要素为空，已从源模板 %s 继承 %d 项要素",
+                    source_id, len(merged["params_schema"]))
+        return merged
+
     def save_department_template(self, user: User, body: dict) -> dict:
         """人工确认后保存为本科室模板（服务端强制写入本人所属科室）。"""
         role = getattr(user, "role", "") or ""
@@ -372,6 +419,8 @@ class TemplateService:
         dept_code = self._dept_code_of(user)
         if not dept_code:
             raise PermissionDeniedError("当前账号未归属科室，无法保存科室模板")
+
+        body = self._inherit_from_source(body)
 
         name = str(body.get("name") or "").strip()
         content = str(body.get("content_template") or "").strip()

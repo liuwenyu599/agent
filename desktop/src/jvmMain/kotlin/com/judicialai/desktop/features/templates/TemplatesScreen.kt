@@ -588,14 +588,14 @@ private fun AdaptDialog(vm: TemplatesViewModel, onDismiss: () -> Unit) {
     val base = vm.preview
     var hints by remember { mutableStateOf("") }
     val draft = vm.draft
-    var name by remember { mutableStateOf(draft?.get("name").orEmpty()) }
-    var content by remember { mutableStateOf(draft?.get("content_template").orEmpty()) }
+    var name by remember { mutableStateOf(draft?.get("name").str()) }
+    var content by remember { mutableStateOf(draft?.get("content_template").str()) }
     // 科室管理员 / 系统管理员保存为科室模板，普通用户保存为我的模板
     val asDept = vm.canSaveDeptTemplate
 
     LaunchedEffect(draft?.get("content_template")) {
-        name = draft?.get("name").orEmpty()
-        content = draft?.get("content_template").orEmpty()
+        name = draft?.get("name").str()
+        content = draft?.get("content_template").str()
     }
 
     AppDialog(

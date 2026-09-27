@@ -8,12 +8,15 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.app.PendingTemplateWrite
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.bool
+import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 
 class TemplatesViewModel(private val repo: TemplatesRepository) {
@@ -42,8 +45,13 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var adaptError by mutableStateOf<String?>(null)
         private set
 
-    /** AI 调整草案（未落库，AI 建议 + 人工确认后才保存） */
-    var draft by mutableStateOf<Map<String, String>?>(null)
+    /**
+     * AI 调整草案（未落库，AI 建议 + 人工确认后才保存）。
+     * 直接持有后端 adapt_for_department 返回的完整 JSON 对象，
+     * 保存时透传全部字段（含 params_schema / structure / system_prompt 等），
+     * 避免逐字段挑选时漏掉要素导致科室模板不可填写。
+     */
+    var draft by mutableStateOf<JsonObject?>(null)
         private set
 
     /** 右侧预览：选中模板后拉取完整结构（列表接口不带正文） */
@@ -153,15 +161,8 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         scope.launch {
             when (val r = repo.adaptForDept(t["id"].str(), hints)) {
                 is ApiResult.Ok -> {
-                    val o = r.data.obj()
-                    draft = if (o == null) null else mapOf(
-                        "source_template_id" to o["source_template_id"].str(),
-                        "name" to o["name"].str(),
-                        "dept_name" to o["dept_name"].str(),
-                        "category" to o["category"].str(),
-                        "content_template" to o["content_template"].str(),
-                        "source" to o["source"].str(),
-                    )
+                    // 整份草案原样保留：后续保存时按完整字段透传，不再手工挑字段。
+                    draft = r.data.obj()
                     if (draft == null) status = "未生成模板调整草案"
                 }
                 is ApiResult.Err -> status = r.message
@@ -181,21 +182,60 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
             status = "模板名称与正文不能为空"
             return
         }
+        // 从草案里取完整字段：缺失时按后端默认值回落，避免存出空要素模板。
+        val category = d["category"].str().ifBlank { "科室模板" }
+        val baseType = d["base_type"].str().ifBlank { "公文" }
+        val templateKind = d["template_kind"].str().ifBlank { "official_doc" }
+        val writingStyle = d["writing_style"].str().ifBlank { "正式公文" }
+        val wordCount = d["word_count"].int().let { if (it > 0) it else 1000 }
+        // 数组字段原样透传 JSON（ApiClient 支持 JsonElement 直通），缺省给空数组。
+        val paramsSchema = d["params_schema"] ?: JsonArray(emptyList())
+        val structure = d["structure"] ?: JsonArray(emptyList())
+        val tags = d["tags"] ?: JsonArray(emptyList())
+
         scope.launch {
             val r = if (canSaveDeptTemplate) {
                 repo.saveDeptTemplate(mapOf(
                     "name" to name,
                     "content_template" to content,
-                    "category" to d["category"].orEmpty(),
-                    "source_template_id" to d["source_template_id"].orEmpty(),
+                    "category" to category,
+                    "base_type" to baseType,
+                    "description" to d["description"].str(),
+                    "params_schema" to paramsSchema,
+                    "structure" to structure,
+                    "system_prompt" to d["system_prompt"].str(),
+                    "writing_guide" to d["writing_guide"].str(),
+                    "writing_style" to writingStyle,
+                    "word_count" to wordCount,
+                    "need_red_header" to d["need_red_header"].bool(),
+                    "need_signature" to d["need_signature"].bool(true),
+                    "need_date" to d["need_date"].bool(true),
+                    "need_doc_number" to d["need_doc_number"].bool(),
+                    "template_kind" to templateKind,
+                    "tags" to tags,
+                    "source_template_id" to d["source_template_id"].str(),
                 ))
             } else {
                 repo.create(mapOf(
                     "name" to name,
-                    "category" to d["category"].orEmpty(),
+                    "category" to category,
+                    "base_type" to baseType,
                     "content_template" to content,
-                    "description" to "基于系统模板按个人写作习惯调整",
+                    "description" to d["description"].str()
+                        .ifBlank { "基于系统模板按个人写作习惯调整" },
                     "visibility" to "personal",
+                    "params_schema" to paramsSchema,
+                    "structure" to structure,
+                    "system_prompt" to d["system_prompt"].str(),
+                    "writing_guide" to d["writing_guide"].str(),
+                    "writing_style" to writingStyle,
+                    "word_count" to wordCount,
+                    "need_red_header" to d["need_red_header"].bool(),
+                    "need_signature" to d["need_signature"].bool(true),
+                    "need_date" to d["need_date"].bool(true),
+                    "need_doc_number" to d["need_doc_number"].bool(),
+                    "template_kind" to templateKind,
+                    "tags" to tags,
                 ))
             }
             when (r) {
