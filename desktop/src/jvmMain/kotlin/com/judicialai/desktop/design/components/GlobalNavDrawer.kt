@@ -124,7 +124,21 @@ fun GlobalNavDrawer(
                     Spacer(Modifier.height(Dimens.space5))
 
                     for (group in AppNav.drawerGroups()) {
-                        val items = group.items.filter(match)
+                        if (group.requiresAdmin && !isAdmin) continue
+                        val items = group.items.filter { item ->
+                            when {
+                                // 用户与角色是系统级账号管理，只允许系统管理员。
+                                item.screen == AppScreen.ADMIN && item.adminTab == 1 ->
+                                    AppState.isDeveloper
+                                // 知识库管理允许科室管理员进入，服务端再按科室做最终隔离。
+                                item.screen == AppScreen.ADMIN && item.adminTab == 2 ->
+                                    AppState.isAdmin
+                                // 管理分组里的“系统设置”不向科室管理员展示。
+                                item.screen == AppScreen.SETTINGS && group.requiresAdmin ->
+                                    AppState.isDeveloper
+                                else -> true
+                            }
+                        }.filter(match)
                         if (items.isEmpty()) continue
                         DrawerGroupTitle(group)
                         Spacer(Modifier.height(Dimens.space2))
