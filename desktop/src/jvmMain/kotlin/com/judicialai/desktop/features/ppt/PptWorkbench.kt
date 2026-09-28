@@ -477,7 +477,7 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
     AppDialog(
         onDismissRequest = onDismiss,
         title = "AI 生成 PPT",
-        subtitle = "将按当前大纲与所选模板，由 PPTAgent 真实渲染生成 .pptx 文件。",
+        subtitle = "将根据当前大纲与所选视觉风格生成可编辑的 .pptx 文件。",
         width = 480.dp,
         actions = {
             AppButton("再改改", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
@@ -494,7 +494,7 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
         Text("共 ${vm.slides.size} 页 · 模板：$curName", fontSize = 13.sp, color = Ink)
         Spacer(Modifier.height(6.dp))
         Text(
-            "这是 AI 智能设计路线：PPTAgent 会结合当前大纲和所选模板逐页设计并排版，" +
+            "AI 会结合当前大纲和所选视觉风格逐页设计并排版，" +
                 "不是简单套用本地模板。预计需要 5–15 分钟。底部的“保存草稿”仅保存当前内容，" +
                 "不会触发 AI 设计。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp,
