@@ -345,7 +345,7 @@ private val GwHeading2Regex = Regex("^（[一二三四五六七八九十]+）[^�
 
 /** 正文段首缩进两字符（14.5sp 正文 ≈ 29sp），即「段前空格」的视觉效果 */
 private val BodyParagraphStyle = ParagraphStyle(
-    textIndent = TextIndent(firstLine = 29.sp, restLine = 0.sp),
+    textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
 )
 
 /**
@@ -371,22 +371,22 @@ private fun FormattedLine(raw: String) {
             fontWeight = FontWeight.Bold, color = Ink, lineHeight = 26.sp,
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         GwHeading1Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 15.5.sp, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = 26.sp)
+            inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Bold,
+            color = Ink, lineHeight = 28.8.sp)
         GwHeading2Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
-            color = Ink, lineHeight = 25.sp)
+            inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Medium,
+            color = Ink, lineHeight = 28.8.sp)
         s.startsWith("- ") || s.startsWith("* ") -> Row {
-            Text("•  ", fontSize = 14.5.sp, color = Ink)
-            Text(inlineMd(s.substring(2)), fontSize = 14.5.sp, color = Ink,
-                lineHeight = 26.sp)
+            Text("•  ", fontSize = 16.sp, color = Ink)
+            Text(inlineMd(s.substring(2)), fontSize = 16.sp, color = Ink,
+                lineHeight = 28.8.sp)
         }
         OrderedListRegex.matches(s) -> {
             val idx = s.indexOf('.')
             Row {
                 Text(s.substring(0, idx + 1) + "  ", fontSize = 14.5.sp, color = Ink)
-                Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 14.5.sp,
-                    color = Ink, lineHeight = 26.sp)
+                Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 16.sp,
+                    color = Ink, lineHeight = 28.8.sp)
             }
         }
         s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
@@ -394,8 +394,8 @@ private fun FormattedLine(raw: String) {
         else -> Text(
             inlineMd(s),
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp,
-                textIndent = TextIndent(firstLine = 29.sp, restLine = 0.sp),
+                fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp,
+                textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
             ),
         )
     }
@@ -453,7 +453,7 @@ private fun FormattedBodyEditor(vm: WritingViewModel) {
                         onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 14.5.sp, color = Ink, lineHeight = 24.sp),
+                            fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp),
                         shape = RoundedCornerShape(Dimens.radiusXs),
                         colors = TextFieldDefaults.outlinedTextFieldColors(
                             backgroundColor = SurfaceTonal,
@@ -1091,25 +1091,45 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     Text("点击段落即可修改", fontSize = 11.sp, color = Muted2)
                     Spacer(Modifier.width(Dimens.space3))
                 }
-                AppLinkButton(if (sourceMode) "退出源码" else "源码模式",
+                AppLinkButton(if (sourceMode) "返回排版视图" else "纯文本编辑",
                     onClick = { sourceMode = !sourceMode })
             }
-            Spacer(Modifier.height(Dimens.space4))
-            if (vm.task.title.isNotBlank()) {
-                Text(vm.task.title, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    color = Ink, lineHeight = 30.sp)
-                Spacer(Modifier.height(Dimens.space4))
-            }
-            Hairline()
             Spacer(Modifier.height(Dimens.space3))
+            if (!sourceMode) {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .background(SurfaceTonal)
+                        .padding(horizontal = Dimens.space3, vertical = Dimens.space2),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("排版视图", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
+                        color = Primary)
+                    Spacer(Modifier.width(Dimens.space3))
+                    Text("标题 22pt · 正文 16pt · 行距 28.8pt · 首行缩进 2 字符",
+                        fontSize = 11.sp, color = Muted)
+                }
+                Spacer(Modifier.height(Dimens.space5))
+            }
+            if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
+                Text(vm.task.documentNumber, fontSize = 14.sp,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    color = Ink2, lineHeight = 22.sp)
+                Spacer(Modifier.height(Dimens.space3))
+            }
+            if (vm.task.title.isNotBlank()) {
+                Text(vm.task.title, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    color = Ink, lineHeight = 34.sp)
+                Spacer(Modifier.height(Dimens.space5))
+            }
             if (sourceMode) {
                 OutlinedTextField(
                     value = vm.content,
                     onValueChange = { vm.content = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp),
+                        fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp),
                     shape = RoundedCornerShape(Dimens.radiusMd),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         backgroundColor = Surface,
