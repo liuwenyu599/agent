@@ -197,7 +197,7 @@ private fun PptJobRunningBanner(job: PptJobProgress) {
             color = MaterialTheme.colors.primary)
         Spacer(Modifier.width(8.dp))
         Text(
-            if (clarifying) "AI 需要你回答一个问题才能继续，请切到「新建 PPT」查看"
+            if (clarifying) "AI 需要你回答一个问题才能继续，请返回 PPT 创建页处理"
             else job.stageText.ifBlank { "生成完成后会自动保存，可先去其他页面" },
             style = MaterialTheme.typography.caption, color = SecondaryText,
             modifier = Modifier.weight(1f))
@@ -433,7 +433,7 @@ internal fun TemplatePicker(vm: PptViewModel) {
             }
         }
         if (vm.templates.isEmpty()) {
-            Text("模板加载中或为空，可到“模板库”上传。", style = MaterialTheme.typography.caption,
+            Text("模板加载中或为空，可进入右上角“模板管理”上传。", style = MaterialTheme.typography.caption,
                 color = SecondaryText, modifier = Modifier.align(Alignment.CenterVertically))
         }
     }
@@ -579,7 +579,7 @@ private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
                 }
             }
             if (vm.documents.isEmpty()) item {
-                Text("暂无 PPT，可到“新建 PPT”生成，或点击上方“导入 PPT 续改”。",
+                Text("暂无 PPT，可返回创建页生成，或点击上方“导入 PPT 续改”。",
                     style = MaterialTheme.typography.caption, color = SecondaryText)
             }
         }
