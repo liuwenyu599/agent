@@ -1,9 +1,9 @@
-"""工作流应用服务：模板初始化、实例管理、上下文解析、节点 AI 生成、AI 调整流程。
+"""工作流程应用服务：模板初始化、实例管理、上下文解析、节点 AI 生成、AI 调整流程。
 
 上下文（workflow_context）统一存储在实例的 basic_info JSON 列中，
 沿用旧系统约定（字段键 meeting_name 等标准键 + 自由键）。
 
-工作流不是僵硬的固定模板：实例创建者或科室/系统管理员可以用自然语言
+工作流程不是僵硬的固定模板：实例创建者或科室/系统管理员可以用自然语言
 让 AI 调整节点（增/删/改名/改写作要求/调顺序），结构调整发生在实例专属
 的模板副本上，公共模板不被污染，同名节点已生成的内容保留不丢。
 """
@@ -150,11 +150,11 @@ class WorkflowService:
             owner = self.db.get(UserModel, inst.user_id)
             if owner and owner.department_code == user.department_code:
                 return inst
-        raise PermissionDeniedError("无权访问该工作流程程")
+        raise PermissionDeniedError("无权访问该工作流程")
 
     # ========== AI 调整流程 ==========
     def ai_adjust_instance(self, user: User, inst_id: str, instruction: str) -> dict:
-        """AI 调整工作流程程节点：增 / 删 / 改名 / 改写作要求 / 调顺序。
+        """AI 调整工作流程节点：增 / 删 / 改名 / 改写作要求 / 调顺序。
 
         用户用自然语言说明怎么改，LLM 输出目标节点清单，服务端与现状对账后
         落库——同名节点保留已生成的内容与状态，新增节点补默认写作要求。
@@ -214,7 +214,7 @@ class WorkflowService:
         except LLMJsonError as e:
             logger.warning("AI 调整工作流程返回内容无法解析：%s", e.message)
             raise AppError(500, "AI 调整失败：AI 这次返回的内容格式不规范，"
-                                "工作流未被修改，请重试")
+                                "工作流程未被修改，请重试")
         except Exception as e:
             logger.exception("AI 调整工作流程失败")
             raise AppError(500, f"AI 调整失败: {e}")
@@ -296,7 +296,7 @@ class WorkflowService:
         reply = (f"已按您的要求调整流程：保留 {kept} 个节点"
                  f"{'（已写内容不丢）' if kept else ''}，"
                  f"新增 {added} 个，移除 {removed} 个。")
-        logger.info("[工作流] AI 调整: inst=%s kept=%d added=%d removed=%d",
+        logger.info("[工作流程] AI 调整: inst=%s kept=%d added=%d removed=%d",
                     inst.id, kept, added, removed)
         result = self._instance_to_dict(inst)
         result["reply"] = reply
@@ -457,7 +457,7 @@ JSON："""
             dependency_note = "\n【数据依赖】本节点需要结合「会议纪要」和「会议材料」提炼宣传要点。"
         prompt = f"""你是司法行政机关的公文写作助手。请为以下工作流程节点撰写内容。
 
-【工作流】{inst.title}
+【工作流程】{inst.title}
 【当前节点】{node.name}（{node.stage}）
 【写作要求】{node.write_guide or '内容规范、详实、可直接使用'}
 {dependency_note}
