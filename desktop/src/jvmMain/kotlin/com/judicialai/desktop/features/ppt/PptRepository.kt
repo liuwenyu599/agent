@@ -39,6 +39,13 @@ class PptRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    /** PPT 可选知识库（服务端已按可见范围过滤）→ [{id, name, description, doc_count}] */
+    suspend fun kbs(): ApiResult<List<JsonObject>> =
+        when (val r = api.get(Endpoints.Ppt.KBS)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+            is ApiResult.Err -> r
+        }
+
     suspend fun uploadTemplate(file: File) =
         api.upload(Endpoints.Ppt.TEMPLATE_UPLOAD, "file", listOf(file), timeoutMs = 300_000)
 
@@ -48,10 +55,12 @@ class PptRepository(private val api: ApiClient) {
     suspend fun outline(
         sourceType: String, topic: String, content: String,
         slideCount: Int, audience: String, scene: String,
+        kbIds: List<String> = emptyList(),
     ): ApiResult<Pair<String?, String>> {
         val body = mapOf(
             "source_type" to sourceType, "topic" to topic, "content" to content,
             "slide_count" to slideCount, "audience" to audience, "scene" to scene,
+            "kb_ids" to kbIds,
         )
         return when (val r = api.post(Endpoints.Ppt.OUTLINE, body, timeoutMs = 180_000)) {
             is ApiResult.Ok -> {
