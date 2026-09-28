@@ -54,14 +54,16 @@ class PptRepository(private val api: ApiClient) {
     /** 返回 (docId, outlineJson) */
     suspend fun outline(
         sourceType: String, topic: String, content: String,
-        slideCount: Int, audience: String, scene: String,
+        slideCount: Int?, audience: String, scene: String,
         kbIds: List<String> = emptyList(),
     ): ApiResult<Pair<String?, String>> {
-        val body = mapOf(
+        val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
-            "slide_count" to slideCount, "audience" to audience, "scene" to scene,
+            "audience" to audience, "scene" to scene,
             "kb_ids" to kbIds,
-        )
+        ).apply {
+            slideCount?.let { put("slide_count", it) }
+        }
         return when (val r = api.post(Endpoints.Ppt.OUTLINE, body, timeoutMs = 180_000)) {
             is ApiResult.Ok -> {
                 val d = r.data.obj()
