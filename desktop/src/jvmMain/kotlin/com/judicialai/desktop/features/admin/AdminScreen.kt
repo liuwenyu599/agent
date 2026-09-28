@@ -78,9 +78,20 @@ import kotlinx.serialization.json.JsonObject
 @Composable
 fun AdminScreen() {
     val vm = remember { AdminViewModel(Repositories.admin) }
-    var tab by remember { mutableStateOf(AppState.adminTab) }
-    LaunchedEffect(Unit) { vm.loadAll() }
-    LaunchedEffect(AppState.adminTab) { tab = AppState.adminTab }
+    val systemAdmin = AppState.isDeveloper
+    fun initialTab(): Int = if (systemAdmin) AppState.adminTab.coerceIn(0, 3)
+        else if (AppState.adminTab == 3) 1 else 0
+    var tab by remember(systemAdmin) { mutableStateOf(initialTab()) }
+
+    LaunchedEffect(Unit, systemAdmin) {
+        if (systemAdmin) vm.loadAll()
+        else {
+            // 科室管理员只加载其职责范围内的数据，不触发系统级用户/全局统计接口。
+            vm.loadKbs()
+            vm.loadDocs()
+        }
+    }
+    LaunchedEffect(AppState.adminTab, systemAdmin) { tab = initialTab() }
 
     Column(
         Modifier.fillMaxSize().background(AppBg).padding(Dimens.space6),
@@ -88,22 +99,33 @@ fun AdminScreen() {
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
-                Eyebrow("管理能力")
+                Eyebrow(if (systemAdmin) "系统管理" else "科室知识管理")
                 Spacer(Modifier.height(Dimens.space1))
-                Text("管理后台", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Text(if (systemAdmin) "管理后台" else "知识管理",
+                    fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             }
         }
+        val tabs = if (systemAdmin)
+            listOf("数据概览", "用户管理", "知识库管理", "文档审核")
+        else listOf("知识库管理", "文档审核")
         AppSegmentedTabs(
-            tabs = listOf("数据概览", "用户管理", "知识库管理", "文档审核"),
-            selectedIndex = tab.coerceIn(0, 3),
+            tabs = tabs,
+            selectedIndex = tab.coerceIn(tabs.indices),
             onSelect = { tab = it },
         )
         Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-            when (tab.coerceIn(0, 3)) {
-                0 -> StatsTab(vm)
-                1 -> UsersTab(vm)
-                2 -> KbTab(vm)
-                else -> DocsTab(vm)
+            if (systemAdmin) {
+                when (tab.coerceIn(0, 3)) {
+                    0 -> StatsTab(vm)
+                    1 -> UsersTab(vm)
+                    2 -> KbTab(vm)
+                    else -> DocsTab(vm)
+                }
+            } else {
+                when (tab.coerceIn(0, 1)) {
+                    0 -> KbTab(vm)
+                    else -> DocsTab(vm)
+                }
             }
         }
         vm.status?.let {
