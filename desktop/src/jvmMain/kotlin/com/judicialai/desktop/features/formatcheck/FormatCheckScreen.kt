@@ -27,8 +27,10 @@ import androidx.compose.material.Card
 import androidx.compose.material.Checkbox
 import androidx.compose.material.Divider
 import androidx.compose.material.Icon
+import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -47,9 +49,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ParagraphStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.core.platform.pickFiles
@@ -63,6 +73,7 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.AppIconButton
+import com.judicialai.desktop.design.components.AppLinkButton
 import com.judicialai.desktop.design.components.EmptyState
 import com.judicialai.desktop.design.components.FilterChip
 import com.judicialai.desktop.design.components.LoadingBlock
@@ -101,12 +112,13 @@ import java.io.File
 /**
  * 公文格式审校工作台（三栏）
  *
- * 左：校验记录（上传 / 打开 / 删除）  中：连续文本编辑器（版本切换 / 缩放 / 问题定位）
+ * 左：校验记录（上传 / 打开 / 删除）  中：分块格式化编辑器（版本切换 / 缩放 / 问题定位）
  * 右：校验结果（修改前后对照 / 应用 / 撤销 / 重新校验 / 导出）
  *
- * 中栏说明：整篇文档是一个连续可编辑的 BasicTextField，段落间用单个换行连接。
- * 「修改前」只读，「当前版本」可编辑；手动编辑后点「保存修改」写回服务端成为新基线
- * 并自动重新校验；不保存只影响本地预览。导出修正稿 = 新基线 + 已应用的自动修正。
+ * 中栏说明：按段落分块渲染公文格式（首行标题居中加粗、「一、」「（一）」层级行加粗、
+ * 正文段首缩进两字符、**粗体** 行内生效），「当前版本」点击任意段落就地编辑，
+ * 「修改前」只读；手动编辑后点「保存修改」写回服务端成为新基线并自动重新校验；
+ * 不保存只影响本地预览。导出修正稿 = 新基线 + 已应用的自动修正。
  */
 @Composable
 fun FormatCheckScreen() {
@@ -276,13 +288,145 @@ private fun RecordRow(
 }
 
 // ============================================================
-// 中栏：连续文本编辑器
+// 中栏：分块格式化编辑器
 // ============================================================
+
+/** 公文层级标题行识别（与写作台同口径）：纯文本段落也要按标题样式渲染 */
+private val FcHeading1Regex = Regex("^[一二三四五六七八九十百]+、[^。；，]{2,60}$")
+private val FcHeading2Regex = Regex("^（[一二三四五六七八九十]+）[^。；，]{2,60}$")
+
+/** 行内格式：解析 **粗体**，其余原样输出（与写作台 inlineMd 同口径） */
+private fun fcInline(text: String): AnnotatedString = buildAnnotatedString {
+    val regex = Regex("\\*\\*(.+?)\\*\\*")
+    var last = 0
+    for (m in regex.findAll(text)) {
+        append(text.substring(last, m.range.first))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(m.groupValues[1]) }
+        last = m.range.last + 1
+    }
+    append(text.substring(last))
+}
+
+/**
+ * 单段落的公文格式渲染：
+ * 首段按公文标题（居中加粗放大）；「一、」「（一）」层级行加粗；
+ * 其余正文段首缩进两字符；**粗体** 行内生效。字号跟随缩放档位 baseSp。
+ */
+@Composable
+private fun FcLine(raw: String, index: Int, baseSp: Float) {
+    val s = raw.trim()
+    val size = baseSp.sp
+    when {
+        s.isBlank() -> Spacer(Modifier.height((baseSp * 0.4f).sp))
+        index == 0 -> Text(
+            fcInline(s), fontSize = (baseSp * 1.3f).sp, fontWeight = FontWeight.Bold,
+            color = Ink, lineHeight = (baseSp * 1.9f).sp,
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        FcHeading1Regex.matches(s) -> Text(
+            fcInline(s), fontSize = (baseSp * 1.05f).sp, fontWeight = FontWeight.Bold,
+            color = Ink, lineHeight = (baseSp * 1.7f).sp)
+        FcHeading2Regex.matches(s) -> Text(
+            fcInline(s), fontSize = size, fontWeight = FontWeight.SemiBold,
+            color = Ink, lineHeight = (baseSp * 1.65f).sp)
+        else -> Text(
+            fcInline(s),
+            style = TextStyle(
+                fontSize = size, color = Ink, lineHeight = (baseSp * 1.6f).sp,
+                paragraphStyle = ParagraphStyle(
+                    textIndent = TextIndent(firstLine = (baseSp * 2).sp, restLine = 0.sp),
+                ),
+            ),
+        )
+    }
+}
+
+/**
+ * 分块所见即所得编辑器：
+ * 每段一个块，按公文格式渲染；「当前版本」下点击任意段落就地编辑
+ * （框内支持多行，一次可拆成多段；清空后点完成 = 删除该段），点「完成」写回
+ * vm.editorText（走 onEditorChange，与旧的连续编辑框共用保存/脏标记逻辑）。
+ * 「修改前」只读。右栏点问题时，对应段落以浅底色高亮（替代旧的光标定位）。
+ */
+@Composable
+private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
+    val readOnly = vm.version == DocVersion.ORIGINAL
+    val baseSp = vm.zoom.baseSp
+    var editIdx by remember { mutableStateOf<Int?>(null) }
+    var editText by remember { mutableStateOf("") }
+
+    // 右栏选中问题对应的段落下标：高亮该段，让「定位第 N 段」在分块模式下可见
+    val focusedPara = (vm.selectedIssueId
+        ?.let { vm.issues.getOrNull(it) }
+        ?.get("paragraph_index") as? JsonPrimitive)?.intOrNull
+
+    fun commit() {
+        val i = editIdx ?: return
+        val cur = vm.editorText.text.split('\n').toMutableList()
+        if (i < cur.size) {
+            cur.removeAt(i)
+            if (editText.isNotBlank()) {
+                cur.addAll(i.coerceAtMost(cur.size), editText.split('\n'))
+            }
+            vm.onEditorChange(TextFieldValue(cur.joinToString("\n")))
+        }
+        editIdx = null
+    }
+
+    Column(modifier) {
+        vm.editorText.text.split('\n').forEachIndexed { i, raw ->
+            if (editIdx == i) {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .border(1.dp, Primary, RoundedCornerShape(Dimens.radiusSm))
+                        .padding(Dimens.space2),
+                ) {
+                    OutlinedTextField(
+                        value = editText,
+                        onValueChange = { editText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = TextStyle(fontSize = baseSp.sp, color = Ink,
+                            lineHeight = (baseSp * 1.6f).sp),
+                        shape = RoundedCornerShape(Dimens.radiusXs),
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            backgroundColor = SurfaceTonal,
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedBorderColor = Color.Transparent,
+                            cursorColor = Primary),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("清空后点完成 = 删除此段；用 **文字** 可加粗",
+                            fontSize = 10.5.sp, color = Muted2)
+                        Spacer(Modifier.weight(1f))
+                        AppLinkButton("取消", onClick = { editIdx = null })
+                        Spacer(Modifier.width(Dimens.space3))
+                        AppLinkButton("完成", onClick = { commit() })
+                    }
+                }
+            } else {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusXs))
+                        .background(if (i == focusedPara) PrimarySoft else Color.Transparent)
+                        .clickable(enabled = !readOnly && !vm.busy) {
+                            editIdx = i
+                            editText = raw
+                        }
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                ) {
+                    FcLine(raw, i, baseSp)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
     val scrollState = rememberScrollState()
-    val fontSize = vm.zoom.baseSp.sp
     // 有手动编辑后切版本会丢弃编辑内容，先确认
     var pendingVersion by remember { mutableStateOf<DocVersion?>(null) }
 
@@ -298,6 +442,10 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
                     if (vm.editorDirty && v != vm.version) pendingVersion = v
                     else vm.switchVersion(v)
                 })
+                Spacer(Modifier.width(Dimens.space2))
+            }
+            if (vm.version == DocVersion.CURRENT && vm.currentRecordId != null) {
+                Text("点击段落即可修改", fontSize = 11.sp, color = Muted2)
                 Spacer(Modifier.width(Dimens.space2))
             }
             Spacer(Modifier.weight(1f))
@@ -352,17 +500,11 @@ private fun DocumentColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifi
                     modifier = Modifier.padding(Dimens.space5),
                 )
             }
-            else -> BasicTextField(
-                value = vm.editorText,
-                onValueChange = { vm.onEditorChange(it) },
-                readOnly = vm.version == DocVersion.ORIGINAL,
-                textStyle = TextStyle(
-                    fontSize = fontSize,
-                    lineHeight = (vm.zoom.baseSp * 1.6f).sp,
-                    color = Ink,
-                ),
-                cursorBrush = SolidColor(Primary),
-                modifier = Modifier.fillMaxWidth().weight(1f)
+            // 分块格式化渲染 + 点击段落就地编辑（「修改前」只读）；
+            // 保存/放弃/脏标记全部沿用 vm 原有逻辑
+            else -> FcBodyEditor(
+                vm,
+                Modifier.fillMaxWidth().weight(1f)
                     .verticalScroll(scrollState)
                     .padding(horizontal = Dimens.space6, vertical = Dimens.space4),
             )
