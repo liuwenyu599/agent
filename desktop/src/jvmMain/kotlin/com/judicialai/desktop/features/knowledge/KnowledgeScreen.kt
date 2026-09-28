@@ -98,6 +98,7 @@ fun KnowledgeScreen() {
             title = vm.docDialogTitle,
             content = vm.docDialogContent,
             busy = vm.docDialogBusy,
+            editable = vm.currentKb?.let(::canWriteKb) ?: false,
             onTitleChange = { vm.docDialogTitle = it },
             onContentChange = { vm.docDialogContent = it },
             onSave = { vm.saveDocument() },
@@ -120,6 +121,7 @@ fun KnowledgeDocDialog(
     title: String,
     content: String,
     busy: Boolean,
+    editable: Boolean = true,
     onTitleChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
     onSave: () -> Unit,
@@ -127,17 +129,20 @@ fun KnowledgeDocDialog(
 ) {
     AppDialog(
         onDismissRequest = onClose,
-        title = "查看 / 编辑文档",
+        title = if (editable) "查看 / 编辑文档" else "查看文档",
         width = 640.dp,
         actions = {
-            AppButton("取消", onClick = onClose, kind = AppButtonKind.SECONDARY)
-            Spacer(Modifier.width(Dimens.space2))
-            AppButton(if (busy) "保存中…" else "保存", onClick = onSave, enabled = !busy)
+            AppButton("关闭", onClick = onClose, kind = AppButtonKind.SECONDARY)
+            if (editable) {
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton(if (busy) "保存中…" else "保存修改", onClick = onSave, enabled = !busy)
+            }
         },
     ) {
         OutlinedTextField(
             value = title, onValueChange = onTitleChange,
             label = { Text("标题", fontSize = 13.sp) }, singleLine = true,
+            enabled = editable,
             modifier = Modifier.fillMaxWidth(),
             textStyle = TextStyle(fontSize = 14.sp, color = Ink),
             shape = RoundedCornerShape(Dimens.radiusControl),
@@ -146,6 +151,7 @@ fun KnowledgeDocDialog(
         OutlinedTextField(
             value = content, onValueChange = onContentChange,
             label = { Text("正文内容", fontSize = 13.sp) },
+            enabled = editable,
             // 加载中或该文档本身没有正文时，300dp 的文本框不能是一片纯空白，
             // 否则用户会以为「参考资料看不到」
             placeholder = {
@@ -157,7 +163,9 @@ fun KnowledgeDocDialog(
             shape = RoundedCornerShape(Dimens.radiusControl),
             colors = docFieldColors(),
         )
-        Text("约 ${content.length} 字 · 保存后将重新分块并同步检索",
+        Text(
+            if (editable) "约 ${content.length} 字 · 保存后将重新分块并同步检索"
+            else "约 ${content.length} 字 · 当前知识库为只读",
             fontSize = 11.sp, color = TextSecondary)
     }
 }
@@ -194,6 +202,13 @@ private fun kbTypeValue(kb: JsonObject): String = when {
     kb["department_code"].str().isNotBlank() -> "department"
     kb["type"].str() == "public" -> "public"
     else -> "personal"
+}
+
+/** 客户端只展示真实可执行的维护动作；服务端仍负责最终权限校验。 */
+private fun canWriteKb(kb: JsonObject): Boolean = when (kbTypeValue(kb)) {
+    "public" -> AppState.isDeveloper
+    "department" -> AppState.isKnowledgeAdmin || AppState.isDeveloper
+    else -> true
 }
 
 /** 按角色可选的知识库类型选项：公共（系统管理员）/ 科室（科室管理员与系统管理员）/ 个人（均可） */
@@ -272,6 +287,7 @@ private fun KbEditDialog(
 private fun KnowledgeList(vm: KnowledgeViewModel) {
     var search by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
+    var pendingDeleteKb by remember { mutableStateOf<JsonObject?>(null) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -378,13 +394,13 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                             TextButton(onClick = { vm.select(kb) }) {
                                 Text("查看", color = EpPrimary, fontSize = 13.sp)
                             }
-                            if (AppState.isAdmin) {
+                            if (canWriteKb(kb)) {
                                 TextButton(onClick = { vm.editingKb = kb }) {
                                     Text("编辑", color = TextRegular, fontSize = 13.sp)
                                 }
-                            }
-                            TextButton(onClick = { vm.deleteKb(kb["id"].str()) }) {
-                                Text("删除", color = EpDanger, fontSize = 13.sp)
+                                TextButton(onClick = { pendingDeleteKb = kb }) {
+                                    Text("删除", color = EpDanger, fontSize = 13.sp)
+                                }
                             }
                         }
                     }
@@ -423,12 +439,36 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
             KbTypeSelector(kbType) { kbType = it }
         }
     }
+
+    pendingDeleteKb?.let { kb ->
+        AppDialog(
+            onDismissRequest = { pendingDeleteKb = null },
+            title = "删除知识库",
+            subtitle = "删除后该知识库将不再用于检索，关联内容可能无法恢复。",
+            width = 480.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDeleteKb = null }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认删除", onClick = {
+                    vm.deleteKb(kb["id"].str())
+                    pendingDeleteKb = null
+                }, kind = AppButtonKind.DANGER)
+            },
+        ) {
+            Text("知识库：${kb["name"].str().ifBlank { "未命名知识库" }}",
+                fontSize = 13.sp, color = TextPrimary)
+            Text("当前含 ${kb["doc_count"].int()} 篇文档",
+                fontSize = 12.sp, color = TextSecondary)
+        }
+    }
 }
 
 /** 知识库详情：对应 Web KnowledgeDetailView（返回头 + 文档表格 + 上传 + 库内搜索） */
 @Composable
 private fun KnowledgeDetail(vm: KnowledgeViewModel) {
     val kb = vm.currentKb ?: return
+    val writable = canWriteKb(kb)
+    var pendingDeleteDoc by remember { mutableStateOf<JsonObject?>(null) }
     Column(Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically,
@@ -443,15 +483,19 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
             val (label, green) = kbTypeLabel(kb)
             KbTag(label, green)
             Spacer(Modifier.weight(1f))
-            Button(
-                onClick = { vm.upload(pickFiles("上传文档", multi = true)) },
-                enabled = !vm.busy,
-                colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
-            ) {
-                Icon(Icons.Default.Add, null, tint = Color.White,
-                    modifier = Modifier.size(16.dp))
-                Text(if (vm.busy) "上传中…" else "上传文档", color = Color.White,
-                    fontSize = 13.sp)
+            if (writable) {
+                Button(
+                    onClick = { vm.upload(pickFiles("上传文档", multi = true)) },
+                    enabled = !vm.busy,
+                    colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+                ) {
+                    Icon(Icons.Default.Add, null, tint = Color.White,
+                        modifier = Modifier.size(16.dp))
+                    Text(if (vm.busy) "上传中…" else "上传文档", color = Color.White,
+                        fontSize = 13.sp)
+                }
+            } else {
+                Text("只读", fontSize = 12.sp, color = TextSecondary)
             }
         }
 
@@ -479,7 +523,7 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
             modifier = Modifier.fillMaxWidth().weight(1f)) {
             val results = vm.searchResults
             if (results != null) {
-                SearchResultList(vm, results)
+                SearchResultList(vm, results, writable) { pendingDeleteDoc = it }
             } else {
                 Column {
                     Row(Modifier.fillMaxWidth().background(Color(0xFFFAFAFA))
@@ -498,7 +542,8 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                             }
                         }
                         vm.docs.forEach { d ->
-                            DocRow(vm, d, snippet = null)
+                            DocRow(vm, d, snippet = null, writable = writable,
+                                onDeleteRequest = { pendingDeleteDoc = it })
                             Divider(color = Color(0xFFF2F4F8))
                         }
                     }
@@ -507,11 +552,36 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
         }
         vm.status?.let { Text(it, fontSize = 12.sp, color = TextSecondary) }
     }
+
+    pendingDeleteDoc?.let { doc ->
+        AppDialog(
+            onDismissRequest = { pendingDeleteDoc = null },
+            title = "删除知识库文档",
+            subtitle = "删除后该文档将退出知识检索范围。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDeleteDoc = null }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认删除", onClick = {
+                    vm.deleteDocument(doc["id"].str())
+                    pendingDeleteDoc = null
+                }, kind = AppButtonKind.DANGER)
+            },
+        ) {
+            Text(doc["title"].str().ifBlank { doc["filename"].str().ifBlank { "未命名文档" } },
+                fontSize = 13.sp, color = TextPrimary)
+        }
+    }
 }
 
 /** 搜索结果：标题命中一组在前，内容命中一组在后（带命中片段），点击即打开全文 */
 @Composable
-private fun SearchResultList(vm: KnowledgeViewModel, results: List<JsonObject>) {
+private fun SearchResultList(
+    vm: KnowledgeViewModel,
+    results: List<JsonObject>,
+    writable: Boolean,
+    onDeleteRequest: (JsonObject) -> Unit,
+) {
     val titleHits = results.filter { it["match"].str() != "content" }
     val contentHits = results.filter { it["match"].str() == "content" }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -531,14 +601,15 @@ private fun SearchResultList(vm: KnowledgeViewModel, results: List<JsonObject>) 
         if (titleHits.isNotEmpty()) {
             SearchGroupHeader("标题命中（${titleHits.size}）")
             titleHits.forEach { d ->
-                DocRow(vm, d, snippet = null)
+                DocRow(vm, d, snippet = null, writable = writable, onDeleteRequest = onDeleteRequest)
                 Divider(color = Color(0xFFF2F4F8))
             }
         }
         if (contentHits.isNotEmpty()) {
             SearchGroupHeader("内容命中（${contentHits.size}）")
             contentHits.forEach { d ->
-                DocRow(vm, d, snippet = d["snippet"].str().ifBlank { null })
+                DocRow(vm, d, snippet = d["snippet"].str().ifBlank { null },
+                    writable = writable, onDeleteRequest = onDeleteRequest)
                 Divider(color = Color(0xFFF2F4F8))
             }
         }
@@ -555,7 +626,13 @@ private fun SearchGroupHeader(text: String) {
 
 /** 文档行（普通列表与搜索结果共用）：标题 / 类型 / 状态 / 时间 / 操作；搜索内容命中时多一行命中片段 */
 @Composable
-private fun DocRow(vm: KnowledgeViewModel, d: JsonObject, snippet: String?) {
+private fun DocRow(
+    vm: KnowledgeViewModel,
+    d: JsonObject,
+    snippet: String?,
+    writable: Boolean,
+    onDeleteRequest: (JsonObject) -> Unit,
+) {
     Row(Modifier.fillMaxWidth()
         .clip(RoundedCornerShape(4.dp))
         .clickable { vm.openDocument(d["id"].str()) }
@@ -587,11 +664,13 @@ private fun DocRow(vm: KnowledgeViewModel, d: JsonObject, snippet: String?) {
             Modifier.width(160.dp), fontSize = 13.sp, color = TextRegular)
         Row(Modifier.width(170.dp)) {
             TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
-                Text("查看/编辑", color = EpPrimary, fontSize = 13.sp)
+                Text(if (writable) "查看/编辑" else "查看", color = EpPrimary, fontSize = 13.sp)
             }
-            TextButton(onClick = { vm.deleteDocument(d["id"].str()) }) {
-                Icon(Icons.Default.Delete, null, tint = EpDanger,
-                    modifier = Modifier.size(16.dp))
+            if (writable) {
+                TextButton(onClick = { onDeleteRequest(d) }) {
+                    Icon(Icons.Default.Delete, null, tint = EpDanger,
+                        modifier = Modifier.size(16.dp))
+                }
             }
         }
     }
