@@ -965,7 +965,7 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                         fontSize = 12.sp)
                 },
                 modifier = Modifier.fillMaxWidth().height(96.dp))
-            Text("无需手写任何 JSON：描述写好后点下方按钮，AI 会自动转换为系统校验项",
+            Text("用自然语言描述校验要求即可，系统会自动生成对应的检查项",
                 fontSize = 11.5.sp, color = TextSecondary)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(enabled = !vm.compilingRule && !vm.busy && description.isNotBlank(),
