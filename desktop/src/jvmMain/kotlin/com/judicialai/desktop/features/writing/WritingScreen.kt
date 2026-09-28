@@ -394,7 +394,7 @@ private fun FormattedLine(raw: String) {
             inlineMd(s),
             style = androidx.compose.ui.text.TextStyle(
                 fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp,
-                paragraphStyle = BodyParagraphStyle,
+                textIndent = TextIndent(firstLine = 29.sp, restLine = 0.sp),
             ),
         )
     }

@@ -317,7 +317,7 @@ private fun FcLine(raw: String, index: Int, baseSp: Float) {
     val s = raw.trim()
     val size = baseSp.sp
     when {
-        s.isBlank() -> Spacer(Modifier.height((baseSp * 0.4f).sp))
+        s.isBlank() -> Spacer(Modifier.height((baseSp * 0.4f).dp))
         index == 0 -> Text(
             fcInline(s), fontSize = (baseSp * 1.3f).sp, fontWeight = FontWeight.Bold,
             color = Ink, lineHeight = (baseSp * 1.9f).sp,
@@ -332,9 +332,7 @@ private fun FcLine(raw: String, index: Int, baseSp: Float) {
             fcInline(s),
             style = TextStyle(
                 fontSize = size, color = Ink, lineHeight = (baseSp * 1.6f).sp,
-                paragraphStyle = ParagraphStyle(
-                    textIndent = TextIndent(firstLine = (baseSp * 2).sp, restLine = 0.sp),
-                ),
+                textIndent = TextIndent(firstLine = (baseSp * 2).sp, restLine = 0.sp),
             ),
         )
     }
