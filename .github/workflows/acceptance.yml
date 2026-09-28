@@ -1,0 +1,52 @@
+name: Acceptance Gate
+
+on:
+  push:
+    branches: [app]
+  pull_request:
+    branches: [app]
+
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-compile:
+    name: Desktop Compose compile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Compile desktop application
+        run: ./gradlew compileKotlinJvm --no-daemon --stacktrace
+
+  server-tests:
+    name: Backend acceptance tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    env:
+      AI_PROVIDER: mock
+      EMBEDDING_PROVIDER: mock
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/requirements-server.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-server.txt pytest
+      - name: Run acceptance tests
+        run: python -m pytest tests -q
