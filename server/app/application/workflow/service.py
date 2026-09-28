@@ -342,7 +342,7 @@ JSON："""
             raise AppError(500, "解析失败：AI 这次返回的内容格式不规范，请换个说法再试")
         except Exception as e:
             logger.exception("自然语言解析失败")
-            raise AppError(500, f"解析失败: {e}")
+            raise AppError(500, "暂时无法解析，请稍后重试")
         return {"parsed": parsed}
 
     def parse_key_value(self, user: User, inst_id: str, text: str) -> dict:
@@ -485,7 +485,7 @@ JSON："""
             )
         except Exception as e:
             logger.exception("节点生成失败")
-            raise AppError(500, f"生成失败: {e}")
+            raise AppError(500, "内容生成失败，请稍后重试")
         if save:
             ni.content = content
             if ni.status == "pending":
