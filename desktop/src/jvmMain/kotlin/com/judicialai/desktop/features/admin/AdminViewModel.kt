@@ -168,9 +168,9 @@ class AdminViewModel(private val repo: AdminRepository) {
 
     fun deleteKb(id: String) = act("已删除") { repo.deleteKb(id) }
 
-    fun review(docId: String, action: String) =
+    fun review(docId: String, action: String, comment: String) =
         act("审核完成") {
-            repo.review(docId, action, if (action == "approved") "审核通过" else "不符合要求")
+            repo.review(docId, action, comment.trim())
         }
 
     fun archive(docId: String) = act("已归档") { repo.archive(docId) }
