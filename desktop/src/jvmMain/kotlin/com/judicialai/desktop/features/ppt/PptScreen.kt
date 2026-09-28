@@ -528,6 +528,7 @@ internal fun SlideTypeDropdown(s: SlideEdit) {
 
 @Composable
 private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
+    var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("我的 PPT", style = MaterialTheme.typography.subtitle1,
@@ -572,7 +573,7 @@ private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
                             vm.download(id, target)
                         }) { Text(if (vm.downloadingId == id) "下载中…" else "下载") }
                         Spacer(Modifier.width(4.dp))
-                        IconButton(onClick = { vm.deleteDocument(id) }) {
+                        IconButton(onClick = { pendingDelete = d }) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colors.error)
                         }
                     }
@@ -584,12 +585,32 @@ private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
             }
         }
     }
+
+    pendingDelete?.let { d ->
+        AppDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = "删除 PPT",
+            subtitle = "删除后该 PPT 的大纲与编辑记录将无法继续使用。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDelete = null }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(8.dp))
+                AppButton("确认删除", onClick = {
+                    vm.deleteDocument(d["id"].str())
+                    pendingDelete = null
+                }, kind = AppButtonKind.DANGER)
+            },
+        ) {
+            Text(d["title"].str().ifBlank { "未命名 PPT" })
+        }
+    }
 }
 
 // ================= 模板库 =================
 
 @Composable
 private fun PptTemplatesPane(vm: PptViewModel) {
+    var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("模板库（上传后自动学习版式与风格）", style = MaterialTheme.typography.subtitle1,
@@ -629,7 +650,7 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                                 Text(t["layout_count"].str().ifBlank { "?" } + " 种版式",
                                     style = MaterialTheme.typography.caption, color = SecondaryText)
                             }
-                            IconButton(onClick = { vm.deleteTemplate(t["id"].str()) }) {
+                            IconButton(onClick = { pendingDelete = t }) {
                                 Icon(Icons.Default.Delete, "删除",
                                     tint = MaterialTheme.colors.error)
                             }
@@ -637,6 +658,25 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                     }
                 }
             }
+        }
+    }
+
+    pendingDelete?.let { t ->
+        AppDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = "删除 PPT 模板",
+            subtitle = "删除后新建 PPT 将无法继续选择该模板；已有 PPT 不受影响。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDelete = null }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(8.dp))
+                AppButton("确认删除", onClick = {
+                    vm.deleteTemplate(t["id"].str())
+                    pendingDelete = null
+                }, kind = AppButtonKind.DANGER)
+            },
+        ) {
+            Text(t["name"].str().ifBlank { "未命名模板" })
         }
     }
 }
