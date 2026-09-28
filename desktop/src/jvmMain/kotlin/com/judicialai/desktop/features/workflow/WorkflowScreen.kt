@@ -370,9 +370,11 @@ private fun StatusTag(status: String) {
     val (text, color) = when (status) {
         "running" -> "进行中" to EpPrimary
         "draft" -> "草稿" to EpWarning
-        "completed" -> "已完成" to EpSuccess
+        "completed", "done" -> "已完成" to EpSuccess
+        "archived" -> "已归档" to TextSecondary
         "pending" -> "待处理" to TextSecondary
-        else -> status.ifBlank { "未知" } to TextSecondary
+        "editing" -> "编辑中" to EpPrimary
+        else -> "状态未知" to TextSecondary
     }
     Box(Modifier.clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.12f))
         .padding(horizontal = 8.dp, vertical = 2.dp)) {
