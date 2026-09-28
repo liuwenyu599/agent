@@ -142,12 +142,12 @@ PPTAgent 生成完成后，成品落在宿主机文件系统（**真机实测**�
 ```yaml
 # justice-office-server 的 compose 中新增（路径与本文 PPT_DATA_DIR 对齐）
 volumes:
-  - <PPT_DATA_DIR 的绝对路径>/workspace:/mnt/pptagent-workspace:ro
+  - /opt/justice-ppt/workspace:/data/pptagent:ro
 ```
 
 ```bash
 # 后端 .env
-PPT_AGENT_WORKSPACE_DIR=/mnt/pptagent-workspace
+PPT_AGENT_WORKSPACE_DIR=/data/pptagent
 ```
 
 ⚠️ 两个坑：
@@ -272,9 +272,9 @@ tail -80 .history/task.log
 | 实验室（探查用） | `pptagent-net` | `justice-ppt-host` | `dp9b-llm` | `http://192.168.68.51:7861` |
 | 司法局生产（本目录 compose） | `justice-network` | `justice-ppt-host` | `justice-deeppresenter-9b` | `http://<宿主机>:7861` |
 
-两者 **PPTAgent 容器名相同（`justice-ppt-host`），只有网络名不同**，因此后端 `.env`
-里的 `PPT_AGENT_URL=http://justice-ppt-host:7861` **不需要改**；切换环境时只需确认
-后端容器已接入对应网络：
+实验室与仓库 compose 可以通过容器网络名访问；**司法局当前生产配置以宿主机地址为准**：
+`PPT_AGENT_URL=http://10.128.85.133:7861`，`PPT_MODEL_URL=http://10.128.85.133:8004/v1`。
+不要因为容器名相同就把生产配置改回容器名。若仅在实验室 compose 内联调，才按对应网络使用容器名：
 
 ```bash
 docker network connect justice-network justice-office-server   # 司法局
