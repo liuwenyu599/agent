@@ -11,6 +11,13 @@ import com.judicialai.desktop.features.ppt.PptJobEngine
  * 模板中心「使用模板」→ 智能写作工作台 的一次性参数。
  * 由 TemplatesViewModel 组装（模板绑定 + 要素指令），WritingScreen 消费后置回 null。
  */
+data class AppGuideStep(
+    val screen: AppScreen,
+    val title: String,
+    val description: String,
+    val actionHint: String,
+)
+
 data class PendingTemplateWrite(
     val templateId: String,
     val templateName: String,
@@ -30,6 +37,53 @@ data class PendingTemplateWrite(
  * 一个窗口里跑生成，另一个窗口能看到进度，切回不丢任务不报错。
  */
 object AppState {
+
+    /** 使用指南：从个人中心启动，按步骤跳转页面并显示导览提示。 */
+    val guideSteps: List<AppGuideStep> = listOf(
+        AppGuideStep(AppScreen.HOME, "工作台", "从这里进入最常用的办公能力。", "先选择要完成的任务，不需要理解模型或技术参数。"),
+        AppGuideStep(AppScreen.WRITING, "智能写作", "描述任务、补充材料并生成正式文稿。", "先说清楚要写什么，再确认结构和内容。"),
+        AppGuideStep(AppScreen.TEMPLATES, "模板中心", "查找系统、科室和个人常用模板。", "选择模板后填写必要要素，再进入智能写作。"),
+        AppGuideStep(AppScreen.PPT, "PPT 助手", "从主题、材料或知识库生成汇报演示文稿。", "先生成并确认大纲，再进入视觉设计和导出。"),
+        AppGuideStep(AppScreen.FORMAT_CHECK, "格式校验", "检查公文格式与常见规范问题。", "上传或选择文档后执行检查，再逐项处理问题。"),
+        AppGuideStep(AppScreen.KNOWLEDGE, "知识库", "查找和维护可用于写作与问答的业务资料。", "先选择知识库，再检索或查看其中的资料。"),
+        AppGuideStep(AppScreen.WORKFLOW, "工作流程", "按固定业务步骤连续生成和整理多份材料。", "选择流程模板后逐节点完成内容，必要时可调整步骤。"),
+    )
+    var guideActive by mutableStateOf(false)
+        private set
+    var guideIndex by mutableStateOf(0)
+        private set
+    val currentGuideStep: AppGuideStep?
+        get() = guideSteps.getOrNull(guideIndex)
+
+    fun startGuide(screen: AppScreen? = null) {
+        guideIndex = screen?.let { target ->
+            guideSteps.indexOfFirst { it.screen == target }.takeIf { it >= 0 }
+        } ?: 0
+        guideActive = true
+        personalCenterOpen = false
+        currentGuideStep?.let { navigate(it.screen) }
+    }
+
+    fun nextGuideStep() {
+        if (!guideActive) return
+        if (guideIndex >= guideSteps.lastIndex) {
+            stopGuide()
+            return
+        }
+        guideIndex += 1
+        currentGuideStep?.let { navigate(it.screen) }
+    }
+
+    fun previousGuideStep() {
+        if (!guideActive || guideIndex <= 0) return
+        guideIndex -= 1
+        currentGuideStep?.let { navigate(it.screen) }
+    }
+
+    fun stopGuide() {
+        guideActive = false
+        guideIndex = 0
+    }
 
     /** 当前焦点窗口的页面（多窗口各自独立导航） */
     var screen: AppScreen
@@ -266,6 +320,7 @@ object AppState {
         role = "user"
         mustChangePassword = false
         personalCenterOpen = false
+        stopGuide()
         departmentName = ""
         departmentCode = ""
         agentName = ""
