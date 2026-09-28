@@ -41,7 +41,10 @@ import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppCard
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.EmptyView
 import com.judicialai.desktop.design.components.ErrorText
 import com.judicialai.desktop.design.components.LoadingView
@@ -59,6 +62,7 @@ import com.judicialai.desktop.design.theme.Muted
 @Composable
 fun DocumentsScreen() {
     val vm = remember { DocumentsViewModel(Repositories.documents) }
+    var confirmDelete by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         vm.refresh()
         // 历史记录「继续」带过来的文档 id：打开这一条后用完即清，避免下次进页面又自动打开
@@ -203,7 +207,7 @@ fun DocumentsScreen() {
                         onClick = { pickSaveFile("${vm.title.ifBlank { "公文" }}.docx")?.let { vm.export(it) } },
                         enabled = !vm.busy && vm.currentId != null,
                     ) { Text("导出 Word") }
-                    OutlinedButton(onClick = { vm.delete() },
+                    OutlinedButton(onClick = { confirmDelete = true },
                         enabled = !vm.busy && vm.currentId != null) { Text("删除") }
                 }
                 if (vm.versions.isNotEmpty()) {
@@ -216,6 +220,25 @@ fun DocumentsScreen() {
                     }
                 }
             }
+        }
+    }
+
+    if (confirmDelete && vm.currentId != null) {
+        AppDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = "删除文档",
+            subtitle = "删除后该文档及历史版本将无法从“我的文档”继续使用。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { confirmDelete = false }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(8.dp))
+                AppButton("确认删除", onClick = {
+                    confirmDelete = false
+                    vm.delete()
+                }, kind = AppButtonKind.DANGER)
+            },
+        ) {
+            Text(vm.title.ifBlank { "未命名文档" }, style = MaterialTheme.typography.body1)
         }
     }
 }
