@@ -188,8 +188,15 @@ fun TemplatesScreen() {
                                 .verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(Dimens.space3),
                         ) {
-                            filtered.forEach { t -> TemplateRow(vm, t, onAdapt = { showAdapt = true },
-                                onEdit = { editing = t }) }
+                            filtered.forEach { t ->
+                                TemplateRow(
+                                    vm = vm,
+                                    t = t,
+                                    onAdapt = { showAdapt = true },
+                                    onEdit = { editing = t },
+                                    onDelete = { pendingDelete = t },
+                                )
+                            }
                             Spacer(Modifier.height(Dimens.space4))
                         }
                     }
@@ -348,6 +355,7 @@ private fun TemplateRow(
     t: JsonObject,
     onAdapt: () -> Unit,
     onEdit: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val tier = vm.tierOf(t)
     val selected = vm.selectedId == t["id"].str()
@@ -413,8 +421,7 @@ private fun TemplateRow(
                 Spacer(Modifier.width(Dimens.space1))
                 AppIconButton(Icons.Default.Edit, "编辑", onClick = onEdit)
                 Spacer(Modifier.width(Dimens.space1))
-                AppIconButton(Icons.Default.Delete, "删除",
-                    onClick = { pendingDelete = t })
+                AppIconButton(Icons.Default.Delete, "删除", onClick = onDelete)
             }
         }
     }
