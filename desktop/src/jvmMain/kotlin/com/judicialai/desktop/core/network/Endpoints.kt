@@ -196,7 +196,9 @@ object Endpoints {
         fun sample(id: String) = "/training/samples/$id"
         fun sampleReview(id: String) = "/training/samples/$id/review"
         const val DATASETS = "/training/datasets"
-        fun datasetVersions(datasetId: String) = "/training/datasets/$id/versions"
+        // 参数名是 datasetId（后端 /training/datasets/{dataset_id}/versions），
+        // 写成 $id 会解析到不存在的标识符，编译不过
+        fun datasetVersions(datasetId: String) = "/training/datasets/$datasetId/versions"
         const val JOBS = "/training/jobs"
         fun job(id: String) = "/training/jobs/$id"
         fun jobCancel(id: String) = "/training/jobs/$id/cancel"

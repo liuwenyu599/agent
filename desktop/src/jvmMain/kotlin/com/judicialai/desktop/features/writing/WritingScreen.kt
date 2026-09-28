@@ -286,7 +286,9 @@ private fun ImageRecognizeDialog(vm: WritingViewModel) {
                         color = Ink, modifier = Modifier.weight(1f), maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                     if (item.text.isNotBlank()) {
-                        AppLinkButton("插入正文末尾") { vm.insertImageText(item) }
+                        // 必须用命名参数：AppLinkButton 的最后一个位置参数是 icon: ImageVector?，
+                        // 尾随 lambda 会被分配给它而不是 onClick，导致编译失败
+                        AppLinkButton("插入正文末尾", onClick = { vm.insertImageText(item) })
                     }
                 }
                 if (item.note.isNotBlank()) {
