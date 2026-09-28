@@ -12,7 +12,7 @@ from app.application.identity.service import AuthService
 from app.domain.identity.entities import User
 from app.infrastructure.database import get_db
 from app.infrastructure.repositories.identity import SqlAlchemyUserRepository
-from app.interfaces.deps import get_current_user, get_current_user_unchecked
+from app.interfaces.deps import get_current_user, get_current_user_unchecked, require_developer
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -44,7 +44,7 @@ def change_password(req: ChangePasswordRequest,
 @router.post("/register")
 def register(
     req: RegisterRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_developer),
     svc: AuthService = Depends(get_auth_service),
 ):
     user = svc.register(current_user, req.username, req.email, req.password,
