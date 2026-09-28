@@ -31,8 +31,6 @@ import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
-import androidx.compose.material.Tab
-import androidx.compose.material.TabRow
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.material.icons.Icons
@@ -62,7 +60,6 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.SecondaryText
-import kotlinx.coroutines.delay
 
 /** 页型中文标签（与服务端 10 种页型一致） */
 val SLIDE_TYPE_LABELS = linkedMapOf(
