@@ -225,6 +225,14 @@ object AppState {
         }
 
     fun updateServerConfig(cfg: ServerConfig) {
+        // 服务器地址一旦变化，当前 token 绝不能继续复用到新地址。
+        // 否则用户在已登录状态修改 baseUrl 后，下一次请求可能把原服务器的
+        // Bearer token 发给另一个服务器，既会造成鉴权混乱，也存在凭据泄露风险。
+        val endpointChanged = serverConfig.baseUrl.trim().trimEnd('/') !=
+            cfg.baseUrl.trim().trimEnd('/')
+        if (endpointChanged && loggedIn) {
+            logout()
+        }
         serverConfig = cfg
         ServerConfig.save(cfg)
     }
