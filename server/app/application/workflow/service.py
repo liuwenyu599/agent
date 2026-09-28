@@ -29,6 +29,7 @@ from app.domain.workflow.entities import (
     WorkflowNode,
     WorkflowTemplate,
 )
+from app.infrastructure.database.models.identity import UserModel
 from app.infrastructure.database.models.workflow import WorkflowInstanceModel
 from app.infrastructure.repositories.workflow import (
     SqlAlchemyNodeInstanceRepository,
@@ -113,13 +114,13 @@ class WorkflowService:
         insts = self.instances.list_by_user(user.id, status)
         return {"instances": [self._instance_to_dict(i) for i in insts]}
 
-    def get_instance(self, inst_id: str) -> dict:
-        return self._instance_to_dict(self._get_instance_checked(inst_id))
+    def get_instance(self, user: User, inst_id: str) -> dict:
+        return self._instance_to_dict(self._get_instance_checked(inst_id, user))
 
-    def update_instance(self, inst_id: str, title: Optional[str], status: Optional[str],
+    def update_instance(self, user: User, inst_id: str, title: Optional[str], status: Optional[str],
                         basic_info: Optional[Dict[str, Any]],
                         workflow_context: Optional[Dict[str, Any]]) -> dict:
-        inst = self._get_instance_checked(inst_id)
+        inst = self._get_instance_checked(inst_id, user)
         if title is not None:
             inst.title = title
         if status is not None:
@@ -132,32 +133,35 @@ class WorkflowService:
         self.db.commit()
         return {"ok": True}
 
-    def delete_instance(self, inst_id: str) -> dict:
-        inst = self._get_instance_checked(inst_id)
+    def delete_instance(self, user: User, inst_id: str) -> dict:
+        inst = self._get_instance_checked(inst_id, user)
         self.node_instances.delete_by_instance(inst.id)
         self.instances.delete(inst)
         self.db.commit()
         return {"ok": True}
 
-    def _get_instance_checked(self, inst_id: str) -> WorkflowInstance:
+    def _get_instance_checked(self, inst_id: str, user: User) -> WorkflowInstance:
         inst = self.instances.get(inst_id)
         if not inst:
-            raise NotFoundError("工作流不存在")
-        return inst
+            raise NotFoundError("工作流程不存在")
+        if inst.user_id == user.id or is_system_admin(user):
+            return inst
+        if is_knowledge_admin(user) and user.department_code:
+            owner = self.db.get(UserModel, inst.user_id)
+            if owner and owner.department_code == user.department_code:
+                return inst
+        raise PermissionDeniedError("无权访问该工作流程程")
 
     # ========== AI 调整流程 ==========
     def ai_adjust_instance(self, user: User, inst_id: str, instruction: str) -> dict:
-        """AI 调整工作流节点：增 / 删 / 改名 / 改写作要求 / 调顺序。
+        """AI 调整工作流程程节点：增 / 删 / 改名 / 改写作要求 / 调顺序。
 
         用户用自然语言说明怎么改，LLM 输出目标节点清单，服务端与现状对账后
         落库——同名节点保留已生成的内容与状态，新增节点补默认写作要求。
         结构调整发生在实例专属的模板副本上，公共模板不被污染。
         权限：实例创建者本人，或科室/系统管理员。
         """
-        inst = self._get_instance_checked(inst_id)
-        if inst.user_id != user.id and not (
-                is_system_admin(user) or is_knowledge_admin(user)):
-            raise PermissionDeniedError("只有创建者或科室管理员可以调整该工作流")
+        inst = self._get_instance_checked(inst_id, user)
         instruction = (instruction or "").strip()
         if not instruction:
             raise AppError(400, "请先说明想怎么调整（例如：去掉简报节点、在纪要后加整改清单）")
@@ -176,7 +180,7 @@ class WorkflowService:
                 "has_content": bool((ni.content or "").strip()),
             })
 
-        prompt = f"""你是工作流程设计助手。下面是一个公文工作流当前的节点清单（JSON）和用户想要的调整。
+        prompt = f"""你是工作流程设计助手。下面是一个公文工作流程当前的节点清单（JSON）和用户想要的调整。
 
 当前节点清单：
 {json.dumps(current, ensure_ascii=False, indent=2)}
@@ -201,18 +205,18 @@ class WorkflowService:
             # 用括号配平提取，避免把 JSON 后面的说明文字一起吞进来。
             block = extract_json_array(raw) or extract_json_block(raw)
             if block is None:
-                raise LLMJsonError("模型输出中找不到完整的工作流节点数组", "")
+                raise LLMJsonError("模型输出中找不到完整的工作流程节点数组", "")
             target = loads_lenient(block)
             if isinstance(target, dict):
                 target = target.get("nodes") or []
             if not isinstance(target, list):
-                raise LLMJsonError("模型输出的工作流节点不是数组", "")
+                raise LLMJsonError("模型输出的工作流程节点不是数组", "")
         except LLMJsonError as e:
-            logger.warning("AI 调整工作流返回内容无法解析：%s", e.message)
+            logger.warning("AI 调整工作流程返回内容无法解析：%s", e.message)
             raise AppError(500, "AI 调整失败：AI 这次返回的内容格式不规范，"
                                 "工作流未被修改，请重试")
         except Exception as e:
-            logger.exception("AI 调整工作流失败")
+            logger.exception("AI 调整工作流程失败")
             raise AppError(500, f"AI 调整失败: {e}")
 
         cleaned: List[Dict[str, Any]] = []
@@ -299,7 +303,7 @@ class WorkflowService:
         return result
 
     # ========== 上下文解析 ==========
-    def parse_natural_language(self, inst_id: str, text: str) -> dict:
+    def parse_natural_language(self, user: User, inst_id: str, text: str) -> dict:
         self._get_instance_checked(inst_id)
         prompt = f"""你是司法行政机关的公文信息提取助手。用户会用口语描述一场会议，请提取结构化信息，
 并把口语表述【规范化】为正式公文语言，严格按 JSON 格式输出。
@@ -341,8 +345,8 @@ JSON："""
             raise AppError(500, f"解析失败: {e}")
         return {"parsed": parsed}
 
-    def parse_key_value(self, inst_id: str, text: str) -> dict:
-        inst = self._get_instance_checked(inst_id)
+    def parse_key_value(self, user: User, inst_id: str, text: str) -> dict:
+        inst = self._get_instance_checked(inst_id, user)
         current_ctx = self._get_workflow_context(inst)
         parsed = {}
         for line in text.split('\n'):
@@ -389,7 +393,7 @@ JSON："""
             "has_conflict": len(conflicts) > 0,
         }
 
-    def confirm_context(self, inst_id: str, workflow_context: Dict[str, Any],
+    def confirm_context(self, user: User, inst_id: str, workflow_context: Dict[str, Any],
                         confirm_overrides: Dict[str, bool]) -> dict:
         inst = self._get_instance_checked(inst_id)
         current_ctx = self._get_workflow_context(inst)
@@ -405,9 +409,9 @@ JSON："""
         return {"ok": True, "workflow_context": new_ctx}
 
     # ========== 节点 ==========
-    def update_node(self, node_inst_id: str, content: Optional[str],
+    def update_node(self, user: User, node_inst_id: str, content: Optional[str],
                     status: Optional[str]) -> dict:
-        ni = self._get_node_instance_checked(node_inst_id)
+        ni = self._get_node_instance_checked(node_inst_id, user)
         if content is not None:
             ni.content = content
             if ni.status == "pending":
@@ -418,9 +422,9 @@ JSON："""
         self.db.commit()
         return {"ok": True, "status": ni.status}
 
-    def generate_node(self, node_inst_id: str, instruction: str = "",
+    def generate_node(self, user: User, node_inst_id: str, instruction: str = "",
                       save: bool = True) -> dict:
-        ni = self._get_node_instance_checked(node_inst_id)
+        ni = self._get_node_instance_checked(node_inst_id, user)
         node = self.nodes.get(ni.node_id)
         inst = self.instances.get(ni.instance_id)
         if not node or not inst:
@@ -451,7 +455,7 @@ JSON："""
             dependency_note = "\n【数据依赖】本节点需要结合「会议材料」提炼议定事项和工作要求。"
         elif "简报" in node.name or "新闻稿" in node.name:
             dependency_note = "\n【数据依赖】本节点需要结合「会议纪要」和「会议材料」提炼宣传要点。"
-        prompt = f"""你是司法行政机关的公文写作助手。请为以下工作流节点撰写内容。
+        prompt = f"""你是司法行政机关的公文写作助手。请为以下工作流程节点撰写内容。
 
 【工作流】{inst.title}
 【当前节点】{node.name}（{node.stage}）
@@ -490,10 +494,11 @@ JSON："""
             self.db.commit()
         return {"content": content, "status": ni.status, "saved": save}
 
-    def _get_node_instance_checked(self, node_inst_id: str) -> NodeInstance:
+    def _get_node_instance_checked(self, node_inst_id: str, user: User) -> NodeInstance:
         ni = self.node_instances.get(node_inst_id)
         if not ni:
             raise NotFoundError("节点不存在")
+        self._get_instance_checked(ni.instance_id, user)
         return ni
 
     # ========== 内部辅助 ==========
