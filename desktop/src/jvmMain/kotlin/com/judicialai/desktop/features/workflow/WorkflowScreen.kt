@@ -69,7 +69,7 @@ import kotlinx.serialization.json.JsonObject
 
 private val tplColors = listOf(QuickBlue, QuickGreen, QuickOrange, QuickPurple, QuickTeal)
 
-/** 工作流程：1:1 还原 Web WorkflowsView（页头 + 分类 chips + 模板卡片 + 我的工作流） */
+/** 工作流程：1:1 还原 Web WorkflowsView（页头 + 分类 chips + 模板卡片 + 我的工作流程） */
 @Composable
 fun WorkflowScreen() {
     val vm = remember { WorkflowViewModel(Repositories.workflow) }
@@ -121,7 +121,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
                     ) {
                         Icon(Icons.Default.Add, null, tint = Color.White,
                             modifier = Modifier.size(16.dp))
-                        Text("新建工作流", color = Color.White, fontSize = 13.sp)
+                        Text("新建工作流程", color = Color.White, fontSize = 13.sp)
                     }
                 }
             }
@@ -129,7 +129,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
             // 分类 + 模板卡片
             Card(shape = RoundedCornerShape(10.dp), elevation = 0.dp) {
                 Column(Modifier.padding(20.dp)) {
-                    Text("工作流分类", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    Text("工作流程分类", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         color = TextPrimary)
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -150,22 +150,22 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
                         Spacer(Modifier.height(10.dp))
                     }
                     if (filtered.isEmpty()) {
-                        Text("暂无工作流模板", color = TextSecondary, fontSize = 13.sp)
+                        Text("暂无工作流程模板", color = TextSecondary, fontSize = 13.sp)
                     }
                 }
             }
         }
 
-        // 右栏：我的工作流
+        // 右栏：我的工作流程
         Card(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(10.dp),
             elevation = 0.dp) {
             Column(Modifier.padding(16.dp)) {
-                Text("⚡ 我的工作流", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                Text("⚡ 我的工作流程", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                     color = TextPrimary)
                 Spacer(Modifier.height(10.dp))
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (vm.instances.isEmpty()) {
-                        Text("暂无工作流，从左侧模板创建", color = TextSecondary, fontSize = 12.sp)
+                        Text("暂无工作流程，从左侧模板创建", color = TextSecondary, fontSize = 12.sp)
                     }
                     vm.instances.forEach { inst ->
                         Column(
@@ -195,7 +195,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
         var title by remember { mutableStateOf(tpl["name"].str()) }
         AppDialog(
             onDismissRequest = { showCreate = null },
-            title = "新建工作流：${tpl["name"].str()}",
+            title = "新建工作流程：${tpl["name"].str()}",
             width = 460.dp,
             actions = {
                 AppButton("取消", onClick = { showCreate = null },
@@ -209,7 +209,7 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
             },
         ) {
             OutlinedTextField(value = title, onValueChange = { title = it },
-                label = { Text("工作流标题") }, singleLine = true,
+                label = { Text("工作流程标题") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth())
         }
     }
