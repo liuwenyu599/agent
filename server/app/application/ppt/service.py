@@ -993,7 +993,7 @@ class PPTService:
         try:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
-                max(6, min(slide_count, 18)), audience, scene,
+                max(2, min(slide_count, 18)), audience, scene,
                 material_names=material_names)
         except RuntimeError as e:
             raise AIServiceError(str(e))
@@ -1039,7 +1039,7 @@ class PPTService:
             images = self._user_images(user.id)
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), body.source_type, body.topic, content,
-                images, max(6, min(body.slide_count, 18)), body.audience, body.scene,
+                images, max(2, min(body.slide_count, 18)), body.audience, body.scene,
                 material_names=material_names)
         except RuntimeError as e:
             # generate_outline 抛出的已是用户可读文案（含重试失败说明）
