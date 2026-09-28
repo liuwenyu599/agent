@@ -40,6 +40,15 @@ _OUTLINE_UNEXPECTED_ERROR_MSG = (
 _PPTX_MIME = ("application/vnd.openxmlformats-officedocument."
               "presentationml.presentation")
 
+# 逐页预览链路依赖的外部命令（顺序即执行顺序）与各自超时秒数。
+# 任一命令在 PATH 上找不到时，预览直接降级为空页数列表，绝不冒泡成 500。
+_PREVIEW_TOOLS: Tuple[str, ...] = ("soffice", "pdftoppm")
+_PREVIEW_TIMEOUTS: Dict[str, int] = {"soffice": 180, "pdftoppm": 120}
+
+
+class _PreviewRenderError(Exception):
+    """预览渲染流程内部可控失败（如命令执行成功但未产出文件）。"""
+
 _CLOUD_DEFAULT = {
     "enabled": False,
     "api_key": "",
@@ -500,16 +509,62 @@ class PPTService:
         return {"message": "已删除"}
 
     # ================= 逐页预览（工作台中栏真实版式） =================
+    @staticmethod
+    def _missing_preview_tools() -> List[str]:
+        """逐页预览依赖的外部命令体检：返回缺失的命令名（空列表=全部可用）。
+
+        容器镜像若未安装 LibreOffice / poppler，这里能提前发现，避免把
+        ``FileNotFoundError: 'soffice'`` 之类的进程异常冒泡成 HTTP 500。
+
+        Returns:
+            缺失的命令名列表，取自 ``("soffice", "pdftoppm")`` 的子集。
+        """
+        return [name for name in _PREVIEW_TOOLS if shutil.which(name) is None]
+
+    @staticmethod
+    def _degraded_preview(reason: str) -> dict:
+        """预览不可用时的正常响应结构：页数列表为空 + 可读原因。
+
+        桌面端拿到空 ``pages`` 即回退到结构化示意卡，与"无预览"完全一致，
+        不会弹错误也不会卡住 loading；服务端同时已在日志里留下原因。
+
+        Args:
+            reason: 面向运维/前端展示的中文原因说明。
+
+        Returns:
+            与成功响应同构的字典，额外带 ``degraded`` / ``reason`` 字段。
+        """
+        return {"pages": [], "count": 0, "degraded": True, "reason": reason}
+
     def preview_document(self, doc_id: str, user: User) -> dict:
         """把当前草稿渲染成 pptx 并逐页转 PNG，供工作台中栏显示真实版式。
-        依赖容器内 LibreOffice（soffice）+ poppler（pdftoppm）；不可用时返回 500，
-        前端自动回退到结构化预览卡，不影响其它功能。"""
+
+        依赖容器内 LibreOffice（soffice）+ poppler（pdftoppm）。任何环节不可用
+        （命令缺失 / 超时 / 未产出文件）都**降级为空页数列表 + 原因说明**，
+        绝不返回 500；桌面端据此回退到结构化预览卡，不影响其它功能。
+        """
         d = self._get_doc_checked(doc_id, user)
         if not d.outline:
             raise NotFoundError("文档不存在或内容为空")
-        template, trow = self._resolve_template(d.template_id, d.theme_id or "")
-        outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
-        data = ppt_engine.render_pptx(outline, template, base_pptx=self._tpl_base_bytes(trow))
+
+        missing = self._missing_preview_tools()
+        if missing:
+            reason = ("服务端未安装 " + " / ".join(missing)
+                      + "，无法渲染真实版式预览（需在镜像中安装 libreoffice 与 poppler-utils）")
+            logger.warning("PPT 逐页预览降级：缺少外部命令 %s（doc_id=%s）",
+                           ",".join(missing), doc_id)
+            return self._degraded_preview(reason)
+
+        try:
+            template, trow = self._resolve_template(d.template_id, d.theme_id or "")
+            outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
+            data = ppt_engine.render_pptx(outline, template,
+                                          base_pptx=self._tpl_base_bytes(trow))
+        except Exception as e:
+            logger.warning("PPT 逐页预览降级：草稿渲染 pptx 失败（doc_id=%s）：%s: %s",
+                           doc_id, type(e).__name__, e)
+            return self._degraded_preview("草稿渲染失败，暂无法显示真实版式预览")
+
         prev_dir = self.ppt_dir / "preview" / d.id
         if prev_dir.exists():
             shutil.rmtree(prev_dir, ignore_errors=True)
@@ -522,22 +577,38 @@ class PPTService:
                 with open(src, "wb") as f:
                     f.write(data)
                 subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
-                                "--outdir", td, src], timeout=180, capture_output=True)
+                                "--outdir", td, src],
+                               timeout=_PREVIEW_TIMEOUTS["soffice"], capture_output=True)
                 pdf = os.path.join(td, "prev.pdf")
                 if not os.path.exists(pdf):
-                    shutil.rmtree(prev_dir, ignore_errors=True)
-                    raise AppError(500, "预览渲染失败：LibreOffice 不可用")
+                    raise _PreviewRenderError("LibreOffice 未产出 PDF")
                 subprocess.run(["pdftoppm", "-png", "-r", "90", pdf,
                                 os.path.join(str(prev_dir), "pg")],
-                               timeout=120, capture_output=True)
-        except AppError:
-            raise
+                               timeout=_PREVIEW_TIMEOUTS["pdftoppm"], capture_output=True)
+        except _PreviewRenderError as e:
+            shutil.rmtree(prev_dir, ignore_errors=True)
+            logger.warning("PPT 逐页预览降级：%s（doc_id=%s）", e, doc_id)
+            return self._degraded_preview(
+                f"预览渲染未完成：{e}（可能是文档内容无法转换）")
+        except subprocess.TimeoutExpired as e:
+            shutil.rmtree(prev_dir, ignore_errors=True)
+            cmd = (e.cmd or [""])[0] if isinstance(e.cmd, list) else (e.cmd or "")
+            logger.warning("PPT 逐页预览降级：外部命令超时 %s 超过 %ss（doc_id=%s）",
+                           cmd, e.timeout, doc_id)
+            return self._degraded_preview("版式渲染超时，请稍后重试或减少页数")
         except Exception as e:
             shutil.rmtree(prev_dir, ignore_errors=True)
-            raise AppError(500, f"预览渲染失败：{e}")
+            logger.warning("PPT 逐页预览降级：外部命令执行失败（doc_id=%s）：%s: %s",
+                           doc_id, type(e).__name__, e)
+            return self._degraded_preview("版式渲染服务暂时不可用，已回退为结构示意")
         names = sorted(p.name for p in prev_dir.glob("pg-*.png"))
+        if not names:
+            shutil.rmtree(prev_dir, ignore_errors=True)
+            logger.warning("PPT 逐页预览降级：未产出任何预览图（doc_id=%s）", doc_id)
+            return self._degraded_preview(
+                "渲染流程完成但未生成预览图（请检查 pdftoppm 与字体依赖）")
         return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in names],
-                "count": len(names)}
+                "count": len(names), "degraded": False, "reason": ""}
 
     def preview_image(self, doc_id: str, name: str, user: User) -> Path:
         """预览图下载（仅本人文档的预览目录，防目录穿越）。"""
