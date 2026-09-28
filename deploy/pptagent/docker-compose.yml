@@ -6,9 +6,9 @@
 #     → OpenAI-compatible → DeepPresenter-9B 容器内 :8003 / 宿主机 :8004
 #
 # 原则：
-#   - 不动现有 PostgreSQL、justice-office-server、Qwen:8001、VL:8002、BGE-M3；
+#   - 不动现有 PostgreSQL、justice-office-server、14B:8003、VL:8002、BGE-M3；
 #   - 三个新容器全部挂在独立网络 justice-network 上；
-#   - 端口避开 8000/8001/8002：模型 8003、Host WebUI/API 7861，Sandbox 不对外；
+#   - DeepPresenter 容器内监听 8003，宿主机发布 8004；Host WebUI/API 7861，Sandbox 不对外；
 #   - FastAPI 侧通过 docker network connect 接入本网络后即可调 Host。
 #
 # 用法：
