@@ -1,4 +1,4 @@
-"""工作流路由。路径与响应结构与旧系统一致（/workflow/...）。"""
+"""工作流程路由。路径与响应结构与旧系统一致（/workflow/...）。"""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -51,21 +51,21 @@ def create_instance(req: CreateInstanceRequest,
 @router.get("/instances/{inst_id}")
 def get_instance(inst_id: str, user: User = Depends(get_current_user),
                  svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.get_instance(inst_id)
+    return svc.get_instance(user, inst_id)
 
 
 @router.put("/instances/{inst_id}")
 def update_instance(inst_id: str, req: UpdateInstanceRequest,
                     user: User = Depends(get_current_user),
                     svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.update_instance(inst_id, req.title, req.status,
+    return svc.update_instance(user, inst_id, req.title, req.status,
                                req.basic_info, req.workflow_context)
 
 
 @router.delete("/instances/{inst_id}")
 def delete_instance(inst_id: str, user: User = Depends(get_current_user),
                     svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.delete_instance(inst_id)
+    return svc.delete_instance(user, inst_id)
 
 
 @router.post("/instances/{inst_id}/ai-adjust")
@@ -79,32 +79,32 @@ def ai_adjust_instance(inst_id: str, req: AiAdjustRequest,
 def parse_natural_language(inst_id: str, req: ParseNaturalLanguageRequest,
                            user: User = Depends(get_current_user),
                            svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.parse_natural_language(inst_id, req.text)
+    return svc.parse_natural_language(user, inst_id, req.text)
 
 
 @router.post("/instances/{inst_id}/parse-key-value")
 def parse_key_value(inst_id: str, req: ParseKeyValueRequest,
                     user: User = Depends(get_current_user),
                     svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.parse_key_value(inst_id, req.text)
+    return svc.parse_key_value(user, inst_id, req.text)
 
 
 @router.post("/instances/{inst_id}/confirm-context")
 def confirm_context(inst_id: str, req: ConfirmContextRequest,
                     user: User = Depends(get_current_user),
                     svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.confirm_context(inst_id, req.workflow_context, req.confirm_overrides or {})
+    return svc.confirm_context(user, inst_id, req.workflow_context, req.confirm_overrides or {})
 
 
 @router.put("/nodes/{node_inst_id}")
 def update_node(node_inst_id: str, req: UpdateNodeRequest,
                 user: User = Depends(get_current_user),
                 svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.update_node(node_inst_id, req.content, req.status)
+    return svc.update_node(user, node_inst_id, req.content, req.status)
 
 
 @router.post("/nodes/{node_inst_id}/generate")
 def generate_node(node_inst_id: str, req: GenerateNodeRequest,
                   user: User = Depends(get_current_user),
                   svc: WorkflowService = Depends(get_workflow_service)):
-    return svc.generate_node(node_inst_id, req.instruction, req.save)
+    return svc.generate_node(user, node_inst_id, req.instruction, req.save)
