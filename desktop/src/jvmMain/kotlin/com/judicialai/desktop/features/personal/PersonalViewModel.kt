@@ -24,6 +24,7 @@ enum class PersonalSection(val title: String) {
     FAVORITES("我的收藏"),
     SECURITY("账号安全"),
     SETTINGS("个人设置"),
+    GUIDE("使用指南"),
     /**
      * 个性化（v3.3）：个人偏好层，只影响 AI 的表达方式、写作习惯与称呼，
      * 不改变科室归属 / 知识检索范围 / 角色权限 / 安全规则。
@@ -142,7 +143,7 @@ class PersonalViewModel {
             // 个性化：每次进入都重新读取，保证与后端一致
             PersonalSection.PERSONALIZATION -> loadPreferences()
             // 这三个分区没有后端列表，不触发 load()
-            PersonalSection.FAVORITES, PersonalSection.SETTINGS, PersonalSection.SECURITY -> Unit
+            PersonalSection.FAVORITES, PersonalSection.SETTINGS, PersonalSection.SECURITY, PersonalSection.GUIDE -> Unit
             else -> load()
         }
     }
