@@ -45,8 +45,11 @@ object AppState {
         AppGuideStep(AppScreen.TEMPLATES, "模板中心", "查找系统、科室和个人常用模板。", "选择模板后填写必要要素，再进入智能写作。"),
         AppGuideStep(AppScreen.PPT, "PPT 助手", "从主题、材料或知识库生成汇报演示文稿。", "先生成并确认大纲，再进入视觉设计和导出。"),
         AppGuideStep(AppScreen.FORMAT_CHECK, "格式校验", "检查公文格式与常见规范问题。", "上传或选择文档后执行检查，再逐项处理问题。"),
+        AppGuideStep(AppScreen.DEPARTMENT, "科室空间", "查看本科室常用业务、知识资源、模板和工作流程。", "日常办理本科室业务时，可从这里快速进入对应资源。"),
         AppGuideStep(AppScreen.KNOWLEDGE, "知识库", "查找和维护可用于写作与问答的业务资料。", "先选择知识库，再检索或查看其中的资料。"),
         AppGuideStep(AppScreen.WORKFLOW, "工作流程", "按固定业务步骤连续生成和整理多份材料。", "选择流程模板后逐节点完成内容，必要时可调整步骤。"),
+        AppGuideStep(AppScreen.CHAT, "历史记录", "查看以前生成的对话、文档、PPT 和工作流程。", "需要继续以前的工作时，从这里找到记录并打开。"),
+        AppGuideStep(AppScreen.DOCUMENTS, "我的文档", "集中查看和继续编辑已保存的文档。", "打开文档后可查看版本、继续编辑或导出。"),
     )
     var guideActive by mutableStateOf(false)
         private set
