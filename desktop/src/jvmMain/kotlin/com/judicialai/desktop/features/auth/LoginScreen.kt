@@ -23,6 +23,7 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Tab
 import androidx.compose.material.TabRow
 import androidx.compose.material.Text
+import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +39,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.features.settings.SettingsViewModel
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
 import com.judicialai.desktop.design.theme.EpPrimaryDark
@@ -53,6 +59,9 @@ import com.judicialai.desktop.design.theme.TextSecondary
  */
 @Composable
 fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
+    var showServerSettings by remember { mutableStateOf(false) }
+    val settingsVm = remember { SettingsViewModel() }
+
     Box(
         Modifier.fillMaxSize().background(
             Brush.linearGradient(listOf(LoginGradStart, LoginGradEnd))
@@ -123,7 +132,50 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     Spacer(Modifier.height(12.dp))
                     Text(it, color = EpSuccess, fontSize = 13.sp)
                 }
+                Spacer(Modifier.height(14.dp))
+                TextButton(
+                    onClick = { showServerSettings = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("服务器连接设置", fontSize = 12.5.sp, color = TextSecondary)
+                }
             }
+        }
+    }
+
+    if (showServerSettings) {
+        LoginServerSettingsDialog(settingsVm) { showServerSettings = false }
+    }
+}
+
+@Composable
+private fun LoginServerSettingsDialog(vm: SettingsViewModel, onDismiss: () -> Unit) {
+    AppDialog(
+        onDismissRequest = onDismiss,
+        title = "服务器连接",
+        subtitle = "首次部署或服务器地址变更时使用。请仅填写本单位可信服务器地址。",
+        width = 520.dp,
+        actions = {
+            AppButton("关闭", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(8.dp))
+            AppButton(if (vm.testing) "测试中…" else "保存并测试",
+                onClick = { vm.saveAndTest() }, enabled = !vm.testing)
+        },
+    ) {
+        OutlinedTextField(
+            value = vm.baseUrl,
+            onValueChange = { vm.baseUrl = it },
+            label = { Text("服务器地址") },
+            placeholder = { Text("例如：http://10.0.0.20:8000") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text("当前配置：${AppState.serverConfig.baseUrl}",
+            fontSize = 11.5.sp, color = TextSecondary)
+        vm.message?.let {
+            Text(it, fontSize = 12.5.sp,
+                color = if (it.contains("成功") || it.contains("正常") || it == "已保存")
+                    EpSuccess else TextRegular)
         }
     }
 }
