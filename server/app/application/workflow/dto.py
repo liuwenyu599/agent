@@ -1,4 +1,4 @@
-"""工作流 DTO。"""
+"""工作流程 DTO。"""
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
