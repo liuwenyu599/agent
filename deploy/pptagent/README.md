@@ -9,12 +9,50 @@
 justice-ppt-host :7861 ──► justice-ppt-sandbox（仅内部，不对外开端口）
     │  （OpenAI-compatible）
     ▼
-justice-deeppresenter-9b :8003（vLLM serve，OpenAI 兼容）
+justice-deeppresenter-9b 容器内 :8003（宿主机生产端口 :8004，OpenAI 兼容）
 ```
 
-- 与现有 PostgreSQL、justice-office-server、Qwen:8001、VL:8002、BGE-M3 完全隔离，互不干扰；
-- 三个新容器都在独立网络 `justice-network`；
-- 端口只新增 8003（模型）和 7861（PPTAgent Host），避开 8000/8001/8002。
+- 与现有 PostgreSQL、justice-office-server、14B:8003、VL:8002、BGE-M3 隔离；
+- 三个 PPT 相关容器都在独立网络 `justice-network`；
+- DeepPresenter 容器内仍监听 8003，但生产宿主机发布为 **8004**；PPTAgent Host 为 7861，避免与 14B 的宿主机 8003 冲突。
+
+## 2026-09-28 已验证镜像基线
+
+生产上的 `deeppresenter-sandbox:latest` 与 `deeppresenter-host:latest` 含现场排障后的补丁。
+**明日交付前不要重新 pull / rebuild 这两个镜像，也不要用上游 latest 覆盖它们。**
+
+当前仓库没有 2026-09-28 现场补丁的完整原始 diff，因此不能安全地凭记忆重造 Dockerfile。
+在原始 patch 被还原并纳入版本控制之前，生产采用“已验证镜像冻结 + 校验 + tar 归档”的方式保证可恢复：
+
+```bash
+cd /opt/judicial_app/deploy/pptagent
+
+./verify-patched-images.sh
+./archive-patched-images.sh /opt/justice-office/data/delivery-images
+```
+
+只有看到：
+
+```text
+PPTAGENT IMAGE BASELINE PASSED
+```
+
+才允许继续部署。归档会生成：
+
+```text
+sandbox.tar
+host.tar
+pptagent-images.sha256
+```
+
+恢复：
+
+```bash
+docker load -i /opt/justice-office/data/delivery-images/sandbox.tar
+docker load -i /opt/justice-office/data/delivery-images/host.tar
+```
+
+这是一条交付安全线，不等价于补丁源码已经完全可复现。后续拿到 9 月 28 日实际 patch diff 后，再补 Dockerfile/overlay 构建；在此之前禁止重建这两个镜像。
 
 ## 部署步骤
 
@@ -33,14 +71,16 @@ docker compose up -d
 # 4. 让司法局后端能访问 PPTAgent Host（不改动后端容器本身）
 docker network connect justice-network justice-office-server
 
-# 5. 后端 .env 增加（供 FastAPI 调 PPTAgent）：
-#    PPT_AGENT_URL=http://justice-ppt-host:7861
+# 5. 生产后端 .env 使用已确认的宿主机地址：
+#    PPT_MODEL_URL=http://10.128.85.133:8004/v1
+#    PPT_AGENT_URL=http://10.128.85.133:7861
+#    PPT_AGENT_WORKSPACE_DIR=/data/pptagent
 ```
 
 ## 验证
 
 ```bash
-curl http://localhost:8003/v1/models        # DeepPresenter-9B 在线
+curl http://localhost:8004/v1/models        # DeepPresenter-9B 在线（生产宿主机端口）
 curl http://localhost:7861/                 # PPTAgent WebUI
 # 在后端容器内：
 docker exec justice-office-server curl -s http://justice-ppt-host:7861/
