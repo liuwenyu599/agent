@@ -491,3 +491,903 @@ private fun FormattedBodyEditor(vm: WritingViewModel) {
         }
     }
 }
+
+// ---------------- 零门槛入口 ----------------
+
+@Composable
+private fun TaskEntryScreen(vm: WritingViewModel) {
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        // 模板中心「使用模板 → 生成」：创建绑定模板的任务并自动起草
+        AppState.pendingWritingTemplate?.let { p ->
+            AppState.pendingWritingTemplate = null
+            // 一次性跳转参数互斥：聊天页残留的写作意图一并作废，
+            // 防止它稍后被当成新任务需求再次启动（上下文串话来源之一）
+            AppState.pendingWritingIntent = null
+            vm.startFromTemplate(p)
+            return@LaunchedEffect
+        }
+        AppState.pendingWritingIntent?.let {
+            vm.entryInput = it
+            AppState.pendingWritingIntent = null
+            vm.planAndStart()
+        }
+    }
+
+    // 内容整体垂直居中：桌面竖向空间不被浪费成底部空白；
+    // 不写死 fillMaxHeight，避免内容不足时全部堆在顶部
+    Box(Modifier.fillMaxSize().background(AppBg), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.widthInMaxEntry()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Dimens.space8, vertical = Dimens.space7),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // 品牌化的写作主视觉：低饱和靛蓝渐变，不做满屏渐变
+            EntryHero()
+
+            Spacer(Modifier.height(Dimens.space6))
+
+            // 输入卡
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusXl))
+                    .background(Surface)
+                    .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusXl))
+                    .padding(Dimens.space5),
+            ) {
+                OutlinedTextField(
+                    value = vm.entryInput,
+                    onValueChange = { vm.entryInput = it },
+                    placeholder = { Text("用一句话描述这次写作任务，例如：根据本月工作材料撰写报送区政府的工作情况报告",
+                        fontSize = 13.5.sp, color = Muted2) },
+                    modifier = Modifier.fillMaxWidth().height(110.dp),
+                    enabled = !vm.busy,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(Dimens.radiusControl),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Ink),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        backgroundColor = SurfaceTonal,
+                        focusedBorderColor = Primary,
+                        unfocusedBorderColor = Line,
+                        cursorColor = Primary,
+                    ),
+                )
+                Spacer(Modifier.height(Dimens.space3))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, null, tint = AiIndigo,
+                            modifier = Modifier.size(Dimens.iconSm))
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text("文种、材料、可依据资料与模板由我自动组织",
+                            fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
+                    }
+                    Spacer(Modifier.width(Dimens.space3))
+                    AppButton(
+                        text = if (vm.planning) "规划中…" else "开始写作",
+                        onClick = { vm.planAndStart() },
+                        kind = AppButtonKind.AI,
+                        size = AppButtonSize.LG,
+                        enabled = !vm.busy && vm.entryInput.isNotBlank(),
+                        loading = vm.planning,
+                        icon = Icons.Default.AutoAwesome,
+                    )
+                }
+            }
+
+            if (vm.planning) {
+                Spacer(Modifier.height(Dimens.space5))
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusLg))
+                        .background(AiSoft)
+                        .border(1.dp, AiSoftStrong, RoundedCornerShape(Dimens.radiusLg))
+                        .padding(Dimens.space5),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AutoAwesome, null, tint = AiIndigo,
+                            modifier = Modifier.size(Dimens.iconMd))
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text("我正在准备本次写作", fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold, color = Ink)
+                    }
+                    Spacer(Modifier.height(Dimens.space3))
+                    listOf(
+                        "理解任务语义与写作目标",
+                        "识别文种、报送对象与使用场景",
+                        "匹配可参考材料与知识来源（受科室权限约束）",
+                        "确定模板并组织左栏任务上下文",
+                    ).forEachIndexed { i, s ->
+                        Row(Modifier.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(18.dp).clip(RoundedCornerShape(Dimens.radiusXs))
+                                    .background(Surface),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("${i + 1}", fontSize = 10.5.sp, color = AiIndigo,
+                                    fontWeight = FontWeight.SemiBold)
+                            }
+                            Spacer(Modifier.width(Dimens.space2))
+                            Text(s, fontSize = 12.5.sp, color = Ink2)
+                        }
+                    }
+                    Spacer(Modifier.height(Dimens.space2))
+                    AppLinkButton("取消本次生成", onClick = { vm.cancelGeneration() })
+                }
+            }
+
+            vm.planError?.let {
+                Spacer(Modifier.height(Dimens.space4))
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusMd))
+                        .background(WarnSoft)
+                        .padding(Dimens.space4),
+                ) {
+                    Text("任务规划不可用：$it", fontSize = 12.5.sp, color = Warn)
+                    Spacer(Modifier.height(Dimens.space2))
+                    AppLinkButton("不规划，直接开始写作", onClick = { vm.startWithoutPlan() })
+                }
+            }
+
+            // 还没拿到 task_id 就切回来了（任务仍在创建中）：明确说明仍在处理，
+            // 不要呈现一个空白入口让人以为任务丢了
+            if (AppState.writingGenerating && !vm.planning) {
+                Spacer(Modifier.height(Dimens.space4))
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusMd))
+                        .background(AiSoft)
+                        .padding(Dimens.space4),
+                ) {
+                    Text("上一次启动的写作任务仍在准备中，完成后会自动回到工作台。",
+                        fontSize = 12.5.sp, color = Ink2, lineHeight = 18.sp)
+                }
+            }
+
+            // 恢复中的中性提示由外层统一渲染（工作台与入口页都要看到），这里只出结果
+            WritingStatusLine(vm.status)
+            Spacer(Modifier.height(Dimens.space6))
+        }
+    }
+}
+
+private fun Modifier.widthInMaxEntry(): Modifier = this.widthIn(max = 900.dp)
+
+@Composable
+private fun EntryHero() {
+    val shape = RoundedCornerShape(Dimens.radiusXl)
+    Box(
+        Modifier.fillMaxWidth().clip(shape)
+            .background(Brush.linearGradient(listOf(FeatureWriteStart, FeatureWriteEnd))),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(Dimens.space6)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(34.dp).clip(RoundedCornerShape(Dimens.radiusMd))
+                        .background(Color.White.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.AutoAwesome, null, tint = OnPrimaryText,
+                        modifier = Modifier.size(Dimens.iconMd))
+                }
+                Spacer(Modifier.width(Dimens.space3))
+                Column {
+                    Text("智能写作", fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+                        color = OnPrimaryText)
+                    Text("${AppState.displayName}，今天你想完成什么写作任务？",
+                        fontSize = 12.5.sp, color = Color.White.copy(alpha = 0.72f))
+                }
+            }
+        }
+    }
+}
+
+// ---------------- 左栏：任务上下文 ----------------
+
+@Composable
+private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
+    val spec = vm.spec ?: return
+    val deptName = AppState.departmentName
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space4)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Eyebrow("任务上下文")
+                Text("本次写作", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                if (spec.agent.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(spec.agent, fontSize = 11.5.sp, color = Muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            AppLinkButton("重新描述", onClick = { vm.backToEntry() })
+        }
+
+        Spacer(Modifier.height(Dimens.space4))
+
+        // 任务卡：AI 规划结果可人工修订（改后点 ✓ 同步后端，对下次「继续生成」生效）
+        ContextBlock(title = "任务要点（可修改）", icon = Icons.Default.Description, tint = Primary) {
+            TaskField("文种", spec.docType) { v -> vm.patchSpecField("文种", v) }
+            TaskField("报送对象", spec.audience) { v -> vm.patchSpecField("报送对象", v) }
+            TaskField("写作目标", spec.target) { v -> vm.patchSpecField("写作目标", v) }
+            spec.fields.filter { it.label !in setOf("文种", "报送对象", "写作目标") }
+                .forEach { f -> TaskField(f.label, f.value) { v -> vm.patchSpecField(f.label, v) } }
+        }
+
+        // 参考材料：可勾选，也可直接查看/编辑知识库原文
+        if (spec.materials.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space3))
+            ContextBlock(title = "参考材料（${spec.materials.count { it.selected }}）") {
+                spec.materials.forEach { opt ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(enabled = opt.note.isBlank()) { vm.toggleMaterial(opt) }
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = opt.selected,
+                            onCheckedChange = { if (opt.note.isBlank()) vm.toggleMaterial(opt) },
+                            modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(Dimens.space2))
+                        Text(opt.label, fontSize = 12.5.sp, color = Ink,
+                            modifier = Modifier.weight(1f), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        if (opt.note.isNotBlank()) {
+                            TagChip(opt.note, fg = Warn, bg = WarnSoft)
+                        } else if (opt.id.isNotBlank()) {
+                            Spacer(Modifier.width(Dimens.space1))
+                            Text("查看", fontSize = 11.5.sp, color = Primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(Dimens.radiusXs))
+                                    .clickable { vm.openDocument(opt.id) }
+                                    .padding(horizontal = 4.dp, vertical = 1.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        // 可依据资料：用「已参考 N 项相关资料 / 来自本科室业务知识」表达
+        if (spec.knowledge.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space3))
+            val selected = spec.knowledge.filter { it.selected }
+            ContextSources(
+                summary = if (selected.isEmpty()) "未选择可依据资料"
+                else "本次写作已参考 ${selected.size} 项相关资料",
+                sources = spec.knowledge.map {
+                    it.label + friendlySource(it.note, deptName).let { s ->
+                        if (s.isBlank()) "" else " · $s"
+                    }
+                },
+            )
+        }
+
+        // 模板
+        if (spec.templateName.isNotBlank()) {
+            Spacer(Modifier.height(Dimens.space3))
+            ContextBlock(title = "使用模板") {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(Dimens.radiusSm))
+                        .background(SurfaceTonal)
+                        .clickable { AppState.navigate(AppScreen.TEMPLATES) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(spec.templateName, fontSize = 12.5.sp, color = Ink,
+                        modifier = Modifier.weight(1f), maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    Text("切换", fontSize = 11.5.sp, color = Primary)
+                }
+                if (spec.source == "template") {
+                    Spacer(Modifier.height(Dimens.space1))
+                    AppLinkButton("返回模板重新填写要素", onClick = { vm.returnToTemplate() })
+                }
+            }
+        }
+
+        if (spec.source == "rule") {
+            Spacer(Modifier.height(Dimens.space3))
+            FieldError("本次规划由规则降级生成（模型不可用），结构可能较简略")
+        }
+
+        Spacer(Modifier.height(Dimens.space4))
+        AppButton("上传材料", onClick = {
+            vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
+        }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
+        Spacer(Modifier.height(Dimens.space2))
+        UploadImageRecognizeButton(vm)
+        if (vm.materials.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space2))
+            vm.materials.forEach { a ->
+                Text("· ${a.name}", fontSize = 11.5.sp, color = Muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (!vm.hasDraft) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("生成初稿", onClick = { vm.draft() }, kind = AppButtonKind.AI,
+                enabled = !vm.busy, loading = vm.busy, fill = true)
+        } else {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+                kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
+                icon = Icons.Default.Refresh, fill = true)
+            Spacer(Modifier.height(Dimens.space1))
+            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+                fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
+        }
+        if (vm.busy) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                kind = AppButtonKind.DANGER, fill = true)
+        }
+    }
+}
+
+@Composable
+private fun SpecFact(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+        Text(label, fontSize = 11.5.sp, color = Muted, modifier = Modifier.width(72.dp))
+        Text(value, fontSize = 12.5.sp, color = if (value == Pending) Muted2 else Ink,
+            modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+            lineHeight = 18.sp)
+    }
+}
+
+/** 把系统实现语言翻译成用户语言：全局公共知识库 → 公共资料，本科室知识库 → 本科室业务知识 */
+private fun friendlySource(note: String, deptName: String): String = when {
+    note.contains("个人") -> "我的资料"
+    note.contains("本科室") || note.contains("科室") ->
+        "${deptName.ifBlank { "本科室" }}业务知识"
+    note.contains("公共") || note.contains("全局") -> "公共资料"
+    else -> note
+}
+
+@Composable
+private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space4)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Eyebrow("任务上下文")
+                Text("写作任务", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+            }
+            AppLinkButton("新建任务", onClick = { vm.newTask() })
+        }
+        Spacer(Modifier.height(Dimens.space4))
+
+        ContextBlock(title = "任务要点", icon = Icons.Default.Description) {
+            TaskField("文种", vm.task.documentType) { v -> vm.patchContext(mapOf("document_type" to v)) }
+            TaskField("标题", vm.task.title) { v -> vm.patchContext(mapOf("title" to v)) }
+            TaskField("主题", vm.task.topic) { v -> vm.patchContext(mapOf("topic" to v)) }
+            TaskField("时间", vm.task.timeRange) { v -> vm.patchContext(mapOf("time_range" to v)) }
+            TaskField("主送机关", vm.task.recipient) { v -> vm.patchContext(mapOf("recipient" to v)) }
+            TaskField("发文机关", vm.task.authority) { v -> vm.patchContext(mapOf("authority" to v)) }
+            if (vm.task.keyFacts.isNotEmpty()) {
+                SpecFact("主要工作", vm.task.keyFacts.joinToString("、"))
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        ContextBlock(title = "文号") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = vm.task.documentNumberEnabled,
+                    onCheckedChange = { vm.toggleDocNumber(it) })
+                Spacer(Modifier.width(Dimens.space2))
+                Text(if (vm.task.documentNumberEnabled) "启用（手工填写，系统不编造）" else "不使用",
+                    fontSize = 12.sp, color = Ink2)
+            }
+            if (vm.task.documentNumberEnabled) {
+                Spacer(Modifier.height(Dimens.space2))
+                OutlinedTextField(
+                    vm.task.documentNumber, { vm.setDocNumber(it) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = Dimens.hControl),
+                    singleLine = true,
+                    shape = RoundedCornerShape(Dimens.radiusControl),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        backgroundColor = SurfaceTonal, focusedBorderColor = Primary,
+                        unfocusedBorderColor = Line, cursorColor = Primary),
+                )
+            }
+            if (vm.task.documentDate.isNotBlank()) {
+                Spacer(Modifier.height(Dimens.space2))
+                SpecFact("成文日期", vm.task.documentDate)
+            }
+        }
+
+        if (vm.task.missingFields.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space3))
+            ContextBlock(title = "还需要的信息", tint = Warn) {
+                vm.task.missingFields.forEach {
+                    Text("· $it", fontSize = 12.sp, color = Warn, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        AppButton("上传材料", onClick = {
+            vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
+        }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
+        Spacer(Modifier.height(Dimens.space2))
+        UploadImageRecognizeButton(vm)
+        if (vm.materials.isEmpty()) {
+            Spacer(Modifier.height(Dimens.space1))
+            Text("未上传材料（可先起草，随时补充）", fontSize = 11.5.sp, color = Muted)
+        } else {
+            Spacer(Modifier.height(Dimens.space2))
+            vm.materials.forEach { a ->
+                Text("· ${a.name}", fontSize = 11.5.sp, color = Muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
+
+        if (!vm.hasDraft) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("生成初稿", onClick = { vm.draft() }, kind = AppButtonKind.AI,
+                enabled = !vm.busy, loading = vm.busy, fill = true)
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("先搭框架", onClick = { vm.draft(outlineOnly = true) },
+                kind = AppButtonKind.SECONDARY, enabled = !vm.busy, fill = true)
+        } else {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+                kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
+                icon = Icons.Default.Refresh, fill = true)
+            Spacer(Modifier.height(Dimens.space1))
+            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+                fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
+        }
+        if (vm.busy) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                kind = AppButtonKind.DANGER, fill = true)
+        }
+        Spacer(Modifier.height(Dimens.space4))
+    }
+}
+
+/**
+ * 可编辑任务字段：改动后点右侧 ✓ 同步后端。
+ * 多行展示（最多 3 行），避免长参数（如写作目标、主要工作）被单行裁剪看不全。
+ */
+@Composable
+private fun TaskField(label: String, value: String, onSync: (String) -> Unit) {
+    var editing by remember(value) { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val shown = editing ?: value
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 11.5.sp, color = Muted, modifier = Modifier.width(72.dp))
+        OutlinedTextField(
+            value = shown,
+            onValueChange = { editing = it },
+            placeholder = { Text(Pending, fontSize = 12.sp, color = Muted2) },
+            modifier = Modifier.weight(1f).heightIn(min = 40.dp, max = 96.dp),
+            singleLine = false,
+            maxLines = 3,
+            shape = RoundedCornerShape(Dimens.radiusSm),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.5.sp, color = Ink),
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                backgroundColor = SurfaceTonal, focusedBorderColor = Primary,
+                unfocusedBorderColor = Line, cursorColor = Primary),
+        )
+        if (editing != null && editing != value) {
+            Spacer(Modifier.width(Dimens.space1))
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(Dimens.radiusXs))
+                    .background(PrimarySoft)
+                    .clickable { onSync(editing ?: ""); editing = null },
+                contentAlignment = Alignment.Center,
+            ) { Text("✓", fontSize = 13.sp, color = Primary) }
+        }
+    }
+}
+
+// ---------------- 中栏：文档工作台 ----------------
+
+@Composable
+private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
+    Column(modifier) {
+        // 文档工具条
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(Dimens.radiusLg))
+                .background(Surface)
+                .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+                .padding(horizontal = Dimens.space4, vertical = Dimens.space3),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(vm.task.title.ifBlank { "未命名文档" }, fontSize = 14.5.sp,
+                    fontWeight = FontWeight.SemiBold, color = Ink, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    buildString {
+                        append(vm.task.documentType.ifBlank { "未识别文种" })
+                        if (vm.task.recipient.isNotBlank()) append(" · 报送 ${vm.task.recipient}")
+                    },
+                    fontSize = 11.5.sp, color = Muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(Dimens.space3))
+            if (vm.busy) {
+                AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                    kind = AppButtonKind.DANGER)
+                Spacer(Modifier.width(Dimens.space2))
+            }
+            if (vm.hasDraft) {
+                AppButton("继续生成", onClick = { vm.draft() },
+                    kind = AppButtonKind.AI, enabled = !vm.busy,
+                    icon = Icons.Default.Refresh)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("保存版本", onClick = { vm.saveVersion() },
+                    kind = AppButtonKind.SECONDARY, enabled = !vm.busy)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("导出 Word", onClick = {
+                    pickSaveFile("${vm.task.title.ifBlank { "公文" }}.docx")
+                        ?.let { vm.export(true, it) }
+                }, kind = AppButtonKind.PRIMARY, enabled = !vm.busy)
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+
+        if (!vm.hasDraft) {
+            // 空状态：文档图形 + 当前任务 + 明确主操作
+            Column(
+                Modifier.fillMaxWidth().weight(1f)
+                    .clip(RoundedCornerShape(Dimens.radiusLg))
+                    .background(Surface)
+                    .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                EmptyState(
+                    text = "还没有正文",
+                    hint = "左栏确认任务上下文后生成初稿，或在右栏告诉助手你想要的写法",
+                    icon = Icons.Default.Description,
+                ) {
+                    AppButton("生成初稿", onClick = { vm.draft() }, kind = AppButtonKind.AI,
+                        enabled = !vm.busy, loading = vm.busy, size = AppButtonSize.LG)
+                }
+            }
+            return
+        }
+
+        // 文档纸张
+        DocumentSurface(modifier = Modifier.weight(1f), padding = Dimens.space6) {
+            // 正文默认就是「所见即所得」：按公文格式渲染（标题居中/加粗、
+            // 一、（一）层级行加粗、正文段首缩进两字符、**粗体** 生效），
+            // 点击任意段落就地修改，格式变化立刻可见；
+            // 「源码模式」回到 Markdown 原文整篇编辑（高级用法，兼容旧习惯）。
+            var sourceMode by remember { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TagChip("V${maxOf(vm.versionNo, 1)}", fg = Warn, bg = WarnSoft)
+                Spacer(Modifier.width(Dimens.space2))
+                Text("待完善", fontSize = 11.5.sp, color = Muted)
+                Spacer(Modifier.weight(1f))
+                if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
+                    Text(vm.task.documentNumber, fontSize = 11.5.sp, color = Muted)
+                    Spacer(Modifier.width(Dimens.space3))
+                }
+                if (!sourceMode) {
+                    Text("点击段落即可修改", fontSize = 11.sp, color = Muted2)
+                    Spacer(Modifier.width(Dimens.space3))
+                }
+                AppLinkButton(if (sourceMode) "退出源码" else "源码模式",
+                    onClick = { sourceMode = !sourceMode })
+            }
+            Spacer(Modifier.height(Dimens.space4))
+            if (vm.task.title.isNotBlank()) {
+                Text(vm.task.title, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    color = Ink, lineHeight = 30.sp)
+                Spacer(Modifier.height(Dimens.space4))
+            }
+            Hairline()
+            Spacer(Modifier.height(Dimens.space3))
+            if (sourceMode) {
+                OutlinedTextField(
+                    value = vm.content,
+                    onValueChange = { vm.content = it },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp),
+                    shape = RoundedCornerShape(Dimens.radiusMd),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        backgroundColor = Surface,
+                        focusedBorderColor = LineSubtle,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = Primary),
+                )
+            } else {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    FormattedBodyEditor(vm)
+                }
+            }
+            Spacer(Modifier.height(Dimens.space3))
+            val versionText = if (vm.versionNo > 0) "版本 v${vm.versionNo}" else "未保存版本"
+            val stateText = if (vm.busy) "助手处理中" else "已就绪"
+            val stateColor: Color = if (vm.busy) Primary else Muted
+            DocumentStatusBar(
+                left = "字数：约 ${vm.content.length} 字",
+                items = listOf(versionText to Muted, stateText to stateColor),
+            )
+        }
+    }
+}
+
+// ---------------- 右栏：AI 助手 ----------------
+
+private val QUICK_ACTIONS = listOf(
+    Triple("扩写", "expand", "扩写当前内容"),
+    Triple("润色", "polish", "润色当前内容"),
+    Triple("精简", "condense", "精简当前内容"),
+    Triple("规范化", "normalize", "调整为司法行政机关正式材料语言"),
+    Triple("补充结构", "complete", "判断当前文档缺少哪些必要部分并补充"),
+    Triple("检查问题", "revise", "检查当前文档存在的问题并列出"),
+)
+
+@Composable
+private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
+    var tab by remember { androidx.compose.runtime.mutableStateOf(0) }
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space4),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(Dimens.radiusSm))
+                    .background(Brush.linearGradient(listOf(AiIndigo, Primary))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.AutoAwesome, null, tint = OnPrimaryText,
+                    modifier = Modifier.size(Dimens.iconXs))
+            }
+            Spacer(Modifier.width(Dimens.space2))
+            Column(Modifier.weight(1f)) {
+                Text("助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Text(vm.spec?.agent?.ifBlank { AppState.agentName.ifBlank { "智能助手" } }
+                    ?: AppState.agentName.ifBlank { "智能助手" },
+                    fontSize = 11.sp, color = Muted, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        if (vm.busy) {
+            AiWorkingRow(if (vm.planning) "正在准备写作环境…" else "正在处理当前文档…")
+            Spacer(Modifier.height(Dimens.space3))
+        }
+
+        AppSegmentedTabs(
+            tabs = listOf("对话", "建议", "依据"),
+            selectedIndex = tab,
+            onSelect = { tab = it },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(Dimens.space3))
+
+        when (tab) {
+            0 -> {
+                LazyColumn(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space3),
+                ) {
+                    items(vm.messages) { m ->
+                        AiBubble(text = m.content, isUser = m.role == "user",
+                            label = vm.spec?.agent?.ifBlank { "助手" } ?: "助手")
+                    }
+                }
+            }
+            1 -> {
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space2),
+                ) {
+                    val actions = vm.spec?.aiActions.orEmpty()
+                    if (actions.isNotEmpty()) {
+                        SectionTitle("针对本次任务")
+                        Spacer(Modifier.height(Dimens.space1))
+                        Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                            actions.chunked(2).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                                    row.forEach { a ->
+                                        Box(Modifier.weight(1f)) {
+                                            AiActionChip(a, onClick = { vm.revise(a, "revise") },
+                                                enabled = !vm.busy && vm.hasDraft,
+                                                icon = Icons.Default.AutoAwesome)
+                                        }
+                                    }
+                                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(Dimens.space4))
+                    }
+                    SectionTitle("对当前文档")
+                    Spacer(Modifier.height(Dimens.space1))
+                    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                        QUICK_ACTIONS.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                                row.forEach { (label, mode, hint) ->
+                                    Box(Modifier.weight(1f)) {
+                                        AiActionChip(label,
+                                            onClick = { vm.revise(hint, mode) },
+                                            enabled = !vm.busy && vm.hasDraft)
+                                    }
+                                }
+                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    if (!vm.hasDraft) {
+                        Spacer(Modifier.height(Dimens.space3))
+                        Text("生成正文后可用这些操作继续打磨", fontSize = 11.5.sp, color = Muted)
+                    }
+                }
+            }
+            else -> {
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space3),
+                ) {
+                    if (vm.references.isEmpty()) {
+                        EmptyState("本次写作暂无引用记录",
+                            hint = "生成或改写正文后，这里会列出助手实际参考的资料",
+                            icon = Icons.Default.Description)
+                    } else {
+                        ContextSources(
+                            summary = "已参考 ${vm.references.size} 项相关资料",
+                            sources = vm.references,
+                            tint = EmeraldInk,
+                            container = EmeraldSoft,
+                        )
+                    }
+                    val selectedKb = vm.spec?.knowledge?.filter { it.selected }.orEmpty()
+                    if (selectedKb.isNotEmpty()) {
+                        ContextSources(
+                            summary = "来自${AppState.departmentName.ifBlank { "本科室" }}业务知识与公共资料",
+                            sources = selectedKb.map { it.label },
+                            tint = EmeraldInk,
+                            container = EmeraldSoft,
+                        )
+                    }
+                    if (vm.versions.isNotEmpty()) {
+                        Spacer(Modifier.height(Dimens.space2))
+                        SectionTitle("历史版本")
+                        Text("点击查看全文，可回退（当前内容会自动保存）",
+                            fontSize = 11.sp, color = Muted)
+                        vm.versions.take(6).forEach { v ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(Dimens.radiusXs))
+                                    .clickable { vm.openVersion(v["version_no"].int()) }
+                                    .padding(vertical = 4.dp, horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("v${v["version_no"].int()}", fontSize = 12.sp,
+                                    color = Primary, modifier = Modifier.width(40.dp))
+                                Text(v["note"].str().ifBlank { "自动保存" },
+                                    fontSize = 12.sp, color = Ink2, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f))
+                                Text("查看/回退", fontSize = 11.sp, color = Primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Dimens.space3))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = vm.chatInput,
+                onValueChange = { vm.chatInput = it },
+                placeholder = { Text("继续说：把第二部分写详细一点…", fontSize = 12.sp,
+                    color = Muted2) },
+                modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl, max = 72.dp),
+                maxLines = 3,
+                enabled = !vm.busy,
+                shape = RoundedCornerShape(Dimens.radiusControl),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
+                colors = TextFieldDefaults.outlinedTextFieldColors(
+                    backgroundColor = SurfaceTonal, focusedBorderColor = Primary,
+                    unfocusedBorderColor = Line, cursorColor = Primary),
+            )
+            Spacer(Modifier.width(Dimens.space2))
+            AppIconButton(
+                icon = Icons.Default.Send,
+                contentDescription = "发送",
+                onClick = { vm.sendChat() },
+                size = 38.dp,
+                tint = if (vm.chatInput.isBlank() || vm.busy) Muted2 else Primary,
+                active = vm.chatInput.isNotBlank() && !vm.busy,
+            )
+        }
+        if (vm.hasDraft) {
+            Spacer(Modifier.height(Dimens.space2))
+            AppLinkButton("加入训练数据", onClick = { vm.addToTraining() }, enabled = !vm.busy)
+        }
+        WritingStatusLine(vm.status)
+    }
+}
+
+/**
+ * 状态提示条：只有真正的失败才用红色错误框。
+ *
+ * 写作台的 `status` 同时承载三类文案——失败原因（"导出失败：…"）、进行中提示
+ * （"上传材料中…"、"正在保存…"）和成功提示（"已保存版本 v3"、"已导出：xxx"）。
+ * 之前一律走 [FieldError]（恒为红色危险框，见 AppControls.kt:338），用户每切一次
+ * 页面就被红字迎面打一次，误以为"切换就会报错"。这里按语义分流。
+ */
+@Composable
+private fun WritingStatusLine(status: String?) {
+    val text = status?.takeIf { it.isNotBlank() } ?: return
+    Spacer(Modifier.height(Dimens.space3))
+    if (isWritingFailureText(text)) {
+        FieldError(text)
+    } else {
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(Dimens.radiusSm))
+                .background(AiSoft)
+                .border(1.dp, AiSoftStrong, RoundedCornerShape(Dimens.radiusSm))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text, fontSize = 12.sp, color = Ink, lineHeight = 18.sp)
+        }
+    }
+}
+
+/** 进行中 / 成功提示：中性浅蓝条，不吓人 */
+@Composable
+private fun WritingProgressLine(text: String) {
+    Spacer(Modifier.height(Dimens.space3))
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(Dimens.radiusSm))
+            .background(AiSoft)
+            .border(1.dp, AiSoftStrong, RoundedCornerShape(Dimens.radiusSm))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, fontSize = 12.sp, color = Ink, lineHeight = 18.sp)
+    }
+}
+
+/**
+ * 判定一条 status 是否为「失败」语义。
+ * 命中失败关键词 → 红色；其余（"已…"、"正在…"、普通说明）→ 中性提示。
+ */
+private fun isWritingFailureText(text: String): Boolean {
+    val failureHints = listOf(
+        "失败", "错误", "中断", "不存在", "已删除", "不可达", "超时",
+        "无法", "不能", "缺少", "请先", "仅支持", "已过期", "不合法", "异常",
+    )
+    return failureHints.any { text.contains(it) }
+}
