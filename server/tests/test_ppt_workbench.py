@@ -466,7 +466,7 @@ def outline_payload():
 
 def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
                                                 outline_payload):
-    """SSE：先 3 个 stage，最后 done 携带权威大纲（含 sources）。"""
+    """SSE：显式要求 8 页时，done 返回严格 8 页且保留来源标注。"""
     payload = outline_payload
     fake_llm._responder = lambda m: json.dumps(payload, ensure_ascii=False)
 
@@ -490,10 +490,13 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     outline = done["data"]["outline"]
     assert outline["title"] == "行政复议工作汇报"
     slides = outline["slides"]
-    assert len(slides) == 3
+    assert len(slides) == 8
     for s in slides:
         assert "sources" in s and isinstance(s["sources"], list)
     assert slides[1]["sources"] == ["材料A.txt"]
+    fillers = slides[2:-1]
+    assert all(s["title"] == "补充内容" for s in fillers)
+    assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
 
     # 来源标注要求确实下发给了模型（provenance 约束不是摆设）
     assert "【来源标注】" in fake_llm.last_prompt
@@ -504,6 +507,25 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
                      headers=_hdr(accounts["a"]))
     assert got.status_code == 200
     assert got.json()["outline"]["title"] == "行政复议工作汇报"
+
+
+def test_outline_stream_without_explicit_slide_count_keeps_model_count(
+        client, accounts, fake_llm, outline_payload):
+    """未显式填写页数时，接口默认值只是建议，不应把模型合理结果强补到默认页数。"""
+    fake_llm._responder = lambda m: json.dumps(outline_payload, ensure_ascii=False)
+
+    r = client.post(f"{BASE}/ppt/outline/stream", json={
+        "source_type": "topic",
+        "topic": "行政复议工作汇报",
+        "material_names": ["材料A.txt"],
+    }, headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+
+    events = _parse_sse(r.text)
+    assert events[-1]["type"] == "done"
+    slides = events[-1]["data"]["outline"]["slides"]
+    assert len(slides) == 3
+    assert slides[1]["sources"] == ["材料A.txt"]
 
 
 def test_outline_stream_emits_error_without_done(client, accounts, fake_llm):
