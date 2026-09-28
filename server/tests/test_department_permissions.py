@@ -488,6 +488,17 @@ def test_knowledge_admin_cannot_manage_system_users(client, users):
     denied = client.get(f"{BASE}/users/", headers=ka)
     assert denied.status_code == 403, denied.text
 
+    # 旧兼容注册接口也不能成为绕过 /users 权限的旁路。
+    register_denied = client.post(f"{BASE}/auth/register", headers=ka, json={
+        "username": "forbidden_created_user",
+        "email": "forbidden_created_user@test.local",
+        "password": "Passw0rd!2026",
+        "real_name": "不应创建",
+        "department": DEPT_FUYI,
+        "role": "user",
+    })
+    assert register_denied.status_code == 403, register_denied.text
+
     allowed = client.get(f"{BASE}/users/", headers=dev)
     assert allowed.status_code == 200, allowed.text
 
