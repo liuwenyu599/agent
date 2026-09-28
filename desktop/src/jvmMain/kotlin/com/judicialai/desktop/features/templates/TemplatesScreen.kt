@@ -115,6 +115,7 @@ fun TemplatesScreen() {
     var showCreate by remember { mutableStateOf(false) }
     var showAdapt by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<JsonObject?>(null) }
+    var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
 
     val all = vm.shown()
     val filtered = all.filter { t ->
@@ -227,6 +228,26 @@ fun TemplatesScreen() {
             vm = vm,
             onDismiss = { showAdapt = false; vm.cancelDraft() },
         )
+    }
+
+    pendingDelete?.let { t ->
+        AppDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = "删除模板",
+            subtitle = "删除后无法恢复，请确认该模板不再使用。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDelete = null }, kind = AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认删除", onClick = {
+                    vm.delete(t["id"].str())
+                    pendingDelete = null
+                })
+            },
+        ) {
+            Text("模板：${t["name"].str().ifBlank { "未命名模板" }}",
+                fontSize = 13.sp, color = Ink2)
+        }
     }
 }
 
@@ -393,7 +414,7 @@ private fun TemplateRow(
                 AppIconButton(Icons.Default.Edit, "编辑", onClick = onEdit)
                 Spacer(Modifier.width(Dimens.space1))
                 AppIconButton(Icons.Default.Delete, "删除",
-                    onClick = { vm.delete(t["id"].str()) })
+                    onClick = { pendingDelete = t })
             }
         }
     }
