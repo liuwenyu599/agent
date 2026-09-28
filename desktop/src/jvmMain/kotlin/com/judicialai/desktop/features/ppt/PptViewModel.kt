@@ -114,6 +114,14 @@ class PptViewModel(private val repo: PptRepository) {
     var materialsTotals by mutableStateOf<MaterialsTotals?>(null)
         private set
 
+    // ---- 知识库（结合知识库生成：服务端按主题做 RAG 语义检索，命中片段作为内容依据） ----
+    var kbs by mutableStateOf(listOf<JsonObject>())
+        private set
+    val selectedKbIds = mutableStateListOf<String>()
+    var kbsLoading by mutableStateOf(false)
+        private set
+    private var kbsLoaded = false
+
     // ---- 生成前预检（信息不足先确认，90 秒未确认按默认方案生成） ----
     var pendingConfirm by mutableStateOf<List<ConfirmQuestion>?>(null)
         private set
@@ -326,6 +334,29 @@ class PptViewModel(private val repo: PptRepository) {
         )
     }
 
+    /**
+     * 进入新建页时加载一次可选知识库列表（服务端已按可见范围过滤）。
+     * 失败静默：入口降级为不显示知识库区，不影响材料/主题路径。
+     */
+    fun loadKbs() {
+        if (kbsLoaded || kbsLoading) return
+        kbsLoading = true
+        scope.launch {
+            when (val r = repo.kbs()) {
+                is ApiResult.Ok -> kbs = r.data
+                is ApiResult.Err -> Unit
+            }
+            // 无论成败都只拉一次：列表变化慢，避免每次进页面都打请求
+            kbsLoaded = true
+            kbsLoading = false
+        }
+    }
+
+    fun toggleKb(id: String) {
+        if (id.isBlank()) return
+        if (id in selectedKbIds) selectedKbIds.remove(id) else selectedKbIds.add(id)
+    }
+
     // ================= 大纲生成（生成前预检 + 流式 + 回退 + 可取消） =================
 
     private fun outlineBody(): Map<String, Any?> {
@@ -344,6 +375,7 @@ class PptViewModel(private val repo: PptRepository) {
             "audience" to "",
             "scene" to "",
             "material_names" to materials.map { it.filename },
+            "kb_ids" to selectedKbIds.toList(),
         )
     }
 
@@ -357,8 +389,8 @@ class PptViewModel(private val repo: PptRepository) {
      *                 产物写到这个位置。
      */
     private fun beginOutline(aiTarget: File?) {
-        if (topic.isBlank() && materials.isEmpty()) {
-            status = "请先填写汇报主题，或上传材料"
+        if (topic.isBlank() && materials.isEmpty() && selectedKbIds.isEmpty()) {
+            status = "请先填写汇报主题，或上传材料，或选择知识库"
             return
         }
         // 切走再切回会得到一个新的 ViewModel（busy 已重置），仅靠 busy 挡不住重复发起；
@@ -540,9 +572,12 @@ class PptViewModel(private val repo: PptRepository) {
         // 服务端未部署流式接口或流中断且未拿到 done → 回退一次性接口
         if (!doneOk && streamErr != null) {
             outlineStage = "正在生成大纲…"
+            @Suppress("UNCHECKED_CAST")
+            val kbIds = (body["kb_ids"] as? List<String>) ?: emptyList()
             when (val r2 = repo.outline(
                 body["source_type"] as String, body["topic"] as String,
-                body["content"] as String, body["slide_count"] as Int, "", "")) {
+                body["content"] as String, body["slide_count"] as Int, "", "",
+                kbIds = kbIds)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
