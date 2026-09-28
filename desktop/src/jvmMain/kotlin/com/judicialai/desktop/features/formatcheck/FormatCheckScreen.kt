@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.bool
@@ -141,12 +142,14 @@ fun FormatCheckScreen() {
                     fontSize = 12.sp, color = Muted)
             }
             FilterChip("审校工作台", selected = !showRules, onClick = { showRules = false })
-            Spacer(Modifier.width(Dimens.space2))
-            FilterChip("规则管理", selected = showRules, onClick = { showRules = true })
+            if (AppState.isAdmin) {
+                Spacer(Modifier.width(Dimens.space2))
+                FilterChip("规则管理", selected = showRules, onClick = { showRules = true })
+            }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
 
-        if (showRules) {
+        if (showRules && AppState.isAdmin) {
             RulesPanel(vm, Modifier.weight(1f).padding(Dimens.space5))
         } else {
             Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -784,6 +787,7 @@ private val RULE_SEVERITIES = listOf("error" to "严重", "warning" to "警告",
 
 @Composable
 private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
+    var pendingDeleteRule by remember { mutableStateOf<JsonObject?>(null) }
     val form = vm.editingRule
     if (form != null) {
         RuleEditor(vm, form, modifier)
@@ -847,7 +851,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                                 TextButton(onClick = { vm.openRuleEditor(rule) }) {
                                     Text("编辑", color = EpPrimary, fontSize = 12.sp)
                                 }
-                                TextButton(onClick = { vm.deleteRule(rule["id"].str()) }) {
+                                TextButton(onClick = { pendingDeleteRule = rule }) {
                                     Text("删除", color = EpDanger, fontSize = 12.sp)
                                 }
                             }
@@ -857,15 +861,36 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                 }
             }
         }
+
+        pendingDeleteRule?.let { rule ->
+            AppDialog(
+                onDismissRequest = { pendingDeleteRule = null },
+                title = "删除格式规则",
+                subtitle = "删除后后续文档将不再执行该规则，且无法恢复。",
+                width = 460.dp,
+                actions = {
+                    AppButton("取消", onClick = { pendingDeleteRule = null },
+                        kind = AppButtonKind.SECONDARY)
+                    Spacer(Modifier.width(Dimens.space2))
+                    AppButton("确认删除", onClick = {
+                        vm.deleteRule(rule["id"].str())
+                        pendingDeleteRule = null
+                    }, kind = AppButtonKind.DANGER)
+                },
+            ) {
+                Text("规则：${rule["name"].str().ifBlank { "未命名规则" }}",
+                    fontSize = 13.sp, color = Ink2)
+            }
+        }
     }
 }
 
 /**
  * 规则编辑器（白话描述版）。
  *
- * 管理员和普通用户都不再手写 JSON：用白话描述校验要求，点「AI 生成校验项」
+ * 管理员不再手写 JSON：用白话描述校验要求，点「AI 生成校验项」
  * 由服务端把描述转换为校验项（白名单过滤后返回），界面上以白话预览确认，
- * 确认后保存（保存权限由服务端按角色校验，普通用户保存时会被提示无权限）。
+ * 确认后保存；普通用户界面不展示规则管理入口，服务端仍保留权限校验兜底。
  *
  * 修复：旧版在「外层 verticalScroll 的 Column」里又嵌了一个
  * 「verticalScroll + heightIn 的 Row」（校验对象单选组），Compose 会直接抛
