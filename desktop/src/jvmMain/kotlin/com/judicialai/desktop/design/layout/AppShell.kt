@@ -268,10 +268,12 @@ private fun AppHeader(
                         userMenuOpen = false
                         WindowManager.openNew()
                     }) { Text("新开独立窗口", fontSize = 13.sp) }
-                    DropdownMenuItem(onClick = {
-                        userMenuOpen = false
-                        AppState.navigate(AppScreen.SETTINGS)
-                    }) { Text("服务器连接设置", fontSize = 13.sp) }
+                    if (AppState.isDeveloper) {
+                        DropdownMenuItem(onClick = {
+                            userMenuOpen = false
+                            AppState.navigate(AppScreen.SETTINGS)
+                        }) { Text("连接设置", fontSize = 13.sp) }
+                    }
                     DropdownMenuItem(onClick = {
                         userMenuOpen = false
                         onLogout()
