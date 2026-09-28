@@ -115,7 +115,7 @@ private fun WelcomeBand(vm: HomeViewModel) {
                     Box(Modifier.size(6.dp).clip(CircleShape)
                         .background(if (vm.aiOnline) Ok else Muted))
                     Spacer(Modifier.width(Dimens.space2))
-                    Text(if (vm.aiOnline) "AI 助手在线" else "AI 助手离线 · 基础功能正常",
+                    Text(if (vm.aiOnline) "AI 助手在线" else "AI 服务离线 · 智能生成功能暂不可用",
                         fontSize = 12.sp, color = Muted)
                 }
             }
