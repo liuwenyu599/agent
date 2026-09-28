@@ -304,7 +304,7 @@ class WorkflowService:
 
     # ========== 上下文解析 ==========
     def parse_natural_language(self, user: User, inst_id: str, text: str) -> dict:
-        self._get_instance_checked(inst_id)
+        self._get_instance_checked(inst_id, user)
         prompt = f"""你是司法行政机关的公文信息提取助手。用户会用口语描述一场会议，请提取结构化信息，
 并把口语表述【规范化】为正式公文语言，严格按 JSON 格式输出。
 
@@ -395,7 +395,7 @@ JSON："""
 
     def confirm_context(self, user: User, inst_id: str, workflow_context: Dict[str, Any],
                         confirm_overrides: Dict[str, bool]) -> dict:
-        inst = self._get_instance_checked(inst_id)
+        inst = self._get_instance_checked(inst_id, user)
         current_ctx = self._get_workflow_context(inst)
         new_ctx = dict(current_ctx)
         for key, val in workflow_context.items():
