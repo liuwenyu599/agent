@@ -56,6 +56,9 @@ fun SettingsScreen() {
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
                 )
+                Text(
+                    "修改服务器地址会结束当前登录，并清理正在恢复的写作/PPT任务；请确认新地址属于本单位可信服务器。",
+                    fontSize = 12.sp, color = TextSecondary)
                 OutlinedTextField(
                     value = vm.timeoutSec,
                     onValueChange = { vm.timeoutSec = it.filter { c -> c.isDigit() } },
