@@ -24,6 +24,7 @@ import androidx.compose.material.Tab
 import androidx.compose.material.TabRow
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,8 +83,13 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     listOf("登录")
                 }
 
-                var tab by remember {
-                    mutableStateOf(if (vm.isFirstUser) 1 else 0)
+                var tab by remember { mutableStateOf(0) }
+                // check-first-user 是异步返回的：首帧通常还是 false。
+                // 如果系统确实是首次部署，结果回来后自动进入管理员创建页，
+                // 避免用户先看到一个必然登录失败的表单，或误以为“首次注册没反应”。
+                LaunchedEffect(vm.isFirstUser) {
+                    if (vm.isFirstUser) tab = 1
+                    else if (tab > 0) tab = 0
                 }
 
                 TabRow(
