@@ -376,7 +376,7 @@ private fun OutlineGeneratingPanel(vm: PptViewModel) {
                     color = MaterialTheme.colors.primary)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    vm.outlineStage.ifBlank { "后端处理中，完成后自动进入大纲确认" },
+                    vm.outlineStage.ifBlank { "正在整理内容，完成后自动进入大纲确认" },
                     style = MaterialTheme.typography.caption, color = SecondaryText,
                     modifier = Modifier.weight(1f))
                 TextButton(onClick = { vm.cancelOutline() }) {
