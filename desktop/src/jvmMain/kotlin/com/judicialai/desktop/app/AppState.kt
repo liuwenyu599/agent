@@ -40,7 +40,7 @@ object AppState {
 
     /** 使用指南：从个人中心启动，按步骤跳转页面并显示导览提示。 */
     val guideSteps: List<AppGuideStep> = listOf(
-        AppGuideStep(AppScreen.HOME, "工作台", "从这里进入最常用的办公能力。", "先选择要完成的任务，不需要理解模型或技术参数。"),
+        AppGuideStep(AppScreen.HOME, "工作台", "从这里进入最常用的办公能力。", "直接选择要完成的任务，按页面提示继续即可。"),
         AppGuideStep(AppScreen.WRITING, "智能写作", "描述任务、补充材料并生成正式文稿。", "先说清楚要写什么，再确认结构和内容。"),
         AppGuideStep(AppScreen.TEMPLATES, "模板中心", "查找系统、科室和个人常用模板。", "选择模板后填写必要要素，再进入智能写作。"),
         AppGuideStep(AppScreen.PPT, "PPT 助手", "从主题、材料或知识库生成汇报演示文稿。", "先生成并确认大纲，再进入视觉设计和导出。"),
