@@ -144,6 +144,18 @@ chmod +x /opt/judicial_app/deploy/postcheck-production.sh
 以下条件全部满足才开始部署：
 
 - 当前生产服务可用，`justice-db` 数据正常；
+- 旧 3B 服务已停用，`justice-qwen` 容器不运行且端口 `8001` 未被占用。部署前可执行：
+
+  ```bash
+  docker rm -f justice-qwen 2>/dev/null || true
+  if ss -tlnp 2>/dev/null | grep -q ':8001 '; then
+    echo "8001 仍被占用，请先停止旧 3B 服务"
+    exit 1
+  fi
+  ```
+
+  期望：命令无报错，`8001` 无监听。postcheck 会再次强制检查。
+
 - 至少保留 20 GB 根分区可用空间；
 - Windows 开发机 `app` 分支已更新到待部署版本，并且 Acceptance Gate 通过；
 - 生产服务器已有：
