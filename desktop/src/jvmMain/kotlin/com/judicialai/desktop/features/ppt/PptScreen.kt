@@ -83,84 +83,53 @@ fun slideTypeLabel(type: String) = SLIDE_TYPE_LABELS[type] ?: type
 @Composable
 fun PptScreen() {
     val vm = remember { PptViewModel(Repositories.ppt) }
-    var tab by remember { mutableStateOf(0) }
-
-    // 跨页面恢复：切走再切回时 remember 会重建 ViewModel（状态清零），
-    // 但生成协程不会被取消，服务端文档早已落库。这里读取全局状态：
-    // 本地还没有文档而全局有 id → 按 id 从服务端取回大纲，直接回到工作台。
-    // 读取发生在组合内，生成完成后（可能是离开页面之后才跑完）id 一写入就会触发重组并自动恢复。
+    var libraryView by remember { mutableStateOf<String?>(null) }
     val pendingDocId = AppState.pendingPptDocId
     val generating = AppState.pptOutlineGenerating
-    // 异步生成任务号：切走再切回时据此重新挂上轮询（进度在服务端，不会丢）
     val pendingJobId = AppState.pendingPptJobId
 
-    LaunchedEffect(Unit) { vm.loadTemplates(); vm.loadDocuments() }
-
-    // 以 id 为 key：id 从 null 变为具体值时（生成完成）自动执行一次恢复
+    LaunchedEffect(Unit) { vm.loadTemplates(); vm.loadDocuments(); vm.loadKbs() }
     LaunchedEffect(pendingDocId) {
         if (pendingDocId != null && vm.docId == null) vm.openDocument(pendingDocId)
     }
+    LaunchedEffect(pendingJobId) { if (pendingJobId != null) vm.resumeJob() }
+    DisposableEffect(Unit) { onDispose { vm.stopJobPolling() } }
 
-    // 异步生成任务：回到页面时重新挂上（续接轮询 / 补一次落盘）
-    LaunchedEffect(pendingJobId) {
-        if (pendingJobId != null) vm.resumeJob()
-    }
-
-    // 离开页面必须停掉轮询协程，否则每个页面都会留下一条永远跑着的轮询。
-    // 任务状态与目标文件都在服务端与全局 PptJobEngine 里，回来时 resumeJob 会续上。
-    DisposableEffect(Unit) {
-        onDispose { vm.stopJobPolling() }
-    }
-
-    // 生成前预检：信息不足时弹出关键信息确认框（90 秒未操作自动按默认方案生成）
-    vm.pendingConfirm?.let { qs ->
-        if (qs.isNotEmpty()) PptPrecheckDialog(vm, qs)
-    }
-
-    // PPTAgent 追问：信息不足时它会先反问而不是直接生成。
-    // 后端刻意不自动代答（自动代答等于替用户编需求），所以必须把问题抛给用户：
-    // 回答后 POST /clarify 带着上下文续跑同一个任务。任务状态是全局的，
-    // 所以即便用户当时在别的页面、切回来也还能看到这个追问框。
-    val pendingQuestion = vm.job
-    // 只认状态、不认 question 是否为空：万一后端给了状态却没给问题文本，
-    // 也必须让用户能作答，否则任务会永远卡在「等待补充信息」没人能推动
-    if (pendingQuestion != null && pendingQuestion.status == PptJobStatus.CLARIFYING) {
-        PptJobClarifyDialog(vm, pendingQuestion)
-    }
+    vm.pendingConfirm?.let { if (it.isNotEmpty()) PptPrecheckDialog(vm, it) }
+    vm.job?.let { if (it.status == PptJobStatus.CLARIFYING) PptJobClarifyDialog(vm, it) }
 
     Column(Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = tab) {
-            Tab(tab == 0, { tab = 0 }) { Text("新建 PPT", Modifier.padding(12.dp)) }
-            Tab(tab == 1, { tab = 1 }) { Text("我的 PPT", Modifier.padding(12.dp)) }
-            Tab(tab == 2, { tab = 2 }) { Text("模板库", Modifier.padding(12.dp)) }
-        }
-        // 还没拿到 doc_id 就切回来了：明确告诉用户生成仍在进行（协程并未被取消），
-        // 不要呈现一片空白让人以为生成丢了
         val lastError = AppState.pptLastError
-        // 异步生成任务进度（全局 PptJobEngine，不随页面销毁）
-        val job = vm.job
         when {
             generating && vm.docId == null -> PptGeneratingBanner(vm)
             lastError != null && vm.docId == null ->
-                // 上次生成（可能发生在切走期间）失败了：本地 status 已随 ViewModel 丢失，
-                // 只有全局记录还在，必须让用户知道失败原因
                 PptFailedBanner(lastError) { AppState.pptLastError = null }
-            // 生成中 / 等待补充信息，但用户在别的 Tab：给一条提示，避免以为任务没了
-            job != null && (job.isActive || job.status == PptJobStatus.CLARIFYING) &&
-                tab != 0 -> PptJobRunningBanner(job)
         }
         when {
-            // 异步生成任务存在（生成中 / 完成 / 失败 / 已取消）→ 展示生成工作台
-            tab == 0 && vm.jobVisible -> PptAsyncWorkbench(vm)
-            tab == 0 && vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
-            tab == 0 && vm.step == PptStep.OUTLINE -> OutlineConfirmPane(vm)
-            else -> Column(Modifier.padding(12.dp)) {
-                when (tab) {
-                    0 -> PptEntryPane(vm)
-                    1 -> PptDocsPane(vm, onOpen = { tab = 0 })
-                    else -> PptTemplatesPane(vm)
+            vm.jobVisible -> PptAsyncWorkbench(vm)
+            vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
+            vm.step == PptStep.OUTLINE -> OutlineConfirmPane(vm)
+            libraryView == "docs" -> Column(Modifier.fillMaxSize().padding(24.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { libraryView = null }) { Text("← 返回创建") }
+                    Spacer(Modifier.width(8.dp))
+                    Text("我的作品", style = MaterialTheme.typography.h6)
                 }
+                Spacer(Modifier.height(12.dp))
+                PptDocsPane(vm, onOpen = { libraryView = null })
             }
+            libraryView == "templates" -> Column(Modifier.fillMaxSize().padding(24.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { libraryView = null }) { Text("← 返回创建") }
+                    Spacer(Modifier.width(8.dp))
+                    Text("模板管理", style = MaterialTheme.typography.h6)
+                }
+                Spacer(Modifier.height(12.dp))
+                PptTemplatesPane(vm)
+            }
+            else -> PptEntryPane(vm,
+                onOpenDocuments = { libraryView = "docs"; vm.loadDocuments() },
+                onOpenTemplates = { libraryView = "templates"; vm.loadTemplates() })
         }
     }
 }
@@ -172,34 +141,22 @@ fun PptScreen() {
  */
 @Composable
 private fun PptPrecheckDialog(vm: PptViewModel, questions: List<ConfirmQuestion>) {
-    var remaining by remember { mutableStateOf(90) }
-    LaunchedEffect(questions) {
-        while (remaining > 0 && vm.pendingConfirm != null) {
-            delay(1000)
-            remaining--
-        }
-        // 倒计时结束仍未操作：按最合理的默认方案先跑
-        if (vm.pendingConfirm != null) vm.confirmAndGenerate(useAnswers = false)
-    }
     AppDialog(
         onDismissRequest = { vm.cancelConfirm() },
         title = "生成前请确认关键信息",
-        subtitle = "为避免凭空编造，请确认以下信息；留空则按默认方案生成。",
+        subtitle = "为避免凭空编造，请确认以下信息；也可以明确选择按默认方案继续。",
         width = 560.dp,
         actions = {
             AppButton("取消", onClick = { vm.cancelConfirm() }, kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
-            AppButton("按默认方案生成（${remaining}s）",
-                onClick = { vm.confirmAndGenerate(useAnswers = false) },
+            AppButton("按默认方案继续", onClick = { vm.confirmAndGenerate(false) },
                 kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
-            AppButton("确认并生成", onClick = { vm.confirmAndGenerate(useAnswers = true) })
+            AppButton("确认并生成大纲", onClick = { vm.confirmAndGenerate(true) })
         },
     ) {
         questions.forEach { q ->
-            OutlinedTextField(
-                value = q.answer, onValueChange = { q.answer = it },
-                label = { Text(q.question) },
+            OutlinedTextField(q.answer, { q.answer = it }, label = { Text(q.question) },
                 modifier = Modifier.fillMaxWidth())
         }
     }
@@ -278,89 +235,85 @@ internal fun sel(selected: Boolean) = ButtonDefaults.outlinedButtonColors(
 // ================= 极简入口页 =================
 
 @Composable
-private fun PptEntryPane(vm: PptViewModel) {
-    Column(Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-
-        Text("想做一份什么 PPT？", style = MaterialTheme.typography.subtitle1)
-        OutlinedTextField(vm.topic, { vm.topic = it },
-            label = { Text("一句话说明，如：社区矫正工作年度汇报") },
-            modifier = Modifier.fillMaxWidth())
-
-        // 材料区：上传后逐份显示 AI 分析结果，不再是黑盒
+private fun PptEntryPane(
+    vm: PptViewModel,
+    onOpenDocuments: () -> Unit,
+    onOpenTemplates: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 32.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("参考材料", style = MaterialTheme.typography.subtitle2,
-                modifier = Modifier.weight(1f))
-            OutlinedButton(enabled = !vm.analyzing, onClick = {
-                val files = pickFiles("选择材料（doc/docx/pdf/txt/md/xlsx/csv/pptx，可多选）")
-                if (files.isNotEmpty()) vm.analyzeMaterials(files)
-            }) { Text(if (vm.analyzing) "分析中…" else "添加材料") }
+            Column(Modifier.weight(1f)) {
+                Text("今天想做一份什么 PPT？", style = MaterialTheme.typography.h5)
+                Spacer(Modifier.height(4.dp))
+                Text("描述任务或上传现有材料，先确认内容结构，再由 AI 完成整套视觉设计。",
+                    style = MaterialTheme.typography.body2, color = SecondaryText)
+            }
+            TextButton(onClick = onOpenDocuments) { Text("我的作品") }
+            TextButton(onClick = onOpenTemplates) { Text("模板管理") }
         }
-        if (vm.materials.isEmpty()) {
-            Text("可上传工作总结、数据表、既有 PPT 等，AI 会逐份分析并作为内容依据。",
-                style = MaterialTheme.typography.caption, color = SecondaryText)
-        }
-        vm.materials.forEachIndexed { i, m ->
-            Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("${m.filename}（${m.chars} 字）",
-                            style = MaterialTheme.typography.subtitle2, maxLines = 1)
-                        if (m.summary.isNotBlank()) {
-                            Text(m.summary, style = MaterialTheme.typography.caption,
-                                color = SecondaryText, maxLines = 3)
+
+        Card(Modifier.fillMaxWidth(), elevation = 2.dp) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    vm.topic, { vm.topic = it },
+                    placeholder = { Text("例如：根据社区矫正年度工作总结，生成一份面向局领导的工作汇报，重点体现工作成效、问题分析和下一步计划。") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
+                )
+                vm.materials.forEachIndexed { i, m ->
+                    Card(Modifier.fillMaxWidth(), elevation = 0.dp,
+                        backgroundColor = MaterialTheme.colors.primary.copy(alpha = 0.04f)) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(m.filename, style = MaterialTheme.typography.subtitle2, maxLines = 1)
+                                Text(if (m.summary.isNotBlank()) "已分析 · " + m.summary
+                                    else "已分析 · ${m.chars} 字",
+                                    style = MaterialTheme.typography.caption,
+                                    color = SecondaryText, maxLines = 2)
+                            }
+                            IconButton(onClick = { vm.removeMaterial(i) }) {
+                                Icon(Icons.Default.Close, "移除", tint = SecondaryText)
+                            }
                         }
                     }
-                    IconButton(onClick = { vm.removeMaterial(i) }) {
-                        Icon(Icons.Default.Close, "移除", tint = MaterialTheme.colors.error)
-                    }
                 }
-            }
-        }
-
-        // 知识库区：结合知识库生成——服务端按主题做 RAG 语义检索，
-        // 命中片段作为大纲内容依据（不是整库原文灌入）
-        LaunchedEffect(Unit) { vm.loadKbs() }
-        if (vm.kbs.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("知识库", style = MaterialTheme.typography.subtitle2,
-                    modifier = Modifier.weight(1f))
-                if (vm.selectedKbIds.isNotEmpty()) {
-                    Text("已选 ${vm.selectedKbIds.size} 个",
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(enabled = !vm.analyzing, onClick = {
+                        val files = pickFiles("选择材料（doc/docx/pdf/txt/md/xlsx/csv/pptx，可多选）")
+                        if (files.isNotEmpty()) vm.analyzeMaterials(files)
+                    }) { Text(if (vm.analyzing) "分析材料中…" else "＋ 添加材料") }
+                    Spacer(Modifier.width(10.dp))
+                    Text(if (vm.selectedKbIds.isEmpty()) "可结合知识库生成"
+                        else "知识库 · 已选 ${vm.selectedKbIds.size} 个",
+                        style = MaterialTheme.typography.caption,
+                        color = if (vm.selectedKbIds.isEmpty()) SecondaryText else MaterialTheme.colors.primary)
+                    Spacer(Modifier.weight(1f))
+                    Text("主题、材料、知识库有其一即可开始",
                         style = MaterialTheme.typography.caption, color = SecondaryText)
                 }
             }
-            vm.kbs.forEach { kb ->
-                val kbId = kb["id"].str()
-                val picked = kbId in vm.selectedKbIds
-                OutlinedButton(onClick = { vm.toggleKb(kbId) },
-                    colors = sel(picked),
-                    modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(kb["name"].str().ifBlank { "未命名知识库" },
-                                style = MaterialTheme.typography.subtitle2, maxLines = 1)
-                            val desc = kb["description"].str()
-                            val cnt = kb["doc_count"].str()
-                            Text(
-                                (if (cnt.isNotBlank()) "$cnt 篇文档" else "") +
-                                    (if (desc.isNotBlank()) " · $desc" else ""),
-                                style = MaterialTheme.typography.caption,
-                                color = SecondaryText, maxLines = 1)
-                        }
-                        if (picked) {
-                            Text("✓", color = MaterialTheme.colors.primary,
-                                style = MaterialTheme.typography.subtitle1)
-                        }
+        }
+
+        if (vm.kbs.isNotEmpty()) {
+            Text("内容依据", style = MaterialTheme.typography.subtitle2)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                vm.kbs.take(4).forEach { kb ->
+                    val kbId = kb["id"].str()
+                    val picked = kbId in vm.selectedKbIds
+                    OutlinedButton(onClick = { vm.toggleKb(kbId) }, colors = sel(picked)) {
+                        Text((if (picked) "✓ " else "") +
+                            kb["name"].str().ifBlank { "未命名知识库" }, maxLines = 1)
                     }
                 }
             }
-            Text("所选知识库会按主题语义检索相关片段，作为内容依据。",
+            Text("仅按当前主题语义检索相关片段，不会把整库内容直接灌入。",
                 style = MaterialTheme.typography.caption, color = SecondaryText)
         }
 
-        // 可选项：页数 / 汇报人 / 时间
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(vm.slideCount, { vm.slideCount = it.filter(Char::isDigit) },
                 label = { Text("页数（可选）") }, modifier = Modifier.weight(1f))
@@ -370,50 +323,47 @@ private fun PptEntryPane(vm: PptViewModel) {
                 label = { Text("汇报时间（可选）") }, modifier = Modifier.weight(1f))
         }
 
+        Text("视觉风格", style = MaterialTheme.typography.subtitle2)
+        Text("不选择时由 AI 根据内容自动匹配；模板只控制视觉与版式，不改变已确认内容。",
+            style = MaterialTheme.typography.caption, color = SecondaryText)
         TemplatePicker(vm)
 
-        // 「AI 智能设计」是主路径：用户不用手动挑模板、也不用在大纲确认页多停一步，
-        // 直接让 AI 逐页设计排版，所以给它最高的视觉权重（AI 渐变实心主按钮）。
         val canGenerate = !vm.busy &&
             (vm.topic.isNotBlank() || vm.materials.isNotEmpty() || vm.selectedKbIds.isNotEmpty())
         AppButton(
-            text = if (vm.autoDesignAfterOutline) "AI 智能设计中…" else "AI 智能设计",
-            onClick = {
-                // 先定保存位置：任务跑完会自动落盘到这里。
-                // 用户在这里取消 = 什么都不发起（不生成大纲、不提交任务）
-                val target = pickSaveFile(
-                    (vm.topic.ifBlank { "演示文稿" }) + ".pptx") ?: return@AppButton
-                vm.startAiDesign(target)
-            },
-            enabled = canGenerate,
-            kind = AppButtonKind.AI,
-            size = AppButtonSize.LG,
-            loading = vm.autoDesignAfterOutline,
-            fill = true,
+            text = if (vm.busy) vm.outlineStage.ifBlank { "正在生成大纲…" } else "生成大纲",
+            onClick = { vm.startOutline() }, enabled = canGenerate,
+            size = AppButtonSize.LG, fill = true,
         )
-        Text(
-            "AI 逐页设计排版，约 5–15 分钟；比“生成大纲”少一步确认，直接出片。" +
-                "模板只作内容结构参考，不必手动挑。",
+        Text("先确认页数、标题和逐页内容，再交给 AI 视觉设计，避免直接出片后反复返工。",
             style = MaterialTheme.typography.caption, color = SecondaryText)
-
-        // 次要路径：只出大纲，停在确认页自己逐页改
-        OutlinedButton(
-            enabled = canGenerate,
-            onClick = { vm.startOutline() },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                if (vm.busy && !vm.autoDesignAfterOutline)
-                    vm.outlineStage.ifBlank { "生成中…" } else "生成大纲")
-        }
-
-        // 生成过程可见：实时阶段 + 浅蓝进度 + 骨架屏 + 可取消
-        // （不再是没有进度、不能取消、看不到过程的空白等待）
-        if (vm.busy && vm.step == PptStep.ENTRY) {
-            OutlineGeneratingPanel(vm)
-        }
-
+        if (vm.busy && vm.step == PptStep.ENTRY) OutlineGeneratingPanel(vm)
         PptStatus(vm)
+
+        if (vm.documents.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("最近创建", style = MaterialTheme.typography.subtitle2,
+                    modifier = Modifier.weight(1f))
+                TextButton(onClick = onOpenDocuments) { Text("查看全部") }
+            }
+            vm.documents.take(3).forEach { d ->
+                Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(d["title"].str().ifBlank { "未命名 PPT" },
+                                style = MaterialTheme.typography.subtitle2)
+                            Text(d["updated_at"].str().ifBlank { d["created_at"].str() },
+                                style = MaterialTheme.typography.caption, color = SecondaryText)
+                        }
+                        TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
+                            Text("继续编辑 →")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -506,7 +456,12 @@ internal fun OutlineConfirmPane(vm: PptViewModel) {
                 vm.addSlideAfter(vm.slides.size - 1)
             }) { Text("添加页面") }
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { vm.toWorkbench() }) { Text("确认，进入编辑") }
+            Button(onClick = {
+                val target = pickSaveFile(
+                    (vm.outlineTitle.ifBlank { vm.topic.ifBlank { "演示文稿" } }) + ".pptx"
+                ) ?: return@Button
+                vm.confirmOutlineAndGenerate(target)
+            }) { Text("确认大纲并生成 PPT") }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
