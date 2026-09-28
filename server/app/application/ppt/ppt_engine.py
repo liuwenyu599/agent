@@ -150,7 +150,8 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 def generate_outline(assistant, source_type: str, topic: str, content: str,
                      images: List[Dict], slide_count: int = 10,
                      audience: str = "", scene: str = "",
-                     material_names: Optional[List[str]] = None) -> Dict:
+                     material_names: Optional[List[str]] = None,
+                     enforce_exact_count: bool = True) -> Dict:
     image_list = "\n".join(f"- {im['name']}：{im.get('caption') or '（无说明）'}" for im in images) \
         or "（素材库为空）"
     extra = ""
@@ -202,7 +203,10 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             logger.warning("[PPT] 大纲重试后仍解析失败，原始输出：%s",
                            truncate_for_log(raw, 800))
             raise RuntimeError(_OUTLINE_PARSE_FAILED_MSG)
-    return normalize_outline(outline, target_count=slide_count)
+    return normalize_outline(
+        outline,
+        target_count=slide_count if enforce_exact_count else None,
+    )
 
 
 def _looks_truncated(raw: str) -> bool:
