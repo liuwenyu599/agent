@@ -37,6 +37,7 @@ jobs:
       AI_PROVIDER: mock
       EMBEDDING_PROVIDER: mock
       PYTHONPATH: .
+      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
