@@ -1,4 +1,4 @@
-"""内置工作流模板定义（与旧系统 BUILTIN_WORKFLOWS 一致）。"""
+"""内置工作流程模板定义（与旧系统 BUILTIN_WORKFLOWS 一致）。"""
 from typing import Any, Dict, List
 
 BUILTIN_WORKFLOWS: List[Dict[str, Any]] = [
@@ -6,7 +6,7 @@ BUILTIN_WORKFLOWS: List[Dict[str, Any]] = [
         "code": "meeting", "name": "会议组织", "category": "综合",
         "description": "会议全流程：基础信息、通知、议程、签到、主持稿、纪要、简报、归档",
         "nodes": [
-            {"name": "基础信息", "stage": "会前", "write_guide": "维护会议结构化信息：名称、时间、地点、主题、主办部门、参会范围等。此节点不生成独立文本，直接编辑工作流核心数据。"},
+            {"name": "基础信息", "stage": "会前", "write_guide": "维护会议结构化信息：名称、时间、地点、主题、主办部门、参会范围等。此节点不生成独立文本，直接编辑工作流程核心数据。"},
             {"name": "会议通知", "stage": "会前", "write_guide": "起草正式会议通知：会议时间地点、参会人员、会议内容、有关要求，符合公文格式。"},
             {"name": "参会人员", "stage": "会前", "write_guide": "整理参会人员名单：姓名、单位、职务，分组排列。"},
             {"name": "会议议程", "stage": "会前", "write_guide": "生成会议详细议程安排：各环节内容、时间、主持人、发言人。"},
