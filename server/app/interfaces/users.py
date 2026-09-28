@@ -16,7 +16,7 @@ from app.core.exceptions import AppError
 from app.domain.identity.entities import User
 from app.infrastructure.database import get_db
 from app.infrastructure.repositories.identity import SqlAlchemyUserRepository
-from app.interfaces.deps import require_admin_or_above
+from app.interfaces.deps import require_developer
 
 router = APIRouter(prefix="/users", tags=["用户"])
 
@@ -27,7 +27,7 @@ def get_user_service(db: Session = Depends(get_db)) -> UserService:
 
 @router.get("/")
 def list_users(
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     return [
@@ -49,7 +49,7 @@ def list_users(
 @router.post("/")
 def create_user(
     req: UserCreateRequest,
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     user = svc.create_user(admin, req.username, req.email, req.password,
@@ -61,7 +61,7 @@ def create_user(
 def update_user(
     user_id: str,
     req: UserUpdateRequest,
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     svc.update_user(admin, user_id, req.real_name, req.department,
@@ -73,7 +73,7 @@ def update_user(
 def reset_password(
     user_id: str,
     req: ResetPasswordRequest,
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     """管理员重置他人密码：重置后该用户下次登录必须修改密码。"""
@@ -84,7 +84,7 @@ def reset_password(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: str,
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     svc.deactivate_user(admin, user_id)
@@ -168,7 +168,7 @@ def _read_rows(filename: str, raw: bytes) -> list[dict]:
 @router.post("/batch-import")
 def batch_import_users(
     file: UploadFile = File(...),
-    admin: User = Depends(require_admin_or_above),
+    admin: User = Depends(require_developer),
     svc: UserService = Depends(get_user_service),
 ):
     """批量创建用户：上传 .xlsx 或 .csv。
