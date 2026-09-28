@@ -120,6 +120,8 @@ class PptViewModel(private val repo: PptRepository) {
     val selectedKbIds = mutableStateListOf<String>()
     var kbsLoading by mutableStateOf(false)
         private set
+    var kbsError by mutableStateOf<String?>(null)
+        private set
     private var kbsLoaded = false
 
     // ---- 生成前预检（信息不足先确认，90 秒未确认按默认方案生成） ----
@@ -341,13 +343,19 @@ class PptViewModel(private val repo: PptRepository) {
     fun loadKbs() {
         if (kbsLoaded || kbsLoading) return
         kbsLoading = true
+        kbsError = null
         scope.launch {
             when (val r = repo.kbs()) {
-                is ApiResult.Ok -> kbs = r.data
-                is ApiResult.Err -> Unit
+                is ApiResult.Ok -> {
+                    kbs = r.data
+                    kbsLoaded = true
+                }
+                is ApiResult.Err -> {
+                    // 瞬态网络错误不能永久吃掉知识库入口；保留重试机会。
+                    kbsLoaded = false
+                    kbsError = "知识库暂时加载失败"
+                }
             }
-            // 无论成败都只拉一次：列表变化慢，避免每次进页面都打请求
-            kbsLoaded = true
             kbsLoading = false
         }
     }
@@ -367,16 +375,19 @@ class PptViewModel(private val repo: PptRepository) {
             if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
             if (reportDate.isNotBlank()) append("汇报时间：").append(reportDate).append('\n')
         }.trim()
-        return mapOf(
+        return mutableMapOf<String, Any?>(
             "source_type" to if (materials.isNotEmpty()) "document" else "topic",
             "topic" to topic,
             "content" to content,
-            "slide_count" to (slideCount.toIntOrNull() ?: 10),
             "audience" to "",
             "scene" to "",
             "material_names" to materials.map { it.filename },
             "kb_ids" to selectedKbIds.toList(),
-        )
+        ).apply {
+            // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
+            // 用户明确填写时才触发精确页数约束。
+            slideCount.toIntOrNull()?.let { put("slide_count", it) }
+        }
     }
 
     /**
@@ -389,6 +400,11 @@ class PptViewModel(private val repo: PptRepository) {
      *                 产物写到这个位置。
      */
     private fun beginOutline(aiTarget: File?) {
+        val requestedPages = slideCount.toIntOrNull()
+        if (slideCount.isNotBlank() && (requestedPages == null || requestedPages !in 2..18)) {
+            status = "页数请输入 2–18，或留空由系统根据内容安排"
+            return
+        }
         if (topic.isBlank() && materials.isEmpty() && selectedKbIds.isEmpty()) {
             status = "请先填写汇报主题，或上传材料，或选择知识库"
             return
@@ -574,9 +590,12 @@ class PptViewModel(private val repo: PptRepository) {
             outlineStage = "正在生成大纲…"
             @Suppress("UNCHECKED_CAST")
             val kbIds = (body["kb_ids"] as? List<String>) ?: emptyList()
+            val slideCount = body["slide_count"] as? Int
+            val audience = body["audience"] as? String ?: ""
+            val scene = body["scene"] as? String ?: ""
             when (val r2 = repo.outline(
                 body["source_type"] as String, body["topic"] as String,
-                body["content"] as String, body["slide_count"] as Int, "", "",
+                body["content"] as String, slideCount, audience, scene,
                 kbIds = kbIds)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
