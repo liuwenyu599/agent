@@ -39,7 +39,7 @@ fun SettingsScreen() {
         Column {
             Text("服务器连接设置", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 color = TextPrimary)
-            Text("配置司法智能办公平台后端服务地址", fontSize = 13.sp, color = TextSecondary)
+            Text("配置司法智能办公平台的服务连接", fontSize = 13.sp, color = TextSecondary)
         }
 
         Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
@@ -50,7 +50,7 @@ fun SettingsScreen() {
                 OutlinedTextField(
                     value = vm.baseUrl,
                     onValueChange = { vm.baseUrl = it },
-                    placeholder = { Text("如 http://127.0.0.1:8000 或 http://内网地址:8000") },
+                    placeholder = { Text("请输入本单位提供的服务地址") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
@@ -62,7 +62,7 @@ fun SettingsScreen() {
                 OutlinedTextField(
                     value = vm.timeoutSec,
                     onValueChange = { vm.timeoutSec = it.filter { c -> c.isDigit() } },
-                    label = { Text("请求超时（秒），AI 长任务建议 120 以上") },
+                    label = { Text("最长等待时间（秒），内容生成较慢时建议 120 以上") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
@@ -89,10 +89,10 @@ fun SettingsScreen() {
                     color = TextPrimary)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "· 生产环境使用司法局内网地址；HTTP 仅允许内网部署时作为配置项，客户端不写死地址\n" +
-                        "· 登录令牌只保存在内存中，退出登录即清除，不写入磁盘\n" +
-                        "· 客户端不保存任何 API Key、密码、模型权重与服务器内部路径\n" +
-                        "· 本机日志不记录 token、密码与文件内容",
+                    "· 请仅使用本单位提供的可信服务地址\n" +
+                        "· 登录凭据仅在本次使用期间保留，退出登录后自动清除\n" +
+                        "· 客户端不会保存服务器密钥、账号密码或内部配置\n" +
+                        "· 本机日志不会记录密码与文档正文",
                     fontSize = 13.sp, color = TextRegular, lineHeight = 22.sp)
             }
         }
