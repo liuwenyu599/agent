@@ -141,7 +141,7 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 1. 只输出 JSON，不要用 markdown 代码块包裹，不要输出其他文字：
 {{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","slides":[{{"type":"cover","title":"...","subtitle":"..."}},...]}}
 2. 每页 slide 的字段：type、title、points、blocks、image_name、note（演讲备注，一句话）；
-3. 总页数 {slide_count} 页左右；
+3. ⚠️ 页数硬约束：slides 数组必须严格等于 {slide_count} 页，不得多一页、少一页；封面和结束页均计入总页数；
 4. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
 5. 图片规则：仅当某页内容与素材库图片明显相关时设 image_name（必须严格等于素材库中的图片名称），否则为 null；
 6. 不要虚构材料中没有的事实和数据。"""
@@ -202,7 +202,7 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             logger.warning("[PPT] 大纲重试后仍解析失败，原始输出：%s",
                            truncate_for_log(raw, 800))
             raise RuntimeError(_OUTLINE_PARSE_FAILED_MSG)
-    return normalize_outline(outline)
+    return normalize_outline(outline, target_count=slide_count)
 
 
 def _looks_truncated(raw: str) -> bool:
@@ -325,8 +325,8 @@ def _loads_ai_json(raw: str, err_msg: str) -> Dict:
     return parsed
 
 
-def normalize_outline(outline: Dict) -> Dict:
-    """规范化 + 兼容旧页型（bullets→content，image_text→content+配图版式）。"""
+def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict:
+    """规范化 + 兼容旧页型，并可强制最终页数。\n\n    target_count 用于新建 PPT 链路的页数硬约束。模型偶尔仍会多/少页：\n    - 多页：只裁中间正文，永远保留封面与结束页；\n    - 少页：补空的“补充内容”页，明确标记为待补充，不制造事实。\n    导入已有 PPT / 空白 PPT 等未传 target_count 的链路保持原行为。\n    """
     type_alias = {"bullets": "content", "image_text": "content"}
     norm = []
     for s in (outline.get("slides") or []):
@@ -360,6 +360,20 @@ def normalize_outline(outline: Dict) -> Dict:
         norm.append({"id": uuid.uuid4().hex[:8], "type": "closing", "title": "谢谢聆听，请批评指正",
                      "subtitle": "", "layout": None, "points": [], "blocks": {},
                      "image_name": None, "image_hint": "", "note": "", "sources": []})
+
+    if target_count is not None:
+        target = max(2, min(int(target_count), 18))
+        # 保留首尾页，只调整中间正文页。
+        if len(norm) > target:
+            norm = [norm[0]] + norm[1:-1][:max(0, target - 2)] + [norm[-1]]
+        while len(norm) < target:
+            norm.insert(-1, {
+                "id": uuid.uuid4().hex[:8], "type": "content", "layout": None,
+                "title": "补充内容", "subtitle": "",
+                "points": ["本页内容待根据已确认材料补充"],
+                "blocks": {}, "image_name": None, "image_hint": "",
+                "note": "页数硬约束补位页；不得自行编造事实或数据", "sources": [],
+            })
     outline["slides"] = norm
     outline.setdefault("title", norm[0]["title"])
     outline.setdefault("subtitle", norm[0].get("subtitle", ""))
