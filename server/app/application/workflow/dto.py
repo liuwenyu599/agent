@@ -1,5 +1,5 @@
 """工作流程 DTO。"""
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,14 +12,14 @@ class CreateInstanceRequest(BaseModel):
 
 class UpdateInstanceRequest(BaseModel):
     title: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["draft", "running", "completed", "archived"]] = None
     basic_info: Optional[Dict[str, Any]] = None
     workflow_context: Optional[Dict[str, Any]] = None
 
 
 class UpdateNodeRequest(BaseModel):
     content: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Literal["pending", "editing", "draft", "done"]] = None
 
 
 class GenerateNodeRequest(BaseModel):
