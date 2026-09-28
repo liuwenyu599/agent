@@ -642,13 +642,18 @@ class PPTService:
                           "description": kb.description or "", "doc_count": cnt})
         return {"items": items}
 
-    def _kb_content(self, kb_ids: list, limit: int = 6000) -> str:
-        """汇总所选知识库已发布文档的内容（按文档截断拼接）。"""
+    def _kb_content(self, kb_ids: list, limit: int = 6000) -> Tuple[str, List[str]]:
+        """汇总所选知识库已发布文档的内容（按文档截断拼接）。
+
+        Returns:
+            (拼接文本, 命中文档标题清单)
+        """
         docs = self.db.scalars(select(DocumentModel).where(
             DocumentModel.kb_id.in_(kb_ids),
             DocumentModel.status == "published")
             .order_by(DocumentModel.created_at.desc()).limit(20)).all()
         parts = []
+        titles = []
         total = 0
         for d in docs:
             text = (d.content or "")[:1200]
@@ -658,8 +663,9 @@ class PPTService:
             if total + len(seg) > limit:
                 break
             parts.append(seg)
+            titles.append(d.title)
             total += len(seg)
-        return "\n\n".join(parts)
+        return "\n\n".join(parts), titles
 
     def _rag_kb_material(self, query: str, user: User,
                          kb_ids: List[str], limit: int = 4000) -> Tuple[str, List[str]]:
@@ -690,7 +696,11 @@ class PPTService:
             text = (h.get("content") or "").strip()
             if not text:
                 continue
-            name = h.get("source_name") or "知识库文档"
+            raw_source = h.get("source") or ""
+            name = h.get("source_name")
+            if not name:
+                title = raw_source.split("（第")[0].strip() if raw_source else ""
+                name = title or "知识库文档"
             seg = f"《{name}》（{h.get('source') or '相关片段'}）\n{text[:800]}"
             if total + len(seg) > limit:
                 break
@@ -719,7 +729,7 @@ class PPTService:
         if query.strip():
             kb_text, kb_sources = self._rag_kb_material(query, user, kb_ids)
         else:
-            kb_text, kb_sources = self._kb_content(kb_ids), []
+            kb_text, kb_sources = self._kb_content(kb_ids)
         if kb_text:
             content = (content.rstrip() + "\n\n" if content else "") + \
                 "【知识库检索材料】\n" + kb_text
@@ -923,7 +933,8 @@ class PPTService:
         topic = (body.topic or "").strip()
         content = (body.content or "").strip()
         materials = [m for m in (body.material_names or []) if m]
-        if not topic and not content:
+        kb_ids = getattr(body, "kb_ids", None) or []
+        if not topic and not content and not kb_ids:
             raise AppError(400, "请先填写汇报主题，或上传材料")
         # 材料正文足够详实时直接放行，不打扰用户
         if len(content) >= 1500:
@@ -973,7 +984,9 @@ class PPTService:
                     kb_ids: Optional[List[str]] = None) -> dict:
         content, material_names = self._apply_kb_material(
             user, kb_ids, topic, content, material_names)
-        if source_type == "kb" and not (content or "").strip():
+        kb_empty = bool(kb_ids) and "【知识库检索材料】" not in (content or "")
+        if kb_empty and (source_type == "kb"
+                         or not ((topic or "").strip() or (content or "").strip())):
             raise AppError(400, "所选知识库没有检索到与主题相关的内容，"
                                 "请换个主题描述，或检查库内是否有已发布文档")
         images = self._user_images(user.id)
@@ -1014,7 +1027,9 @@ class PPTService:
             yield _sse({"type": "stage", "text": "正在知识库中检索相关材料…"})
         content, material_names = self._apply_kb_material(
             user, kb_ids, body.topic, body.content, body.material_names)
-        if body.source_type == "kb" and not (content or "").strip():
+        kb_empty = bool(kb_ids) and "【知识库检索材料】" not in (content or "")
+        if kb_empty and (body.source_type == "kb"
+                         or not ((body.topic or "").strip() or (body.content or "").strip())):
             yield _sse({"type": "error",
                         "message": "所选知识库没有检索到与主题相关的内容，"
                                    "请换个主题描述，或检查库内是否有已发布文档"})
