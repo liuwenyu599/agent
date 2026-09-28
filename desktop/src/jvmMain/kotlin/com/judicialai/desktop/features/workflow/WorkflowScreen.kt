@@ -114,8 +114,11 @@ private fun WorkflowHome(vm: WorkflowViewModel) {
                         Text("提供常用办公流程模板，支持一键创建，智能生成各类材料；创建后可用 AI 调整节点",
                             fontSize = 12.sp, color = TextSecondary)
                     }
-                    Button(onClick = { showCreate = filtered.firstOrNull() },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
+                    Button(
+                        onClick = { showCreate = filtered.firstOrNull() },
+                        enabled = filtered.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary),
+                    ) {
                         Icon(Icons.Default.Add, null, tint = Color.White,
                             modifier = Modifier.size(16.dp))
                         Text("新建工作流", color = Color.White, fontSize = 13.sp)
