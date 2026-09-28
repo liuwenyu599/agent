@@ -168,6 +168,7 @@ private fun UsersTab(vm: AdminViewModel) {
     var showCreate by remember { mutableStateOf(false) }
     var editUser by remember { mutableStateOf<JsonObject?>(null) }
     var resetUser by remember { mutableStateOf<JsonObject?>(null) }
+    var disableUser by remember { mutableStateOf<JsonObject?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -209,11 +210,18 @@ private fun UsersTab(vm: AdminViewModel) {
                     onClick = { editUser = u })
                 com.judicialai.desktop.design.components.AppLinkButton("重置密码",
                     onClick = { resetUser = u })
-                com.judicialai.desktop.design.components.AppLinkButton(
-                    if (u["is_active"].bool()) "禁用" else "启用",
-                    onClick = { vm.toggleUser(u["id"].str(), !u["is_active"].bool()) },
-                    color = if (u["is_active"].bool()) Danger else Ok,
-                )
+                if (u["username"].str() == AppState.username) {
+                    Text("当前账号", fontSize = 11.5.sp, color = Muted2)
+                } else {
+                    com.judicialai.desktop.design.components.AppLinkButton(
+                        if (u["is_active"].bool()) "禁用" else "启用",
+                        onClick = {
+                            if (u["is_active"].bool()) disableUser = u
+                            else vm.toggleUser(u["id"].str(), true)
+                        },
+                        color = if (u["is_active"].bool()) Danger else Ok,
+                    )
+                }
             }
         }
     }
@@ -230,6 +238,27 @@ private fun UsersTab(vm: AdminViewModel) {
             onSubmit = { _, _, _, real, deptCode, role ->
                 vm.updateUser(u["id"].str(), real, deptCode, role); editUser = null
             }) { editUser = null }
+    }
+
+    disableUser?.let { u ->
+        AppDialog(
+            onDismissRequest = { disableUser = null },
+            title = "禁用用户",
+            subtitle = "禁用后该账号将无法继续登录或使用业务功能，已有业务数据不会删除。",
+            width = 460.dp,
+            actions = {
+                AppButton("取消", onClick = { disableUser = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认禁用", onClick = {
+                    vm.toggleUser(u["id"].str(), false)
+                    disableUser = null
+                }, kind = com.judicialai.desktop.design.components.AppButtonKind.DANGER)
+            },
+        ) {
+            Text("用户：${u["username"].str()} · ${u["real_name"].str().ifBlank { "未填写姓名" }}",
+                fontSize = 13.sp, color = Ink2)
+        }
     }
 
     resetUser?.let { u ->
@@ -404,6 +433,7 @@ private fun roleRoleDesc(role: String): String = when (role) {
 
 @Composable
 private fun KbTab(vm: AdminViewModel) {
+    var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
     AdminTable(
         headers = listOf("#" to 46, "知识库名称" to 320, "类型" to 90,
             "文档数" to 90, "创建时间" to 140, "操作" to 120),
@@ -418,13 +448,37 @@ private fun KbTab(vm: AdminViewModel) {
         },
     ) { idx, _ ->
         com.judicialai.desktop.design.components.AppLinkButton("删除",
-            onClick = { vm.deleteKb(vm.kbs[idx]["id"].str()) }, color = Danger)
+            onClick = { pendingDelete = vm.kbs[idx] }, color = Danger)
+    }
+
+    pendingDelete?.let { kb ->
+        AppDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = "删除知识库",
+            subtitle = "这是管理后台的破坏性操作，删除后知识检索与关联文档会受到影响。",
+            width = 480.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingDelete = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认删除", onClick = {
+                    vm.deleteKb(kb["id"].str())
+                    pendingDelete = null
+                }, kind = com.judicialai.desktop.design.components.AppButtonKind.DANGER)
+            },
+        ) {
+            Text("知识库：${kb["name"].str().ifBlank { "未命名知识库" }} · ${kb["doc_count"].int()} 篇文档",
+                fontSize = 13.sp, color = Ink2)
+        }
     }
 }
 
 @Composable
 private fun DocsTab(vm: AdminViewModel) {
     var sub by remember { mutableStateOf(0) }
+    var pendingReview by remember { mutableStateOf<Pair<JsonObject, String>?>(null) }
+    var pendingArchive by remember { mutableStateOf<JsonObject?>(null) }
+
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         AppSegmentedTabs(
             tabs = listOf("待审核 (${vm.pendingDocs.size})", "已发布 (${vm.publishedDocs.size})",
@@ -447,14 +501,72 @@ private fun DocsTab(vm: AdminViewModel) {
             Row {
                 if (sub == 0) {
                     com.judicialai.desktop.design.components.AppLinkButton("通过",
-                        onClick = { vm.review(d["id"].str(), "approved") }, color = Ok)
+                        onClick = { pendingReview = d to "approved" }, color = Ok)
                     com.judicialai.desktop.design.components.AppLinkButton("驳回",
-                        onClick = { vm.review(d["id"].str(), "rejected") }, color = Danger)
+                        onClick = { pendingReview = d to "rejected" }, color = Danger)
                 } else if (sub == 1) {
                     com.judicialai.desktop.design.components.AppLinkButton("归档",
-                        onClick = { vm.archive(d["id"].str()) }, color = Danger)
+                        onClick = { pendingArchive = d }, color = Danger)
                 }
             }
+        }
+    }
+
+    pendingReview?.let { (doc, action) ->
+        var comment by remember(pendingReview) {
+            mutableStateOf(if (action == "approved") "审核通过" else "")
+        }
+        val rejected = action == "rejected"
+        AppDialog(
+            onDismissRequest = { pendingReview = null },
+            title = if (rejected) "驳回文档" else "通过文档",
+            subtitle = if (rejected)
+                "请填写明确驳回原因，提交后将作为审核记录保留。"
+            else "确认该文档符合发布要求；可补充审核意见。",
+            width = 520.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingReview = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton(if (rejected) "确认驳回" else "确认通过", onClick = {
+                    vm.review(doc["id"].str(), action,
+                        comment.ifBlank { if (rejected) "" else "审核通过" })
+                    pendingReview = null
+                }, enabled = !rejected || comment.isNotBlank(),
+                    kind = if (rejected)
+                        com.judicialai.desktop.design.components.AppButtonKind.DANGER
+                    else com.judicialai.desktop.design.components.AppButtonKind.PRIMARY)
+            },
+        ) {
+            Text(doc["title"].str().ifBlank { "未命名文档" }, fontSize = 13.sp, color = Ink)
+            AppTextField(
+                value = comment,
+                onValueChange = { comment = it },
+                label = "审核意见",
+                placeholder = if (rejected) "请写明不符合要求的具体原因" else "可补充审核意见",
+                singleLine = false,
+                minLines = 3,
+            )
+        }
+    }
+
+    pendingArchive?.let { doc ->
+        AppDialog(
+            onDismissRequest = { pendingArchive = null },
+            title = "归档已发布文档",
+            subtitle = "归档后文档将退出当前发布列表和检索范围，请确认该内容已不再有效。",
+            width = 480.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingArchive = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认归档", onClick = {
+                    vm.archive(doc["id"].str())
+                    pendingArchive = null
+                }, kind = com.judicialai.desktop.design.components.AppButtonKind.DANGER)
+            },
+        ) {
+            Text(doc["title"].str().ifBlank { "未命名文档" }, fontSize = 13.sp, color = Ink2)
         }
     }
 }
