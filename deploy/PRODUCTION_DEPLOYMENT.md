@@ -4,6 +4,63 @@
 > 目标：避免“源码已改、容器仍跑旧代码”“配置路径在宿主机正确、容器内不可见”“PPT 后端成功、客户端误判失败”等假完成。  
 > 原则：生产环境不从 GitHub 拉代码；使用 Windows 开发机打包后通过 SCP 传入，生产密钥与源码包分离。
 
+## 0. 镜像策略
+
+本次部署**只重建** `justice-office-server`，并使用唯一 tag：
+
+```text
+justice-office-server:<日期>-<sha短码>
+```
+
+例如：
+
+```text
+justice-office-server:20260929-b89af290
+```
+
+`deeppresenter-sandbox:latest` 和 `deeppresenter-host:latest` 保持 **2026-09-28 全天排障后的 commit 版本**，本次部署不重建这两个镜像。但它们承载 PPT 链路的关键补丁，部署前必须验证补丁完整性；`preflight-production.sh` 会自动检查，任一补丁缺失都必须先从交付镜像归档恢复。
+
+期望输出：
+
+```text
+[ OK ] sandbox 镜像补丁完整
+[ OK ] host 镜像补丁完整
+```
+
+## 0.1 部署顺序总览
+
+```text
+Windows 端人工确认客户端行为
+（TIMEOUT_STATUS_MS >= 30000 且判定依据是 job_status）
+命令见 preflight 脚本末尾打印的提示
+        ↓
+Windows 确认 app SHA
+        ↓
+生成并上传源码包
+        ↓
+备份数据库 / 配置 / 旧源码
+        ↓
+归档 sandbox / host / rollback-server 三个交付镜像
+        ↓
+替换服务器源码
+        ↓
+preflight-production.sh
+        ↓
+只重建 justice-office-server:<日期>-<sha短码>
+        ↓
+切换 compose 并启动
+        ↓
+postcheck-production.sh
+        ↓
+客户端 2 页 PPT E2E
+        ↓
+客户端 10 页 PPT E2E
+        ↓
+角色权限与核心业务抽测
+        ↓
+最终签字
+```
+
 ## 1. 先纠正旧交接中的几个错误判断
 
 1. **不能再复用同一个镜像标签当作新版本。**  
@@ -31,6 +88,36 @@
 
 7. **生产配置不能跟源码覆盖。**  
    `/opt/justice-office/deploy/.env`、数据库数据目录、PPTAgent 配置与缓存都不得被代码 tar 包覆盖。
+
+## 1.0 交付镜像归档
+
+在执行 preflight 之前，必须先把 2026-09-28 已验证的 sandbox / host 镜像和当前后端镜像保存为可恢复 tar：
+
+```bash
+mkdir -p /opt/justice-office/data/delivery-images
+
+docker save deeppresenter-sandbox:latest \
+  -o /opt/justice-office/data/delivery-images/sandbox.tar
+
+docker save deeppresenter-host:latest \
+  -o /opt/justice-office/data/delivery-images/host.tar
+
+docker tag justice-office-server:2.6.6 justice-office-server:rollback
+docker save justice-office-server:rollback \
+  -o /opt/justice-office/data/delivery-images/rollback-server.tar
+
+ls -lh /opt/justice-office/data/delivery-images/
+```
+
+期望至少看到：
+
+```text
+sandbox.tar
+host.tar
+rollback-server.tar
+```
+
+三个 tar **必须全部存在且非空**，才能进入 preflight。缺任何一个都表示交付镜像未归档，无法保证可恢复。
 
 ## 1.1 随包自带的两道部署闸门
 
@@ -456,21 +543,39 @@ docker exec justice-api ls -la /data/pptagent | head
 
 第一条不是 `/data/pptagent` 或第二条看不到 workspace 内容时，不要改客户端，先修挂载。
 
-## 15. 回滚
+## 15. 回滚步骤
+
+如果 `postcheck-production.sh` 失败，或者 2 页 / 10 页 PPT 端到端验收失败，不要在新镜像上继续临时打补丁，直接回滚后端：
 
 ```bash
 cd /opt/justice-office/deploy
 
-BACKUP_DIR=<第4步输出的备份目录>
-cp "$BACKUP_DIR/docker-compose.yml" ./docker-compose.yml
+cp docker-compose.yml docker-compose.yml.rollback-$(date +%Y%m%d_%H%M%S)
 
-docker rm -f justice-api justice-migrate 2>/dev/null || true
+sed -i 's|justice-office-server:[^ "]*|justice-office-server:rollback|' docker-compose.yml
+
+docker rm -f justice-api justice-migrate
 docker compose --env-file .env -f docker-compose.yml up -d
+
 sleep 40
-curl -fsS http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/health
 ```
 
-源码回滚：
+期望：
+
+```text
+HTTP 200，health 返回正常状态
+```
+
+如本次新版本执行过数据库迁移，且迁移与旧版本不兼容，**必须在回滚 API 前停止业务写入**，再从部署前备份恢复数据库。备份文件位置：
+
+```text
+/opt/justice-office/data/backups/delivery-YYYYMMDD/justice.dump
+```
+
+实际目录以第 4 节执行备份时输出的 `BACKUP_DIR` 为准。
+
+如还需要回滚服务器源码：
 
 ```bash
 rm -rf /opt/judicial_app.failed
@@ -478,7 +583,14 @@ mv /opt/judicial_app /opt/judicial_app.failed
 mv /opt/judicial_app.prev /opt/judicial_app
 ```
 
-数据库不要随意回滚。只有确认本次数据库迁移导致不兼容时，才停止全部写入服务并从第 4 步备份恢复。
+sandbox / host 镜像补丁损坏时分别恢复：
+
+```bash
+docker load -i /opt/justice-office/data/delivery-images/sandbox.tar
+docker load -i /opt/justice-office/data/delivery-images/host.tar
+```
+
+恢复后必须重新执行 preflight，再启动服务。
 
 ## 16. 最终交付签字条件
 
