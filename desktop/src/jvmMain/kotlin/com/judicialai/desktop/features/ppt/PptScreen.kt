@@ -319,6 +319,47 @@ private fun PptEntryPane(vm: PptViewModel) {
             }
         }
 
+        // 知识库区：结合知识库生成——服务端按主题做 RAG 语义检索，
+        // 命中片段作为大纲内容依据（不是整库原文灌入）
+        LaunchedEffect(Unit) { vm.loadKbs() }
+        if (vm.kbs.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("知识库", style = MaterialTheme.typography.subtitle2,
+                    modifier = Modifier.weight(1f))
+                if (vm.selectedKbIds.isNotEmpty()) {
+                    Text("已选 ${vm.selectedKbIds.size} 个",
+                        style = MaterialTheme.typography.caption, color = SecondaryText)
+                }
+            }
+            vm.kbs.forEach { kb ->
+                val kbId = kb["id"].str()
+                val picked = kbId in vm.selectedKbIds
+                OutlinedButton(onClick = { vm.toggleKb(kbId) },
+                    colors = sel(picked),
+                    modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(kb["name"].str().ifBlank { "未命名知识库" },
+                                style = MaterialTheme.typography.subtitle2, maxLines = 1)
+                            val desc = kb["description"].str()
+                            val cnt = kb["doc_count"].str()
+                            Text(
+                                (if (cnt.isNotBlank()) "$cnt 篇文档" else "") +
+                                    (if (desc.isNotBlank()) " · $desc" else ""),
+                                style = MaterialTheme.typography.caption,
+                                color = SecondaryText, maxLines = 1)
+                        }
+                        if (picked) {
+                            Text("✓", color = MaterialTheme.colors.primary,
+                                style = MaterialTheme.typography.subtitle1)
+                        }
+                    }
+                }
+            }
+            Text("所选知识库会按主题语义检索相关片段，作为内容依据。",
+                style = MaterialTheme.typography.caption, color = SecondaryText)
+        }
+
         // 可选项：页数 / 汇报人 / 时间
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(vm.slideCount, { vm.slideCount = it.filter(Char::isDigit) },
@@ -333,7 +374,8 @@ private fun PptEntryPane(vm: PptViewModel) {
 
         // 「AI 智能设计」是主路径：用户不用手动挑模板、也不用在大纲确认页多停一步，
         // 直接让 AI 逐页设计排版，所以给它最高的视觉权重（AI 渐变实心主按钮）。
-        val canGenerate = !vm.busy && (vm.topic.isNotBlank() || vm.materials.isNotEmpty())
+        val canGenerate = !vm.busy &&
+            (vm.topic.isNotBlank() || vm.materials.isNotEmpty() || vm.selectedKbIds.isNotEmpty())
         AppButton(
             text = if (vm.autoDesignAfterOutline) "AI 智能设计中…" else "AI 智能设计",
             onClick = {
