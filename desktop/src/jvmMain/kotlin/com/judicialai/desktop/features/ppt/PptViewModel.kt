@@ -105,7 +105,7 @@ class PptViewModel(private val repo: PptRepository) {
 
     // ---- 入口页 ----
     var topic by mutableStateOf("")
-    var slideCount by mutableStateOf("10")
+    var slideCount by mutableStateOf("")
     var presenter by mutableStateOf("")
     var reportDate by mutableStateOf("")
     val materials = mutableStateListOf<MaterialAnalysis>()
