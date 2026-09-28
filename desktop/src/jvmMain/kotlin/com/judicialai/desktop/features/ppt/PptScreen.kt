@@ -297,24 +297,51 @@ private fun PptEntryPane(
         }
 
         if (vm.kbs.isNotEmpty()) {
-            Text("内容依据", style = MaterialTheme.typography.subtitle2)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                vm.kbs.take(4).forEach { kb ->
-                    val kbId = kb["id"].str()
-                    val picked = kbId in vm.selectedKbIds
-                    OutlinedButton(onClick = { vm.toggleKb(kbId) }, colors = sel(picked)) {
-                        Text((if (picked) "✓ " else "") +
-                            kb["name"].str().ifBlank { "未命名知识库" }, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("内容依据", style = MaterialTheme.typography.subtitle2,
+                    modifier = Modifier.weight(1f))
+                Text("共 " + vm.kbs.size + " 个可用知识库",
+                    style = MaterialTheme.typography.caption, color = SecondaryText)
+            }
+            vm.kbs.chunked(4).forEach { rowKbs ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    rowKbs.forEach { kb ->
+                        val kbId = kb["id"].str()
+                        val picked = kbId in vm.selectedKbIds
+                        OutlinedButton(
+                            onClick = { vm.toggleKb(kbId) },
+                            colors = sel(picked),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text((if (picked) "✓ " else "") +
+                                kb["name"].str().ifBlank { "未命名知识库" }, maxLines = 1)
+                        }
                     }
+                    repeat(4 - rowKbs.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
             Text("仅按当前主题语义检索相关片段，不会把整库内容直接灌入。",
                 style = MaterialTheme.typography.caption, color = SecondaryText)
+        } else if (vm.kbsError != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(vm.kbsError ?: "知识库暂时加载失败",
+                    style = MaterialTheme.typography.caption, color = SecondaryText,
+                    modifier = Modifier.weight(1f))
+                TextButton(enabled = !vm.kbsLoading, onClick = { vm.loadKbs() }) {
+                    Text(if (vm.kbsLoading) "重试中…" else "重新加载")
+                }
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(vm.slideCount, { vm.slideCount = it.filter(Char::isDigit) },
-                label = { Text("页数（可选）") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(
+                vm.slideCount,
+                { vm.slideCount = it.filter(Char::isDigit).take(2) },
+                label = { Text("页数（可选，2–18）") },
+                isError = vm.slideCount.isNotBlank() &&
+                    (vm.slideCount.toIntOrNull()?.let { it !in 2..18 } != false),
+                modifier = Modifier.weight(1f),
+            )
             OutlinedTextField(vm.presenter, { vm.presenter = it },
                 label = { Text("汇报人（可选）") }, modifier = Modifier.weight(1f))
             OutlinedTextField(vm.reportDate, { vm.reportDate = it },
