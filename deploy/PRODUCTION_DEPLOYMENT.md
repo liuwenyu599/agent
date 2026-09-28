@@ -32,6 +32,26 @@
 7. **生产配置不能跟源码覆盖。**  
    `/opt/justice-office/deploy/.env`、数据库数据目录、PPTAgent 配置与缓存都不得被代码 tar 包覆盖。
 
+## 1.1 随包自带的两道部署闸门
+
+服务器替换源码后、构建镜像前先执行：
+
+```bash
+chmod +x /opt/judicial_app/deploy/preflight-production.sh
+/opt/judicial_app/deploy/preflight-production.sh
+```
+
+只有看到 `PRE-FLIGHT PASSED` 才继续构建。
+
+新容器启动后执行：
+
+```bash
+chmod +x /opt/judicial_app/deploy/postcheck-production.sh
+/opt/judicial_app/deploy/postcheck-production.sh
+```
+
+只有看到 `POST-CHECK PASSED` 才进入客户端 2 页 / 10 页 PPT 端到端验收。这两个脚本不会读取或打印生产密码，只检查必须的路径、URL、挂载、模型、字体、数据库存活与关键源码修复。
+
 ## 2. 本次部署前置条件
 
 以下条件全部满足才开始部署：
