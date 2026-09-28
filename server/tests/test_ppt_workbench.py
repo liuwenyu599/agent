@@ -885,3 +885,43 @@ def test_download_before_generate_is_404(client, accounts):
     r = client.get(f"{BASE}/ppt/documents/{doc_id}/download",
                    headers=_hdr(accounts["a"]))
     assert r.status_code == 404, r.text
+
+
+# ============================================================ 页数硬约束回归
+
+
+def test_outline_page_count_hard_constraint_two_pages():
+    """2 页请求必须严格得到 2 页，且规范化不得因为补 cover/closing 膨胀页数。"""
+    from app.application.ppt import ppt_engine
+
+    raw = {
+        "title": "两页汇报",
+        "subtitle": "",
+        "slides": [
+            {"type": "cover", "title": "两页汇报"},
+            {"type": "content", "title": "模型多生成的正文", "points": ["事实内容"]},
+            {"type": "closing", "title": "谢谢聆听"},
+        ],
+    }
+    out = ppt_engine.normalize_outline(raw, target_count=2)
+    assert len(out["slides"]) == 2
+    assert out["slides"][0]["type"] == "cover"
+    assert out["slides"][-1]["type"] == "closing"
+
+
+def test_outline_page_count_hard_constraint_does_not_fabricate_fillers():
+    """模型少页时允许补位，但补位必须显式标记待补充，不能制造事实/数据。"""
+    from app.application.ppt import ppt_engine
+
+    raw = {
+        "title": "四页汇报",
+        "slides": [
+            {"type": "cover", "title": "四页汇报"},
+            {"type": "closing", "title": "谢谢聆听"},
+        ],
+    }
+    out = ppt_engine.normalize_outline(raw, target_count=4)
+    assert len(out["slides"]) == 4
+    fillers = out["slides"][1:-1]
+    assert all(s["title"] == "补充内容" for s in fillers)
+    assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
