@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.storage.ServerConfig
+import com.judicialai.desktop.features.ppt.PptJobEngine
 
 /**
  * 模板中心「使用模板」→ 智能写作工作台 的一次性参数。
@@ -235,6 +236,9 @@ object AppState {
         this.role = role
         this.mustChangePassword = mustChangePassword
         this.loggedIn = true
+        // 换账号登录：全局 PPT 任务引擎里若还挂着别人的任务（被动掉线等未走 logout 的路径），
+        // 必须在这里按归属账号清掉，否则新账号一打开 PPT 助手就看到上一个账号在「生成中」
+        PptJobEngine.dropForeignJob()
         this.screen = AppScreen.HOME
         this.navDrawerOpen = false
         // 管理员重置过密码：自动打开个人中心，由 ViewModel 落到「账号安全」引导改密
@@ -267,7 +271,11 @@ object AppState {
         pptOutlineGenerating = false
         pptExporting = false
         pptLastError = null
-        // 异步生成任务属于上一个账号：只清句柄，轮询协程自己在下一次循环发现未登录时会停
+        // 异步生成任务属于上一个账号：句柄要清，任务本身也要从全局引擎里摘掉。
+        // PptJobEngine 是全局单例（不随页面销毁），界面读的是它的 current，
+        // 只清这里的标记的话，换账号登录打开 PPT 助手仍会看到上一个账号的「生成中」。
+        // reset() 内部也会清 pendingPptJobId / pptJobActive，这里保留显式赋值做双保险。
+        PptJobEngine.reset()
         pendingPptJobId = null
         pptJobActive = false
         pendingWritingTaskId = null

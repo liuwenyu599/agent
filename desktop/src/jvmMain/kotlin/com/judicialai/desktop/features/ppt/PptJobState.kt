@@ -181,6 +181,46 @@ object PptJobEngine {
     var current by mutableStateOf<PptJobProgress?>(null)
         private set
 
+    /**
+     * 提交任务时的账号（快照 [AppState.username]）。
+     *
+     * 存在的理由：轮询循环在 `delay()` 期间完全可能走完「登出 → 换账号登录」，
+     * 醒来时 `AppState.loggedIn` 又是 true，只判登录态会误以为还是本人，
+     * 于是拿新账号的 token 继续拉上一个账号的 jobId，
+     * 让新账号在 PPT 助手里一直看到别人的「生成中」。
+     * 登出时 [AppState.logout] 会调 [reset] 把它一起清掉。
+     */
+    private var ownerUsername: String = ""
+
+    /**
+     * 当前登录账号是不是提交这个任务的账号。
+     * 老任务/取不到用户名（锚点为空）时按「本人」处理，退回原有行为，不误杀任务。
+     */
+    private fun isSameOwner(): Boolean {
+        if (ownerUsername.isBlank()) return true
+        val now = AppState.username
+        return now.isBlank() || now == ownerUsername
+    }
+
+    /**
+     * 任务不属于当前账号（或已登出）：彻底丢弃而不是置成 CANCELLED——
+     * 置 CANCELLED 的话新账号仍会看到一张「已停止」的旧任务卡片，
+     * 语义上应该直接回到 IDLE（[current] = null）。
+     */
+    private fun dropForWrongOwner(p: PptJobProgress) {
+        val reason = if (AppState.loggedIn)
+            "任务属于上一个账号「$ownerUsername」，当前账号「${AppState.username}」"
+        else "已退出登录"
+        ClientLog.warn("PPT 生成任务已停止：job=${p.jobId}（$reason）")
+        stopPolling()
+        exportJob?.cancel()
+        exportJob = null
+        current = null
+        ownerUsername = ""
+        AppState.pendingPptJobId = null
+        AppState.pptJobActive = false
+    }
+
     // ---------------- 提交 ----------------
 
     /**
@@ -199,6 +239,8 @@ object PptJobEngine {
         exportJob?.cancel()
         exportJob = null
         repo = repository
+        // 记下归属账号：换账号登录后据此判断这个任务不该再出现在新账号的界面上
+        ownerUsername = AppState.username
 
         val p = PptJobProgress()
         p.docId = docId.ifBlank { null }
@@ -261,12 +303,11 @@ object PptJobEngine {
                 delay(if (first) FIRST_DELAY_MS else nextDelay(fails))
                 first = false
 
-                // 退出登录（换账号）后不再替上一个账号拉任务
-                if (!AppState.loggedIn) {
-                    p.status = PptJobStatus.CANCELLED
-                    p.stageText = "已退出登录，本次生成已停止"
-                    AppState.pendingPptJobId = null
-                    AppState.pptJobActive = false
+                // 退出登录（或休眠期间已换成另一个账号）后不再替上一个账号拉任务。
+                // 只判 loggedIn 不够：delay 期间「登出 → 换账号登录」完成时它又是 true，
+                // 那样会拿新账号的 token 继续轮询旧 jobId，旧任务就一直挂在界面上。
+                if (!AppState.loggedIn || !isSameOwner()) {
+                    dropForWrongOwner(p)
                     return@launch
                 }
                 if (System.currentTimeMillis() - startedAt > MAX_TOTAL_MS) {
@@ -373,6 +414,11 @@ object PptJobEngine {
     }
 
     private fun finish(p: PptJobProgress, s: PptJobStatusSnapshot) {
+        // 兜底：任务跑到终态时账号已经换过，不能把旧账号的结果写回全局标记
+        if (!AppState.loggedIn || !isSameOwner()) {
+            dropForWrongOwner(p)
+            return
+        }
         stopPolling()
         when (p.status) {
             PptJobStatus.DONE -> {
@@ -527,8 +573,23 @@ object PptJobEngine {
         exportJob?.cancel()
         exportJob = null
         current = null
+        ownerUsername = ""
         AppState.pendingPptJobId = null
         AppState.pptJobActive = false
+    }
+
+    /**
+     * 登录成功后调用：清掉**不属于本次登录账号**的遗留任务。
+     *
+     * 正常登出会走 [AppState.logout] → [reset]，本来不会留下东西；
+     * 但 401 被动掉线等路径只清了 token（没走 logout），任务可能还挂在全局引擎上，
+     * 换账号登录后就直接出现在新账号的 PPT 助手里。这里按归属账号兜一次底：
+     * 同一个账号重新登录（token 过期后重登）不受影响，任务照常续跑。
+     */
+    fun dropForeignJob() {
+        val p = current ?: return
+        if (isSameOwner()) return
+        dropForWrongOwner(p)
     }
 
     /**
@@ -547,6 +608,12 @@ object PptJobEngine {
      */
     fun resumeIfNeeded(repository: PptRepository) {
         val p = current ?: return
+        // 上一个账号遗留的任务：直接丢弃，既不续轮询也不补导出，
+        // 否则新账号一进 PPT 页就会重新挂上别人的任务（并把别人的产物写到本地）
+        if (!AppState.loggedIn || !isSameOwner()) {
+            dropForWrongOwner(p)
+            return
+        }
         repo = repository
         if (p.isActive) {
             if (pollJob?.isActive != true) startPolling()
