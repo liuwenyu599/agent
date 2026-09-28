@@ -476,3 +476,26 @@ def test_agent_developer_manage_all(users, client):
     r = client.put(f"{BASE}/organization/agents/renshi", json={"intro": "系统管理员维护"},
                    headers=_hdr(users["developer"]))
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------- 系统级管理边界
+
+def test_knowledge_admin_cannot_manage_system_users(client, users):
+    """科室知识管理员不能读取或修改全局账号目录；账号管理仅系统管理员可用。"""
+    ka = _hdr(users["fuyi_admin"])
+    dev = _hdr(users["developer"])
+
+    denied = client.get(f"{BASE}/users/", headers=ka)
+    assert denied.status_code == 403, denied.text
+
+    allowed = client.get(f"{BASE}/users/", headers=dev)
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_global_stats_are_system_admin_only(client, users):
+    """全局用户/会话统计不向科室管理员泄露。"""
+    ka = client.get(f"{BASE}/knowledge/stats", headers=_hdr(users["fuyi_admin"]))
+    assert ka.status_code == 403, ka.text
+
+    dev = client.get(f"{BASE}/knowledge/stats", headers=_hdr(users["developer"]))
+    assert dev.status_code == 200, dev.text
