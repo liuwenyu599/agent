@@ -196,12 +196,13 @@ fun WritingScreen() {
     // 历史版本预览 / 回退弹窗
     vm.versionPreview?.let { v -> VersionPreviewDialog(vm, v) }
 
-    // 参考材料（知识库文档）查看 / 编辑弹窗
+    // 参考材料（知识库文档）只读查看：写作工作台不能顺手改动知识源
     if (vm.docDialogId != null) {
         KnowledgeDocDialog(
             title = vm.docDialogTitle,
             content = vm.docDialogContent,
             busy = vm.docDialogBusy,
+            editable = false,
             onTitleChange = { vm.docDialogTitle = it },
             onContentChange = { vm.docDialogContent = it },
             onSave = { vm.saveDocument() },
