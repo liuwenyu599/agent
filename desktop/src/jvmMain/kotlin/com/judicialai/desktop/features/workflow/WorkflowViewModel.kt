@@ -83,7 +83,7 @@ class WorkflowViewModel(private val repo: WorkflowRepository) {
     }
 
     /**
-     * AI 调整流程：工作流不是死模板，用户用自然语言说明怎么改
+     * AI 调整流程：工作流程不是死模板，用户用自然语言说明怎么改
      * （增/删节点、改写作要求、调顺序）。服务端返回调整后的完整实例，
      * 直接替换 detail，并用 reply 如实告知保留/新增/移除了多少节点。
      */
