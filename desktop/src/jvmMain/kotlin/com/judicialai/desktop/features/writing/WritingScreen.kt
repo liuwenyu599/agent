@@ -796,7 +796,7 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
 
         if (spec.source == "rule") {
             Spacer(Modifier.height(Dimens.space3))
-            FieldError("本次规划由规则降级生成（模型不可用），结构可能较简略")
+            FieldError("智能规划暂时不可用，已为你生成基础结构；可继续编辑或稍后重试")
         }
 
         Spacer(Modifier.height(Dimens.space4))
