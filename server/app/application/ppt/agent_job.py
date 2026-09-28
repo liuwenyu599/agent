@@ -37,7 +37,7 @@ from app.infrastructure.ppt.ppt_agent_client import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.timeutil import now_local
+from app.core.timeutil import CN_TZ, now_local
 from app.domain.ppt.entities import PPTDocument
 from app.infrastructure.database import SessionLocal
 from app.infrastructure.database.models.ppt import PPTDocumentModel
@@ -488,7 +488,10 @@ def list_previews(doc_id: str) -> List[str]:
     doc = _open(doc_id)
     if doc is None or doc.job_started_at is None:
         return []
-    started = doc.job_started_at.timestamp()
+    # job_started_at 按系统约定是“东八区本地语义的 naive datetime”。
+    # 直接 .timestamp() 会按宿主机本地 TZ 解释：容器/CI 若是 UTC，就会把阈值
+    # 错推到未来 8 小时，导致明明已生成的预览图全部被判定为“旧文件”。
+    started = doc.job_started_at.replace(tzinfo=CN_TZ).timestamp()
     client = PPTAgentClient.from_settings()
     scan = client.scan_progress(started)
     return list(scan.get("preview_files") or [])
@@ -508,10 +511,13 @@ def resolve_preview(doc_id: str, index: int) -> Optional[Path]:
         target = Path(files[index]).resolve()
     except OSError:
         return None
-    if root == Path("") or not target.is_file():
+    if not target.is_file():
         return None
-    # 必须落在工作区目录内，挡住 ../../etc/passwd 之类
-    if not str(target).startswith(str(root)):
+    # 必须真正是 root 的子路径。字符串 startswith 会把 /data/work-evil
+    # 错当成 /data/work 的子目录，不能用于目录穿越边界判断。
+    try:
+        target.relative_to(root)
+    except ValueError:
         logger.warning("预览路径越界被拒绝：%s", target)
         return None
     return target
