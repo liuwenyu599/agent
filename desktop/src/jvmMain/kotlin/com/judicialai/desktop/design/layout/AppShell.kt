@@ -53,6 +53,8 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.app.LocalWindowSession
 import com.judicialai.desktop.app.NavItem
 import com.judicialai.desktop.app.WindowManager
+import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppSearchField
 import com.judicialai.desktop.design.components.GlobalNavDrawer
 import com.judicialai.desktop.design.components.PersonalCenterDrawer
@@ -123,6 +125,10 @@ fun AppShell(
                 vm = personalVm,
                 onDismiss = { session.personalCenterOpen = false },
             )
+        }
+
+        if (AppState.guideActive) {
+            UsageGuideOverlay()
         }
     }
 }
@@ -375,5 +381,75 @@ private fun HeaderIconButton(
     ) {
         Icon(icon, contentDescription = description, tint = Ink2,
             modifier = Modifier.size(Dimens.iconMd))
+    }
+}
+
+
+@Composable
+private fun UsageGuideOverlay() {
+    val step = AppState.currentGuideStep ?: return
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.38f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            ),
+    ) {
+        Box(
+            Modifier.fillMaxSize()
+                .padding(top = Dimens.headerHeight + 14.dp, start = 14.dp, end = 14.dp, bottom = 14.dp)
+                .border(2.dp, Primary, RoundedCornerShape(Dimens.radiusLg)),
+        )
+
+        Surface(
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(28.dp).width(560.dp),
+            shape = RoundedCornerShape(Dimens.radiusLg),
+            color = SurfaceColor,
+            elevation = 12.dp,
+        ) {
+            Column(Modifier.padding(Dimens.space5)) {
+                Text(
+                    "使用指南  ${AppState.guideIndex + 1} / ${AppState.guideSteps.size}",
+                    fontSize = 11.5.sp, color = Primary, fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(Dimens.space2))
+                Text(step.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Spacer(Modifier.height(Dimens.space2))
+                Text(step.description, fontSize = 13.sp, color = Ink2, lineHeight = 20.sp)
+                Spacer(Modifier.height(Dimens.space2))
+                Box(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(Dimens.radiusSm))
+                        .background(Primary.copy(alpha = 0.08f))
+                        .padding(Dimens.space3),
+                ) {
+                    Text("建议操作：${step.actionHint}", fontSize = 12.5.sp,
+                        color = Ink2, lineHeight = 19.sp)
+                }
+                Spacer(Modifier.height(Dimens.space4))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppButton(
+                        text = "退出指南",
+                        onClick = { AppState.stopGuide() },
+                        kind = AppButtonKind.SECONDARY,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    AppButton(
+                        text = "上一步",
+                        onClick = { AppState.previousGuideStep() },
+                        enabled = AppState.guideIndex > 0,
+                        kind = AppButtonKind.SECONDARY,
+                    )
+                    Spacer(Modifier.width(Dimens.space2))
+                    AppButton(
+                        text = if (AppState.guideIndex == AppState.guideSteps.lastIndex)
+                            "完成" else "下一步",
+                        onClick = { AppState.nextGuideStep() },
+                    )
+                }
+            }
+        }
     }
 }
