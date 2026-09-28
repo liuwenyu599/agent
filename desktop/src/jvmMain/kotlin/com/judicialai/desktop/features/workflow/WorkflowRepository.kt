@@ -7,7 +7,7 @@ import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
 import kotlinx.serialization.json.JsonObject
 
-/** 工作流数据访问（对应 Web workflow.js 与 backend/api/workflow.py） */
+/** 工作流程数据访问（对应 Web workflow.js 与 backend/api/workflow.py） */
 class WorkflowRepository(private val api: ApiClient) {
 
     /** GET /workflow/templates → {"templates": [...]} */
@@ -40,7 +40,7 @@ class WorkflowRepository(private val api: ApiClient) {
             "workflow_context" to emptyMap<String, String>(),
         ))
 
-    /** PUT /workflow/instances/{id} {title} → 重命名工作流（历史记录入口共用） */
+    /** PUT /workflow/instances/{id} {title} → 重命名工作流程（历史记录入口共用） */
     suspend fun renameInstance(id: String, title: String) =
         api.put(Endpoints.Workflow.instance(id), mapOf("title" to title))
 
