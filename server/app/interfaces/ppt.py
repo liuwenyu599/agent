@@ -239,7 +239,7 @@ def copy_document(doc_id: str, user: User = Depends(get_current_user),
 
 @router.post("/documents/{doc_id}/favorite")
 def toggle_doc_favorite(doc_id: str, user: User = Depends(get_current_user),
-                      svc: PPTService = Depends(get_ppt_service)):
+                  svc: PPTService = Depends(get_ppt_service)):
     return svc.toggle_doc_favorite(doc_id, user)
 
 
@@ -272,7 +272,7 @@ def preview_image(doc_id: str, name: str,
 @router.get("/kbs")
 def list_kbs(user: User = Depends(get_current_user),
              svc: PPTService = Depends(get_ppt_service)):
-    return svc.list_kbs()
+    return svc.list_kbs(user)
 
 
 @router.post("/outline-from-kb")
