@@ -127,7 +127,7 @@ fun AppShell(
             )
         }
 
-        if (AppState.guideActive) {
+        if (AppState.guideActive && WindowManager.active === session) {
             UsageGuideOverlay()
         }
     }
