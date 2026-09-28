@@ -34,6 +34,7 @@ from app.infrastructure.rag import get_embedder, get_vector_store
 from app.interfaces.deps import (
     get_current_user,
     require_admin_or_above,
+    require_developer,
     require_knowledge_admin,
 )
 
@@ -124,7 +125,7 @@ def review_document(req: ReviewRequest, user: User = Depends(get_current_user),
 
 
 @router.get("/stats")
-def get_stats(user: User = Depends(require_admin_or_above),
+def get_stats(user: User = Depends(require_developer),
               db: Session = Depends(get_db),
               svc: KnowledgeService = Depends(get_knowledge_service)):
     from sqlalchemy import select
