@@ -981,7 +981,8 @@ class PPTService:
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
                     material_names: Optional[List[str]] = None,
-                    kb_ids: Optional[List[str]] = None) -> dict:
+                    kb_ids: Optional[List[str]] = None,
+                    enforce_exact_count: bool = True) -> dict:
         content, material_names = self._apply_kb_material(
             user, kb_ids, topic, content, material_names)
         kb_empty = bool(kb_ids) and "【知识库检索材料】" not in (content or "")
@@ -994,7 +995,8 @@ class PPTService:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
                 max(2, min(slide_count, 18)), audience, scene,
-                material_names=material_names)
+                material_names=material_names,
+                enforce_exact_count=enforce_exact_count)
         except RuntimeError as e:
             raise AIServiceError(str(e))
         d = self.documents.add(PPTDocument(
@@ -1005,10 +1007,12 @@ class PPTService:
         return {"doc_id": d.id, "outline": outline}
 
     def make_outline(self, body, user: User) -> dict:
+        explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
         return self._do_outline(user, body.source_type, body.topic, body.content,
                                 body.slide_count, body.audience, body.scene,
                                 material_names=body.material_names,
-                                kb_ids=getattr(body, "kb_ids", None))
+                                kb_ids=getattr(body, "kb_ids", None),
+                                enforce_exact_count=explicit_count)
 
     def outline_stream(self, body, user: User) -> Iterator[str]:
         """流式大纲（SSE）：stage 事件展示进度，done 携带权威大纲。
@@ -1037,10 +1041,12 @@ class PPTService:
         yield _sse({"type": "stage", "text": "正在梳理汇报结构…"})
         try:
             images = self._user_images(user.id)
+            explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), body.source_type, body.topic, content,
                 images, max(2, min(body.slide_count, 18)), body.audience, body.scene,
-                material_names=material_names)
+                material_names=material_names,
+                enforce_exact_count=explicit_count)
         except RuntimeError as e:
             # generate_outline 抛出的已是用户可读文案（含重试失败说明）
             yield _sse({"type": "error", "message": str(e)})
