@@ -620,10 +620,19 @@ class PPTService:
         return p
 
     # ================= 生成流程 =================
-    def list_kbs(self) -> dict:
-        """PPT 可选知识库列表（含文档数）。"""
+    def list_kbs(self, user: User) -> dict:
+        """PPT 可选知识库列表（含文档数）。
+
+        按服务端解析的可见范围过滤（公共库 + 本科室库 + 本人个人库），
+        前端拿不到无权库的入口；检索时 RagService 还会再做一次交集校验。
+        """
+        from app.application.knowledge.access import KnowledgeAccessPolicy
+        allowed = set(KnowledgeAccessPolicy(self.db).accessible_kb_ids(user))
+        if not allowed:
+            return {"items": []}
         rows = self.db.scalars(select(KnowledgeBaseModel).where(
-            KnowledgeBaseModel.is_active == True)).all()  # noqa: E712
+            KnowledgeBaseModel.is_active == True,  # noqa: E712
+            KnowledgeBaseModel.id.in_(allowed))).all()
         items = []
         for kb in rows:
             cnt = len(self.db.scalars(select(DocumentModel).where(
@@ -652,12 +661,77 @@ class PPTService:
             total += len(seg)
         return "\n\n".join(parts)
 
+    def _rag_kb_material(self, query: str, user: User,
+                         kb_ids: List[str], limit: int = 4000) -> Tuple[str, List[str]]:
+        """RAG 语义检索：按主题从所选知识库检索相关片段（而非整库原文截断灌入）。
+
+        权限范围由 RagService 在服务端解析（kb_ids 与可访问库取交集），
+        客户端传值无法扩大检索范围。向量服务 / 嵌入模型不可用时降级为空，
+        绝不阻塞大纲生成。
+
+        Returns:
+            (拼接好的知识库材料文本, 命中来源文档名清单)
+        """
+        if not kb_ids or not query.strip():
+            return "", []
+        try:
+            from app.application.knowledge.rag_service import RagService
+            from app.infrastructure.rag import get_embedder, get_vector_store
+            rag = RagService(self.db, get_embedder(), get_vector_store())
+            hits = rag.search(query[:200], user.id, kb_ids=kb_ids, top_k=8)
+        except Exception as e:  # noqa: BLE001 - 检索失败不能拖垮大纲生成
+            logger.warning("[PPT] 知识库检索失败，按无知识库材料继续：%s: %s",
+                           type(e).__name__, str(e)[:200])
+            return "", []
+        parts: List[str] = []
+        sources: List[str] = []
+        total = 0
+        for h in hits:
+            text = (h.get("content") or "").strip()
+            if not text:
+                continue
+            name = h.get("source_name") or "知识库文档"
+            seg = f"《{name}》（{h.get('source') or '相关片段'}）\n{text[:800]}"
+            if total + len(seg) > limit:
+                break
+            parts.append(seg)
+            total += len(seg)
+            if name not in sources:
+                sources.append(name)
+        return "\n\n".join(parts), sources
+
+    def _apply_kb_material(self, user: User, kb_ids: Optional[List[str]],
+                           topic: str, content: str,
+                           material_names: Optional[List[str]]) -> Tuple[str, List[str]]:
+        """把所选知识库的检索材料并入大纲上下文。
+
+        有检索词（主题 / 材料正文）→ RAG 语义检索；什么都没有（纯选库）
+        → 回退整库按文档截断拼接。检索为空不在这里报错：主题与上传材料
+        仍可驱动生成；source_type="kb" 的纯知识库入口由调用方判空。
+
+        Returns:
+            (合并后的 content, 追加知识库来源后的 material_names)
+        """
+        names = list(material_names or [])
+        if not kb_ids:
+            return content, names
+        query = (topic or "").strip() or (content or "")[:200]
+        if query.strip():
+            kb_text, kb_sources = self._rag_kb_material(query, user, kb_ids)
+        else:
+            kb_text, kb_sources = self._kb_content(kb_ids), []
+        if kb_text:
+            content = (content.rstrip() + "\n\n" if content else "") + \
+                "【知识库检索材料】\n" + kb_text
+            names += [f"知识库《{s}》" for s in kb_sources]
+        return content, names
+
     def outline_from_kb(self, kb_ids: List[str], topic: str, audience: str,
                         scene: str, slide_count: int, user: User) -> dict:
-        content = self._kb_content(kb_ids)
-        if not content:
-            raise AppError(400, "所选知识库没有可用的已发布文档内容")
-        return self._do_outline(user, "kb", topic, content, slide_count, audience, scene)
+        """知识库入口大纲：有主题 → RAG 语义检索相关片段；无主题 → 整库截断拼接
+        （合并与判空逻辑统一在 _do_outline / _apply_kb_material）。"""
+        return self._do_outline(user, "kb", topic, "", slide_count, audience, scene,
+                                kb_ids=kb_ids)
 
     async def extract_text(self, file) -> dict:
         """提取单个文档文本（前端多文件时循环调用，自行拼接后走 /outline）。"""
@@ -862,7 +936,7 @@ class PPTService:
             "以下情况视为信息充足：材料正文已较详细；或主题本身完整具体（含单位、事项、时间范围）。\n"
             "不要因为文风、配色、页数等偏好提问——那些用默认值即可。\n"
             "只输出 JSON：{\"sufficient\": true 或 false, \"questions\": "
-            "[{\"question\": \"需要向用户确认的问题\", \"default\": \"用户不回答时采用的最合理默认方案\"}]}。\n"
+            "[{\"question\": \"需要向用户确认的问题\", \"default\": \"用户不回答时采用的最合理默认方案\"]}。\n"
             "questions 最多 3 个，按重要性排序；sufficient 为 true 时必须为空数组。\n\n"
             f"【主题】{topic or '（未填写）'}\n"
             f"【已填信息 / 材料正文节选】\n{content[:1500] or '（无）'}\n"
@@ -895,7 +969,13 @@ class PPTService:
     # ================= 大纲 =================
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
-                    material_names: Optional[List[str]] = None) -> dict:
+                    material_names: Optional[List[str]] = None,
+                    kb_ids: Optional[List[str]] = None) -> dict:
+        content, material_names = self._apply_kb_material(
+            user, kb_ids, topic, content, material_names)
+        if source_type == "kb" and not (content or "").strip():
+            raise AppError(400, "所选知识库没有检索到与主题相关的内容，"
+                                "请换个主题描述，或检查库内是否有已发布文档")
         images = self._user_images(user.id)
         try:
             outline = ppt_engine.generate_outline(
@@ -914,7 +994,8 @@ class PPTService:
     def make_outline(self, body, user: User) -> dict:
         return self._do_outline(user, body.source_type, body.topic, body.content,
                                 body.slide_count, body.audience, body.scene,
-                                material_names=body.material_names)
+                                material_names=body.material_names,
+                                kb_ids=getattr(body, "kb_ids", None))
 
     def outline_stream(self, body, user: User) -> Iterator[str]:
         """流式大纲（SSE）：stage 事件展示进度，done 携带权威大纲。
@@ -928,13 +1009,23 @@ class PPTService:
             return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
 
         yield _sse({"type": "stage", "text": "正在理解材料与任务要求…"})
+        kb_ids = getattr(body, "kb_ids", None) or []
+        if kb_ids:
+            yield _sse({"type": "stage", "text": "正在知识库中检索相关材料…"})
+        content, material_names = self._apply_kb_material(
+            user, kb_ids, body.topic, body.content, body.material_names)
+        if body.source_type == "kb" and not (content or "").strip():
+            yield _sse({"type": "error",
+                        "message": "所选知识库没有检索到与主题相关的内容，"
+                                   "请换个主题描述，或检查库内是否有已发布文档"})
+            return
         yield _sse({"type": "stage", "text": "正在梳理汇报结构…"})
         try:
             images = self._user_images(user.id)
             outline = ppt_engine.generate_outline(
-                self._ppt_assistant(), body.source_type, body.topic, body.content,
+                self._ppt_assistant(), body.source_type, body.topic, content,
                 images, max(6, min(body.slide_count, 18)), body.audience, body.scene,
-                material_names=body.material_names)
+                material_names=material_names)
         except RuntimeError as e:
             # generate_outline 抛出的已是用户可读文案（含重试失败说明）
             yield _sse({"type": "error", "message": str(e)})
@@ -1269,7 +1360,7 @@ class PPTService:
         finally:
             resp.close()
 
-        m = re.search(r"https?://[^\s\)\"'>]+\.pptx[^\s\)\"'>]*", content)
+        m = re.search(r"https?://[^\s\)\"'>]+\.pptx[^\s\"'>]*", content)
         if not m:
             raise AIServiceError("云端未返回 PPT 下载链接，返回内容：" + content[:200])
         try:
