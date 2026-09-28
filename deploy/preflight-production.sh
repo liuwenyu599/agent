@@ -66,6 +66,51 @@ grep -q 'replace(tzinfo=CN_TZ)' "$SOURCE_DIR/server/app/application/ppt/agent_jo
   fail "源码缺少 PPT 预览时区修复"
 ok "关键源码修复"
 
+# ---------- 镜像补丁完整性（2026-09-28 排障基线） ----------
+DELIVERY_IMAGE_DIR="/opt/justice-office/data/delivery-images"
+SANDBOX_IMAGE="deeppresenter-sandbox:latest"
+HOST_IMAGE="deeppresenter-host:latest"
+SANDBOX_RESTORE="$DELIVERY_IMAGE_DIR/sandbox.tar"
+HOST_RESTORE="$DELIVERY_IMAGE_DIR/host.tar"
+
+for tar_file in \
+  "$DELIVERY_IMAGE_DIR/sandbox.tar" \
+  "$DELIVERY_IMAGE_DIR/host.tar" \
+  "$DELIVERY_IMAGE_DIR/rollback-server.tar"
+do
+  [ -s "$tar_file" ] || fail "交付镜像未归档，无法保证可恢复：缺少 $tar_file"
+done
+ok "交付镜像归档"
+
+docker image inspect "$SANDBOX_IMAGE" >/dev/null 2>&1 ||
+  fail "sandbox 镜像补丁丢失，请从 /opt/justice-office/data/delivery-images/sandbox.tar 恢复"
+
+docker run --rm --entrypoint sh "$SANDBOX_IMAGE" -c '
+  set -eu
+  capture=$(find / -type f -name capture.js 2>/dev/null | head -n 1)
+  [ -n "$capture" ]
+  [ "$(grep -o "offline-patch" "$capture" | wc -l | tr -d " ")" = "2" ]
+  schemas=$(find / -type f -name schemas.js 2>/dev/null | head -n 1)
+  [ -n "$schemas" ]
+  grep -q "rewrite: z.union" "$schemas"
+  [ ! -L /usr/local/bin/mmdc ]
+  [ "$(head -n 1 /usr/local/bin/mmdc)" = "#!/bin/bash" ]
+  [ "$(fc-list :lang=zh | wc -l | tr -d " ")" -ge 100 ]
+' || fail "sandbox 镜像补丁丢失，请从 /opt/justice-office/data/delivery-images/sandbox.tar 恢复"
+ok "sandbox 镜像补丁完整"
+
+docker image inspect "$HOST_IMAGE" >/dev/null 2>&1 ||
+  fail "host 镜像补丁丢失，请从 /opt/justice-office/data/delivery-images/host.tar 恢复"
+
+docker run --rm --entrypoint sh "$HOST_IMAGE" -c '
+  set -eu
+  grep -q "禁止 apt install" /usr/src/pptagent/deeppresenter/roles/Research.yaml
+  which soffice >/dev/null
+  which unoconv >/dev/null
+  test -f /root/.cache/huggingface/hub/models--julien-c--fasttext-language-id/snapshots/master/lid.176.bin
+' || fail "host 镜像补丁丢失，请从 /opt/justice-office/data/delivery-images/host.tar 恢复"
+ok "host 镜像补丁完整"
+
 for p in 8002 8003 8004; do
   curl -fsS --max-time 10 "http://127.0.0.1:$p/v1/models" >/dev/null ||
     fail "模型端口 $p 不可用"
@@ -74,6 +119,14 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:7
 [ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ] ||
   fail "PPTAgent 7861 不可用，HTTP=$code"
 ok "模型与 PPTAgent"
+
+echo
+echo "⚠️ 部署前必须在 Windows 端执行以下两条命令，人工确认客户端行为："
+echo ' cd D:\Projects\judicial_app\desktop'
+echo ' findstr /n /c:"TIMEOUT_STATUS_MS" src\jvmMain\kotlin\com\judicialai\desktop\features\ppt\PptRepository.kt'
+echo ' findstr /n /c:"job_status" /c:"job_error" /c:"error_msg" src\jvmMain\kotlin\com\judicialai\desktop\features\ppt\*.kt'
+echo " 期望：TIMEOUT_STATUS_MS >= 30000；判断依据是 job_status，不是 job_error。"
+echo " 若不满足，先改客户端再继续部署。"
 
 echo
 echo "PRE-FLIGHT PASSED"
