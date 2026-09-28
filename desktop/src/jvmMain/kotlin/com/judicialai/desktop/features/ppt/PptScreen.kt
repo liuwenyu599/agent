@@ -60,6 +60,7 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.theme.SecondaryText
+import kotlinx.serialization.json.JsonObject
 
 /** 页型中文标签（与服务端 10 种页型一致） */
 val SLIDE_TYPE_LABELS = linkedMapOf(
