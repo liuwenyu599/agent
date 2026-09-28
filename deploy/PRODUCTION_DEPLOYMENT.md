@@ -91,16 +91,19 @@ postcheck-production.sh
 
 ## 1.0 交付镜像归档
 
+> **PPTAgent 镜像冻结要求：** 不要重新 pull / rebuild `deeppresenter-sandbox:latest` 或
+> `deeppresenter-host:latest`。当前生产依赖 2026-09-28 现场修补后的镜像；在原始 patch
+> diff 被正式纳入仓库前，只能校验、归档和恢复，不能用上游 latest 覆盖。
+
+
 在执行 preflight 之前，必须先把 2026-09-28 已验证的 sandbox / host 镜像和当前后端镜像保存为可恢复 tar：
 
 ```bash
 mkdir -p /opt/justice-office/data/delivery-images
 
-docker save deeppresenter-sandbox:latest \
-  -o /opt/justice-office/data/delivery-images/sandbox.tar
-
-docker save deeppresenter-host:latest \
-  -o /opt/justice-office/data/delivery-images/host.tar
+cd /opt/judicial_app/deploy/pptagent
+./verify-patched-images.sh
+./archive-patched-images.sh /opt/justice-office/data/delivery-images
 
 docker tag justice-office-server:2.6.6 justice-office-server:rollback
 docker save justice-office-server:rollback \
