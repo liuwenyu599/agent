@@ -428,7 +428,7 @@ class PptViewModel(private val repo: PptRepository) {
                 busy = false
                 outlineStage = ""
                 pendingConfirm = questions
-                status = "生成前请确认几个关键信息（90 秒未确认将按默认方案生成）"
+                status = "生成前请确认几个关键信息（请确认后再生成）"
             } else {
                 launchOutline(body)
             }
@@ -446,7 +446,7 @@ class PptViewModel(private val repo: PptRepository) {
      * `val id = docId ?: return` 就是死在这上面。所以只能串行：先拿 docId，
      * 再在 [launchOutline] 末尾续接提交（见 [submitAiDesign]）。
      *
-     * 预检发现信息不足时仍会弹确认框（[pendingConfirm]），用户答完或 90 秒超时后
+     * 预检发现信息不足时仍会弹确认框（[pendingConfirm]），用户明确确认后
      * 走 [confirmAndGenerate] 继续——那条路径同样认这个标志，所以仍能自动提交。
      *
      * @param target 生成完成后 pptx 的保存位置；由界面先用 pickSaveFile 选好，
