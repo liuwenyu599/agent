@@ -144,12 +144,18 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
     }
 
     if (showServerSettings) {
-        LoginServerSettingsDialog(settingsVm) { showServerSettings = false }
+        LoginServerSettingsDialog(settingsVm, onServerChanged = { vm.refreshFirstUser() }) {
+            showServerSettings = false
+        }
     }
 }
 
 @Composable
-private fun LoginServerSettingsDialog(vm: SettingsViewModel, onDismiss: () -> Unit) {
+private fun LoginServerSettingsDialog(
+    vm: SettingsViewModel,
+    onServerChanged: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AppDialog(
         onDismissRequest = onDismiss,
         title = "服务器连接",
@@ -159,7 +165,11 @@ private fun LoginServerSettingsDialog(vm: SettingsViewModel, onDismiss: () -> Un
             AppButton("关闭", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
             AppButton(if (vm.testing) "测试中…" else "保存并测试",
-                onClick = { vm.saveAndTest() }, enabled = !vm.testing)
+                onClick = {
+                    vm.saveAndTest()
+                    // saveAndTest 内部先同步保存配置、再异步探活；此时即可用新地址重查首次部署状态。
+                    onServerChanged()
+                }, enabled = !vm.testing)
         },
     ) {
         OutlinedTextField(
