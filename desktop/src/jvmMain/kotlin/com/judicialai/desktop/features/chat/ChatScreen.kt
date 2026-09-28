@@ -535,7 +535,7 @@ private fun RenameDialog(
             HistoryCategory.CHAT -> "修改对话标题"
             HistoryCategory.DOC -> "修改文档标题"
             HistoryCategory.PPT -> "修改演示文稿标题"
-            HistoryCategory.WORKFLOW -> "修改工作流名称"
+            HistoryCategory.WORKFLOW -> "修改工作流程名称"
         },
         width = 460.dp,
         actions = {
@@ -588,7 +588,7 @@ private fun DeleteConfirmDialog(
                 HistoryCategory.CHAT -> "该对话的全部消息"
                 HistoryCategory.DOC -> "该文档及其全部版本"
                 HistoryCategory.PPT -> "该演示文稿"
-                HistoryCategory.WORKFLOW -> "该工作流及其全部节点内容"
+                HistoryCategory.WORKFLOW -> "该工作流程及其全部节点内容"
             } + "将从你的记录中移除，且无法恢复。",
             fontSize = 12.5.sp, color = Ink2, lineHeight = 18.sp,
         )
@@ -600,5 +600,5 @@ private fun historyOpenLabelOf(category: HistoryCategory): String = when (catego
     HistoryCategory.CHAT -> "回看对话"
     HistoryCategory.DOC -> "预览文档"
     HistoryCategory.PPT -> "到 PPT 工作台继续修改"
-    HistoryCategory.WORKFLOW -> "打开工作流"
+    HistoryCategory.WORKFLOW -> "打开工作流程"
 }
