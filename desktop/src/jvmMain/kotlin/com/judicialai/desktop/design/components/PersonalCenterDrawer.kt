@@ -74,7 +74,7 @@ import com.judicialai.desktop.features.personal.PersonalViewModel
 
 /**
  * 个人中心：承载「我的工作」与账号设置，使 HOME 只保留四大生产力入口。
- * 最近使用 / 我的文档 / 我的收藏 / 账号安全 / 个人设置 / 个性化。
+ * 最近使用 / 我的文档 / 我的收藏 / 账号安全 / 个人设置 / 个性化 / 使用指南。
  */
 @Composable
 fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
@@ -157,6 +157,7 @@ fun PersonalCenterDrawer(vm: PersonalViewModel, onDismiss: () -> Unit) {
                     PersonalSection.SECURITY -> SecurityPanel(vm)
                     PersonalSection.SETTINGS -> SettingsPanel(vm)
                     PersonalSection.PERSONALIZATION -> PersonalizationPanel(vm)
+                    PersonalSection.GUIDE -> GuidePanel()
                 }
             }
         }
@@ -195,8 +196,7 @@ private fun DocList(items: List<PersonalViewModel.DocItem>) {
 private fun FavoritesPanel() {
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
         NoticeBar(
-            text = "收藏能力后端目前仅覆盖 PPT 模板与 PPT 文档，暂无通用收藏接口；" +
-                "为避免伪造数据，这里不做占位列表。",
+            text = "这里汇总你收藏的常用内容；目前可从 PPT 助手中查看已收藏的模板和材料。",
             fg = Ink2, bg = AppBg,
         )
         Row(
@@ -291,7 +291,7 @@ private fun SecurityPanel(vm: PersonalViewModel) {
         Spacer(Modifier.height(Dimens.space3))
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         Text(
-            "忘记密码请联系系统管理员重置；政务内网短信验证码功能尚未开放。",
+            "忘记密码请联系系统管理员重置。",
             fontSize = 11.5.sp, color = Muted,
         )
     }
@@ -563,5 +563,40 @@ private fun SettingsEntryRow(
         }
         Spacer(Modifier.width(Dimens.space2))
         Text("›", fontSize = 16.sp, color = Muted2)
+    }
+}
+
+
+@Composable
+private fun GuidePanel() {
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space3)) {
+        NoticeBar(
+            text = "选择一个功能开始导览。系统会自动跳转到对应页面，并逐步提示常用操作。",
+            fg = Ink2, bg = AppBg,
+        )
+        AppState.guideSteps.forEach { step ->
+            AppCardTonal {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(step.title, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                            color = Ink)
+                        Spacer(Modifier.height(4.dp))
+                        Text(step.description, fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
+                    }
+                    Spacer(Modifier.width(Dimens.space3))
+                    AppButton(
+                        text = "开始",
+                        onClick = { AppState.startGuide(step.screen) },
+                        kind = AppButtonKind.SECONDARY,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(Dimens.space2))
+        AppButton(
+            text = "从工作台开始完整导览",
+            onClick = { AppState.startGuide() },
+            fill = true,
+        )
     }
 }
