@@ -24,7 +24,10 @@ class AuthViewModel {
     var isFirstUser by mutableStateOf(false)
         private set
 
-    init {
+    init { refreshFirstUser() }
+
+    /** 服务器地址切换后重新判断是否需要创建首个系统管理员。 */
+    fun refreshFirstUser() {
         scope.launch {
             isFirstUser = AppState.api.checkFirstUser()
         }
