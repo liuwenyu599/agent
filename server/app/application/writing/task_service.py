@@ -201,12 +201,33 @@ class WritingTaskService:
     def create_task(self, user_id: str, message: str,
                     session_id: Optional[str] = None,
                     template_id: Optional[str] = None,
-                    kb_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+                    kb_ids: Optional[List[str]] = None,
+                    planned_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """从自然语言初始化任务：解析要素 -> 建任务 -> 返回上下文与追问。"""
         from app.infrastructure.database.models.writing_task import WritingTaskModel
 
         ctx = task_parser.empty_context()
-        # 创建时即可绑定模板 / 知识库（用户显式选择，原样记录）
+        it = None
+        changes: List[str] = []
+
+        # /plan 已经完成语义理解时，复用这份服务端产生的上下文，避免同一句话
+        # 再跑一次 LLM。只接收 empty_context 已知字段，拒绝客户端夹带任意键。
+        if planned_context:
+            for key in tuple(ctx.keys()):
+                if key in planned_context and key not in ("history", "missing_fields"):
+                    ctx[key] = planned_context[key]
+            # 确定性 parser 再覆盖一次文号/日期/字数等用户原文事实，保证不会因
+            # 规划快照过旧而漏掉这类严格字段；这一步不调用模型。
+            changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+        else:
+            # 未经过 /plan 的兼容路径仍保留原有 LLM 语义理解能力。
+            it = self._interpret(message, ctx, has_draft=False)
+            if it:
+                changes = self._apply_interpretation(ctx, it, message)
+            else:
+                changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+
+        # 创建时显式选择的模板 / 知识库优先于规划快照。
         if template_id:
             tmpl = self._load_template(template_id)
             if tmpl:
@@ -214,12 +235,6 @@ class WritingTaskService:
                 ctx["template_name"] = tmpl["name"]
         if kb_ids:
             ctx["kb_ids"] = [k for k in kb_ids if k]
-        # LLM 语义理解优先；失败回退确定性 parser
-        it = self._interpret(message, ctx, has_draft=False)
-        if it:
-            changes = self._apply_interpretation(ctx, it, message)
-        else:
-            changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
         missing = task_parser.compute_missing(ctx)
         self._push_history(ctx, "user", message)
 
@@ -286,6 +301,10 @@ class WritingTaskService:
             "agent": (org_ctx.get("agent") or {}).get("name") or "",
             "title": ctx.get("title") or "",
             "source": source,
+            "planned_context": {
+                k: v for k, v in ctx.items()
+                if k not in ("history", "missing_fields")
+            },
             "fields": fields,
             "materials": materials,
             "knowledge": knowledge,
