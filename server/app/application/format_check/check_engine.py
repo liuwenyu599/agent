@@ -517,6 +517,9 @@ class FormatCheckEngine:
         rule_brief = "；".join(
             f"{r['name']}（{r['target']}）" for r in rules[:15]
         ) or "（暂无已配置规则）"
+        numbered_text = "\n".join(
+            f"[第{i + 1}段] {line}" for i, line in enumerate(text.splitlines()) if line.strip()
+        )
         scope = """在程序已经完成字体、字号、缩进、行距、页边距等确定性排版校验的基础上，
 请继续做内容规范审校，重点检查：
 1. 敏感词、禁用词、明显不宜用于正式公文的表述；
@@ -533,11 +536,12 @@ class FormatCheckEngine:
 
 已配置的格式规则供参考：{rule_brief}
 
-公文内容：
-{text}
+公文内容（已标注段号）：
+{numbered_text}
 
-请严格按以下 JSON 数组格式输出（不要输出其他任何内容），没有问题则输出 []：
-[{{"location": "位置描述", "element": "问题项", "current": "当前情况", "expected": "要求", "suggestion": "修改建议"}}]"""
+请严格按以下 JSON 数组格式输出（不要输出其他任何内容），没有问题则输出 []。
+paragraph_index 使用 0 开始的段落下标；无法定位时填 null：
+[{{"location": "位置描述", "paragraph_index": 0, "element": "问题项", "current": "当前情况", "expected": "要求", "suggestion": "修改建议"}}]"""
         try:
             reply = self.assistant.complete(
                 [{"role": "system", "content": "你是严谨的公文格式审核助手，只输出 JSON。"},
@@ -564,7 +568,11 @@ class FormatCheckEngine:
                     "suggestion": str(it.get("suggestion", "")),
                     "source": "ai",
                     "severity": "warning",
-                    "paragraph_index": None,
+                    "paragraph_index": (
+                        int(it.get("paragraph_index"))
+                        if str(it.get("paragraph_index", "")).strip().isdigit()
+                        else None
+                    ),
                     "fix_hint": None,
                 })
             return result
