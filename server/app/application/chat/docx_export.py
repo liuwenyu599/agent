@@ -121,6 +121,20 @@ def _parse_inline_formatting(p, text):
                     _set_font(run, FONT_BODY, Pt(16))
 
 
+def _split_markdown_table_row(line):
+    """拆一行 Markdown 表格，兼容末尾有/无竖线。
+
+    "| A | B |" 和 "| A | B" 都应得到 ["A", "B"]；
+    旧实现固定 [1:-1] 会把后一种写法的最后一格丢掉。
+    """
+    raw = (line or "").strip()
+    parts = raw.split("|")
+    if raw.startswith("|") and parts:
+        parts = parts[1:]
+    if raw.endswith("|") and parts:
+        parts = parts[:-1]
+    return [cell.strip() for cell in parts]
+
 def _add_table(doc, lines, start_idx):
     """解析并添加 Markdown 表格"""
     # 收集表格行
@@ -134,11 +148,11 @@ def _add_table(doc, lines, start_idx):
         return i
 
     # 解析表头
-    header_cells = [c.strip() for c in table_lines[0].split('|')[1:-1]]
+    header_cells = _split_markdown_table_row(table_lines[0])
     # 跳过分隔行（包含 --- 的那行）
     data_rows = []
     for line in table_lines[2:]:
-        cells = [c.strip() for c in line.split('|')[1:-1]]
+        cells = _split_markdown_table_row(line)
         if cells:
             data_rows.append(cells)
 
