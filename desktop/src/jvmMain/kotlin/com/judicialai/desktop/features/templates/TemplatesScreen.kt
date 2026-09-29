@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.Checkbox
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
@@ -696,6 +697,25 @@ private fun TemplateEditDialog(
     var category by remember { mutableStateOf(editing?.get("category").str()) }
     var description by remember { mutableStateOf(editing?.get("description").str()) }
     var content by remember { mutableStateOf(editing?.get("content_template").str()) }
+    var writingStyle by remember {
+        mutableStateOf(editing?.get("writing_style").str().ifBlank { "正式公文" })
+    }
+    var wordCount by remember {
+        mutableStateOf(editing?.get("word_count").int().let { if (it > 0) it.toString() else "1000" })
+    }
+    var structureText by remember {
+        mutableStateOf(
+            editing?.get("structure").arr().mapNotNull { it.obj() }.joinToString("\n") {
+                val n = it["name"].str()
+                val g = it["guide"].str()
+                if (g.isBlank()) n else "$n｜$g"
+            }
+        )
+    }
+    var needRedHeader by remember { mutableStateOf(editing?.get("need_red_header")?.toString() == "true") }
+    var needSignature by remember { mutableStateOf(editing == null || editing["need_signature"]?.toString() != "false") }
+    var needDate by remember { mutableStateOf(editing == null || editing["need_date"]?.toString() != "false") }
+    var needDocNumber by remember { mutableStateOf(editing?.get("need_doc_number")?.toString() == "true") }
 
     AppDialog(
         onDismissRequest = onDismiss,
@@ -712,17 +732,57 @@ private fun TemplateEditDialog(
                         "category" to category,
                         "description" to description,
                         "content_template" to content,
+                        "writing_style" to writingStyle,
+                        "word_count" to (wordCount.toIntOrNull() ?: 1000),
+                        "structure" to structureText.lines().mapNotNull { raw ->
+                            val line = raw.trim()
+                            if (line.isBlank()) null else {
+                                val parts = line.split("｜", limit = 2)
+                                mapOf("name" to parts[0].trim(), "guide" to parts.getOrElse(1) { "" }.trim())
+                            }
+                        },
+                        "need_red_header" to needRedHeader,
+                        "need_signature" to needSignature,
+                        "need_date" to needDate,
+                        "need_doc_number" to needDocNumber,
                     )
                 )
             }, kind = AppButtonKind.PRIMARY, enabled = name.isNotBlank())
         },
     ) {
+        SectionTitle("第 1 步 · 基本信息")
         AppTextField(value = name, onValueChange = { name = it }, label = "模板名称",
             placeholder = "例如：行政复议工作情况报告")
         AppTextField(value = category, onValueChange = { category = it }, label = "类型",
             placeholder = "例如：报告")
         AppTextField(value = description, onValueChange = { description = it },
             label = "简短说明", singleLine = false, minLines = 2)
+
+        Spacer(Modifier.height(Dimens.space2))
+        SectionTitle("第 2 步 · 初始格式设计")
+        Text("先确定文种结构与成文格式，再保存正文骨架；后续 AI 起草按这些约束生成。",
+            fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
+        AppTextField(value = writingStyle, onValueChange = { writingStyle = it },
+            label = "写作风格", placeholder = "例如：正式公文")
+        AppTextField(value = wordCount, onValueChange = { wordCount = it.filter(Char::isDigit).take(6) },
+            label = "建议字数", placeholder = "例如：1000")
+        AppTextField(
+            value = structureText,
+            onValueChange = { structureText = it },
+            label = "章节结构",
+            placeholder = "每行一项：一、总体情况｜概述工作背景和总体成效",
+            singleLine = false,
+            minLines = 4,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(needRedHeader, { needRedHeader = it }); Text("红头")
+            Spacer(Modifier.width(Dimens.space2))
+            Checkbox(needDocNumber, { needDocNumber = it }); Text("发文字号")
+            Spacer(Modifier.width(Dimens.space2))
+            Checkbox(needSignature, { needSignature = it }); Text("落款")
+            Spacer(Modifier.width(Dimens.space2))
+            Checkbox(needDate, { needDate = it }); Text("日期")
+        }
         AppTextField(value = content, onValueChange = { content = it }, label = "正文骨架",
             placeholder = "可用占位符，如 {{时间范围}}", singleLine = false, minLines = 8)
     }
