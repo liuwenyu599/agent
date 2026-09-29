@@ -9,6 +9,7 @@ import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.features.chat.model.KnowledgeCitation
+import com.judicialai.desktop.features.chat.model.ChatSession
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 
@@ -89,6 +90,18 @@ class KnowledgeRepository(private val api: ApiClient) {
             api.upload(Endpoints.Knowledge.BATCH_UPLOAD, "files", files, mapOf("kb_id" to kbId))
 
     suspend fun deleteDocument(docId: String) = api.del(Endpoints.Knowledge.document(docId))
+
+    suspend fun listQaSessions(): ApiResult<List<ChatSession>> =
+        when (val r = api.get(Endpoints.Knowledge.ASK_SESSIONS)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items().map {
+                ChatSession(
+                    id = it["id"].str(),
+                    title = it["title"].str().ifBlank { "未命名会话" },
+                    createdAt = it["created_at"].str(),
+                )
+            })
+            is ApiResult.Err -> r
+        }
 
     suspend fun ask(
         message: String,
