@@ -51,6 +51,35 @@ class PptRepository(private val api: ApiClient) {
 
     suspend fun deleteTemplate(id: String) = api.del(Endpoints.Ppt.templateDelete(id))
 
+    suspend fun templateDetail(id: String): ApiResult<JsonObject> =
+        when (val r = api.get(Endpoints.Ppt.template(id))) {
+            is ApiResult.Ok -> {
+                val obj = r.data.obj()
+                if (obj != null) ApiResult.Ok(obj)
+                else ApiResult.Err("模板详情格式错误")
+            }
+            is ApiResult.Err -> r
+        }
+
+    suspend fun updateTemplate(
+        id: String,
+        name: String,
+        category: String,
+        description: String,
+        font: String,
+        layouts: Map<String, String>,
+    ) = api.put(
+        Endpoints.Ppt.template(id),
+        mapOf(
+            "name" to name,
+            "category" to category,
+            "description" to description,
+            "font" to font,
+            "layouts" to layouts,
+        ),
+    )
+
+
     /** 返回 (docId, outlineJson) */
     suspend fun outline(
         sourceType: String, topic: String, content: String,
