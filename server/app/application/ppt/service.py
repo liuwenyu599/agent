@@ -64,7 +64,7 @@ DEFAULT_DESIGN_PROMPT: Dict[str, str] = {
         "封面保持干净，不叠加数据框，结束页简洁。"
     ),
 }
-DEFAULT_GOV_TEMPLATE_ID = "gov_report_red"
+DEFAULT_GOV_TEMPLATE_ID = "gov_report_blue"
 _TOC_TITLE_RE = re.compile(r"^(目录|汇报提纲|内容提要|主要内容|汇报目录)$")
 
 
