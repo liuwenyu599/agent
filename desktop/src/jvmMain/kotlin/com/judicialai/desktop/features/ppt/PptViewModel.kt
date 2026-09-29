@@ -224,7 +224,8 @@ class PptViewModel(private val repo: PptRepository) {
             when (val r = repo.templates()) {
                 is ApiResult.Ok -> {
                     templates = r.data
-                    if (templateId == null) templateId = r.data.firstOrNull()?.get("id")?.str()
+                    // 不替用户静默选择“列表第一项”。null 表示未显式选模板，
+                    // 由服务端统一采用默认政务模板；只有用户点击后才写 templateId。
                 }
                 is ApiResult.Err -> status = r.message
             }
