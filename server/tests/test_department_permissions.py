@@ -106,17 +106,17 @@ def users(client):
 
     return {
         "developer": dev_token,
-        "fuyi_user": reg("fuyi_user", "user", DEPT_FUYI),
-        "fuyi_admin": reg("fuyi_knowledge_admin", "knowledge_admin", DEPT_FUYI),
-        "renshi_user": reg("renshi_user", "user", DEPT_RENSHI),
-        "renshi_admin": reg("renshi_knowledge_admin", "knowledge_admin", DEPT_RENSHI),
+        "fuyiuser": reg("fuyiuser", "user", DEPT_FUYI),
+        "fuyiadmin": reg("fuyiknowledgeadmin", "knowledge_admin", DEPT_FUYI),
+        "renshiuser": reg("renshiuser", "user", DEPT_RENSHI),
+        "renshiadmin": reg("renshiknowledgeadmin", "knowledge_admin", DEPT_RENSHI),
     }
 
 
 @pytest.fixture(scope="module")
 def kbs(users):
     """创建全局 / 复议科 / 人事科 / 个人 四类知识库及文档。"""
-    fuyi_uid = _uid_of("fuyi_user")
+    fuyi_uid = _uid_of("fuyiuser")
     return {
         "global": _mk_kb("全局公共知识库", department_code=""),
         "fuyi": _mk_kb("复议科知识库", department_code="fuyi"),
@@ -154,7 +154,7 @@ def test_developer_is_system_admin(users, client):
 
 
 def test_knowledge_admin_is_not_system_admin(users, client):
-    r = client.get(f"{BASE}/organization/me", headers=_hdr(users["fuyi_admin"]))
+    r = client.get(f"{BASE}/organization/me", headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 200
     assert r.json()["is_admin"] is False
     assert r.json()["dept_code"] == "fuyi"
@@ -176,23 +176,23 @@ def test_department_code_persisted_on_create(users):
     from sqlalchemy import select
     from app.infrastructure.database.models.identity import UserModel
     rows = {r.username: r for r in db.scalars(select(UserModel)).all()}
-    assert rows["fuyi_user"].department_code == "fuyi"
-    assert rows["renshi_user"].department_code == "renshi"
-    assert rows["fuyi_knowledge_admin"].department_code == "fuyi"
+    assert rows["fuyiuser"].department_code == "fuyi"
+    assert rows["renshiuser"].department_code == "renshi"
+    assert rows["fuyiknowledgeadmin"].department_code == "fuyi"
     db.close()
 
 
 def test_unknown_department_is_rejected(users, client):
     """v3.2：所属科室只能从科室字典选择，未命中字典的名称一律拒绝，不猜测归口。"""
     r = client.post(f"{BASE}/auth/register", json={
-        "username": "nodept_user", "email": "nodept@test.local",
+        "username": "nodeptuser", "email": "nodept@test.local",
         "password": "Passw0rd!2026", "department": "不存在的科室", "role": "user",
     }, headers=_hdr(users["developer"]))
     assert r.status_code == 400
     db = SessionLocal()
     from sqlalchemy import select
     from app.infrastructure.database.models.identity import UserModel
-    row = db.scalar(select(UserModel).where(UserModel.username == "nodept_user"))
+    row = db.scalar(select(UserModel).where(UserModel.username == "nodeptuser"))
     assert row is None
     db.close()
 
@@ -200,14 +200,14 @@ def test_unknown_department_is_rejected(users, client):
 def test_department_code_selected_from_dictionary(users, client):
     """前端按科室 code 提交，服务端落库 department_code 与正式名称。"""
     r = client.post(f"{BASE}/auth/register", json={
-        "username": "coded_user", "email": "coded@test.local",
+        "username": "codeduser", "email": "coded@test.local",
         "password": "Passw0rd!2026", "department_code": "renshi", "role": "user",
     }, headers=_hdr(users["developer"]))
     assert r.status_code == 200
     db = SessionLocal()
     from sqlalchemy import select
     from app.infrastructure.database.models.identity import UserModel
-    row = db.scalar(select(UserModel).where(UserModel.username == "coded_user"))
+    row = db.scalar(select(UserModel).where(UserModel.username == "codeduser"))
     assert row is not None
     assert row.department_code == "renshi"
     assert row.department == "人事科"
@@ -217,7 +217,7 @@ def test_department_code_selected_from_dictionary(users, client):
 def test_unknown_role_is_rejected(users, client):
     """角色必须与前端下拉一致：普通用户 / 知识管理员 / 系统管理员。"""
     r = client.post(f"{BASE}/auth/register", json={
-        "username": "bad_role_user", "email": "badrole@test.local",
+        "username": "badroleuser", "email": "badrole@test.local",
         "password": "Passw0rd!2026", "department_code": "fuyi", "role": "super_admin",
     }, headers=_hdr(users["developer"]))
     assert r.status_code in (400, 403)
@@ -227,7 +227,7 @@ def test_unknown_role_is_rejected(users, client):
 
 def test_list_kb_only_global_and_own_dept(users, client, kbs):
     ids = {kb["id"] for kb in client.get(
-        f"{BASE}/knowledge/list", headers=_hdr(users["fuyi_user"])).json()}
+        f"{BASE}/knowledge/list", headers=_hdr(users["fuyiuser"])).json()}
     assert kbs["global"] in ids
     assert kbs["fuyi"] in ids
     assert kbs["personal_fuyi"] in ids
@@ -236,7 +236,7 @@ def test_list_kb_only_global_and_own_dept(users, client, kbs):
 
 def test_list_kb_knowledge_admin_cannot_see_other_dept(users, client, kbs):
     ids = {kb["id"] for kb in client.get(
-        f"{BASE}/knowledge/list", headers=_hdr(users["fuyi_admin"])).json()}
+        f"{BASE}/knowledge/list", headers=_hdr(users["fuyiadmin"])).json()}
     assert kbs["renshi"] not in ids
     assert kbs["fuyi"] in ids
 
@@ -250,27 +250,27 @@ def test_list_kb_developer_sees_all(users, client, kbs):
 
 def test_personal_kb_only_owner(users, client, kbs):
     ids = {kb["id"] for kb in client.get(
-        f"{BASE}/knowledge/list", headers=_hdr(users["renshi_user"])).json()}
+        f"{BASE}/knowledge/list", headers=_hdr(users["renshiuser"])).json()}
     assert kbs["personal_fuyi"] not in ids
 
 
 # ---------------------------------------------------------------- 4. 跨科室 KB / 文档访问
 
 def test_cross_dept_kb_detail_forbidden(users, client, kbs):
-    for who in ("fuyi_user", "fuyi_admin"):
+    for who in ("fuyiuser", "fuyiadmin"):
         r = client.get(f"{BASE}/knowledge/{kbs['renshi']}", headers=_hdr(users[who]))
         assert r.status_code == 403, who
 
 
 def test_cross_dept_kb_documents_forbidden(users, client, kbs):
-    for who in ("fuyi_user", "fuyi_admin"):
+    for who in ("fuyiuser", "fuyiadmin"):
         r = client.get(f"{BASE}/knowledge/{kbs['renshi']}/documents",
                        headers=_hdr(users[who]))
         assert r.status_code == 403, who
 
 
 def test_cross_dept_document_detail_forbidden(users, client, docs):
-    for who in ("fuyi_user", "fuyi_admin"):
+    for who in ("fuyiuser", "fuyiadmin"):
         r = client.get(f"{BASE}/knowledge/documents/{docs['renshi']}",
                        headers=_hdr(users[who]))
         assert r.status_code == 403, who
@@ -278,7 +278,7 @@ def test_cross_dept_document_detail_forbidden(users, client, docs):
 
 def test_own_dept_document_readable(users, client, docs):
     r = client.get(f"{BASE}/knowledge/documents/{docs['fuyi']}",
-                   headers=_hdr(users["fuyi_user"]))
+                   headers=_hdr(users["fuyiuser"]))
     assert r.status_code == 200
     assert r.json()["title"] == "复议科文档"
 
@@ -293,19 +293,19 @@ def test_developer_can_read_cross_dept(users, client, docs):
 
 def test_knowledge_admin_cannot_delete_other_dept_kb(users, client, kbs):
     r = client.delete(f"{BASE}/knowledge/{kbs['renshi']}",
-                      headers=_hdr(users["fuyi_admin"]))
+                      headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 403
 
 
 def test_knowledge_admin_cannot_update_other_dept_kb(users, client, kbs):
     r = client.put(f"{BASE}/knowledge/{kbs['renshi']}", json={"name": "被改名"},
-                   headers=_hdr(users["fuyi_admin"]))
+                   headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 403
 
 
 def test_knowledge_admin_can_manage_own_dept_kb(users, client, kbs):
     r = client.put(f"{BASE}/knowledge/{kbs['fuyi']}", json={"name": "复议科知识库(改)"},
-                   headers=_hdr(users["fuyi_admin"]))
+                   headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 200
 
 
@@ -313,7 +313,7 @@ def test_upload_to_other_dept_kb_forbidden(users, client, kbs):
     r = client.post(
         f"{BASE}/knowledge/upload?kb_id={kbs['renshi']}",
         files={"file": ("a.txt", b"hello world", "text/plain")},
-        headers=_hdr(users["fuyi_admin"]),
+        headers=_hdr(users["fuyiadmin"]),
     )
     assert r.status_code == 403
 
@@ -322,7 +322,7 @@ def test_batch_upload_to_other_dept_kb_forbidden(users, client, kbs):
     r = client.post(
         f"{BASE}/knowledge/batch-upload?kb_id={kbs['renshi']}",
         files={"files": ("a.txt", b"hello world", "text/plain")},
-        headers=_hdr(users["fuyi_admin"]),
+        headers=_hdr(users["fuyiadmin"]),
     )
     assert r.status_code == 403
 
@@ -330,14 +330,14 @@ def test_batch_upload_to_other_dept_kb_forbidden(users, client, kbs):
 def test_import_urls_to_other_dept_kb_forbidden(users, client, kbs):
     r = client.post(f"{BASE}/knowledge/import-urls",
                     json={"kb_id": kbs["renshi"], "urls": ["https://example.com/a"]},
-                    headers=_hdr(users["fuyi_admin"]))
+                    headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 403
 
 
 def test_review_other_dept_document_forbidden(users, client, docs):
     r = client.post(f"{BASE}/knowledge/review",
                     json={"doc_id": docs["renshi"], "action": "approve", "comment": ""},
-                    headers=_hdr(users["fuyi_admin"]))
+                    headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 403
 
 
@@ -345,7 +345,7 @@ def test_review_own_dept_document_allowed(users, client, kbs):
     did = _mk_doc(kbs["fuyi"], "本科室待审文档", status="pending", department_code="fuyi")
     r = client.post(f"{BASE}/knowledge/review",
                     json={"doc_id": did, "action": "approve", "comment": "ok"},
-                    headers=_hdr(users["fuyi_admin"]))
+                    headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 200
 
 
@@ -353,7 +353,7 @@ def test_pending_queue_scoped_to_own_dept(users, client, kbs):
     _mk_doc(kbs["renshi"], "人事科待审文档", status="pending", department_code="renshi")
     _mk_doc(kbs["fuyi"], "复议科待审文档2", status="pending", department_code="fuyi")
     items = client.get(f"{BASE}/knowledge/pending",
-                       headers=_hdr(users["fuyi_admin"])).json()
+                       headers=_hdr(users["fuyiadmin"])).json()
     titles = {i["title"] for i in items}
     assert "人事科待审文档" not in titles
     assert "复议科待审文档2" in titles
@@ -361,7 +361,7 @@ def test_pending_queue_scoped_to_own_dept(users, client, kbs):
 
 def test_all_documents_scoped(users, client, docs):
     data = client.get(f"{BASE}/knowledge/documents?status=all",
-                      headers=_hdr(users["fuyi_admin"])).json()
+                      headers=_hdr(users["fuyiadmin"])).json()
     ids = {d["id"] for d in data["data"]}
     assert docs["renshi"] not in ids
     assert docs["fuyi"] in ids
@@ -386,7 +386,7 @@ def test_rag_scopes_exclude_other_dept(users, kbs):
     from app.application.knowledge.rag_service import RagService
     db = SessionLocal()
     rag = RagService(db, None, None)
-    fuyi_uid = _uid_of("fuyi_user")
+    fuyi_uid = _uid_of("fuyiuser")
     scopes = rag.resolve_scopes("fuyi", False, fuyi_uid)
     assert "GLOBAL" in scopes
     assert "DEPT:fuyi" in scopes
@@ -402,7 +402,7 @@ def test_rag_client_scopes_cannot_escalate(users, kbs):
     from app.application.knowledge.access import KnowledgeAccessPolicy
     db = SessionLocal()
     policy = KnowledgeAccessPolicy(db)
-    fuyi = _user_obj("fuyi_user")
+    fuyi = _user_obj("fuyiuser")
     merged = policy.intersect_scopes(fuyi, ["DEPT:renshi", "GLOBAL"])
     assert merged == ["GLOBAL"]
     db.close()
@@ -415,7 +415,7 @@ def test_rag_search_excludes_other_dept_chunks(users, kbs, docs):
     try:
         rag = RagService(db, None, None)
         # 绕过向量库不可用的情况：直接校验可访问 kb 集合 + 作用域交集
-        fuyi = _user_obj("fuyi_user")
+        fuyi = _user_obj("fuyiuser")
         kb_ids = rag._get_accessible_kb_ids(fuyi.id, "fuyi", False)
         assert kbs["renshi"] not in kb_ids
         # 即便客户端强行指定人事科 kb_id，也会被过滤
@@ -448,26 +448,26 @@ def _user_obj(username):
 # ---------------------------------------------------------------- 7. Agent 权限
 
 def test_agent_cross_dept_forbidden(users, client):
-    for who in ("fuyi_user", "fuyi_admin"):
+    for who in ("fuyiuser", "fuyiadmin"):
         r = client.get(f"{BASE}/organization/agents/renshi", headers=_hdr(users[who]))
         assert r.status_code == 403, who
 
 
 def test_agent_own_dept_readable(users, client):
-    r = client.get(f"{BASE}/organization/agents/fuyi", headers=_hdr(users["fuyi_admin"]))
+    r = client.get(f"{BASE}/organization/agents/fuyi", headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 200
     assert r.json()["dept_code"] == "fuyi"
 
 
 def test_agent_update_other_dept_forbidden(users, client):
     r = client.put(f"{BASE}/organization/agents/renshi", json={"intro": "越权修改"},
-                   headers=_hdr(users["fuyi_admin"]))
+                   headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 403
 
 
 def test_agent_update_own_dept_allowed(users, client):
     r = client.put(f"{BASE}/organization/agents/fuyi", json={"intro": "本科室简介"},
-                   headers=_hdr(users["fuyi_admin"]))
+                   headers=_hdr(users["fuyiadmin"]))
     assert r.status_code == 200
     assert r.json()["intro"] == "本科室简介"
 
@@ -482,7 +482,7 @@ def test_agent_developer_manage_all(users, client):
 
 def test_knowledge_admin_cannot_manage_system_users(client, users):
     """科室知识管理员不能读取或修改全局账号目录；账号管理仅系统管理员可用。"""
-    ka = _hdr(users["fuyi_admin"])
+    ka = _hdr(users["fuyiadmin"])
     dev = _hdr(users["developer"])
 
     denied = client.get(f"{BASE}/users/", headers=ka)
@@ -490,8 +490,8 @@ def test_knowledge_admin_cannot_manage_system_users(client, users):
 
     # 旧兼容注册接口也不能成为绕过 /users 权限的旁路。
     register_denied = client.post(f"{BASE}/auth/register", headers=ka, json={
-        "username": "forbidden_created_user",
-        "email": "forbidden_created_user@test.local",
+        "username": "forbiddencreateduser",
+        "email": "forbiddencreateduser@test.local",
         "password": "Passw0rd!2026",
         "real_name": "不应创建",
         "department": DEPT_FUYI,
@@ -505,7 +505,7 @@ def test_knowledge_admin_cannot_manage_system_users(client, users):
 
 def test_global_stats_are_system_admin_only(client, users):
     """全局用户/会话统计不向科室管理员泄露。"""
-    ka = client.get(f"{BASE}/knowledge/stats", headers=_hdr(users["fuyi_admin"]))
+    ka = client.get(f"{BASE}/knowledge/stats", headers=_hdr(users["fuyiadmin"]))
     assert ka.status_code == 403, ka.text
 
     dev = client.get(f"{BASE}/knowledge/stats", headers=_hdr(users["developer"]))
