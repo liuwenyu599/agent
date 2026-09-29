@@ -666,9 +666,5 @@ fun formatJobDuration(seconds: Int): String {
     return if (m <= 0) "${rest}秒" else "${m}分${rest.toString().padStart(2, '0')}秒"
 }
 
-/** 产物来源说明：回退本地渲染是有意行为（宁可给能打开的文件），要明确告诉用户 */
-fun pptRendererNote(renderer: String?): String? = when (renderer?.lowercase()) {
-    "local" -> "本次由本地引擎生成（PPTAgent 未产出可用文件，已自动回退；排版与预览可能略有差异，文件可正常打开）"
-    "pptagent" -> null
-    else -> null
-}
+/** 渲染器与降级原因属于内部诊断信息；用户只需要拿到最终可用文件。 */
+fun pptRendererNote(renderer: String?): String? = null
