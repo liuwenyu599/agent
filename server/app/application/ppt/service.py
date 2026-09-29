@@ -1166,58 +1166,19 @@ class PPTService:
 
     # ================= 生成前预检（信息不足先确认，不瞎编） =================
     def precheck_outline(self, body, user: User) -> dict:
-        """生成前预检：判断关键信息是否足以支撑一份不瞎编的 PPT。
+        """兼容旧接口的无打扰预检。
 
-        信息不足时返回需要向用户确认的问题（最多 3 个，按重要性排序），
-        每个问题附带最合理的默认方案——用户 90 秒未确认或选择默认时按默认方案生成。
-        预检失败（模型不可用、返回无法解析等）一律放行，不阻塞生成。
+        新交互只保留“描述需求 → 确认大纲 → 拿文件”。缺少风格、页数、场景等信息
+        一律由服务端默认策略补齐；缺少事实时要求模型使用概括表述而不是编造，不再追问用户。
         """
         topic = (body.topic or "").strip()
         content = (body.content or "").strip()
-        materials = [m for m in (body.material_names or []) if m]
         kb_ids = getattr(body, "kb_ids", None) or []
         if not topic and not content and not kb_ids:
-            raise AppError(400, "请先填写汇报主题，或上传材料")
-        # 材料正文足够详实时直接放行，不打扰用户
-        if len(content) >= 1500:
-            return {"sufficient": True, "questions": []}
-        prompt = (
-            "你是政务 PPT 助手的「生成前检查员」。根据用户提供的主题与材料，判断能否生成一份"
-            "内容扎实、不需要编造事实的 PPT 大纲。\n"
-            "只检查影响内容真实性的关键信息，例如：汇报对象与场合、汇报人与单位、时间范围、"
-            "必须覆盖的工作事项或数据。\n"
-            "以下情况视为信息充足：材料正文已较详细；或主题本身完整具体（含单位、事项、时间范围）。\n"
-            "不要因为文风、配色、页数等偏好提问——那些用默认值即可。\n"
-            "只输出 JSON：{\"sufficient\": true 或 false, \"questions\": "
-            "[{\"question\": \"需要向用户确认的问题\", \"default\": \"用户不回答时采用的最合理默认方案\"]}。\n"
-            "questions 最多 3 个，按重要性排序；sufficient 为 true 时必须为空数组。\n\n"
-            f"【主题】{topic or '（未填写）'}\n"
-            f"【已填信息 / 材料正文节选】\n{content[:1500] or '（无）'}\n"
-            f"【材料文件】{'、'.join(materials) or '（无）'}")
-        try:
-            raw = self._ppt_assistant().complete(
-                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=400)
-        except Exception as e:
-            logger.warning("[PPT] 生成前预检失败，直接放行: %s", e)
-            return {"sufficient": True, "questions": []}
-        data = loads_llm_object(raw)
-        if data is None:
-            # 预检只是"帮忙多问一句"，解析不出来就降级放行，不打断用户
-            return {"sufficient": True, "questions": []}
-        if data.get("sufficient"):
-            return {"sufficient": True, "questions": []}
-        questions = []
-        for q in (data.get("questions") or [])[:3]:
-            if not isinstance(q, dict):
-                continue
-            question = str(q.get("question") or "").strip()
-            default = str(q.get("default") or "").strip()
-            if question:
-                questions.append({"question": question[:100],
-                                  "default": (default or "按政务汇报通用惯例处理")[:200]})
-        if not questions:
-            return {"sufficient": True, "questions": []}
-        return {"sufficient": False, "questions": questions}
+            raise AppError(400, "请填写 PPT 主题，或上传/选择一份材料")
+        logger.info("[PPT] 无打扰预检通过：user=%s topic_chars=%d content_chars=%d",
+                    user.id, len(topic), len(content))
+        return {"sufficient": True, "questions": []}
 
     # ================= 大纲 =================
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
