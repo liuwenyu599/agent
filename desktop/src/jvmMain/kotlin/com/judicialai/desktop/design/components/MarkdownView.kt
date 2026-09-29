@@ -73,11 +73,11 @@ fun MarkdownView(text: String, modifier: Modifier = Modifier) {
             val t = line.trimEnd()
             val s = t.trim()
 
-            if (s.startsWith("|") && i + 1 < lines.size && isSeparator(lines[i + 1])) {
+            if (s.contains("|") && i + 1 < lines.size && isSeparator(lines[i + 1])) {
                 val rows = mutableListOf<List<String>>()
                 rows += tableCells(s)
                 i += 2 // 跳过 Markdown 表头分隔行
-                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                while (i < lines.size && lines[i].contains("|") && lines[i].isNotBlank()) {
                     rows += tableCells(lines[i])
                     i += 1
                 }
