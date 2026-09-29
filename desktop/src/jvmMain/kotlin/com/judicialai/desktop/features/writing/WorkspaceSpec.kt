@@ -1,5 +1,7 @@
 package com.judicialai.desktop.features.writing
 
+import kotlinx.serialization.json.JsonObject
+
 /**
  * 一次写作任务的工作台配置（WorkspaceSpec）。
  *
@@ -24,6 +26,8 @@ data class WorkspaceSpec(
     val title: String = "",
     /** 规划来源：llm = 模型规划，rule = 规则降级（后端会在响应中标注） */
     val source: String = "",
+    /** 服务端已经完成语义解析的任务上下文；创建任务时原样复用，避免再跑一次 LLM。 */
+    val plannedContext: JsonObject? = null,
     /** 已解析出的任务要素（键：值） */
     val fields: List<SpecField> = emptyList(),
     /** 参考材料（可勾选） */
