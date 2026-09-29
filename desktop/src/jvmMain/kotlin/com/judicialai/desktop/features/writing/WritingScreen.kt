@@ -52,6 +52,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
@@ -362,32 +363,36 @@ private fun FormattedLine(raw: String) {
             Spacer(Modifier.height(4.dp)); Hairline(); Spacer(Modifier.height(4.dp))
         }
         s.startsWith("### ") -> Text(
-            inlineMd(s.removePrefix("### ")), fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold, color = Ink, lineHeight = 28.sp)
+            inlineMd(s.removePrefix("### ")), fontSize = 16.sp,
+            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
+            color = Ink, lineHeight = 28.sp)
         s.startsWith("## ") -> Text(
             inlineMd(s.removePrefix("## ")), fontSize = 16.sp,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.sp)
+            fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
+            color = Ink, lineHeight = 28.sp)
         s.startsWith("# ") -> Text(
             inlineMd(s.removePrefix("# ")), fontSize = 22.sp,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 34.sp,
+            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
+            color = Ink, lineHeight = 34.sp,
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         GwHeading1Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = 28.sp)
+            inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.SansSerif,
+            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.sp)
         GwHeading2Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Medium,
-            color = Ink, lineHeight = 28.sp)
+            inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Normal, color = Ink, lineHeight = 28.sp)
         s.startsWith("- ") || s.startsWith("* ") -> Row {
-            Text("•  ", fontSize = 16.sp, color = Ink)
-            Text(inlineMd(s.substring(2)), fontSize = 16.sp, color = Ink,
-                lineHeight = 28.sp)
+            Text("•  ", fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink)
+            Text(inlineMd(s.substring(2)), fontSize = 16.sp,
+                fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.sp)
         }
         OrderedListRegex.matches(s) -> {
             val idx = s.indexOf('.')
             Row {
-                Text(s.substring(0, idx + 1) + "  ", fontSize = 16.sp, color = Ink)
+                Text(s.substring(0, idx + 1) + "  ", fontSize = 16.sp,
+                    fontFamily = FontFamily.Serif, color = Ink)
                 Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 16.sp,
-                    color = Ink, lineHeight = 28.sp)
+                    fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.sp)
             }
         }
         s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
@@ -395,7 +400,8 @@ private fun FormattedLine(raw: String) {
         else -> Text(
             inlineMd(s),
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 16.sp, color = Ink, lineHeight = 28.sp,
+                fontSize = 16.sp, fontFamily = FontFamily.Serif,
+                color = Ink, lineHeight = 28.sp,
                 textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
             ),
         )
@@ -460,7 +466,8 @@ private fun FormattedBodyEditor(
                         onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 16.sp, color = Ink, lineHeight = 28.sp),
+                            fontSize = 16.sp, fontFamily = FontFamily.Serif,
+                        color = Ink, lineHeight = 28.sp),
                         shape = RoundedCornerShape(Dimens.radiusXs),
                         colors = TextFieldDefaults.outlinedTextFieldColors(
                             backgroundColor = SurfaceTonal,
@@ -1128,7 +1135,8 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 Spacer(Modifier.height(Dimens.space3))
             }
             if (vm.task.title.isNotBlank()) {
-                Text(vm.task.title, fontSize = 22.sp, fontWeight = FontWeight.Normal,
+                Text(vm.task.title, fontSize = 22.sp, fontFamily = FontFamily.Serif,
+                    fontWeight = FontWeight.Normal,
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                     color = Ink, lineHeight = 34.sp)
                 Spacer(Modifier.height(Dimens.space5))
@@ -1136,7 +1144,8 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
             if (vm.task.recipient.isNotBlank()) {
                 Text(
                     vm.task.recipient.trimEnd('：', ':') + "：",
-                    fontSize = 16.sp, color = Ink, lineHeight = 28.sp,
+                    fontSize = 16.sp, fontFamily = FontFamily.Serif,
+                    color = Ink, lineHeight = 28.sp,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(Dimens.space3))
