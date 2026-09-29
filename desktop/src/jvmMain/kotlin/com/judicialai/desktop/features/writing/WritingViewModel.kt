@@ -456,6 +456,7 @@ class WritingViewModel(
             agent = d["agent"].str(),
             title = d["title"].str(),
             source = d["source"].str(),
+            plannedContext = d["planned_context"].obj(),
             fields = d["fields"].arr().mapNotNull { it.obj() }.map { f ->
                 SpecField(label = f["label"].str(), value = f["value"].str())
             },
