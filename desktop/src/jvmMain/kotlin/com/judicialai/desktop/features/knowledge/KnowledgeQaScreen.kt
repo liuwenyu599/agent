@@ -40,6 +40,7 @@ import java.awt.dnd.DropTargetAdapter
 import java.awt.dnd.DropTargetDropEvent
 import java.awt.image.BufferedImage
 import java.io.File
+import java.util.prefs.Preferences
 import javax.imageio.ImageIO
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -189,7 +190,15 @@ fun KnowledgeQaScreen(
 
 @Composable
 private fun QaSessionSidebar(vm: KnowledgeQaViewModel) {
-    var newestFirst by remember { mutableStateOf(true) }
+    val prefs = remember(com.judicialai.desktop.app.AppState.username) {
+        Preferences.userRoot().node(
+            "com/judicialai/desktop/knowledge-qa/" +
+                com.judicialai.desktop.app.AppState.username.ifBlank { "anonymous" }
+        )
+    }
+    var newestFirst by remember(com.judicialai.desktop.app.AppState.username) {
+        mutableStateOf(prefs.get("sort", "newest") != "oldest")
+    }
     val visibleSessions = if (newestFirst) vm.sessions
         else vm.sessions.sortedBy { it.createdAt }
     Column(Modifier.width(240.dp).fillMaxHeight()
@@ -199,11 +208,17 @@ private fun QaSessionSidebar(vm: KnowledgeQaViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("问答记录", style = MaterialTheme.typography.subtitle2,
                 modifier = Modifier.weight(1f))
-            TextButton(onClick = { newestFirst = true }) {
+            TextButton(onClick = {
+                newestFirst = true
+                prefs.put("sort", "newest")
+            }) {
                 Text("最新", color = if (newestFirst) MaterialTheme.colors.primary
                     else MaterialTheme.colors.onSurface.copy(alpha = 0.55f))
             }
-            TextButton(onClick = { newestFirst = false }) {
+            TextButton(onClick = {
+                newestFirst = false
+                prefs.put("sort", "oldest")
+            }) {
                 Text("最早", color = if (!newestFirst) MaterialTheme.colors.primary
                     else MaterialTheme.colors.onSurface.copy(alpha = 0.55f))
             }
