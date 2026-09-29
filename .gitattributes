@@ -1,0 +1,14 @@
+# Keep Linux-executed files on LF even when edited from Windows.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Kotlin/Gradle sources are text; keep consistent line endings across platforms.
+*.kt text eol=lf
+*.kts text eol=lf
+*.gradle text eol=lf
+
+# Configuration and deployment files.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.env text eol=lf
