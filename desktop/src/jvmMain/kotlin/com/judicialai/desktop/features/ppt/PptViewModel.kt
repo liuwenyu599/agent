@@ -211,6 +211,7 @@ class PptViewModel(private val repo: PptRepository) {
 
     // ---- AI 助手 ----
     var aiInstruction by mutableStateOf("")
+    var outlineAdjustInstruction by mutableStateOf("")
     var aiBusy by mutableStateOf(false)
         private set
     var aiNote by mutableStateOf<String?>(null)
@@ -1120,6 +1121,45 @@ class PptViewModel(private val repo: PptRepository) {
                         aiNote = "结构已调整（共 ${slides.size} 页）"
                         refreshPreview()
                     } else aiNote = "AI 未返回有效结构"
+                }
+                is ApiResult.Err -> aiNote = r.message
+            }
+            aiBusy = false
+        }
+    }
+
+    /** 大纲确认页：按一句自然语言整体调整，并把结果立即写回服务端草稿。 */
+    fun aiAdjustOutline() {
+        val instruction = outlineAdjustInstruction.trim()
+        if (instruction.isBlank() || slides.isEmpty() || aiBusy) return
+        aiBusy = true
+        aiNote = null
+        scope.launch {
+            when (val r = repo.aiOutlineAdjust(outlineJson(), instruction)) {
+                is ApiResult.Ok -> {
+                    val ol = r.data.obj()?.get("outline").obj()
+                    if (ol != null) {
+                        pushUndo()
+                        outlineTitle = ol["title"].str().ifBlank { outlineTitle }
+                        outlineSubtitle = ol["subtitle"].str()
+                        val arr = ol["slides"].arr().mapNotNull { it.obj() }
+                        if (arr.isNotEmpty()) {
+                            slides.clear()
+                            arr.forEach { slides.add(SlideEdit.fromJson(it)) }
+                            selected = selected.coerceIn(
+                                0, (slides.size - 1).coerceAtLeast(0))
+                            outlineAdjustInstruction = ""
+                            aiNote = "大纲已按要求调整"
+                            val id = docId
+                            if (id != null) {
+                                repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
+                            }
+                        } else {
+                            aiNote = "AI 未返回有效大纲"
+                        }
+                    } else {
+                        aiNote = "AI 未返回有效大纲"
+                    }
                 }
                 is ApiResult.Err -> aiNote = r.message
             }
