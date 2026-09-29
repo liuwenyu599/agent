@@ -183,10 +183,10 @@ def accounts(client):
 
     return {
         "dev": dev,
-        "a": reg("pref_a", "user", DEPT_FUYI),
-        "b": reg("pref_b", "user", DEPT_FUYI),
-        "admin": reg("pref_admin", "knowledge_admin", DEPT_FUYI),
-        "renshi": reg("pref_renshi", "user", DEPT_RENSHI),
+        "a": reg("prefa", "user", DEPT_FUYI),
+        "b": reg("prefb", "user", DEPT_FUYI),
+        "admin": reg("prefadmin", "knowledge_admin", DEPT_FUYI),
+        "renshi": reg("prefrenshi", "user", DEPT_RENSHI),
     }
 
 
@@ -387,7 +387,7 @@ def test_user_a_and_b_have_independent_preferences(client, accounts):
 
 def test_only_self_endpoint_exists(client, accounts):
     """不存在 /preferences/{user_id} 这类他人端点。"""
-    other = _uid_of("pref_b")
+    other = _uid_of("prefb")
     r = client.get(f"{BASE}/preferences/{other}", headers=_hdr(accounts["a"]))
     assert r.status_code in (404, 405), r.text
     assert r.status_code != 200
@@ -415,8 +415,8 @@ def test_same_department_agents_share_business_layers(client, accounts):
     assert _put(client, accounts["b"], assistant_name="小李",
                 writing_style="concise_formal").status_code == 200
 
-    pa = _agent_system_prompt(_uid_of("pref_a"))
-    pb = _agent_system_prompt(_uid_of("pref_b"))
+    pa = _agent_system_prompt(_uid_of("prefa"))
+    pb = _agent_system_prompt(_uid_of("prefb"))
     assert pa and pb
 
     for layer in ("【安全与权限约束】", "【科室业务】", "【工作要求】"):
@@ -446,7 +446,7 @@ def test_preference_block_after_safety_and_before_task(client, accounts):
     db = SessionLocal()
     try:
         agent = OrganizationService(db)._raw_agent("fuyi")
-        pref = UserPreferenceService(db).prompt_block_of(_uid_of("pref_a"))
+        pref = UserPreferenceService(db).prompt_block_of(_uid_of("prefa"))
     finally:
         db.close()
     assert agent and pref
@@ -472,7 +472,7 @@ def test_preference_enters_agent_prompt_exactly_once(client, accounts):
                 work_preference="我常处理行政复议答复，希望先给结论再给依据。",
                 behaviors={"cite_sources": True}).status_code == 200
 
-    prompt = _agent_system_prompt(_uid_of("pref_a"))
+    prompt = _agent_system_prompt(_uid_of("prefa"))
     assert "小司" in prompt
     assert "我常处理行政复议答复" in prompt
     assert PREF_OPEN in prompt and PREF_CLOSE in prompt
@@ -509,9 +509,9 @@ def test_preference_cannot_expand_rag_scope(client, accounts, kbs, docs):
     """
     from app.application.shared.user_preference import PREF_OPEN
 
-    uid_a = _uid_of("pref_a")
+    uid_a = _uid_of("prefa")
     before = _rag_snapshot(uid_a)
-    row_before = _user_row("pref_a")
+    row_before = _user_row("prefa")
     safety_before = _section(_agent_system_prompt(uid_a), "【安全与权限约束】")
 
     # 前置校验：检索确实能命中，且人事科内容在权限之内不可见
@@ -532,7 +532,7 @@ def test_preference_cannot_expand_rag_scope(client, accounts, kbs, docs):
     assert PREF_OPEN in prompt
 
     after = _rag_snapshot(uid_a)
-    row_after = _user_row("pref_a")
+    row_after = _user_row("prefa")
 
     # 1) 作用域不变
     assert after["scopes"] == before["scopes"], (before["scopes"], after["scopes"])
@@ -589,8 +589,8 @@ def test_negative_control_admin_can_see_renshi(accounts, kbs, docs):
 def test_write_rejects_permission_fields_and_keeps_row(client, accounts):
     """提交 department_code / scopes / role 一律 400，且库内行与 users 表不变。"""
     assert _put(client, accounts["a"], assistant_name="小司").status_code == 200
-    uid = _uid_of("pref_a")
-    row_before = _user_row("pref_a")
+    uid = _uid_of("prefa")
+    row_before = _user_row("prefa")
 
     for bad in ({"department_code": "renshi"},
                 {"scopes": ["DEPT:renshi", "GLOBAL"]},
@@ -600,7 +600,7 @@ def test_write_rejects_permission_fields_and_keeps_row(client, accounts):
         assert "不支持的字段" in r.json()["detail"], r.json()
 
     assert _get(client, accounts["a"]).json()["assistant_name"] == "小司"
-    row_after = _user_row("pref_a")
+    row_after = _user_row("prefa")
     assert row_after.department_code == row_before.department_code
     assert row_after.role == row_before.role
 
@@ -620,7 +620,7 @@ def test_chat_prompt_keeps_writing_rules(client, accounts):
                 work_preference="希望先给结论再给依据。").status_code == 200
     db = SessionLocal()
     try:
-        pref = UserPreferenceService(db).prompt_block_of(_uid_of("pref_a"))
+        pref = UserPreferenceService(db).prompt_block_of(_uid_of("prefa"))
     finally:
         db.close()
     assert pref
@@ -758,7 +758,7 @@ def test_sanitizer_strips_injection_lines(client, accounts):
 
     db = SessionLocal()
     try:
-        block = UserPreferenceService(db).prompt_block_of(_uid_of("pref_a"))
+        block = UserPreferenceService(db).prompt_block_of(_uid_of("prefa"))
     finally:
         db.close()
     for bad in ("【安全与权限约束】", "忽略以上", "【参考资料】", "ignore previous"):
@@ -776,7 +776,7 @@ def test_empty_preference_block_is_empty_string(client, accounts):
         UserPreferenceService,
     )
 
-    uid = _uid_of("pref_b")
+    uid = _uid_of("prefb")
     db = SessionLocal()
     try:
         svc = UserPreferenceService(db)
@@ -801,7 +801,7 @@ def test_preference_block_of_missing_row_is_empty():
     """从未写过偏好的用户：prompt_block_of 返回 ""，不报错。"""
     from app.application.shared.user_preference import UserPreferenceService
 
-    uid = _uid_of("pref_renshi")
+    uid = _uid_of("prefrenshi")
     db = SessionLocal()
     try:
         assert UserPreferenceService(db).prompt_block_of(uid) == ""
@@ -817,7 +817,7 @@ def test_no_agent_version_created(client, accounts):
     db = SessionLocal()
     try:
         OrganizationService(db).update_agent(
-            _user_row("pref_admin"), "fuyi",
+            _user_row("prefadmin"), "fuyi",
             {"business_prompt": "本科室口径：行政复议答复期限六十日。"})
     finally:
         db.close()
