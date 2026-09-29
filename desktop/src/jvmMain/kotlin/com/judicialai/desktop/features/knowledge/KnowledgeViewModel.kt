@@ -125,7 +125,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         }
     }
 
-    fun setDocSort(sort: String) {
+    fun changeDocSort(sort: String) {
         if (sort == docSort) return
         docSort = sort
         docPage = 1
