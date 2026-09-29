@@ -72,19 +72,19 @@ def _dev_token() -> str:
     只能注册一次，所以这里逐级兜底，保证单独跑本文件、或两个文件以任意顺序跑都能过：
 
     1. ``register-first`` 抢注成功 → 直接用它的 token；
-    2. 已初始化 → 用 job_dev 账号登录；
+    2. 已初始化 → 用 jobdev 账号登录；
     3. 登录也被挡（如 must_change_password）→ 按用户名查库，直接签发 token；
-    4. 库里连 job_dev 都没有 → 退而求其次取任意 developer/admin；
+    4. 库里连 jobdev 都没有 → 退而求其次取任意 developer/admin；
     5. 连管理员都没有（别的测试文件先把库初始化了）→ 直接建一个 developer。
     """
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "job_dev", "email": "job_dev@test.local",
+        "username": "jobdev", "email": "jobdev@test.local",
         "password": PWD, "real_name": "管理员"})
     if r.status_code == 200:
         return r.json()["access_token"]
 
     login = client.post(f"{BASE}/auth/login",
-                        json={"username": "job_dev", "password": PWD})
+                        json={"username": "jobdev", "password": PWD})
     if login.status_code == 200:
         return login.json()["access_token"]
 
@@ -96,14 +96,14 @@ def _dev_token() -> str:
 
     db = SessionLocal()
     try:
-        row = db.scalar(select(UserModel).where(UserModel.username == "job_dev"))
+        row = db.scalar(select(UserModel).where(UserModel.username == "jobdev"))
         if row is None:
             row = db.scalar(select(UserModel).where(
                 UserModel.role.in_(("developer", "admin"))))
         if row is None:
             # 其它测试文件已初始化过这个库且没留管理员 —— 自己插一个 developer
             row = UserModel(id=f"job-dev-{uuid.uuid4().hex[:12]}",
-                            username="job_dev", email="job_dev@test.local",
+                            username="jobdev", email="jobdev@test.local",
                             hashed_password=get_password_hash(PWD),
                             real_name="管理员", role="developer",
                             department="行政复议科", is_active=True,
@@ -933,12 +933,12 @@ def test_job_requires_ownership(monkeypatch, doc_and_token):
     """别人的 job 不能查（越权 404）。"""
     token, doc_id = doc_and_token
     other = client.post(f"{BASE}/auth/register", json={
-        "username": "job_other", "email": "job_other@test.local",
+        "username": "jobother", "email": "jobother@test.local",
         "password": PWD, "department": "行政复议科", "role": "user"},
         headers=_hdr(token))
     assert other.status_code == 200, other.text
     other_token = client.post(f"{BASE}/auth/login", json={
-        "username": "job_other", "password": PWD}).json()["access_token"]
+        "username": "jobother", "password": PWD}).json()["access_token"]
     r = client.get(f"{BASE}/ppt/jobs/{doc_id}/status", headers=_hdr(other_token))
     # 403（新账号须先改密）/ 404（非本人资源）都算正确拦截，绝不能是 200
     assert r.status_code in (403, 404)
