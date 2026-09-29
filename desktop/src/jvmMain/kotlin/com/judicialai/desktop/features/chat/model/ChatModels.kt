@@ -1,9 +1,22 @@
 package com.judicialai.desktop.features.chat.model
 
+data class KnowledgeCitation(
+    val source: String,
+    val kbId: String = "",
+    val kbName: String = "",
+    val kbType: String = "",
+    val docId: String = "",
+    val docTitle: String = "",
+    val chunkId: String = "",
+    val chunkIndex: Int = 0,
+    val excerpt: String = "",
+)
+
 data class ChatMessage(
     val role: String,
     val content: String,
     val sources: List<String> = emptyList(),
+    val citations: List<KnowledgeCitation> = emptyList(),
     val attachments: List<ChatAttachment> = emptyList(),
     /** 智能写作流水线结果（仅写作类回复非空） */
     val documentId: String? = null,
