@@ -5,11 +5,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.application.chat.service import ChatService
 from app.application.knowledge.document_service import DocumentService
 from app.application.knowledge.dto import (
     DocUpdateRequest,
     KBCreateRequest,
     KBUpdateRequest,
+    KnowledgeAskRequest,
     ReviewRequest,
     UrlImportRequest,
     UrlTextImportRequest,
@@ -26,6 +28,9 @@ from app.application.knowledge.web_import_service import (
     parse_urls_from_excel,
 )
 from app.core.config import settings
+from app.application.knowledge.rag_service import RagService
+from app.application.shared.writing_assistant import WritingAssistant
+from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.core.exceptions import AppError
 from app.domain.identity.entities import ROLE_KNOWLEDGE_ADMIN, User
 from app.infrastructure.database import get_db
@@ -167,6 +172,50 @@ def get_batch_task(task_id: str, user: User = Depends(get_current_user)):
 @router.get("/queue-status")
 def queue_status(user: User = Depends(require_knowledge_admin)):
     return get_queue_status()
+
+
+@router.post("/ask")
+def ask_knowledge(
+    req: KnowledgeAskRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """科室空间知识问答。
+
+    检索范围不接受客户端指定，固定由 RagService 按登录用户解析为：
+    公共知识库 + 本科室知识库 + 本人个人知识库。
+    图片附件自动走视觉模型；纯文本/文档走主语言模型。
+    会话与消息复用 chat_sessions/chat_messages，因此自动进入“历史记录”。
+    """
+    question = (req.message or "").strip()
+    if not question:
+        raise AppError(400, "请输入问题")
+
+    chat = ChatService(
+        db,
+        WritingAssistant(get_llm_gateway(), get_vision_gateway()),
+        RagService(db, get_embedder(), get_vector_store()),
+    )
+    result = chat.send_message(
+        user,
+        message=question,
+        session_id=req.session_id,
+        use_rag=True,
+        source="knowledge_qa",
+        attachment_ids=req.attachment_ids or [],
+        system_prompt=(
+            "你是司法行政知识库问答助手。回答必须优先依据本轮检索到的知识库材料和用户附件；"
+            "不得编造政策、文号、数字、人名或出处。检索材料不足时明确说明“现有知识库未检索到足够依据”。"
+            "回答正文保持简洁清楚，不要伪造引用编号；引用由系统在答案下方结构化展示。"
+        ),
+    )
+    # 对外只暴露知识问答需要的稳定字段；sources 已含库、文档、段落、chunk 与命中内容。
+    return {
+        "reply": result.get("reply", ""),
+        "sources": result.get("sources", []),
+        "attachments": result.get("attachments", []),
+        "session_id": result.get("session_id"),
+    }
 
 
 @router.get("/{kb_id}")
