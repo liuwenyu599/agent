@@ -1416,7 +1416,6 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
         }
         if (vm.hasDraft) {
             Spacer(Modifier.height(Dimens.space2))
-            AppLinkButton("加入训练数据", onClick = { vm.addToTraining() }, enabled = !vm.busy)
         }
         WritingStatusLine(vm.status)
     }
