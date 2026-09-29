@@ -426,19 +426,72 @@ class PPTAgentJobRunner:
                   job_error=reason[:1000], job_finished_at=now_local())
         logger.error("PPT job 失败：job_id=%s，原因=%s", self.doc_id, reason)
 
+    def _template_guidance(self, doc: PPTDocument) -> str:
+        """把应用里用户真正选择的模板信息传给 PPTAgent。
+
+        PPTAgent 的 Gradio template_value 是它自己的模板枚举，不能直接接受本系统
+        template_id；因此至少把名称/类别/字体/色板作为强视觉约束放进 message，
+        避免界面选了模板但异步生成完全无视该选择。
+        """
+        if not doc.template_id:
+            return ""
+        db: Session = SessionLocal()
+        try:
+            svc = PPTService(db, None)
+            t = svc.templates.get(doc.template_id)
+            if not t:
+                return ""
+            colors = ", ".join(
+                str(v) for _, v in list((t.colors or {}).items())[:6] if v)
+            lines = [
+                f"已选视觉模板：{t.name}",
+                f"模板类别：{t.category}",
+                f"模板字体：{t.font or '微软雅黑'}",
+            ]
+            if t.description:
+                lines.append(f"模板说明：{t.description}")
+            if colors:
+                lines.append(f"模板主色：{colors}")
+            return "\n".join(lines)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("读取 PPT 模板指导信息失败：%s", e)
+            return ""
+        finally:
+            db.close()
+
     def _build_message(self, doc: PPTDocument) -> str:
-        """拼给 PPTAgent 的 message：标题 + 大纲 Markdown + 原始素材 + 补充需求。"""
+        """拼给 PPTAgent 的 message：大纲 + 模板约束 + 素材 + 设计质量要求。"""
         outline_md = build_outline_markdown(doc.outline or {})
         parts = [f"# {doc.title or '演示文稿'}"]
         if doc.subtitle:
             parts.append(f"> {doc.subtitle}")
-        parts.append(outline_md)
+
+        template_guide = self._template_guidance(doc)
+        if template_guide:
+            parts.append(
+                "# 视觉模板（必须遵循）\n" + template_guide +
+                "\n整体色系、字体气质、政务/商务风格必须服从该模板，不要自行切换成无关主题。"
+            )
+
+        parts.append("# 页面大纲\n" + outline_md)
         material = (doc.source_content or "").strip()
         if material:
             parts.append(f"\n# 原始素材\n{material[:6000]}")
         if self.message.strip():
             parts.append(f"\n# 补充要求\n{self.message.strip()}")
-        parts.append("\n请按上面的大纲直接生成完整 PPT，不要反问。")
+
+        parts.append(
+            "# 版式质量硬要求\n"
+            "1. 严格按大纲页数与页面角色生成，不额外复制封面或结束页；\n"
+            "2. 封面只保留主标题、副标题、单位/日期等必要信息，不在背景中再次重复标题；\n"
+            "3. 正文页优先一页一个核心结论，每页 3~5 个要点，避免大段文字堆积；\n"
+            "4. 正文文字必须清晰可读，禁止为了塞内容把字号缩得很小；\n"
+            "5. 图表/流程图如果使用，应占据足够版面并能直接阅读；禁止右下角/边角放一个很小的图凑版面；\n"
+            "6. 图文双栏时保持视觉均衡，图至少占页面约三分之一；没有高质量图就用清晰的数据卡片/重点数字，不强行画图；\n"
+            "7. 不得编造原始素材中不存在的数据、荣誉、年份、比例和结论；\n"
+            "8. 结束页保持简洁，不重复封面背景结构和整套指标图。\n"
+            "请按以上约束直接生成完整 PPT，不要反问。"
+        )
         return "\n\n".join(parts)
 
     def _build_attachments(self) -> List[Dict[str, Any]]:
