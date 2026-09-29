@@ -31,6 +31,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{(_TMPDIR / 'test.db').as_posi
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.application.ppt.service import PPTService  # noqa: E402
 from app.infrastructure.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -480,12 +481,14 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert "text/event-stream" in r.headers["content-type"]
 
     events = _parse_sse(r.text)
-    assert [e["type"] for e in events] == ["stage", "stage", "stage", "done"], events
+    assert [e["type"] for e in events] == [
+        "stage", "stage", "stage", "stage", "done"], events
     assert events[0]["text"] == "正在理解材料与任务要求…"
     assert events[1]["text"] == "正在梳理汇报结构…"
-    assert events[2]["text"] == "大纲已就绪，正在校验与保存…"
+    assert events[2]["text"] == "正在自动检查页面结构与内容密度…"
+    assert events[3]["text"] == "大纲已优化，正在保存…"
 
-    done = events[3]
+    done = events[4]
     assert done["data"]["doc_id"]
     outline = done["data"]["outline"]
     assert outline["title"] == "行政复议工作汇报"
@@ -493,14 +496,16 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert len(slides) == 8
     for s in slides:
         assert "sources" in s and isinstance(s["sources"], list)
-    assert slides[1]["sources"] == ["材料A.txt"]
-    fillers = slides[2:-1]
-    assert all(s["title"] == "补充内容" for s in fillers)
+    assert slides[1]["type"] == "toc"
+    original = next(s for s in slides if s["title"] == "案件办理情况")
+    assert original["sources"] == ["材料A.txt"]
+    fillers = [s for s in slides if s["title"] == "补充内容"]
     assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
 
-    # 来源标注要求确实下发给了模型（provenance 约束不是摆设）
-    assert "【来源标注】" in fake_llm.last_prompt
-    assert "材料A.txt" in fake_llm.last_prompt and "材料B.csv" in fake_llm.last_prompt
+    # 来源标注要求确实下发给首次大纲模型；最后一次调用已是自动审查。
+    prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]
+    assert any("【来源标注】" in p for p in prompts)
+    assert any("材料A.txt" in p and "材料B.csv" in p for p in prompts)
 
     # 大纲已落库，后续编辑链路可拿到同一份
     got = client.get(f"{BASE}/ppt/documents/{done['data']['doc_id']}",
@@ -509,9 +514,9 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert got.json()["outline"]["title"] == "行政复议工作汇报"
 
 
-def test_outline_stream_without_explicit_slide_count_keeps_model_count(
+def test_outline_stream_without_explicit_slide_count_uses_server_default(
         client, accounts, fake_llm, outline_payload):
-    """未显式填写页数时，接口默认值只是建议，不应把模型合理结果强补到默认页数。"""
+    """未填页数时服务端按材料长度确定权威页数；纯主题默认 6 页。"""
     fake_llm._responder = lambda m: json.dumps(outline_payload, ensure_ascii=False)
 
     r = client.post(f"{BASE}/ppt/outline/stream", json={
@@ -524,8 +529,11 @@ def test_outline_stream_without_explicit_slide_count_keeps_model_count(
     events = _parse_sse(r.text)
     assert events[-1]["type"] == "done"
     slides = events[-1]["data"]["outline"]["slides"]
-    assert len(slides) == 3
-    assert slides[1]["sources"] == ["材料A.txt"]
+    assert len(slides) == 6
+    assert slides[0]["type"] == "cover"
+    assert slides[1]["type"] == "toc"
+    assert slides[-1]["type"] == "closing"
+    assert any(s.get("sources") == ["材料A.txt"] for s in slides)
 
 
 def test_outline_stream_emits_error_without_done(client, accounts, fake_llm):
@@ -574,8 +582,10 @@ def test_outline_stream_rescues_malformed_json_without_retry(client, accounts, f
     }, headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     events = _parse_sse(r.text)
-    assert [e["type"] for e in events] == ["stage", "stage", "stage", "done"], events
-    assert len(fake_llm.calls) == 1, fake_llm.calls  # 宽容解析救回，无需重试
+    assert [e["type"] for e in events] == [
+        "stage", "stage", "stage", "stage", "done"], events
+    # 首次大纲一次成功；第二次调用是服务端自动大纲审查，不是解析失败重试。
+    assert len(fake_llm.calls) == 2, fake_llm.calls
     outline = events[-1]["data"]["outline"]
     titles = [s["title"] for s in outline["slides"]]
     assert titles[0] == "封面"
@@ -591,7 +601,75 @@ def test_outline_stream_slide_count_clamped(client, accounts, fake_llm,
     }, headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     assert _parse_sse(r.text)[-1]["type"] == "done"
-    assert "18 页左右" in fake_llm.last_prompt or "18 页" in fake_llm.last_prompt
+    prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]
+    assert any("18 页左右" in p or "18 页" in p for p in prompts)
+
+
+def test_server_auto_page_count_thresholds():
+    assert PPTService._auto_slide_count("甲" * 999) == 6
+    assert PPTService._auto_slide_count("甲" * 1000) == 10
+    assert PPTService._auto_slide_count("甲" * 3000) == 10
+    assert PPTService._auto_slide_count("甲" * 3001) == 15
+
+
+def test_outline_sanitizer_cleans_cover_toc_and_closing_without_losing_body():
+    outline = {
+        "title": "社区矫正年度总结",
+        "subtitle": "2026年",
+        "slides": [
+            {"type": "cover", "title": "社区矫正年度总结",
+             "subtitle": "2026年", "points": ["汇报单位：白云区司法局", "不应保留"],
+             "blocks": {"chart": {"x": 1}}},
+            {"type": "content", "title": "年度概况", "points": ["要点A"],
+             "sources": ["材料A"]},
+            {"type": "content", "title": "重点工作", "points": ["要点B"]},
+            {"type": "content", "title": "风险防控", "points": ["要点C"]},
+            {"type": "content", "title": "下一步安排", "points": ["要点D"]},
+            {"type": "closing", "title": "谢谢聆听", "points": ["不应保留"],
+             "blocks": {"x": 1}},
+        ],
+    }
+    out = PPTService.sanitize_outline(outline, target_count=6, ensure_toc=True)
+    assert len(out["slides"]) == 6
+    cover = out["slides"][0]
+    assert cover["type"] == "cover"
+    assert cover["unit"] == "白云区司法局"
+    assert "points" not in cover and "blocks" not in cover
+    assert out["slides"][1]["type"] == "toc"
+    assert any(s["title"] == "年度概况" for s in out["slides"])
+    closing = out["slides"][-1]
+    assert closing["type"] == "closing"
+    assert set(closing).issubset({"id", "type", "title"})
+
+
+def test_ai_outline_adjust_endpoint_can_turn_toc_into_content(
+        client, accounts, fake_llm):
+    current = {
+        "title": "汇报",
+        "slides": [
+            {"type": "cover", "title": "汇报"},
+            {"type": "toc", "title": "目录", "points": ["一、概况"]},
+            {"type": "closing", "title": "谢谢聆听"},
+        ],
+    }
+    adjusted = {
+        "title": "汇报",
+        "slides": [
+            {"type": "cover", "title": "汇报"},
+            {"type": "content", "title": "工作概览", "points": ["一、概况"]},
+            {"type": "closing", "title": "谢谢聆听"},
+        ],
+    }
+    fake_llm._responder = lambda m: json.dumps(adjusted, ensure_ascii=False)
+    r = client.post(
+        f"{BASE}/ppt/ai/outline-adjust",
+        json={"instruction": "把目录页改成正文页", "outline": current},
+        headers=_hdr(accounts["a"]),
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()["outline"]
+    assert out["slides"][1]["type"] == "content"
+    assert out["slides"][1]["title"] == "工作概览"
 
 
 # ============================================================ 4. ai/slide-action
