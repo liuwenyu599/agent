@@ -167,30 +167,46 @@ fun WritingScreen() {
     val lastError = AppState.writingLastError
     val generating = AppState.writingGenerating
 
-    Column(Modifier.fillMaxSize().background(AppBg)) {
-        if (lastError != null && !generating) {
-            WritingFailedBanner(lastError) { AppState.writingLastError = null }
-        }
-        // 切回页面后正在从服务端取回任务：明确说明在做什么，别让人以为卡住/报错
-        if (vm.restoring) {
-            WritingProgressLine("正在取回上次未完成的写作任务…")
-        }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (!vm.hasTask) {
-                TaskEntryScreen(vm)
-            } else {
-                Row(
-                    Modifier.fillMaxSize().padding(Dimens.space4),
-                    horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
-                ) {
-                    if (vm.spec != null) {
-                        SpecPanel(vm, Modifier.width(300.dp).fillMaxHeight())
-                    } else {
-                        TaskPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().background(AppBg)) {
+            if (lastError != null && !generating) {
+                WritingFailedBanner(lastError) { AppState.writingLastError = null }
+            }
+            // 切回页面后正在从服务端取回任务：明确说明在做什么，别让人以为卡住/报错
+            if (vm.restoring) {
+                WritingProgressLine("正在取回上次未完成的写作任务…")
+            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (!vm.hasTask) {
+                    TaskEntryScreen(vm)
+                } else {
+                    Row(
+                        Modifier.fillMaxSize().padding(Dimens.space4),
+                        horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
+                    ) {
+                        if (vm.spec != null) {
+                            SpecPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                        } else {
+                            TaskPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                        }
+                        EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
+                        AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
                     }
-                    EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
-                    AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
                 }
+            }
+        }
+
+        // 轻提示浮层（如「取消生成成功」）：居中短暂展示，约 0.5 秒由 ViewModel 自动清除。
+        // 取消是用户主动操作，不走 status 提示条，更不走红色错误框。
+        vm.toast?.let { msg ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    msg, fontSize = 13.sp, color = OnPrimaryText,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(Dimens.radiusLg))
+                        .background(Ink.copy(alpha = 0.92f))
+                        .padding(horizontal = Dimens.space5, vertical = Dimens.space3),
+                )
             }
         }
     }
@@ -630,7 +646,7 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                         }
                     }
                     Spacer(Modifier.height(Dimens.space2))
-                    AppLinkButton("取消本次生成", onClick = { vm.cancelGeneration() })
+                    AppLinkButton("取消本次生成", onClick = { vm.cancelAndReset() })
                 }
             }
 
@@ -675,9 +691,8 @@ private fun Modifier.widthInMaxEntry(): Modifier = this.widthIn(max = 900.dp)
 @Composable
 private fun EntryHero() {
     val shape = RoundedCornerShape(Dimens.radiusXl)
-    Box(
-        Modifier.fillMaxWidth().clip(shape)
-            .background(Brush.linearGradient(listOf(FeatureWriteStart, FeatureWriteEnd))),
+    Box(Modifier.fillMaxWidth().clip(shape)
+        .background(Brush.linearGradient(listOf(FeatureWriteStart, FeatureWriteEnd))),
     ) {
         Column(Modifier.fillMaxWidth().padding(Dimens.space6)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -844,7 +859,7 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
         }
         if (vm.busy) {
             Spacer(Modifier.height(Dimens.space2))
-            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+            AppButton("取消生成", onClick = { vm.cancelAndReset() },
                 kind = AppButtonKind.DANGER, fill = true)
         }
     }
@@ -972,7 +987,7 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
         }
         if (vm.busy) {
             Spacer(Modifier.height(Dimens.space2))
-            AppButton("取消生成", onClick = { vm.cancelGeneration() },
+            AppButton("取消生成", onClick = { vm.cancelAndReset() },
                 kind = AppButtonKind.DANGER, fill = true)
         }
         Spacer(Modifier.height(Dimens.space4))
@@ -1045,7 +1060,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
             }
             Spacer(Modifier.width(Dimens.space3))
             if (vm.busy) {
-                AppButton("取消生成", onClick = { vm.cancelGeneration() },
+                AppButton("取消生成", onClick = { vm.cancelAndReset() },
                     kind = AppButtonKind.DANGER)
                 Spacer(Modifier.width(Dimens.space2))
             }
