@@ -1,7 +1,7 @@
 """知识库请求模型。"""
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class KBCreateRequest(BaseModel):
@@ -48,4 +48,4 @@ class KnowledgeAskRequest(BaseModel):
     """科室空间知识问答：检索范围由服务端按登录用户强制解析。"""
     message: str
     session_id: Optional[str] = None
-    attachment_ids: List[str] = []
+    attachment_ids: List[str] = Field(default_factory=list)
