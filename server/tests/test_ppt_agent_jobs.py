@@ -39,6 +39,7 @@ from pptx import Presentation  # noqa: E402
 from pptx.util import Inches  # noqa: E402
 
 from app.application.ppt import agent_job  # noqa: E402
+from app.application.ppt.service import PPTService  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.infrastructure.database import Base, engine  # noqa: E402
 from app.infrastructure.ppt.ppt_agent_client import (  # noqa: E402
@@ -129,6 +130,13 @@ def _make_pptx_bytes(tag: str, pages: int = 3) -> bytes:
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
+
+
+def test_generated_pptx_quality_gate_detects_page_mismatch():
+    data = _make_pptx_bytes("quality", pages=3)
+    assert PPTService.assess_generated_pptx(data, 3) == []
+    issues = PPTService.assess_generated_pptx(data, 6)
+    assert any("页数不符" in item for item in issues)
 
 
 def _wrapped(value: Any) -> Dict[str, Any]:
