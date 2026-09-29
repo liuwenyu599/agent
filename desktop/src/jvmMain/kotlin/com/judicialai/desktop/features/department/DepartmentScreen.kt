@@ -318,6 +318,16 @@ private fun BusinessCard(vm: DepartmentViewModel, modifier: Modifier) {
 private fun KnowledgeCard(vm: DepartmentViewModel, modifier: Modifier) {
     PanelCard(modifier, title = "知识资源", icon = Icons.Default.LibraryBooks,
         tint = EmeraldInk) {
+        AppButton(
+            "知识库问答",
+            onClick = { AppState.navigate(AppScreen.KNOWLEDGE_QA) },
+            kind = AppButtonKind.PRIMARY,
+            fill = true,
+        )
+        Spacer(Modifier.height(Dimens.space2))
+        Text("回答范围自动限定为公共库 + 本科室库 + 本人库，答案附可追溯引用。",
+            fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
+        Spacer(Modifier.height(Dimens.space3))
         if (vm.knowledge.isEmpty()) {
             EmptyLine("本科室暂无可用知识资源")
         } else {
