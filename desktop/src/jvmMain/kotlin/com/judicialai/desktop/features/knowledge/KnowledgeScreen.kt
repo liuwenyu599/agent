@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
@@ -57,6 +58,7 @@ import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.MarkdownView
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
@@ -148,21 +150,36 @@ fun KnowledgeDocDialog(
             shape = RoundedCornerShape(Dimens.radiusControl),
             colors = docFieldColors(),
         )
-        OutlinedTextField(
-            value = content, onValueChange = onContentChange,
-            label = { Text("正文内容", fontSize = 13.sp) },
-            enabled = editable,
-            // 加载中或该文档本身没有正文时，300dp 的文本框不能是一片纯空白，
-            // 否则用户会以为「参考资料看不到」
-            placeholder = {
-                Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
-                    fontSize = 13.sp, color = TextPlaceholder)
-            },
-            modifier = Modifier.fillMaxWidth().height(DocContentFieldHeight),
-            textStyle = TextStyle(fontSize = 14.sp, color = Ink, lineHeight = 22.sp),
-            shape = RoundedCornerShape(Dimens.radiusControl),
-            colors = docFieldColors(),
-        )
+        if (editable) {
+            OutlinedTextField(
+                value = content, onValueChange = onContentChange,
+                label = { Text("正文内容", fontSize = 13.sp) },
+                placeholder = {
+                    Text(if (busy) "正在加载正文…" else "（该文档暂无正文内容）",
+                        fontSize = 13.sp, color = TextPlaceholder)
+                },
+                modifier = Modifier.fillMaxWidth().height(DocContentFieldHeight),
+                textStyle = TextStyle(fontSize = 14.sp, color = Ink, lineHeight = 22.sp),
+                shape = RoundedCornerShape(Dimens.radiusControl),
+                colors = docFieldColors(),
+            )
+        } else {
+            SelectionContainer {
+                Column(
+                    Modifier.fillMaxWidth().height(DocContentFieldHeight)
+                        .verticalScroll(rememberScrollState())
+                        .clip(RoundedCornerShape(Dimens.radiusControl))
+                        .background(SurfaceTonal)
+                        .padding(14.dp),
+                ) {
+                    if (busy) {
+                        Text("正在加载正文…", fontSize = 13.sp, color = TextPlaceholder)
+                    } else {
+                        MarkdownView(content.ifBlank { "（该文档暂无正文内容）" })
+                    }
+                }
+            }
+        }
         Text(
             if (editable) "约 ${content.length} 字 · 保存后将重新分块并同步检索"
             else "约 ${content.length} 字 · 当前知识库为只读",
