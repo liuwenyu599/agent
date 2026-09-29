@@ -23,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import java.io.File
+import java.time.LocalDate
 
 /** 工作台步骤：极简入口 → 大纲确认（可编辑） → 三栏工作台 */
 enum class PptStep { ENTRY, OUTLINE, WORKBENCH }
@@ -106,8 +107,11 @@ class PptViewModel(private val repo: PptRepository) {
     // ---- 入口页 ----
     var topic by mutableStateOf("")
     var slideCount by mutableStateOf("")
+    private val today = LocalDate.now()
     var presenter by mutableStateOf("")
-    var reportDate by mutableStateOf("")
+    var generationYear by mutableStateOf(today.year.toString())
+    var location by mutableStateOf("白云司法局")
+    var reportDate by mutableStateOf(today.toString())
     val materials = mutableStateListOf<MaterialAnalysis>()
     var analyzing by mutableStateOf(false)
         private set
@@ -372,8 +376,10 @@ class PptViewModel(private val repo: PptRepository) {
             materials.forEach {
                 append("【").append(it.filename).append("】\n").append(it.text).append("\n\n")
             }
+            if (generationYear.isNotBlank()) append("生成年份：").append(generationYear).append('\n')
+            if (location.isNotBlank()) append("单位/地点：").append(location).append('\n')
             if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
-            if (reportDate.isNotBlank()) append("汇报时间：").append(reportDate).append('\n')
+            if (reportDate.isNotBlank()) append("落款日期：").append(reportDate).append('\n')
         }.trim()
         return mutableMapOf<String, Any?>(
             "source_type" to if (materials.isNotEmpty()) "document" else "topic",
@@ -967,8 +973,10 @@ class PptViewModel(private val repo: PptRepository) {
         if (topic.isNotBlank()) append("主题：").append(topic).append('\n')
         if (outlineTitle.isNotBlank() && outlineTitle != topic)
             append("标题：").append(outlineTitle).append('\n')
+        if (generationYear.isNotBlank()) append("生成年份：").append(generationYear).append('\n')
+        if (location.isNotBlank()) append("单位/地点：").append(location).append('\n')
         if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
-        if (reportDate.isNotBlank()) append("汇报时间：").append(reportDate).append('\n')
+        if (reportDate.isNotBlank()) append("落款日期：").append(reportDate).append('\n')
         if (materials.isNotEmpty())
             append("参考材料：").append(materials.joinToString("、") { it.filename }).append('\n')
     }.trim()
