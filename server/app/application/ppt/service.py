@@ -1232,20 +1232,28 @@ class PPTService:
                          or not ((topic or "").strip() or (content or "").strip())):
             raise AppError(400, "所选知识库没有检索到与主题相关的内容，"
                                 "请换个主题描述，或检查库内是否有已发布文档")
+        target_count = self._effective_slide_count(
+            slide_count, enforce_exact_count, content)
         images = self._user_images(user.id)
         try:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
-                max(2, min(slide_count, 18)), audience, scene,
+                target_count, audience, scene,
                 material_names=material_names,
-                enforce_exact_count=enforce_exact_count)
+                # 用户未填页数时也由服务端先算出权威页数，再执行同一硬约束。
+                enforce_exact_count=True)
+            outline = self._audit_and_repair_outline(outline, target_count, content)
         except RuntimeError as e:
             raise AIServiceError(str(e))
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=source_type,
-            source_content=(topic or content or "")[:2000],
-            outline=outline, status="draft"))
+            # 后续 PPTAgent 必须能看到真实材料；topic 不能覆盖 material content。
+            source_content=(content or topic or "")[:8000],
+            theme_id=DEFAULT_GOV_TEMPLATE_ID,
+            outline=outline, status="draft", slide_count=target_count))
+        logger.info("[PPT] 权威大纲已创建：doc_id=%s pages=%d source=%s",
+                    d.id, len(outline.get("slides") or []), source_type)
         return {"doc_id": d.id, "outline": outline}
 
     def make_outline(self, body, user: User) -> dict:
@@ -1284,27 +1292,31 @@ class PPTService:
         try:
             images = self._user_images(user.id)
             explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
+            target_count = self._effective_slide_count(
+                body.slide_count, explicit_count, content)
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), body.source_type, body.topic, content,
-                images, max(2, min(body.slide_count, 18)), body.audience, body.scene,
+                images, target_count, body.audience, body.scene,
                 material_names=material_names,
-                enforce_exact_count=explicit_count)
+                enforce_exact_count=True)
+            yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
+            outline = self._audit_and_repair_outline(outline, target_count, content)
         except RuntimeError as e:
-            # generate_outline 抛出的已是用户可读文案（含重试失败说明）
             yield _sse({"type": "error", "message": str(e)})
             return
         except Exception as e:
-            # 兜底：绝不把原始异常（如 JSONDecodeError 的英文报错）回传客户端，
-            # 只记日志，给用户的文案必须说明"没有生成任何文档，可放心重试"
             logger.exception("PPT 大纲生成失败：%s", e)
             yield _sse({"type": "error", "message": _OUTLINE_UNEXPECTED_ERROR_MSG})
             return
-        yield _sse({"type": "stage", "text": "大纲已就绪，正在校验与保存…"})
+        yield _sse({"type": "stage", "text": "大纲已优化，正在保存…"})
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=body.source_type,
-            source_content=(body.topic or body.content or "")[:2000],
-            outline=outline, status="draft"))
+            source_content=(content or body.topic or "")[:8000],
+            theme_id=DEFAULT_GOV_TEMPLATE_ID,
+            outline=outline, status="draft", slide_count=target_count))
+        logger.info("[PPT] 流式权威大纲已创建：doc_id=%s pages=%d",
+                    d.id, len(outline.get("slides") or []))
         yield _sse({"type": "done", "data": {"doc_id": d.id, "outline": outline}})
 
     async def outline_from_doc(self, file, topic: str, audience: str, scene: str,
