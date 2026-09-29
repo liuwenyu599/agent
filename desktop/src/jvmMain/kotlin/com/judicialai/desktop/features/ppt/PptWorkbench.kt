@@ -480,17 +480,15 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
     AppDialog(
         onDismissRequest = onDismiss,
         title = "AI 生成 PPT",
-        subtitle = "将根据当前大纲与所选视觉风格生成可编辑的 .pptx 文件。",
+        subtitle = "生成完成后会自动保存在“我的作品”，需要时再下载 .pptx 到本地。",
         width = 480.dp,
         actions = {
             AppButton("再改改", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
             AppButton("确认生成", onClick = {
                 onDismiss()
-                val target = pickSaveFile(
-                    (vm.outlineTitle.ifBlank { "演示文稿" }) + ".pptx") ?: return@AppButton
-                // 异步：提交即返回，逐页出图，跑完自动落盘（服务端没部署 /ppt/jobs 时自动回退同步）
-                vm.startGenerateAsync(target)
+                // 生成产物先自动保存在系统“我的作品”；本地文件需要时再下载。
+                vm.startGenerateAsync()
             })
         },
     ) {
@@ -498,13 +496,13 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
         Spacer(Modifier.height(6.dp))
         Text(
             "AI 会结合当前大纲和所选视觉风格逐页设计并排版，" +
-                "不是简单套用本地模板。预计需要 5–15 分钟。底部的“保存草稿”仅保存当前内容，" +
-                "不会触发 AI 设计。",
+                "不是简单套用本地模板。预计需要 5–15 分钟。生成完成即保存在系统中，" +
+                "无需提前选择本地保存位置。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp,
         )
         Spacer(Modifier.height(6.dp))
         Text("提交后可立刻切到其他页面，每生成完一页就能在这里看到缩略图；" +
-            "全部完成后自动保存到刚才选择的位置。期间可随时取消。",
+            "全部完成后可在“我的作品”继续查看，需要时再下载到本地。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp)
     }
 }
