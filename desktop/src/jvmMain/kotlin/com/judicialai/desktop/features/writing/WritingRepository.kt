@@ -26,6 +26,7 @@ class WritingRepository(private val api: ApiClient) {
             if (spec.docType.isNotBlank()) body["document_type"] = spec.docType
             if (spec.kbIds.isNotEmpty()) body["kb_ids"] = spec.kbIds
             if (spec.title.isNotBlank()) body["title"] = spec.title
+            spec.plannedContext?.let { body["planned_context"] = it }
         }
         return when (val r = api.post(Endpoints.WritingTasks.LIST, body, timeoutMs = 120_000)) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
