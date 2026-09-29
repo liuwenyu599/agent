@@ -386,7 +386,7 @@ private fun PptEntryPane(
             onClick = { vm.startOutline() }, enabled = canGenerate,
             size = AppButtonSize.LG, fill = true,
         )
-        Text("先确认页数、标题和逐页内容，再交给 AI 视觉设计，避免直接出片后反复返工。",
+        Text("先确认页数、标题和逐页内容，再交给 AI 视觉设计。生成完成后自动保存到“我的作品”，需要时再下载到本地。",
             style = MaterialTheme.typography.caption, color = SecondaryText)
         if (vm.busy && vm.step == PptStep.ENTRY) OutlineGeneratingPanel(vm)
         PptStatus(vm)
@@ -508,10 +508,7 @@ internal fun OutlineConfirmPane(vm: PptViewModel) {
             }) { Text("添加页面") }
             Spacer(Modifier.width(8.dp))
             Button(onClick = {
-                val target = pickSaveFile(
-                    (vm.outlineTitle.ifBlank { vm.topic.ifBlank { "演示文稿" } }) + ".pptx"
-                ) ?: return@Button
-                vm.confirmOutlineAndGenerate(target)
+                vm.confirmOutlineAndGenerate()
             }) { Text("确认大纲并生成 PPT") }
         }
 
