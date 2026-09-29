@@ -135,7 +135,7 @@ def _make_pptx_bytes(tag: str, pages: int = 3) -> bytes:
 
 def test_server_design_guidance_is_appended_to_agent_message(monkeypatch):
     """用户只说业务需求，风格与版式约束由服务端统一补进最终 message。"""
-    runner = agent_job.PPTJobRunner("doc-1", "user-1", message="突出年度亮点")
+    runner = agent_job.PPTAgentJobRunner("doc-1", "user-1", message="突出年度亮点")
     monkeypatch.setattr(
         runner, "_design_guidance",
         lambda _doc: "庄重政务风格，深蓝主色，少装饰；每页不超过 4 个要点。")
@@ -158,7 +158,7 @@ def test_server_design_guidance_is_appended_to_agent_message(monkeypatch):
 
 def test_quality_gate_retries_once_then_accepts(monkeypatch):
     """第一次低质时系统自动重试一次；第二次合格后直接收下，不再追问用户。"""
-    runner = agent_job.PPTJobRunner("doc-1", "user-1")
+    runner = agent_job.PPTAgentJobRunner("doc-1", "user-1")
     first = _make_pptx_bytes("bad", pages=2)
     good = _make_pptx_bytes("good", pages=3)
     calls = []
