@@ -13,8 +13,35 @@ import com.judicialai.desktop.features.chat.model.ChatMessage
 import com.judicialai.desktop.features.chat.model.ChatSession
 import com.judicialai.desktop.features.chat.model.HistoryCategory
 import com.judicialai.desktop.features.chat.model.HistoryItem
+import com.judicialai.desktop.features.chat.model.KnowledgeCitation
 import java.io.File
 
+private fun citationOf(e: kotlinx.serialization.json.JsonElement): KnowledgeCitation? {
+    val o = e.obj() ?: return null
+    val label = o["source"].str().ifBlank {
+        val title = o["doc_title"].str()
+        val index = o["chunk_index"].int()
+        if (title.isBlank()) "" else "$title（第${index}段）"
+    }
+    if (label.isBlank()) return null
+    return KnowledgeCitation(
+        source = label,
+        kbId = o["kb_id"].str(),
+        kbName = o["kb_name"].str(),
+        kbType = o["kb_type"].str(),
+        docId = o["doc_id"].str(),
+        docTitle = o["doc_title"].str(),
+        chunkId = o["chunk_id"].str(),
+        chunkIndex = o["chunk_index"].int(),
+        excerpt = o["content"].str(),
+    )
+}
+
+private fun sourceLabelOf(e: kotlinx.serialization.json.JsonElement): String {
+    val s = e.str()
+    if (s.isNotBlank()) return s
+    return citationOf(e)?.source.orEmpty()
+}
 /** /chat/send 完整结果（含智能写作流水线字段） */
 data class SendOutcome(
     val reply: String,
@@ -101,7 +128,8 @@ class ChatRepository(private val api: ApiClient) {
                 ChatMessage(
                     role = m["role"].str().ifBlank { "assistant" },
                     content = m["content"].str(),
-                    sources = m["sources"].arr().map { it.str() }.filter { it.isNotBlank() },
+                    sources = m["sources"].arr().map(::sourceLabelOf).filter { it.isNotBlank() },
+                    citations = m["sources"].arr().mapNotNull(::citationOf),
                     attachments = m["attachments"].arr().mapNotNull { a ->
                         a.obj()?.let {
                             ChatAttachment(it["id"].str(), it["filename"].str(),
