@@ -47,8 +47,8 @@ if ! docker image inspect deeppresenter-sandbox:latest >/dev/null 2>&1; then
   warn "sandbox 镜像不存在；如有异常请从 /opt/justice-office/data/delivery-images/sandbox.tar 恢复"
 elif ! docker run --rm --entrypoint sh deeppresenter-sandbox:latest -c '
   set -eu
-  capture=$(find / -type f -name capture.js 2>/dev/null | head -n 1)
-  schemas=$(find / -type f -name schemas.js 2>/dev/null | head -n 1)
+  capture=/usr/src/app/dist/utils/capture.js
+  schemas=/usr/src/app/dist/tools/schemas.js
   [ -n "$capture" ] && [ "$(grep -o "offline-patch" "$capture" | wc -l | tr -d " ")" = "2" ]
   [ -n "$schemas" ] && grep -q "rewrite: z.union" "$schemas"
   [ ! -L /usr/local/bin/mmdc ] && [ "$(head -n 1 /usr/local/bin/mmdc)" = "#!/bin/bash" ]

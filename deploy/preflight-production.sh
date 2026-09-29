@@ -87,10 +87,10 @@ docker image inspect "$SANDBOX_IMAGE" >/dev/null 2>&1 ||
 
 docker run --rm --entrypoint sh "$SANDBOX_IMAGE" -c '
   set -eu
-  capture=$(find / -type f -name capture.js 2>/dev/null | head -n 1)
+  capture=/usr/src/app/dist/utils/capture.js
   [ -n "$capture" ]
   [ "$(grep -o "offline-patch" "$capture" | wc -l | tr -d " ")" = "2" ]
-  schemas=$(find / -type f -name schemas.js 2>/dev/null | head -n 1)
+  schemas=/usr/src/app/dist/tools/schemas.js
   [ -n "$schemas" ]
   grep -q "rewrite: z.union" "$schemas"
   [ ! -L /usr/local/bin/mmdc ]
