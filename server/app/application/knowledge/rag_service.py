@@ -208,6 +208,7 @@ class RagService:
             kb = chunk.document.knowledge_base if chunk.document else None
             results.append({
                 "content": content,
+                "chunk_content": chunk.content,
                 "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
                 "chunk_id": chunk_id,
                 "chunk_index": chunk.chunk_index,
