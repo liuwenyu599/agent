@@ -19,12 +19,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.dragAndDropTarget
-import androidx.compose.ui.draganddrop.awtTransferable
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
+import com.judicialai.desktop.app.LocalAwtWindow
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
@@ -37,6 +34,10 @@ import java.awt.Graphics2D
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
+import java.awt.dnd.DnDConstants
+import java.awt.dnd.DropTarget
+import java.awt.dnd.DropTargetAdapter
+import java.awt.dnd.DropTargetDropEvent
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
@@ -51,20 +52,36 @@ fun KnowledgeQaScreen(
     LaunchedEffect(Unit) { vm.loadSessions() }
     var input by remember { mutableStateOf("") }
 
-    val dropTarget = remember {
-        object : DragAndDropTarget {
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                val files = filesFromTransferable(event.awtTransferable)
-                if (files.isNotEmpty()) vm.upload(files)
-                return files.isNotEmpty()
-            }
+    val awtWindow = LocalAwtWindow.current
+    DisposableEffect(awtWindow) {
+        if (awtWindow == null) return@DisposableEffect onDispose { }
+        val previous = awtWindow.dropTarget
+        val target = DropTarget(
+            awtWindow,
+            DnDConstants.ACTION_COPY,
+            object : DropTargetAdapter() {
+                override fun drop(event: DropTargetDropEvent) {
+                    val files = filesFromTransferable(event.transferable)
+                    if (files.isEmpty()) {
+                        event.rejectDrop()
+                        return
+                    }
+                    event.acceptDrop(DnDConstants.ACTION_COPY)
+                    vm.upload(files)
+                    event.dropComplete(true)
+                }
+            },
+            true,
+        )
+        awtWindow.dropTarget = target
+        onDispose {
+            if (awtWindow.dropTarget === target) awtWindow.dropTarget = previous
         }
     }
 
     Row(
         Modifier.fillMaxSize()
             .background(com.judicialai.desktop.design.theme.AppBg)
-            .dragAndDropTarget(shouldStartDragAndDrop = { true }, target = dropTarget)
             .onPreviewKeyEvent {
                 if (it.type == KeyEventType.KeyDown && it.isCtrlPressed && it.key == Key.V) {
                     val files = clipboardFiles()
