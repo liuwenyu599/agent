@@ -321,6 +321,19 @@ private fun KnowledgeCard(vm: DepartmentViewModel, modifier: Modifier) {
         AppButton(
             "知识库问答",
             onClick = { AppState.navigate(AppScreen.KNOWLEDGE_QA) },
+            kind = AppButtonKind.AI,
+            fill = true,
+        )
+        Text(
+            "自动检索公共知识库 + 本科室知识库 + 本人知识库；答案附可点击引用。",
+            fontSize = 11.5.sp,
+            color = Muted,
+            lineHeight = 17.sp,
+        )
+        Spacer(Modifier.height(Dimens.space2))
+        AppButton(
+            "知识库问答",
+            onClick = { AppState.navigate(AppScreen.KNOWLEDGE_QA) },
             kind = AppButtonKind.PRIMARY,
             fill = true,
         )
