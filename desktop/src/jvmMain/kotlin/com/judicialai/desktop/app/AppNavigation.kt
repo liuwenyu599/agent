@@ -34,6 +34,7 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
 
     DEPARTMENT("科室空间", Icons.Default.Groups),
     KNOWLEDGE("知识库", Icons.Default.LibraryBooks),
+    KNOWLEDGE_QA("知识库问答", Icons.Default.LibraryBooks),
     CHAT("历史记录", Icons.Default.History),
 
     // DOCUMENTS 保留实现，入口收在「个人中心」，不占用主导航；
