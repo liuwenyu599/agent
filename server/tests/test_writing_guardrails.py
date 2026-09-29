@@ -105,11 +105,9 @@ def test_docx_export_recognizes_plain_text_official_headings_and_indent():
         title="测试通知",
     )
     doc = Document(BytesIO(buf.getvalue()))
-    texts = [p.text for p in doc.paragraphs if p.text.strip()]
-
-    h1 = doc.paragraphs[texts.index("一、总体要求") + 1]
-    body = doc.paragraphs[texts.index("这是普通正文第一段，用于检查正文格式。") + 1]
-    h2 = doc.paragraphs[texts.index("（一）明确工作安排") + 1]
+    h1 = next(p for p in doc.paragraphs if p.text == "一、总体要求")
+    body = next(p for p in doc.paragraphs if p.text == "这是普通正文第一段，用于检查正文格式。")
+    h2 = next(p for p in doc.paragraphs if p.text == "（一）明确工作安排")
 
     assert h1.runs[0].font.name == FONT_H1
     assert h1.runs[0].font.size == Pt(16)
