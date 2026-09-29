@@ -12,6 +12,7 @@ from app.application.chat.docx_export import (
     FONT_TITLE,
     generate_official_document,
     markdown_to_docx,
+    _split_markdown_table_row,
 )
 from app.application.writing.postprocessor import (
     TODAY_STR,
@@ -19,6 +20,12 @@ from app.application.writing.postprocessor import (
     derive_daizi,
 )
 from app.application.writing.task_service import WritingTaskService
+
+
+def test_markdown_table_without_trailing_pipe_keeps_last_cell():
+    assert _split_markdown_table_row("| 指标 | 数值 |") == ["指标", "数值"]
+    assert _split_markdown_table_row("| 指标 | 数值") == ["指标", "数值"]
+    assert _split_markdown_table_row("指标 | 数值") == ["指标", "数值"]
 
 
 def test_rule_of_law_office_uses_correct_document_number_prefix():
