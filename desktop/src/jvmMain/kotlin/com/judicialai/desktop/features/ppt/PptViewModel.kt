@@ -789,17 +789,18 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     /**
-     * 大纲确认后的唯一出片入口：用户先确认逐页内容，再选择保存位置并提交 PPTAgent。
+     * 大纲确认后的唯一出片入口：用户确认逐页内容后直接提交 PPTAgent。
+     * 生成结果保存在服务端“我的作品”中；本地文件仅在用户之后主动点击下载时写出。
      * 复用现有异步任务链，提交前会先保存当前大纲，DeepPresenter/PPTAgent 读取的是确认后的版本。
      */
-    fun confirmOutlineAndGenerate(target: File) {
+    fun confirmOutlineAndGenerate() {
         if (docId == null || slides.isEmpty()) {
             status = "请先生成并确认大纲"
             return
         }
         step = PptStep.WORKBENCH
-        status = "大纲已确认，正在提交 AI 视觉设计任务…"
-        startGenerateAsync(target)
+        status = "大纲已确认，正在提交 AI 视觉设计任务；完成后自动保存到“我的作品”…"
+        startGenerateAsync()
     }
 
     fun toWorkbench() {
