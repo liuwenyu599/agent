@@ -42,3 +42,10 @@ class UrlTextImportRequest(BaseModel):
     """批量粘贴文本（每行一个或多个链接）"""
     kb_id: str
     text: str
+
+
+class KnowledgeAskRequest(BaseModel):
+    """科室空间知识问答：检索范围由服务端按登录用户强制解析。"""
+    message: str
+    session_id: Optional[str] = None
+    attachment_ids: List[str] = []
