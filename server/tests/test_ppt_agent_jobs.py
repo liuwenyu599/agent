@@ -44,7 +44,7 @@ from app.core.config import settings  # noqa: E402
 from app.core.timeutil import now_local  # noqa: E402
 from app.infrastructure.database import Base, engine  # noqa: E402
 from app.infrastructure.ppt.ppt_agent_client import (  # noqa: E402
-    PPTAgentClient, PPTAgentError, looks_like_pptx,
+    PPTAgentClient, PPTAgentError, PPTAgentOutcome, looks_like_pptx,
 )
 from app.main import app  # noqa: E402
 
@@ -131,6 +131,58 @@ def _make_pptx_bytes(tag: str, pages: int = 3) -> bytes:
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
+
+
+def test_server_design_guidance_is_appended_to_agent_message(monkeypatch):
+    """用户只说业务需求，风格与版式约束由服务端统一补进最终 message。"""
+    runner = agent_job.PPTJobRunner("doc-1", "user-1", message="突出年度亮点")
+    monkeypatch.setattr(
+        runner, "_design_guidance",
+        lambda _doc: "庄重政务风格，深蓝主色，少装饰；每页不超过 4 个要点。")
+    doc = SimpleNamespace(
+        title="社区矫正年度总结",
+        subtitle="2026年",
+        outline={"slides": [
+            {"type": "cover", "title": "社区矫正年度总结"},
+            {"type": "closing", "title": "谢谢聆听"},
+        ]},
+        source_content="材料正文",
+    )
+    message = runner._build_message(doc)
+    assert "突出年度亮点" in message
+    assert "系统设计约束（必须执行）" in message
+    assert "庄重政务风格" in message
+    assert "每页不超过 4 个要点" in message
+    assert "不得额外增加封面/结束页" in message
+
+
+def test_quality_gate_retries_once_then_accepts(monkeypatch):
+    """第一次低质时系统自动重试一次；第二次合格后直接收下，不再追问用户。"""
+    runner = agent_job.PPTJobRunner("doc-1", "user-1")
+    first = _make_pptx_bytes("bad", pages=2)
+    good = _make_pptx_bytes("good", pages=3)
+    calls = []
+
+    class _Client:
+        def generate_deck(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return PPTAgentOutcome(pptx=good, event_id="retry-event")
+
+    stored = {}
+    monkeypatch.setattr(
+        runner, "_store",
+        lambda data, renderer, event_id="": stored.update(
+            {"data": data, "renderer": renderer, "event_id": event_id}))
+
+    ok = runner._accept_or_retry_quality(
+        first, "first-event", _Client(), "message", [], 3,
+        time.monotonic() + 60)
+
+    assert ok is True
+    assert len(calls) == 1
+    assert stored["data"] == good
+    assert stored["renderer"] == "pptagent_retry"
+    assert stored["event_id"] == "retry-event"
 
 
 def test_generated_pptx_quality_gate_detects_page_mismatch():
