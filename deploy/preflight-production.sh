@@ -105,6 +105,7 @@ docker image inspect "$HOST_IMAGE" >/dev/null 2>&1 ||
 docker run --rm --entrypoint sh "$HOST_IMAGE" -c '
   set -eu
   grep -q "禁止 apt install" /usr/src/pptagent/deeppresenter/roles/Research.yaml
+  python3 -c "import yaml; yaml.safe_load(open(\"/usr/src/pptagent/deeppresenter/roles/Research.yaml\", encoding=\"utf-8\"))"
   which soffice >/dev/null
   which unoconv >/dev/null
   test -f /root/.cache/huggingface/hub/models--julien-c--fasttext-language-id/snapshots/master/lid.176.bin
