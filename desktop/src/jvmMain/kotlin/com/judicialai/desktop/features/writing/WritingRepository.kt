@@ -172,10 +172,6 @@ class WritingRepository(private val api: ApiClient) {
     suspend fun export(id: String, redHeader: Boolean, target: File) =
         api.downloadGet(Endpoints.WritingTasks.export(id, redHeader), target)
 
-    /** 加入训练数据：instruction + AI 初稿 + 人工最终稿 → pending_review */
-    suspend fun addToTraining(id: String, finalContent: String) =
-        api.post(Endpoints.WritingTasks.trainingSample(id), mapOf("final_content" to finalContent))
-
     // ---- 材料（复用对话附件通道，绑定到任务关联会话） ----
 
     suspend fun uploadMaterials(files: List<File>): ApiResult<List<ChatAttachment>> =
