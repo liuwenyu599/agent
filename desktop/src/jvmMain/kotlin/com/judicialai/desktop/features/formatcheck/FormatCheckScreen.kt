@@ -204,9 +204,12 @@ private fun RecordsColumn(vm: FormatCheckViewModel, modifier: Modifier = Modifie
                 loading = vm.busy,
                 fill = true,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = vm.useAi, onCheckedChange = { vm.useAi = it })
-                Text("AI 辅助判断", fontSize = 12.sp, color = Ink2)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("校验方式", fontSize = 11.sp, color = Muted)
+                Text("规则 + AI + 知识库一致性", fontSize = 12.sp,
+                    color = Ink2, fontWeight = FontWeight.Medium)
+                Text("排版规则确定性执行；AI 检查内容规范；知识库只报告有原文证据的冲突。",
+                    fontSize = 10.5.sp, color = Muted, lineHeight = 15.sp)
             }
         }
 
@@ -672,6 +675,20 @@ private fun IssueCard(
                 )
             }
             Spacer(Modifier.width(Dimens.space2))
+            Text(
+                when (issue["source"].str()) {
+                    "knowledge" -> "知识库"
+                    "ai" -> "AI"
+                    else -> "规则"
+                },
+                fontSize = 10.sp,
+                color = when (issue["source"].str()) {
+                    "knowledge" -> VioletInk
+                    "ai" -> AiIndigo
+                    else -> Primary
+                },
+            )
+            Spacer(Modifier.width(Dimens.space2))
             Text(issue["element"].str().ifBlank { "格式项" }, fontSize = 12.5.sp,
                 fontWeight = FontWeight.Medium, color = Ink,
                 modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -692,6 +709,50 @@ private fun IssueCard(
                 CompareRow("修改后", expected, Ok)
             }
         }
+        val formatDiffs = vm.formatDiffForIssue(index)
+        if (formatDiffs.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space1))
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusSm))
+                    .background(PrimarySoft)
+                    .padding(Dimens.space2),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text("DOCX 实际排版变化", fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold, color = Primary)
+                formatDiffs.forEach { d ->
+                    Text("${d.label}：${d.before} → ${d.after}",
+                        fontSize = 11.sp, color = Ink2, lineHeight = 16.sp)
+                }
+            }
+        }
+
+        val evidence = issue["evidence"].obj()
+        if (evidence != null) {
+            Spacer(Modifier.height(Dimens.space1))
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusSm))
+                    .background(VioletSoft)
+                    .padding(Dimens.space2),
+            ) {
+                Text("知识库证据", fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold, color = VioletInk)
+                Text(
+                    "${evidence["kb_name"].str().ifBlank { "知识库" }} · " +
+                        "${evidence["doc_title"].str().ifBlank { "文档" }} · " +
+                        "第${evidence["chunk_index"].str().ifBlank { "?" }}段",
+                    fontSize = 10.5.sp, color = Ink2,
+                )
+                val excerpt = evidence["excerpt"].str()
+                if (excerpt.isNotBlank()) Text(
+                    excerpt.take(180) + if (excerpt.length > 180) "…" else "",
+                    fontSize = 10.5.sp, color = Muted, lineHeight = 15.sp,
+                )
+            }
+        }
+
         val suggestion = issue["suggestion"].str()
         if (suggestion.isNotBlank()) {
             Text(suggestion, fontSize = 11.5.sp, color = Ink2, lineHeight = 17.sp)
@@ -795,7 +856,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("格式规则（先执行确定性规则；未配置规则时才使用 AI 全面审查）", fontSize = 12.sp,
+            Text("格式与内容规则（确定性规则 + AI 内容审校同时执行）", fontSize = 12.sp,
                 color = TextSecondary, modifier = Modifier.weight(1f))
             Button(onClick = { vm.openRuleEditor(null) },
                 colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
@@ -818,13 +879,13 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                     Text("程度", Modifier.width(70.dp), fontSize = 12.sp, color = TextSecondary)
                     Text("默认", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
                     Text("启用", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
-                    Text("操作", Modifier.width(130.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("操作", Modifier.width(190.dp), fontSize = 12.sp, color = TextSecondary)
                 }
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (vm.rules.isEmpty()) {
                         Box(Modifier.fillMaxWidth().padding(40.dp),
                             contentAlignment = Alignment.Center) {
-                            Text("尚未配置规则；配置后优先执行规则校验，当前将使用 AI 全面审查",
+                            Text("尚未配置自定义排版规则；系统仍会执行内容规则、AI 审校和知识库一致性检查",
                                 color = TextSecondary, fontSize = 13.sp)
                         }
                     }
@@ -847,9 +908,12 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                                 Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
                             Text(if (rule["is_active"].bool(true)) "启用" else "停用",
                                 Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
-                            Row(Modifier.width(130.dp)) {
+                            Row(Modifier.width(190.dp)) {
                                 TextButton(onClick = { vm.openRuleEditor(rule) }) {
                                     Text("编辑", color = EpPrimary, fontSize = 12.sp)
+                                }
+                                TextButton(onClick = { vm.duplicateRule(rule) }, enabled = !vm.busy) {
+                                    Text("复制", color = EpPrimary, fontSize = 12.sp)
                                 }
                                 TextButton(onClick = { pendingDeleteRule = rule }) {
                                     Text("删除", color = EpDanger, fontSize = 12.sp)
