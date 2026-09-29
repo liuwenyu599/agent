@@ -205,8 +205,8 @@ def accounts(client):
             db.close()
         return {"token": tok, "id": uid, "dept": dept_code}
 
-    a = reg("kb_user_a", "法制与律师管理科", "fazhi")
-    b = reg("kb_user_b", "行政复议科", "fuyi")
+    a = reg("kbusera", "法制与律师管理科", "fazhi")
+    b = reg("kbuserb", "行政复议科", "fuyi")
 
     kbs = {
         "public": _mk_kb("全局公共库", "public", ""),
