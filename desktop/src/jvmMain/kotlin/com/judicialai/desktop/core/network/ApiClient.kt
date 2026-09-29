@@ -369,6 +369,10 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     else -> ApiResult.Err(r.status.value, errMsg(r.status.value, text, null))
                 }
             }
+        } catch (e: CancellationException) {
+            // 「取消生成」是用户主动操作，不是网络失败：原样上抛让协程正常结束，
+            // 不能吞掉转成 Err——否则 ViewModel 会把 "Job was cancelled" 当报错弹给用户
+            throw e
         } catch (e: Exception) {
             ClientLog.error(method.value + " " + path + " 失败", e)
             ApiResult.Err(null, friendlyMessage(e))
@@ -404,6 +408,8 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     if (text.isBlank()) JsonObject(emptyMap()) else json.parseToJsonElement(text))
                 else ApiResult.Err(r.status.value, errMsg(r.status.value, text, null))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ClientLog.error("上传 $path 失败", e)
             ApiResult.Err(null, friendlyMessage(e))
@@ -459,6 +465,8 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     }
                 } else ApiResult.Err(r.status.value, errMsg(r.status.value, r.body(), null))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ClientLog.error("下载 $path 失败", e)
             ApiResult.Err(null, friendlyMessage(e))
@@ -493,6 +501,8 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     }
                 } else ApiResult.Err(r.status.value, errMsg(r.status.value, r.body(), null))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             ClientLog.error("导出 $path 失败", e)
             ApiResult.Err(null, friendlyMessage(e))
