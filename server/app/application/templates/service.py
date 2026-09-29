@@ -142,6 +142,7 @@ class TemplateService:
             "id": t.id, "name": t.name, "category": t.category, "base_type": t.base_type,
             "department_code": t.department_code or "", "tier": tier,
             "description": t.description, "icon": t.icon, "params_schema": t.params_schema,
+            "content_template": t.content_template, "system_prompt": t.system_prompt,
             "is_builtin": t.is_builtin, "use_count": t.use_count,
             "writing_style": t.writing_style, "word_count": t.word_count,
             "need_red_header": t.need_red_header, "need_signature": t.need_signature,
@@ -169,6 +170,13 @@ class TemplateService:
             "writing_style": t.writing_style, "word_count": t.word_count,
             "need_red_header": t.need_red_header, "need_signature": t.need_signature,
             "need_date": t.need_date, "need_doc_number": t.need_doc_number,
+            "template_kind": t.template_kind, "tags": t.tags or [],
+            "scene": t.scene or "", "writing_guide": t.writing_guide or "",
+            "structure": t.structure or [], "kb_ids": t.kb_ids or [],
+            "visibility": t.visibility, "share_scope": t.share_scope,
+            "share_departments": t.share_departments or [],
+            "share_roles": t.share_roles or [],
+            "is_draft": bool(t.is_draft),
             "is_builtin": t.is_builtin, "is_active": t.is_active, "use_count": t.use_count,
         }
 
