@@ -217,9 +217,16 @@ class WritingTaskService:
             for key in tuple(ctx.keys()):
                 if key in planned_context and key not in ("history", "missing_fields"):
                     ctx[key] = planned_context[key]
-            # 确定性 parser 再覆盖一次文号/日期/字数等用户原文事实，保证不会因
-            # 规划快照过旧而漏掉这类严格字段；这一步不调用模型。
-            changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
+            # planned_context 已经完成过语义理解，文种/主题/主送/发文机关等语义字段
+            # 必须以它为准。规则 parser 这里只刷新“可从原文字面确定”的严格字段，
+            # 避免诸如“关于报送材料的通知”被误抽成 recipient="材料的通知"。
+            parsed = task_parser.parse_message(message)
+            literal_keys = {
+                "time_range", "word_count_target",
+                "document_number_enabled", "document_number", "document_date",
+            }
+            literal_updates = {k: v for k, v in parsed.items() if k in literal_keys}
+            changes = task_parser.merge_context(ctx, literal_updates)
         else:
             # 未经过 /plan 的兼容路径仍保留原有 LLM 语义理解能力。
             it = self._interpret(message, ctx, has_draft=False)
