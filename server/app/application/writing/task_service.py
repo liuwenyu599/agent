@@ -1048,21 +1048,33 @@ class WritingTaskService:
         if ctx.get("tone"):
             parts.append(f"语气风格：{ctx['tone']}。")
         if not outline_only:
+            doc_type = str(ctx.get("document_type") or "")
+            if "函" in doc_type:
+                length_rule = (
+                    "3) 函件务必简明，一般控制为 3-5 个自然段或部分；"
+                    + ("全文按用户指定字数执行；" if ctx.get("word_count_target")
+                       else "通常控制在 800-1200 字，能合并的事项不要拆成多条；")
+                    + "不得套用总结、报告的长篇结构；\n"
+                )
+                ending_rule = "10) 函件不得使用书信式“此致、敬礼”，结尾使用“特此函告。”等规范函件结语。\n"
+            else:
+                length_rule = "3) 按文种组织必要结构，避免机械凑章节；除用户另有字数要求外，以完整、精炼为准；\n"
+                ending_rule = ""
             parts.append(
                 "\n严格要求：\n"
                 "1) 必须输出完整公文，禁止提纲、片段、列表；\n"
                 "2) 标题、主送机关由系统结构化字段单独排版；你的输出正文不要重复标题或主送机关，从正文第一段直接开始；\n"
-                "3) 正文分 6-8 个章节，每章节 200 字以上，全文不少于 1800 字；\n"
+                + length_rule +
                 "4) 禁止使用任何 Markdown 标记：不要 ###、####、**、---、-、* 等；\n"
                 "5) 直接以纯文本输出，段落之间用一个空行分隔；\n"
-                "6) 语言规范、正式、符合党政机关公文写作惯例；\n"
+                "6) 语言规范、正式、符合党政机关公文写作惯例；同文种知识库范文命中时优先参考其体例和固定用语；\n"
                 "7) 严禁编造具体信息：不得虚构联系人姓名、联系电话、邮箱地址、网址；"
                 "材料未提供这类可选字段时直接省略，不得输出 XX/xx/XXXX 等占位符；\n"
                 "8) 当前文件的文号与成文日期由系统程序处理，正文不要自行输出文号或日期占位符；\n"
                 "9) 严格遵守已确认文种和内容边界，不得把通知写成工作要点、把报送事项扩写成全年工作部署；\n"
-                "10) 再次强调：第 7、8 条只针对外部事实（姓名、电话、文号、统计数字、"
-                "具体日期）；工作思路、具体举措、责任分工、预期目标属于作者自主规划，"
-                "必须逐节写实写具体，严禁用「略」「待补充」「仅保留思路」式说明顶替正文段落。"
+                + ending_rule +
+                "11) 外部事实（姓名、电话、文号、统计数字、具体日期）必须有来源；"
+                "工作思路、具体举措、责任分工、预期目标属于作者自主规划，应写实写具体。"
             )
         return "".join(parts)
 
@@ -1090,6 +1102,7 @@ class WritingTaskService:
             doc_date=user_date,
             inject_docnum=enabled and not user_number,
             inject_date=True,
+            document_type=ctx.get("document_type"),
         )
 
     def _retrieve(self, ctx: Dict[str, Any], user_id: str,
