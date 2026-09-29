@@ -64,7 +64,7 @@ _OUTLINE_SRC = {
 # ============================================================ 工具
 
 
-def _make_pptx_bytes(tag: str, pages: int = 3) -> bytes:
+def _make_pptx_bytes(tag: str, pages: int = 4) -> bytes:
     """用 python-pptx 造一个最小可解析 pptx，正文带 tag 便于区分来源。"""
     from pptx.util import Inches
 
@@ -220,7 +220,7 @@ def test_b_agent_success_stores_agent_pptx(monkeypatch, ctx):
 
     assert renderer == "pptagent", "应走 PPTAgent 渲染"
     assert data == agent_pptx, "落盘字节必须是 PPTAgent 返回的 pptx"
-    assert _open_slide_count(data) == 3
+    assert _open_slide_count(data) == len(_OUTLINE_SRC["slides"])
     # 三步（健康探测 / 提交 / 轮询 / 取结果）都应真实发生
     assert any(p.startswith(settings.PPT_AGENT_SUBMIT_PATH) for p in transport_hits)
     assert any("/status/" in p for p in transport_hits)
