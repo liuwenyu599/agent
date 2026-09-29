@@ -376,7 +376,7 @@ class DocumentService:
 
         raise AppError(
             400, f"暂不支持 .{suffix or '未知'} 格式的文件，"
-                 "请上传 doc / docx / pdf / wps / rtf / txt / md 格式的文档")
+                 "请上传 doc / docx / pdf / wps / rtf / txt / md / xlsx 格式的文档")
 
     @staticmethod
     def _read_text_file(file_path: Path) -> str:
