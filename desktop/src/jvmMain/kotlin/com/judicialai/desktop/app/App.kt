@@ -11,6 +11,7 @@ import com.judicialai.desktop.features.documents.DocumentsScreen
 import com.judicialai.desktop.features.formatcheck.FormatCheckScreen
 import com.judicialai.desktop.features.home.HomeScreen
 import com.judicialai.desktop.features.knowledge.KnowledgeScreen
+import com.judicialai.desktop.features.knowledge.KnowledgeQaScreen
 import com.judicialai.desktop.features.ppt.PptScreen
 import com.judicialai.desktop.features.settings.SettingsScreen
 import com.judicialai.desktop.features.templates.TemplatesScreen
@@ -51,6 +52,7 @@ fun App() {
                 AppScreen.PPT -> PptScreen()
                 AppScreen.FORMAT_CHECK -> FormatCheckScreen()
                 AppScreen.KNOWLEDGE -> KnowledgeScreen()
+                AppScreen.KNOWLEDGE_QA -> KnowledgeQaScreen()
                 AppScreen.DOCUMENTS -> DocumentsScreen()
                 AppScreen.CHAT -> ChatScreen()
                 AppScreen.WORKFLOW -> WorkflowScreen()
