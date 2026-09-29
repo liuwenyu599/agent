@@ -519,6 +519,43 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                 focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
         )
 
+        if (vm.searchResults == null) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("排序：", fontSize = 12.sp, color = TextSecondary)
+                listOf(
+                    "newest" to "最新上传",
+                    "oldest" to "最早上传",
+                    "title" to "标题",
+                ).forEach { (key, labelText) ->
+                    val selected = vm.docSort == key
+                    TextButton(onClick = { vm.setDocSort(key) }) {
+                        Text(
+                            labelText,
+                            fontSize = 12.sp,
+                            color = if (selected) EpPrimary else TextRegular,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                val pageCount = ((vm.docTotal + vm.docPageSize - 1) / vm.docPageSize)
+                    .coerceAtLeast(1)
+                Text("共 " + vm.docTotal + " 篇 · 第 " + vm.docPage + "/" + pageCount + " 页",
+                    fontSize = 12.sp, color = TextSecondary)
+                TextButton(
+                    onClick = { vm.prevDocPage() },
+                    enabled = vm.docPage > 1,
+                ) { Text("上一页", fontSize = 12.sp) }
+                TextButton(
+                    onClick = { vm.nextDocPage() },
+                    enabled = vm.docPage * vm.docPageSize < vm.docTotal,
+                ) { Text("下一页", fontSize = 12.sp) }
+            }
+        }
         Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
             modifier = Modifier.fillMaxWidth().weight(1f)) {
             val results = vm.searchResults
