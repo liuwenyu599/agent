@@ -115,6 +115,14 @@ class PptRepository(private val api: ApiClient) {
             mapOf("action" to action, "slides" to slides, "index" to index, "instruction" to ""),
             timeoutMs = 180_000)
 
+    /** 大纲确认页：一句自然语言整体调整当前大纲。 */
+    suspend fun aiOutlineAdjust(outline: JsonObject, instruction: String) =
+        api.post(
+            Endpoints.Ppt.AI_OUTLINE_ADJUST,
+            mapOf("outline" to outline, "instruction" to instruction),
+            timeoutMs = 180_000,
+        )
+
     /**
      * 同步生成（PPTAgent 渲染）。PPTAgent 跑满要 15 分钟，
      * 300 秒必然先断，这里放宽到 20 分钟。新流程走 [submitJob] 异步，这是回退路径。
