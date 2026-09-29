@@ -46,7 +46,7 @@ class KnowledgeQaViewModel(
 
     fun loadSessions() {
         scope.launch {
-            when (val r = chat.listSessions()) {
+            when (val r = knowledge.listQaSessions()) {
                 is ApiResult.Ok -> sessions = r.data
                 is ApiResult.Err -> status = r.message
             }
