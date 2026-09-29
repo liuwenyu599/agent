@@ -263,7 +263,10 @@ private fun jobHintText(job: PptJobProgress): String = when (job.status) {
     PptJobStatus.SUBMITTED -> "任务已提交，服务端正在排队，可先去其他页面"
     PptJobStatus.GENERATING -> "每生成完一页就会出现在左侧，可点选查看大图"
     PptJobStatus.CLARIFYING -> "AI 需要你补充一点信息，回答后会接着刚才的进度继续生成"
-    PptJobStatus.DONE -> "全部页面已生成，点击下方按钮可重新保存到别的位置"
+    PptJobStatus.DONE -> if (job.exportedPath == null)
+        "全部页面已生成，并已保存到“我的作品”；需要本地文件时点击下方“下载 PPTX”"
+    else
+        "全部页面已生成；服务端“我的作品”中已保留，也可再次下载到其他位置"
     PptJobStatus.FAILED -> "生成未完成，可点击「重试」用同一份大纲再生成一次"
     PptJobStatus.CANCELLED -> "已停止等待本次生成，可点击「重新开始」再生成一次"
     PptJobStatus.IDLE -> ""
