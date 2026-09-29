@@ -18,7 +18,9 @@ import sys
 import tempfile
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from typing import Any, Dict, List
 
@@ -396,6 +398,15 @@ def test_real_token_stats_are_not_a_question(monkeypatch):
     assert out.pending is True, "既无产物也无追问 → 仍视为 pending"
 
 
+def test_short_no_token_status_is_not_a_question():
+    """无数字的短状态语不是追问，不能把任务推进 awaiting_clarification。"""
+    from app.infrastructure.ppt.ppt_agent_client import strip_token_stats
+
+    assert strip_token_stats("暂无 token 数据") == ""
+    assert strip_token_stats("无 Token 信息。") == ""
+    assert strip_token_stats("No token data.") == ""
+
+
 def test_english_token_stats_block_is_also_stripped():
     """英文形态的统计块同样要识别（防止只认中文）。"""
     from app.infrastructure.ppt.ppt_agent_client import strip_token_stats
@@ -731,6 +742,29 @@ def test_submit_job_returns_immediately(monkeypatch, doc_and_token):
     body = r.json()
     assert body["job_id"] == doc_id
     assert body["status"] in ("pending", "running")
+
+
+def test_job_status_uses_persisted_heartbeat_across_workers(monkeypatch):
+    """另一个 worker 看不到本地线程时，只要 DB 心跳新鲜就仍应返回 running。"""
+    monkeypatch.setattr(agent_job, "_is_active", lambda _doc_id: False)
+    fresh = now_local()
+    doc = SimpleNamespace(
+        id="cross-worker-job",
+        job_started_at=fresh - timedelta(seconds=10),
+        job_progress_at=fresh,
+        job_status="running",
+        job_current_page=0,
+        job_total_pages=0,
+        job_phase="designing",
+        job_error="",
+        job_question="",
+        job_renderer="",
+    )
+    assert agent_job.job_status(doc)["status"] == "running"
+
+    doc.job_progress_at = now_local() - timedelta(
+        seconds=max(60, settings.PPT_AGENT_STALL_TIMEOUT) + 5)
+    assert agent_job.job_status(doc)["status"] == "failed"
 
 
 def test_job_status_flow_and_export(monkeypatch, doc_and_token):
