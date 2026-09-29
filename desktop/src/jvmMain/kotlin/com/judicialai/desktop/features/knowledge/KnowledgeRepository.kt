@@ -6,8 +6,17 @@ import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.obj
+import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.str
+import com.judicialai.desktop.features.chat.model.KnowledgeCitation
 import kotlinx.serialization.json.JsonObject
 import java.io.File
+
+data class KnowledgeAskOutcome(
+    val reply: String,
+    val sessionId: String?,
+    val citations: List<KnowledgeCitation>,
+)
 
 /** 知识库数据访问（对应 Web knowledge.js） */
 class KnowledgeRepository(private val api: ApiClient) {
@@ -80,4 +89,43 @@ class KnowledgeRepository(private val api: ApiClient) {
             api.upload(Endpoints.Knowledge.BATCH_UPLOAD, "files", files, mapOf("kb_id" to kbId))
 
     suspend fun deleteDocument(docId: String) = api.del(Endpoints.Knowledge.document(docId))
+
+    suspend fun ask(
+        message: String,
+        sessionId: String?,
+        attachmentIds: List<String>,
+    ): ApiResult<KnowledgeAskOutcome> {
+        val body = buildMap<String, Any?> {
+            put("message", message)
+            put("session_id", sessionId)
+            if (attachmentIds.isNotEmpty()) put("attachment_ids", attachmentIds)
+        }
+        return when (val r = api.post(Endpoints.Knowledge.ASK, body, timeoutMs = 180_000)) {
+            is ApiResult.Ok -> {
+                val root = r.data.obj()
+                val citations = root?.get("sources").arr().mapNotNull { e ->
+                    val o = e.obj() ?: return@mapNotNull null
+                    val source = o["source"].str()
+                    if (source.isBlank()) return@mapNotNull null
+                    KnowledgeCitation(
+                        source = source,
+                        kbId = o["kb_id"].str(),
+                        kbName = o["kb_name"].str(),
+                        kbType = o["kb_type"].str(),
+                        docId = o["doc_id"].str(),
+                        docTitle = o["doc_title"].str(),
+                        chunkId = o["chunk_id"].str(),
+                        chunkIndex = o["chunk_index"].int(),
+                        excerpt = o["content"].str(),
+                    )
+                } ?: emptyList()
+                ApiResult.Ok(KnowledgeAskOutcome(
+                    reply = root?.get("reply").str(),
+                    sessionId = root?.get("session_id").str().ifBlank { null },
+                    citations = citations,
+                ))
+            }
+            is ApiResult.Err -> r
+        }
+    }
 }
