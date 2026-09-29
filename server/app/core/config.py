@@ -228,6 +228,12 @@ class Settings:
         self.OCR_LANG = os.getenv("OCR_LANG", "chi_sim+eng")
         self.FORMAT_CHECK_MAX_SIZE = int(os.getenv("FORMAT_CHECK_MAX_SIZE", str(20 * 1024 * 1024)))
         self.FORMAT_CHECK_AI_BUDGET = int(os.getenv("FORMAT_CHECK_AI_BUDGET", "1500"))
+        self.FORMAT_CHECK_SENSITIVE_WORDS = [
+            x.strip() for x in os.getenv("FORMAT_CHECK_SENSITIVE_WORDS", "").split(",") if x.strip()
+        ]
+        self.FORMAT_CHECK_FORBIDDEN_WORDS = [
+            x.strip() for x in os.getenv("FORMAT_CHECK_FORBIDDEN_WORDS", "").split(",") if x.strip()
+        ]
 
         self.CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
         self.LOG_DIR = Path(os.getenv("LOG_DIR", str(self.DATA_DIR / "logs"))).resolve()
