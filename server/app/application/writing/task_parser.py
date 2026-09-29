@@ -54,6 +54,22 @@ REVISE_HINTS = ["改", "扩写", "润色", "精简", "缩写", "补充", "增加
 DRAFT_HINTS = ["起草", "写一版", "先写", "生成", "出初稿", "开始写", "出稿", "写吧", "先搭", "框架", "提纲"]
 
 
+def normalize_recipient_name(name: str) -> str:
+    """司法局当前交付环境中的主送机关规范化。
+
+    仅补全白云区机关的行政区划前缀，不改“各镇街、各部门”等集合称谓，
+    也不猜测其他地区的机关全称。
+    """
+    s = (name or "").strip().rstrip("：:")
+    if not s:
+        return s
+    if re.fullmatch(r"白云区[\u4e00-\u9fa5]{2,20}(?:局|委|办|院|中心|政府|委员会|办公室)", s):
+        return "广州市" + s
+    if s == "区财政局":
+        return "广州市白云区财政局"
+    return s
+
+
 def empty_context() -> Dict[str, Any]:
     return {
         "document_type": None,
@@ -112,7 +128,7 @@ def parse_message(message: str) -> Dict[str, Any]:
 
     m = RECIPIENT_RE.search(msg)
     if m:
-        upd["recipient"] = m.group(1).strip()
+        upd["recipient"] = normalize_recipient_name(m.group(1))
 
     m = AUTHORITY_RE.search(msg)
     if m:
