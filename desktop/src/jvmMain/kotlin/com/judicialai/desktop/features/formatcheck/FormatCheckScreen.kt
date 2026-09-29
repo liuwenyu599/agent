@@ -846,7 +846,7 @@ private fun hasFixHint(issue: JsonObject): Boolean {
 private val RULE_TARGETS = listOf(
     "page" to "页面设置", "title" to "标题", "body" to "正文",
     "heading1" to "一级标题", "heading2" to "二级标题",
-    "signature" to "落款", "date" to "成文日期", "general" to "全文通用",
+    "signature" to "落款", "date" to "成文日期", "general" to "全文通用", "content" to "内容规范",
 )
 private val RULE_SEVERITIES = listOf("error" to "严重", "warning" to "警告", "info" to "提示")
 
