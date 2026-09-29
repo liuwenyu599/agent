@@ -1,7 +1,7 @@
 """身份模块请求/响应模型。"""
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -10,7 +10,7 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    username: str
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9]+$")
     email: str
     password: str
     real_name: str = ""
@@ -20,7 +20,7 @@ class RegisterRequest(BaseModel):
 
 
 class UserCreateRequest(BaseModel):
-    username: str
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9]+$")
     email: str
     password: str
     real_name: str = ""
