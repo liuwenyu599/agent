@@ -456,7 +456,7 @@ class PPTAgentJobRunner:
                     self.doc_id, renderer, len(data))
 
     def _fallback_local(self, reason: str) -> None:
-        """兜底：真实本地渲染，绝不返回空文件/占位文件。"""
+        """严格套模板兜底：AI 智能设计失败/低质时自动切换，用户无感。"""
         db: Session = SessionLocal()
         try:
             svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
@@ -464,7 +464,7 @@ class PPTAgentJobRunner:
             if doc is None or not doc.outline:
                 self._fail(f"{reason}；且本地渲染缺少大纲")
                 return
-            data = svc.render_local_pptx(doc, doc.outline, doc.user_id)
+            data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
             ok, why = looks_like_pptx(data)
             if not ok:
                 self._fail(f"{reason}；本地渲染产物非法：{why}")
@@ -476,10 +476,10 @@ class PPTAgentJobRunner:
             slides = len((doc.outline or {}).get("slides") or [])
             _update_job(self.doc_id, file_path=str(path), status="generated",
                         slide_count=slides, job_status="succeeded",
-                        job_phase="succeeded", job_renderer="local",
+                        job_phase="succeeded", job_renderer="strict_template",
                         job_error="", job_question="",
                         job_finished_at=now_local(), job_progress_at=now_local())
-            logger.warning("[PPT] 已切换严格模板渲染并完成：job_id=%s，内部原因=%s",
+            logger.warning("[PPT] 已切换严格套模板并完成：job_id=%s，内部原因=%s",
                            self.doc_id, reason)
         except Exception as e:  # noqa: BLE001
             logger.exception("本地兜底渲染失败：%s", e)
