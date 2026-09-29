@@ -193,17 +193,23 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
         }
     }
 
-    /** GET /auth/check-first-user → {is_first: Boolean}，用于登录页「首次注册」Tab */
-    suspend fun checkFirstUser(): Boolean {
+    /** GET /auth/check-first-user → {is_first: Boolean}，用于登录页「首次注册」Tab。
+     * 连接失败不能伪装成“已有用户”，否则首次部署时会把管理员创建入口静默隐藏。
+     */
+    suspend fun checkFirstUser(): ApiResult<Boolean> {
         return try {
             client().use { c ->
                 val r = c.get(configProvider().apiBase + Endpoints.Auth.CHECK_FIRST_USER)
-                if (!r.status.isSuccess()) return false
-                val obj = json.parseToJsonElement(r.body<String>()) as? JsonObject
-                obj?.get("is_first")?.jsonPrimitive?.content == "true"
+                if (!r.status.isSuccess()) {
+                    ApiResult.Err(r.status.value, "无法确认系统初始化状态，请检查服务器连接")
+                } else {
+                    val obj = json.parseToJsonElement(r.body<String>()) as? JsonObject
+                    ApiResult.Ok(obj?.get("is_first")?.jsonPrimitive?.content == "true")
+                }
             }
         } catch (e: Exception) {
-            false
+            ClientLog.warn("检查首次部署状态失败：${e.message ?: e::class.simpleName}")
+            ApiResult.Err(null, friendlyMessage(e))
         }
     }
 
