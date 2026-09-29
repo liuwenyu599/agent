@@ -227,6 +227,13 @@ class WritingTaskService:
             else:
                 changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
 
+        # 标题是排版结构字段：用户未显式填写时按已确认的主题+文种确定性生成，
+        # 不再让模型在正文里自行重复一个标题。
+        if not ctx.get("title"):
+            derived_title = task_parser.build_title(ctx)
+            if derived_title:
+                ctx["title"] = derived_title
+
         # 创建时显式选择的模板 / 知识库优先于规划快照。
         if template_id:
             tmpl = self._load_template(template_id)
@@ -309,7 +316,7 @@ class WritingTaskService:
             "audience": ctx.get("recipient") or "",
             "department": org_ctx.get("dept_name") or org_ctx.get("short_name") or "",
             "agent": (org_ctx.get("agent") or {}).get("name") or "",
-            "title": ctx.get("title") or "",
+            "title": ctx.get("title") or task_parser.build_title(ctx) or "",
             "source": source,
             "planned_context": {
                 k: v for k, v in ctx.items()
