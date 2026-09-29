@@ -41,7 +41,7 @@ def _hdr(token):
 def _dev_token(client):
     """取得系统管理员令牌（复用 test_password_policy 的思路）。"""
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "kbroute_dev", "email": "kbroute_dev@test.local",
+        "username": "kbroutedev", "email": "kbroutedev@test.local",
         "password": "Passw0rd!2026", "real_name": "系统管理员",
     })
     if r.status_code == 200:

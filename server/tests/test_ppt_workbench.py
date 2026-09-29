@@ -103,7 +103,7 @@ def _hdr(token):
 def _dev_token(client):
     """取得系统管理员令牌（首个用户已被占用时直接为库内管理员签发）。"""
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "ppt_dev", "email": "ppt_dev@test.local",
+        "username": "pptdev", "email": "pptdev@test.local",
         "password": PWD, "real_name": "系统管理员",
     })
     if r.status_code == 200:

@@ -120,7 +120,7 @@ def _dev_token(client):
     此时直接为库中已有的系统管理员账号签发令牌（与 test_password_policy 同思路）。
     """
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "pref_dev", "email": "pref_dev@test.local",
+        "username": "prefdev", "email": "prefdev@test.local",
         "password": PWD, "real_name": "系统管理员",
     })
     if r.status_code == 200:
@@ -143,8 +143,8 @@ def _dev_token(client):
 
 
 def _admin_uid():
-    """系统管理员的用户 id（优先本模块注册的 pref_dev，否则库中任一管理员）。"""
-    uid = _uid_of("pref_dev")
+    """系统管理员的用户 id（优先本模块注册的 prefdev，否则库中任一管理员）。"""
+    uid = _uid_of("prefdev")
     if uid:
         return uid
     from sqlalchemy import select

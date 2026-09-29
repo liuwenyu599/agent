@@ -165,7 +165,7 @@ def _mk_kb(name, kb_type="public", dept_code="", owner_id=None):
 def accounts(client):
     """系统管理员 + 两个不同科室的普通用户 + 三种可见性的知识库。"""
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "kb_dev", "email": "kb_dev@test.local",
+        "username": "kbdev", "email": "kbdev@test.local",
         "password": PWD, "real_name": "系统管理员"})
     if r.status_code == 200:
         dev = r.json()["access_token"]

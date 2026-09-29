@@ -120,7 +120,7 @@ def _dev_token(client: TestClient) -> str:
     此时直接为库中的系统管理员账号签发令牌。
     """
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "tz_admin", "email": "tz_admin@test.local",
+        "username": "tzadmin", "email": "tzadmin@test.local",
         "password": PWD, "real_name": "时间管理员",
     })
     if r.status_code == 200:

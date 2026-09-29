@@ -55,7 +55,7 @@ def client():
 def token(client):
     """系统管理员令牌（首个用户已被其它测试文件占用时直接为库内管理员签发）。"""
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "ppt_prev_dev", "email": "ppt_prev_dev@test.local",
+        "username": "pptprevdev", "email": "pptprevdev@test.local",
         "password": PWD, "real_name": "系统管理员",
     })
     if r.status_code == 200:
