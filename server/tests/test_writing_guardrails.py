@@ -259,3 +259,29 @@ def test_document_number_citation_without_retrieved_evidence_is_flagged():
     messages = [i["message"] for i in result["issues"]]
     assert any("穗司发〔2018〕278号" in m and "未在本次检索材料中找到" in m
                for m in messages)
+
+
+def test_unsupported_document_number_is_removed_before_delivery():
+    text = "根据穗司发〔2018〕278号有关要求，现提出如下安排。"
+    cleaned, warnings = WritingTaskService._guard_external_document_numbers(
+        text,
+        sources=[{"content": "这里只包含其他政策材料。", "source": "其他材料（第1段）"}],
+        ctx={},
+    )
+    assert "穗司发〔2018〕278号" not in cleaned
+    assert "相关文件" in cleaned
+    assert warnings == ["穗司发〔2018〕278号"]
+
+
+def test_document_number_with_retrieved_evidence_is_preserved():
+    text = "根据穗司发〔2018〕278号有关要求，现提出如下安排。"
+    cleaned, warnings = WritingTaskService._guard_external_document_numbers(
+        text,
+        sources=[{
+            "content": "依据穗司发〔2018〕278号文件要求执行。",
+            "source": "政策依据（第2段）",
+        }],
+        ctx={},
+    )
+    assert cleaned == text
+    assert warnings == []
