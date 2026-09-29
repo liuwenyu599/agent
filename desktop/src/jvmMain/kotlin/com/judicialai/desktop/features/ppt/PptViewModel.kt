@@ -373,13 +373,17 @@ class PptViewModel(private val repo: PptRepository) {
 
     private fun outlineBody(): Map<String, Any?> {
         val content = buildString {
-            materials.forEach {
-                append("【").append(it.filename).append("】\n").append(it.text).append("\n\n")
-            }
+            // 关键信息放在材料正文之前：服务端会截取 content 前 6000 字，
+            // 长材料也不能把年度/单位/落款日期截掉。
             if (generationYear.isNotBlank()) append("生成年份：").append(generationYear).append('\n')
             if (location.isNotBlank()) append("单位/地点：").append(location).append('\n')
             if (presenter.isNotBlank()) append("汇报人：").append(presenter).append('\n')
             if (reportDate.isNotBlank()) append("落款日期：").append(reportDate).append('\n')
+            if (generationYear.isNotBlank() || location.isNotBlank() ||
+                presenter.isNotBlank() || reportDate.isNotBlank()) append('\n')
+            materials.forEach {
+                append("【").append(it.filename).append("】\n").append(it.text).append("\n\n")
+            }
         }.trim()
         return mutableMapOf<String, Any?>(
             "source_type" to if (materials.isNotEmpty()) "document" else "topic",
