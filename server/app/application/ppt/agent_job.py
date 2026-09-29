@@ -182,9 +182,15 @@ def job_status(doc: PPTDocument) -> Dict[str, Any]:
     if started is not None:
         elapsed = max(0.0, (now_local() - started).total_seconds())
     status = doc.job_status or "unknown"
-    # 线程已结束但未写终态（如进程重启）→ 判定为失败，避免前端无限轮询
-    if status in ("pending", "running") and not _is_active(doc.id or ""):
-        status = "failed"
+    # 多 worker 下 _RUNNING 是进程内状态，不能用于跨进程判断任务是否存活。
+    # 以数据库心跳为准：只有心跳超过 stall timeout 未刷新才对外判失败。
+    if status in ("pending", "running"):
+        heartbeat = doc.job_progress_at or doc.job_started_at
+        stall_limit = max(60, settings.PPT_AGENT_STALL_TIMEOUT)
+        if heartbeat is not None:
+            stale_seconds = max(0.0, (now_local() - heartbeat).total_seconds())
+            if stale_seconds > stall_limit:
+                status = "failed"
     remaining: Optional[float] = None
     if (status in ("pending", "running") and doc.job_current_page > 0
             and doc.job_total_pages > doc.job_current_page):
