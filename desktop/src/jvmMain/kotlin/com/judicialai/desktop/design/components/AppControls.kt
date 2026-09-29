@@ -269,9 +269,10 @@ fun AppTextField(
             // 调用方只传 minLines 时默认 maxLines=8，很容易踩到，这里兜底保证 min <= max。
             maxLines = maxOf(maxLines, minLines),
             modifier = Modifier.fillMaxWidth()
-                .heightIn(min = Dimens.hControl),
+                .heightIn(min = maxOf(Dimens.hControl, 48.dp)),
             shape = RoundedCornerShape(Dimens.radiusControl),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = Ink),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontSize = 14.sp, lineHeight = 20.sp, color = Ink),
             colors = TextFieldDefaults.outlinedTextFieldColors(
                 textColor = Ink,
                 backgroundColor = if (enabled) Surface else SurfaceDeep,
