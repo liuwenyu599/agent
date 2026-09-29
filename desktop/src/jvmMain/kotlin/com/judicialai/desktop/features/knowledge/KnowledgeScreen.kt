@@ -550,7 +550,7 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                     "title" to "标题",
                 ).forEach { (key, labelText) ->
                     val selected = vm.docSort == key
-                    TextButton(onClick = { vm.setDocSort(key) }) {
+                    TextButton(onClick = { vm.changeDocSort(key) }) {
                         Text(
                             labelText,
                             fontSize = 12.sp,
