@@ -204,6 +204,8 @@ _TOKEN_STATS_WORD_RE = re.compile(r"统计|用量|使用量|消耗|概况|usage|
 # 逐行兜底：命中这些 marker **且同行带数字**的行才丢掉。
 # 要求带数字是为了不误伤正文里提到"成本控制""统计工作"的普通句子。
 _TOKEN_STAT_LINE_RE = re.compile(r"(🔤|💰|💵|⏱|\btokens?\b|\bcost\b)", re.I)
+# 无数字的短状态语也不是追问；真机偶发返回“暂无 token 数据”。
+_NO_TOKEN_DATA_RE = re.compile(r"^\s*(?:暂无|没有|无)\s*tokens?\s*(?:数据|信息|统计)?\s*[。.!！]?$|^\s*no\s+token\s+data\s*[.!]?$", re.I)
 _DIGIT_RE = re.compile(r"\d")
 
 
@@ -300,6 +302,8 @@ def strip_token_stats(text: str) -> str:
     # ② 逐行兜底
     kept: List[str] = []
     for line in raw.splitlines():
+        if _NO_TOKEN_DATA_RE.match(line):
+            continue
         if _TOKEN_STAT_LINE_RE.search(line) and _DIGIT_RE.search(line):
             continue
         kept.append(line)
