@@ -171,14 +171,28 @@ fun KnowledgeQaScreen(
 
 @Composable
 private fun QaSessionSidebar(vm: KnowledgeQaViewModel) {
+    var newestFirst by remember { mutableStateOf(true) }
+    val visibleSessions = if (newestFirst) vm.sessions
+        else vm.sessions.sortedBy { it.createdAt }
     Column(Modifier.width(240.dp).fillMaxHeight()
         .background(MaterialTheme.colors.surface).padding(12.dp)) {
         Button(onClick = vm::newSession, modifier = Modifier.fillMaxWidth()) { Text("＋ 新建问答") }
         Spacer(Modifier.height(12.dp))
-        Text("问答记录", style = MaterialTheme.typography.subtitle2)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("问答记录", style = MaterialTheme.typography.subtitle2,
+                modifier = Modifier.weight(1f))
+            TextButton(onClick = { newestFirst = true }) {
+                Text("最新", color = if (newestFirst) MaterialTheme.colors.primary
+                    else MaterialTheme.colors.onSurface.copy(alpha = 0.55f))
+            }
+            TextButton(onClick = { newestFirst = false }) {
+                Text("最早", color = if (!newestFirst) MaterialTheme.colors.primary
+                    else MaterialTheme.colors.onSurface.copy(alpha = 0.55f))
+            }
+        }
         Spacer(Modifier.height(6.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(vm.sessions, key = { it.id }) { s ->
+            items(visibleSessions, key = { it.id }) { s ->
                 val selected = s.id == vm.currentSessionId
                 Row(
                     Modifier.fillMaxWidth()
@@ -302,7 +316,36 @@ private fun CitationDialog(
             Spacer(Modifier.height(4.dp))
             Column(Modifier.fillMaxWidth().heightIn(max = 520.dp)
                 .verticalScroll(rememberScrollState())) {
-                MarkdownView(document?.get("content").str().ifBlank { "暂无可展示原文" })
+                HighlightedDocument(
+                    text = document?.get("content").str().ifBlank { "暂无可展示原文" },
+                    excerpt = citation.excerpt,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HighlightedDocument(text: String, excerpt: String) {
+    val needle = excerpt.trim().replace(Regex("\\s+"), " ").take(80)
+    val blocks = text.split(Regex("\\n\\s*\\n"))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { block ->
+            val normalized = block.trim().replace(Regex("\\s+"), " ")
+            val hit = needle.isNotBlank() && (
+                normalized.contains(needle, ignoreCase = true) ||
+                    needle.take(40).let { it.isNotBlank() && normalized.contains(it, ignoreCase = true) }
+            )
+            Box(
+                Modifier.fillMaxWidth()
+                    .background(
+                        if (hit) MaterialTheme.colors.primary.copy(alpha = 0.12f)
+                        else androidx.compose.ui.graphics.Color.Transparent,
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(if (hit) 8.dp else 0.dp),
+            ) {
+                MarkdownView(block)
             }
         }
     }
