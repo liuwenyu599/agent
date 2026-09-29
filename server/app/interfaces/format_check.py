@@ -16,17 +16,23 @@ from app.application.format_check.dto import (
     RuleRequest,
 )
 from app.application.format_check.service import FormatCheckService
+from app.application.knowledge.rag_service import RagService
 from app.application.shared.writing_assistant import WritingAssistant
 from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway
 from app.infrastructure.database import get_db
+from app.infrastructure.rag import get_embedder, get_vector_store
 from app.interfaces.deps import get_current_user, require_admin_or_above
 
 router = APIRouter(prefix="/format-check", tags=["格式校验"])
 
 
 def get_format_check_service(db: Session = Depends(get_db)) -> FormatCheckService:
-    return FormatCheckService(db, WritingAssistant(get_llm_gateway()))
+    return FormatCheckService(
+        db,
+        WritingAssistant(get_llm_gateway()),
+        RagService(db, get_embedder(), get_vector_store()),
+    )
 
 
 # ========== 校验 ==========
