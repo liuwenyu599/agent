@@ -494,11 +494,13 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert outline["title"] == "行政复议工作汇报"
     slides = outline["slides"]
     assert len(slides) == 8
-    for s in slides:
-        assert "sources" in s and isinstance(s["sources"], list)
+    assert slides[0]["type"] == "cover"
+    assert "points" not in slides[0] and "blocks" not in slides[0]
     assert slides[1]["type"] == "toc"
     original = next(s for s in slides if s["title"] == "案件办理情况")
     assert original["sources"] == ["材料A.txt"]
+    assert slides[-1]["type"] == "closing"
+    assert "points" not in slides[-1] and "blocks" not in slides[-1]
     fillers = [s for s in slides if s["title"] == "补充内容"]
     assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
 
