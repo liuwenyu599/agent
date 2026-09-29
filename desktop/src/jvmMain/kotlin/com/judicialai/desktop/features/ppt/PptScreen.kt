@@ -502,6 +502,29 @@ internal fun OutlineConfirmPane(vm: PptViewModel) {
                 label = { Text("副标题（可选）") }, modifier = Modifier.weight(1f))
         }
 
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                vm.outlineAdjustInstruction,
+                { vm.outlineAdjustInstruction = it },
+                label = { Text("AI 调整大纲") },
+                placeholder = { Text("例如：把目录页改成正文页；合并第 3、4 页") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            Button(
+                onClick = { vm.aiAdjustOutline() },
+                enabled = !vm.aiBusy && vm.outlineAdjustInstruction.isNotBlank(),
+            ) {
+                Text(if (vm.aiBusy) "调整中…" else "AI 调整")
+            }
+        }
+        vm.aiNote?.let {
+            Text(it, style = MaterialTheme.typography.caption, color = SecondaryText)
+        }
+
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             itemsIndexed(vm.slides, key = { i, _ -> i }) { i, s ->
                 Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
