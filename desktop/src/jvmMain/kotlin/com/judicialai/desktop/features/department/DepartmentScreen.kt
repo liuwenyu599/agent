@@ -327,6 +327,7 @@ private fun KnowledgeCard(vm: DepartmentViewModel, modifier: Modifier) {
                         Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(Dimens.radiusMd))
                             .background(EmeraldSoft)
+                            .clickable { AppState.navigate(AppScreen.KNOWLEDGE) }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -340,7 +341,7 @@ private fun KnowledgeCard(vm: DepartmentViewModel, modifier: Modifier) {
                             }
                         }
                         Spacer(Modifier.width(Dimens.space2))
-                        TagChip("${k.docCount} 篇", fg = EmeraldInk, bg = Surface)
+                        TagChip("${k.docCount} 篇 · 查看 →", fg = EmeraldInk, bg = Surface)
                     }
                 }
             }
