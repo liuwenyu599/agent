@@ -240,13 +240,29 @@ class PPTAgentJobRunner:
             if doc is None:
                 self._fail("文档不存在")
                 return
+
+            # 用户确认后的大纲是唯一内容源。提交前只做确定性净化：
+            # 封面/结束页去脏字段，但不重新强制目录，尊重用户“目录改正文”等调整。
+            original_outline = doc.outline or {}
+            clean_outline = PPTService.sanitize_outline(
+                original_outline,
+                target_count=len(original_outline.get("slides") or []) or None,
+                ensure_toc=False)
+            if clean_outline != original_outline:
+                updated = _update_job(
+                    self.doc_id, outline=clean_outline,
+                    slide_count=len(clean_outline.get("slides") or []))
+                if updated is not None:
+                    doc = updated
+                logger.info("[PPT] 提交前规则净化完成：job_id=%s", self.doc_id)
+
             message = self._build_message(doc)
             num_pages = len((doc.outline or {}).get("slides") or []) or None
             attachments = self._build_attachments()
             if attachments:
                 logger.info("PPT job 携带 %d 个附件", len(attachments))
 
-            # 子线程消费事件流（长阻塞），本线程扫目录更新进度
+            # AI 智能设计路径：PPTAgent 负责创意设计；后续有自动质量闸与严格模板兜底。
             worker = threading.Thread(
                 target=self._consume, args=(client, message, attachments, num_pages, deadline),
                 name=f"ppt-sse-{self.doc_id[:8]}", daemon=True)
@@ -254,7 +270,7 @@ class PPTAgentJobRunner:
             self._progress_loop(client, deadline)
             worker.join(timeout=5)
 
-            self._finish(doc)
+            self._finish(doc, client, message, attachments, num_pages, deadline)
         except Exception as e:  # noqa: BLE001 - 后台线程绝不能把异常抛穿
             logger.exception("PPT job 执行异常：%s", e)
             self._fail(f"{type(e).__name__}: {e}")
@@ -327,30 +343,88 @@ class PPTAgentJobRunner:
 
     # ---------------- 收尾 ----------------
 
-    def _finish(self, doc: PPTDocument) -> None:
+    def _retry_generate(self, client: PPTAgentClient, message: str,
+                        attachments: List[Any], num_pages: Optional[int],
+                        deadline: float, extra_instruction: str) -> Optional[PPTAgentOutcome]:
+        """系统内部自动重试；不再把模型追问或质量修复要求甩给用户。"""
+        if time.monotonic() >= deadline - 30:
+            logger.warning("[PPT] 剩余时间不足，跳过自动重试：job_id=%s", self.doc_id)
+            return None
+        self._set(job_status="running", job_phase="designing",
+                  job_question="", job_progress_at=now_local())
+        try:
+            return client.generate_deck(
+                message + "\n\n# 系统自动修正要求\n" + extra_instruction,
+                history=self.history or None,
+                attachments=attachments or None,
+                num_pages=num_pages, deadline=deadline)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[PPT] 自动重试失败：job_id=%s %s: %s",
+                           self.doc_id, type(e).__name__, e)
+            return None
+
+    def _accept_or_retry_quality(self, data: bytes, event_id: str,
+                                 client: PPTAgentClient, message: str,
+                                 attachments: List[Any], num_pages: Optional[int],
+                                 deadline: float) -> bool:
+        expected = int(num_pages or 0)
+        issues = PPTService.assess_generated_pptx(data, expected)
+        if not issues:
+            self._store(data, renderer="pptagent", event_id=event_id)
+            return True
+
+        logger.warning("[PPT] AI 智能设计未通过质量闸：job_id=%s issues=%s",
+                       self.doc_id, "；".join(issues))
+        retry = self._retry_generate(
+            client, message, attachments, num_pages, deadline,
+            "上一次成品未通过系统质量检查。请完整重新生成一次，并修复以下问题："
+            + "；".join(issues)
+            + "。必须保持已确认页数，不得新增封面或结束页，不得编造数据。")
+        if retry and retry.pptx:
+            retry_issues = PPTService.assess_generated_pptx(retry.pptx, expected)
+            if not retry_issues:
+                logger.info("[PPT] AI 智能设计自动重试通过质量闸：job_id=%s", self.doc_id)
+                self._store(retry.pptx, renderer="pptagent_retry",
+                            event_id=retry.event_id)
+                return True
+            logger.warning("[PPT] AI 智能设计重试仍未通过：job_id=%s issues=%s",
+                           self.doc_id, "；".join(retry_issues))
+        return False
+
+    def _finish(self, doc: PPTDocument, client: PPTAgentClient, message: str,
+                attachments: List[Any], num_pages: Optional[int],
+                deadline: float) -> None:
         error = self.slot.get("error")
         outcome: Optional[PPTAgentOutcome] = self.slot.get("outcome")
 
         if error is not None and outcome is None:
-            logger.warning("PPT job 调用 PPTAgent 失败，回退本地渲染：%s", error)
+            logger.warning("PPT job 调用 PPTAgent 失败，自动切换严格模板渲染：%s", error)
             self._fallback_local(f"{type(error).__name__}: {error}")
             return
         if outcome is None:
             self._fallback_local("PPTAgent 未返回任何结果")
             return
         if outcome.pptx:
-            self._store(outcome.pptx, renderer="pptagent",
-                        event_id=outcome.event_id)
+            if self._accept_or_retry_quality(
+                    outcome.pptx, outcome.event_id, client, message,
+                    attachments, num_pages, deadline):
+                return
+            self._fallback_local("AI 智能设计质量检查未通过")
             return
         if outcome.question.strip():
-            # R1：PPTAgent 在确认需求，把问题透给用户
-            logger.info("PPT job 收到追问，等待用户回答：job_id=%s", self.doc_id)
-            self._set(job_status="awaiting_clarification",
-                      job_phase="awaiting_clarification",
-                      job_question=outcome.question, job_event_id=outcome.event_id,
-                      job_progress_at=now_local())
+            # 用户已确认过大纲，中间追问由系统按默认策略自动回答一次。
+            logger.info("[PPT] PPTAgent 追问已由系统自动处理：job_id=%s", self.doc_id)
+            retry = self._retry_generate(
+                client, message, attachments, num_pages, deadline,
+                "用户已经确认大纲。请按已确认大纲、默认政务设计约束和现有材料直接继续，"
+                "采用合理默认值，不要再次向用户提问。")
+            if retry and retry.pptx and self._accept_or_retry_quality(
+                    retry.pptx, retry.event_id, client, message,
+                    attachments, num_pages, deadline):
+                return
+            self._fallback_local("AI 智能设计需要额外确认，已自动采用严格模板")
             return
-        self._fallback_local("PPTAgent 既未返回产物也未返回追问")
+        self._fallback_local("PPTAgent 未返回可用产物")
 
     def _store(self, data: bytes, renderer: str, event_id: str = "") -> None:
         """落盘成品并置为成功。"""
@@ -403,9 +477,9 @@ class PPTAgentJobRunner:
             _update_job(self.doc_id, file_path=str(path), status="generated",
                         slide_count=slides, job_status="succeeded",
                         job_phase="succeeded", job_renderer="local",
-                        job_error=reason, job_question="",
+                        job_error="", job_question="",
                         job_finished_at=now_local(), job_progress_at=now_local())
-            logger.warning("PPT job 已回退本地渲染完成：job_id=%s，原因=%s",
+            logger.warning("[PPT] 已切换严格模板渲染并完成：job_id=%s，内部原因=%s",
                            self.doc_id, reason)
         except Exception as e:  # noqa: BLE001
             logger.exception("本地兜底渲染失败：%s", e)
