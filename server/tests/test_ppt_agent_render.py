@@ -254,7 +254,7 @@ def test_b_agent_binary_result_direct(monkeypatch, ctx):
     data, renderer = svc._render_pptx_bytes(doc, doc.outline, template, None)
     assert renderer == "pptagent"
     assert data == agent_pptx
-    assert _open_slide_count(data) == 3
+    assert _open_slide_count(data) == len(_OUTLINE_SRC["slides"])
 
 
 def test_b_gradio_files_response_json_wrapper(monkeypatch, ctx):
@@ -286,7 +286,7 @@ def test_b_gradio_files_response_json_wrapper(monkeypatch, ctx):
     data, renderer = svc._render_pptx_bytes(doc, doc.outline, template, None)
     assert renderer == "pptagent"
     assert data == agent_pptx
-    assert _open_slide_count(data) == 3
+    assert _open_slide_count(data) == len(_OUTLINE_SRC["slides"])
 
 
 def test_b_gradio_one_shot_submit_returns_file(monkeypatch, ctx):
@@ -358,7 +358,7 @@ def test_workspace_channel_returns_product(monkeypatch, ctx, tmp_path):
     assert renderer == "pptagent"
     assert data == agent_pptx
     assert not polled_status, "共享卷通道下不该再查状态/结果端点"
-    assert _open_slide_count(data) == 3
+    assert _open_slide_count(data) == len(_OUTLINE_SRC["slides"])
 
 
 def test_workspace_channel_picks_newest_and_ignores_stale(monkeypatch, ctx, tmp_path):
