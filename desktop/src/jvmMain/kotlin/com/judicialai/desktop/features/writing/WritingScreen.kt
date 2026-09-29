@@ -1090,7 +1090,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
 
         // 文档纸张
         DocumentSurface(modifier = Modifier.weight(1f), padding = Dimens.space6) {
-            // 正文默认就是「所见即所得」：按公文格式渲染（标题居中/加粗、
+            // 正文默认就是「所见即所得」：按公文格式渲染（标题居中、
             // 一、（一）层级行加粗、正文段首缩进两字符、**粗体** 生效），
             // 点击任意段落就地修改，格式变化立刻可见；
             // 「源码模式」回到 Markdown 原文整篇编辑（高级用法，兼容旧习惯）。
@@ -1156,7 +1156,8 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     onValueChange = { vm.content = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 16.sp, color = Ink, lineHeight = 28.sp),
+                        fontSize = 16.sp, fontFamily = FontFamily.Serif,
+                        color = Ink, lineHeight = 28.sp),
                     shape = RoundedCornerShape(Dimens.radiusMd),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         backgroundColor = Surface,
