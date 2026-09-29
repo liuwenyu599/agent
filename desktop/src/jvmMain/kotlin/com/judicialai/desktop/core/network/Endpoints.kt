@@ -148,6 +148,7 @@ object Endpoints {
         const val AI_SLIDE_ACTION = "/ppt/ai/slide-action"
         /** 结构调整（新增/拆分/合并页） */
         const val AI_STRUCTURE = "/ppt/ai/structure"
+        const val AI_OUTLINE_ADJUST = "/ppt/ai/outline-adjust"
 
         /**
          * 异步生成任务（PPTAgent 一次生成要 5–15 分钟，必须「提交即返回 + 轮询 + 逐页预览」）。
