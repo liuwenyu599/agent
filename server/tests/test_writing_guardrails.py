@@ -1,5 +1,16 @@
-"""公文文种、文号与落款日期的交付前回归测试。"""
+"""公文文种、文号、排版与写作台性能关键路径回归测试。"""
 
+from io import BytesIO
+
+from docx import Document
+from docx.shared import Pt
+
+from app.application.chat.docx_export import (
+    FONT_BODY,
+    FONT_H1,
+    FONT_H2,
+    markdown_to_docx,
+)
 from app.application.writing.postprocessor import (
     TODAY_STR,
     PostProcessor,
@@ -45,3 +56,66 @@ def test_postprocessor_injects_real_current_signoff_date():
     assert TODAY_STR in out
     assert out_date == TODAY_STR
     assert "2026年X月X日" not in out
+
+
+class _FakeDb:
+    def add(self, _obj):
+        pass
+
+    def commit(self):
+        pass
+
+    def refresh(self, _obj):
+        pass
+
+
+class _BoomInterpreter:
+    def interpret(self, *args, **kwargs):
+        raise AssertionError("planned_context 路径不应再次调用 LLM")
+
+
+def test_planned_context_skips_second_llm_interpretation():
+    svc = WritingTaskService(_FakeDb())
+    svc.interpreter = _BoomInterpreter()
+
+    result = svc.create_task(
+        "u1",
+        "请起草一份关于报送材料的通知",
+        planned_context={
+            "document_type": "通知",
+            "title": "关于报送有关材料的通知",
+            "topic": "报送有关材料",
+            "recipient": "各镇街、各部门",
+            "authority": "中共广州市白云区委全面依法治区委员会办公室",
+        },
+    )
+
+    ctx = result["task_context"]
+    assert ctx["document_type"] == "通知"
+    assert ctx["title"] == "关于报送有关材料的通知"
+    assert ctx["recipient"] == "各镇街、各部门"
+
+
+def test_docx_export_recognizes_plain_text_official_headings_and_indent():
+    buf = markdown_to_docx(
+        "一、总体要求\n"
+        "这是普通正文第一段，用于检查正文格式。\n"
+        "（一）明确工作安排\n"
+        "这是普通正文第二段。",
+        title="测试通知",
+    )
+    doc = Document(BytesIO(buf.getvalue()))
+    texts = [p.text for p in doc.paragraphs if p.text.strip()]
+
+    h1 = doc.paragraphs[texts.index("一、总体要求") + 1]
+    body = doc.paragraphs[texts.index("这是普通正文第一段，用于检查正文格式。") + 1]
+    h2 = doc.paragraphs[texts.index("（一）明确工作安排") + 1]
+
+    assert h1.runs[0].font.name == FONT_H1
+    assert h1.runs[0].font.size == Pt(16)
+    assert h2.runs[0].font.name == FONT_H2
+    assert h2.runs[0].font.size == Pt(16)
+    assert body.runs[0].font.name == FONT_BODY
+    assert body.runs[0].font.size == Pt(16)
+    assert body.paragraph_format.first_line_indent == Pt(32)
+    assert body.paragraph_format.line_spacing == Pt(28)
