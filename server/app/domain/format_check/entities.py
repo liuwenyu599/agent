@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 VALID_RULE_TARGETS = [
-    "title", "body", "heading1", "heading2", "page", "signature", "date", "general",
+    "title", "body", "heading1", "heading2", "page", "signature", "date", "general", "content",
 ]
 
 
@@ -12,7 +12,7 @@ VALID_RULE_TARGETS = [
 class FormatRule:
     """公文格式规则（可配置，不写死）。
 
-    target: 作用对象：title/body/heading1/heading2/page/signature/date/general
+    target: 作用对象：title/body/heading1/heading2/page/signature/date/general/content
     checks: JSON 字典，只配置需要检查的项，未配置的项不检查。
     """
     name: str
