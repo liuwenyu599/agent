@@ -1475,10 +1475,22 @@ def analyze_template(file_bytes: bytes) -> Dict:
 
 # ================= 模板学习渲染：按版式库克隆页面并填充内容 =================
 
-def _pick_layout(layouts: list, slide_type: str, used: Dict) -> Dict:
-    """按页型从版式库选最合适的版式；同类型多版式时轮流使用。无匹配则降级链查找。"""
+def _pick_layout(layouts: list, slide_type: str, used: Dict,
+                 preferred_layout_id: str = "") -> Dict:
+    """按页型从版式库选最合适的版式。
+
+    用户在模板编辑器里给页型显式绑定某个学习版式 id（如 L3）时优先采用；
+    没有显式绑定时仍按 detected_type + fallback 自动匹配。
+    """
     if not layouts:
         return None
+
+    preferred = (preferred_layout_id or "").strip()
+    if preferred:
+        hit = next((l for l in layouts if str(l.get("id") or "") == preferred), None)
+        if hit:
+            return hit
+
     chain = LEARNED_FALLBACK.get(slide_type, ["content"]) + ["content"]
     for want in chain:
         cands = [l for l in layouts if l.get("detected_type") == want]
@@ -1694,8 +1706,13 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     src_slides = list(prs.slides)
     used = {}
     plan = []
+    skeleton = template.get("layouts") or {}
     for s in outline.get("slides", []):
-        lay = _pick_layout(layout_library, s.get("type", "content"), used)
+        slide_type = s.get("type", "content")
+        preferred = skeleton.get(slide_type, "")
+        # 内置模板 layouts 值是 band_bottom / bar_title 等渲染样式名；
+        # 只有值确实命中学习版式 id 时才视为“骨架绑定”，完全向后兼容。
+        lay = _pick_layout(layout_library, slide_type, used, preferred)
         if not lay:
             break
         idx = lay.get("source_slide_index", 0)
