@@ -50,7 +50,7 @@ compose.desktop {
 
             packageName = "JudicialAIDesktop"
             packageVersion = "1.0.0"
-            vendor = "司法局"
+            vendor = "Baiyun Justice Bureau"
 
             windows {
                 perUserInstall = true
