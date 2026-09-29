@@ -67,17 +67,36 @@ class ContentChecker:
                            f"请核实该文件名称与内容",
             })
 
-        # ---- 2. 正文文号引用合理性 ----
+        # ---- 2. 正文文号引用合理性 / 来源核验 ----
+        seen_docnums = set()
         for m in BODY_DOCNUM_RE.finditer(text):
             num_text = m.group(0)
             if header_docnum and num_text == header_docnum:
                 continue
+            if num_text in seen_docnums:
+                continue
+            seen_docnums.add(num_text)
             year = int(m.group(1))
             if not (1949 <= year <= _current_year()):
                 issues.append({
                     "source": "content",
                     "severity": "review",
                     "message": f"引用文号“{num_text}”年份异常，请核实",
+                })
+                continue
+            if kb_text and num_text not in kb_text:
+                issues.append({
+                    "source": "content",
+                    "severity": "review",
+                    "message": f"引用文号“{num_text}”未在本次检索材料中找到，"
+                               "不得把模型记忆当作已核实引用，请人工核实原文",
+                })
+            elif not kb_text:
+                issues.append({
+                    "source": "content",
+                    "severity": "review",
+                    "message": f"引用文号“{num_text}”本次没有可核验的知识库来源，"
+                               "请核实后再正式使用",
                 })
 
         # ---- 3. 落款日期与正文事实年份冲突粗查 ----
