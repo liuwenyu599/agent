@@ -19,6 +19,11 @@ FONT_BODY = '仿宋_GB2312'      # 正文
 FONT_H1 = '黑体'              # 一级标题
 FONT_H2 = '楷体_GB2312'        # 二级标题
 
+# 纯文本公文层级标题。写作服务会剥掉 Markdown 标记，因此导出器必须能识别
+# “一、……” / “（一）……”这类真实公文结构，否则会误按仿宋正文导出。
+GW_HEADING1_RE = re.compile(r"^[一二三四五六七八九十百]+、[^。；，]{2,60}$")
+GW_HEADING2_RE = re.compile(r"^（[一二三四五六七八九十]+）[^。；，]{2,60}$")
+
 
 def _set_font(run, name, size, bold=False, color=None):
     """设置字体"""
@@ -175,7 +180,7 @@ def _add_list_item(doc, line, level=0):
     indent = Cm(0.74 * level)  # 每级缩进 0.74cm
     _set_paragraph_format(
         p, 
-        first_line_indent=Cm(0.74) if level == 0 else None,
+        first_line_indent=Pt(32) if level == 0 else None,
         line_spacing=Pt(28),
         space_after=Pt(3)
     )
@@ -451,8 +456,81 @@ def markdown_to_docx(text: str, title: str = "公文",
             i += 1
             continue
 
+        # 纯文本公文层级标题（模型输出通常不带 Markdown #）
+        if GW_HEADING1_RE.match(stripped):
+            p = doc.add_paragraph()
+            _set_paragraph_format(p, space_before=Pt(6), space_after=Pt(3),
+                                  line_spacing=Pt(28))
+            run = p.add_run(stripped)
+            _set_font(run, FONT_H1, Pt(16), bold=True)
+            i += 1
+            continue
+
+        if GW_HEADING2_RE.match(stripped):
+            p = doc.add_paragraph()
+            _set_paragraph_format(p, space_before=Pt(3), space_after=Pt(3),
+                                  line_spacing=Pt(28))
+            run = p.add_run(stripped)
+            _set_font(run, FONT_H2, Pt(16))
+            i += 1
+            continue
+
         # 列表项
-        list_match = re.match(r'^(\s*)([-*]|\d+\.)\s+(.+)$', line)
+        list_match = re.match(r'^(\s*)([-*]|\d+\.)\s+(.+)
+        if list_match:
+            indent_len = len(list_match.group(1))
+            level = indent_len // 2  # 每2个空格一级
+            _add_list_item(doc, line, level)
+            i += 1
+            continue
+
+        # 普通段落
+        p = doc.add_paragraph()
+        _set_paragraph_format(
+            p,
+            first_line_indent=Pt(32),
+            line_spacing=Pt(28),
+            space_after=Pt(3)
+        )
+        _parse_inline_formatting(p, stripped)
+        i += 1
+
+    # 落款
+    if signature:
+        _add_signature(doc, signature)
+
+    # 日期
+    if date_text:
+        _add_date(doc, date_text)
+
+    # 保存
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def generate_official_document(content: str, 
+                                title: str = "",
+                                doc_number: str = "",
+                                recipient: str = "",
+                                signature: str = "",
+                                date_text: str = "") -> BytesIO:
+    """
+    生成标准党政机关公文格式 Word 文档
+
+    这是 markdown_to_docx 的便捷封装，默认启用红头格式
+    """
+    return markdown_to_docx(
+        text=content,
+        title=title,
+        doc_number=doc_number,
+        recipient=recipient,
+        signature=signature,
+        date_text=date_text,
+        use_red_header=True
+    )
+, line)
         if list_match:
             indent_len = len(list_match.group(1))
             level = indent_len // 2  # 每2个空格一级
