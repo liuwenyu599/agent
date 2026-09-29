@@ -192,10 +192,11 @@ def delete_kb(kb_id: str, user: User = Depends(require_admin_or_above),
 
 @router.get("/{kb_id}/documents")
 def list_documents(kb_id: str, status: str = Query("published"),
-                   page: int = Query(1), page_size: int = Query(20),
+                   page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                   sort: str = Query("newest"),
                    user: User = Depends(get_current_user),
                    svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.list_kb_documents(kb_id, user, status, page, page_size)
+    return svc.list_kb_documents(kb_id, user, status, page, page_size, sort)
 
 
 @router.get("/{kb_id}/documents/search")
