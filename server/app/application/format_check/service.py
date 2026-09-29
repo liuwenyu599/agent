@@ -330,7 +330,7 @@ class FormatCheckService:
             "filename": filename,
             "file_type": result["file_type"],
             "ai_used": result["ai_used"],
-            "check_mode": "ai_only" if ai_only else "rule",
+            "check_mode": "ai_only" if ai_only else ("hybrid" if result.get("ai_used") else "rule"),
             # issue_count 语义保持不变：累计总问题数
             "issue_count": len(issues),
             "open_issue_count": len(issues),
@@ -719,7 +719,8 @@ class FormatCheckService:
             if hint:
                 value = hint.get("value")
                 return ("fix", mapped_index, it.get("element"), hint.get("type"),
-                        hint.get("field"), str(value) if value is not None else None)
+                        hint.get("field"), str(value) if value is not None else None,
+                        str(hint.get("old") or ""), str(hint.get("new") or ""))
             # AI / 知识库 / 仅提示类问题没有 fix_hint，用来源 + 问题项 + 当前原文定位。
             current = str(it.get("current") or "").strip()[:120]
             return ("review", mapped_index, it.get("source"), it.get("element"), current)
@@ -787,7 +788,7 @@ class FormatCheckService:
         return {
             "id": record.id, "record_id": record.id,
             "filename": record.filename, "file_type": record.file_type,
-            "check_mode": "rule",
+            "check_mode": "hybrid" if result.get("ai_used") else "rule",
             "ai_used": result.get("ai_used", False),
             "issue_count": len(issues),
             "open_issue_count": _open_issue_count(record),
