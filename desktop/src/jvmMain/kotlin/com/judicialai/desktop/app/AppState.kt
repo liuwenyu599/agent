@@ -149,6 +149,15 @@ object AppState {
      * **不在消费后清空**（否则切走再切回仍然会丢），仅在用户显式回到入口页
      * （PptViewModel.backToEntry）、删除该文档或登出时置 null。
      */
+    /**
+     * PPT 入口“汇报信息”的当前会话值。只在内存中保存，用于页面切换后恢复；
+     * 不跨账号持久化，logout 时清空，避免把上一个账号的单位/日期带给下一个账号。
+     */
+    var pptGenerationYear by mutableStateOf("")
+    var pptLocation by mutableStateOf("")
+    var pptPresenter by mutableStateOf("")
+    var pptReportDate by mutableStateOf("")
+
     var pendingPptDocId by mutableStateOf<String?>(null)
 
     /**
@@ -334,6 +343,10 @@ object AppState {
         navDrawerOpen = false
         // 跨页面恢复标记一并清空，避免换账号登录后恢复到上一个账号的文档/任务
         pendingPptDocId = null
+        pptGenerationYear = ""
+        pptLocation = ""
+        pptPresenter = ""
+        pptReportDate = ""
         pptOutlineGenerating = false
         pptExporting = false
         pptLastError = null
