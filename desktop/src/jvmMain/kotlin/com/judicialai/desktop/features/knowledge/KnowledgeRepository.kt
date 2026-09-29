@@ -129,7 +129,7 @@ class KnowledgeRepository(private val api: ApiClient) {
                         docTitle = o["doc_title"].str(),
                         chunkId = o["chunk_id"].str(),
                         chunkIndex = o["chunk_index"].int(),
-                        excerpt = o["content"].str(),
+                        excerpt = o["chunk_content"].str().ifBlank { o["content"].str() },
                     )
                 } ?: emptyList()
                 ApiResult.Ok(KnowledgeAskOutcome(
