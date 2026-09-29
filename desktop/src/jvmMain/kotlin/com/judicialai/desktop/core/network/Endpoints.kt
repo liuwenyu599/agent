@@ -49,6 +49,8 @@ object Endpoints {
         fun documents(kbId: String) = "/knowledge/$kbId/documents"
         const val UPLOAD = "/knowledge/upload"
         const val BATCH_UPLOAD = "/knowledge/batch-upload"
+        /** 科室空间知识问答：服务端固定检索公共 + 本科室 + 本人知识库 */
+        const val ASK = "/knowledge/ask"
         fun document(docId: String) = "/knowledge/documents/$docId"
         fun documentArchive(docId: String) = "/knowledge/documents/$docId/archive"
     }
