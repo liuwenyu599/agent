@@ -43,6 +43,13 @@ _OUTLINE_PARSE_FAILED_MSG = (
 
 # ================= 内置官方模板（含完整版式体系） =================
 BUILTIN_TEMPLATES = [
+    {"id": "gov_report_blue", "name": "政务工作汇报（深蓝）", "category": "工作汇报", "is_official": True,
+     "description": "庄重政务深蓝，适用：司法行政工作汇报、年度总结、专项汇报",
+     "colors": {"primary": "17365D", "accent": "2F75B5", "light": "EEF3F8", "dark": "0E243E"},
+     "layouts": {"cover": "band_bottom", "toc": "numbered_list", "section": "left_block",
+                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
+                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
+                  "summary": "cards", "closing": "center"}},
     {"id": "gov_report_red", "name": "政务工作汇报", "category": "工作汇报", "is_official": True,
      "description": "庄重政务红，适用：工作汇报、阶段总结",
      "colors": {"primary": "C00000", "accent": "E8B54D", "light": "FDF2F2", "dark": "7A0000"},
