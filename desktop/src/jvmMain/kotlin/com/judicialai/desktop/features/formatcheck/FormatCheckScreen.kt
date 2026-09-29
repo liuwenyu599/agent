@@ -795,7 +795,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("格式规则（为空时校验自动降级为 AI 全面审查）", fontSize = 12.sp,
+            Text("格式规则（先执行确定性规则；未配置规则时才使用 AI 全面审查）", fontSize = 12.sp,
                 color = TextSecondary, modifier = Modifier.weight(1f))
             Button(onClick = { vm.openRuleEditor(null) },
                 colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
@@ -824,7 +824,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                     if (vm.rules.isEmpty()) {
                         Box(Modifier.fillMaxWidth().padding(40.dp),
                             contentAlignment = Alignment.Center) {
-                            Text("尚未配置规则，上传文档时将使用 AI 全面审查",
+                            Text("尚未配置规则；配置后优先执行规则校验，当前将使用 AI 全面审查",
                                 color = TextSecondary, fontSize = 13.sp)
                         }
                     }
