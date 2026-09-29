@@ -1527,6 +1527,22 @@ class PPTService:
         except (RuntimeError, IndexError) as e:
             raise AIServiceError(str(e))
 
+    def ai_outline_adjust(self, body) -> dict:
+        """自然语言整体调整大纲；用户明确调整后的页型优先，不强制重新补目录。"""
+        logger.info("[PPT] AI 大纲调整：instruction=%s", body.instruction[:120])
+        try:
+            outline = ppt_engine.ai_outline_adjust(
+                self._ppt_assistant(), body.outline, body.instruction)
+            # 仍清理封面/结束页脏字段，但 respect 用户“把目录改成正文”等显式修改。
+            outline = self.sanitize_outline(
+                outline, target_count=None, ensure_toc=False)
+            logger.info("[PPT] AI 大纲调整完成：pages=%d",
+                        len(outline.get("slides") or []))
+            return {"outline": outline}
+        except RuntimeError as e:
+            logger.warning("[PPT] AI 大纲调整失败：%s", e)
+            raise AIServiceError(str(e))
+
     # ================= 云端生成（qwen-doc-turbo，可选开关，仅脱敏验证用） =================
     @property
     def _cloud_cfg_path(self) -> Path:
