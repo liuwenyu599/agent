@@ -625,11 +625,11 @@ class WritingTaskService:
         if not text.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
         # 提纲式退化兜底：只给骨架的自动重写一次，不把「此处略去」式占位稿落库
-        text, retried = self._regenerate_if_degenerate(
-            instruction, sources, attachment_ctx, user_id, template, text)
+        text, retry_reason = self._regenerate_if_needed(
+            instruction, sources, attachment_ctx, user_id, template, text, ctx)
         payload = self._finalize_draft(t, ctx, text, sources, user_id)
-        if retried:
-            payload["reply"] = "检测到初稿只有提纲，已自动重写为完整成文。" + payload["reply"]
+        if retry_reason:
+            payload["reply"] = retry_reason + payload["reply"]
         return payload
 
     def draft_stream(self, task_id: str, user_id: str,
@@ -662,11 +662,11 @@ class WritingTaskService:
                 yield _sse({"type": "error", "message": "模型未返回内容，请重试"})
                 return
             # 提纲式退化兜底：只给骨架的自动重写一次（done 携带重写后的成文）
-            text, retried = self._regenerate_if_degenerate(
-                instruction, sources, attachment_ctx, user_id, template, text)
+            text, retry_reason = self._regenerate_if_needed(
+                instruction, sources, attachment_ctx, user_id, template, text, ctx)
             payload = self._finalize_draft(t, ctx, text, sources, user_id)
-            if retried:
-                payload["reply"] = "检测到初稿只有提纲，已自动重写为完整成文。" + payload["reply"]
+            if retry_reason:
+                payload["reply"] = retry_reason + payload["reply"]
             yield _sse({"type": "done", "data": payload})
         except HTTPException as e:
             yield _sse({"type": "error", "message": str(e.detail)})
@@ -674,37 +674,67 @@ class WritingTaskService:
             logger.exception("[写作任务] 流式起草失败")
             yield _sse({"type": "error", "message": f"生成中断：{e}"})
 
-    def _regenerate_if_degenerate(self, instruction: str, sources,
-                                  attachment_ctx, user_id,
-                                  template: Optional[Dict[str, Any]],
-                                  text: str) -> tuple:
-        """提纲式退化兜底：检测命中就按「逐节展开」要求重写一次，取更完整者。
+    def _regenerate_if_needed(self, instruction: str, sources,
+                              attachment_ctx, user_id,
+                              template: Optional[Dict[str, Any]],
+                              text: str, ctx: Dict[str, Any]) -> tuple:
+        """质量兜底：提纲式退化或函件明显过长时，最多自动重写一次。
 
-        提示词约束是软约束，模型仍可能只给骨架；这里是结构性防线，
-        宁多一次生成，也不把「此处略去」式占位稿交给用户。
-        重写失败或重写后仍退化/更短时，返回原文（质量门仍会如实标 D 级）。
+        - 提纲退化：要求逐节展开；
+        - 函件过长：在用户未指定长篇字数时，压缩到 3-5 个部分/自然段，
+          合并重复事项并保留事实、金额、时限和办理要求。
         """
         from app.application.writing.postprocessor import detect_outline_degeneration
-        if not detect_outline_degeneration(text):
-            return text, False
-        logger.warning("[写作任务] 检测到提纲式退化，自动重写一次")
-        retry_instruction = (
-            instruction +
-            "\n\n【重写要求】上一次输出只有章节标题和占位说明，是提纲不是公文，不合格。"
-            "请逐节展开为完整段落：每节写清工作思路、具体举措、责任分工与预期目标；"
-            "工作举措属于作者自主规划，必须写实写具体，"
-            "不得出现任何「略」「待补充」「仅保留思路」式占位文字。")
+
+        degenerate = bool(detect_outline_degeneration(text))
+        doc_type = str(ctx.get("document_type") or "")
+        compact函 = (
+            "函" in doc_type
+            and not ctx.get("word_count_target")
+            and len(re.sub(r"\s+", "", text)) > 1500
+        )
+        if not degenerate and not compact函:
+            return text, None
+
+        if degenerate:
+            logger.warning("[写作任务] 检测到提纲式退化，自动重写一次")
+            retry_instruction = (
+                instruction +
+                "\n\n【重写要求】上一次输出只有章节标题和占位说明，是提纲不是公文，不合格。"
+                "请逐节展开为完整段落：每节写清工作思路、具体举措、责任分工与预期目标；"
+                "工作举措属于作者自主规划，必须写实写具体，"
+                "不得出现任何「略」「待补充」「仅保留思路」式占位文字。")
+            reason = "检测到初稿只有提纲，已自动重写为完整成文。"
+        else:
+            logger.warning("[写作任务] 检测到函件过长（%d 字），自动精简一次",
+                           len(re.sub(r"\s+", "", text)))
+            retry_instruction = (
+                instruction +
+                "\n\n【精简重写要求】上一版函件过长，不符合函件简明直接的体例。"
+                "请在不丢失事实、金额、时限、办理要求和责任主体的前提下，"
+                "合并重复事项，将正文压缩为 3-5 个自然段或部分，通常控制在 800-1200 字；"
+                "不得写成 7、8 个条目的长篇报告，不得新增材料中没有的事实。")
+            reason = "检测到函件篇幅偏长，已自动精简为更符合函件体例的版本。"
+
         try:
             retry = self._llm_draft(retry_instruction, sources, attachment_ctx,
                                     user_id, template=template)
             retry = self._clean_markdown(retry)
         except Exception as e:
-            logger.warning("[写作任务] 退化重写失败: %s", e)
-            return text, False
-        if retry.strip() and not detect_outline_degeneration(retry) \
-                and len(retry) > len(text):
-            return retry, True
-        return text, False
+            logger.warning("[写作任务] 自动重写失败: %s", e)
+            return text, None
+
+        if not retry.strip() or detect_outline_degeneration(retry):
+            return text, None
+        if degenerate and len(retry) <= len(text):
+            return text, None
+        if compact函:
+            retry_len = len(re.sub(r"\s+", "", retry))
+            original_len = len(re.sub(r"\s+", "", text))
+            if retry_len >= original_len or retry_len > 1500:
+                logger.warning("[写作任务] 函件精简结果仍过长，保留原文供质量门提示：%d 字", retry_len)
+                return text, None
+        return retry, reason
 
     def _finalize_draft(self, t, ctx: Dict[str, Any], text: str,
                         sources: List[Dict], user_id: str) -> Dict[str, Any]:
@@ -714,6 +744,13 @@ class WritingTaskService:
         text = self._strip_leading_structural_fields(text, ctx)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(text, topic=ctx.get("title") or ctx.get("topic") or "")
+        from app.application.writing.content_check import ContentChecker
+        content_check = ContentChecker().check(
+            text, sources=sources, header_docnum=doc_number)
+        if content_check["issues"]:
+            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
+            if quality.get("level") == "A":
+                quality["level"] = "B"
 
         if doc_number:
             ctx["document_number"] = doc_number
@@ -747,8 +784,8 @@ class WritingTaskService:
             reply += "以下内容因缺少事实依据已标注：" + "、".join(ctx["missing_fields"]) + "。"
         reply += "您可以继续对话修改，或直接编辑正文后保存版本。"
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
-                "quality": quality, "postprocess_events": events,
-                "references": references}
+                "quality": quality, "content_check": content_check,
+                "postprocess_events": events, "references": references}
 
     # ---------------- 修改（核心：作用于当前文档） ----------------
 
@@ -782,6 +819,13 @@ class WritingTaskService:
         revised = self._strip_leading_structural_fields(revised, ctx)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        from app.application.writing.content_check import ContentChecker
+        content_check = ContentChecker().check(
+            revised, sources=sources, header_docnum=doc_number)
+        if content_check["issues"]:
+            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
+            if quality.get("level") == "A":
+                quality["level"] = "B"
 
         # 上下文同步（例如"不要文号"这类指令）
         changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
@@ -806,7 +850,8 @@ class WritingTaskService:
         if changes:
             reply += "任务信息同步更新：" + "；".join(changes) + "。"
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
-                "quality": quality, "postprocess_events": events, "context_changes": changes,
+                "quality": quality, "content_check": content_check,
+                "postprocess_events": events, "context_changes": changes,
                 "references": references}
 
     # ---------------- 版本 / 导出 ----------------
