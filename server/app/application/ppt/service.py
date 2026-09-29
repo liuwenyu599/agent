@@ -1368,17 +1368,47 @@ class PPTService:
             )
             md = build_outline_markdown(outline)
             material = (d.source_content or "").strip()
-            content_md = md if not material else f"{md}\n\n# 原始素材\n{material}\n"
+            design = self.design_prompt_for_document(d)
+            content_md = md
+            if material:
+                content_md += f"\n\n# 原始素材\n{material[:8000]}"
+            content_md += (
+                "\n\n# 系统设计约束（必须执行）\n" + design
+                + "\n严格按已确认页数生成，不新增封面/结束页，不编造数据。"
+            )
             client = PPTAgentClient.from_settings()
+            expected = len(outline.get("slides") or [])
             data = client.render(
                 topic=(outline.get("title") or d.title or "未命名演示文稿"),
                 content_markdown=content_md,
-                slide_count=len(outline.get("slides") or []),
+                slide_count=expected,
                 template_hint=(template or {}).get("name") or (template or {}).get("id") or "",
             )
             ok, why = looks_like_pptx(data)
             if not ok:
                 raise PPTAgentError(f"结果非法：{why}")
+
+            issues = self.assess_generated_pptx(data, expected)
+            if issues:
+                logger.warning("[PPT] 同步 AI 智能设计未通过质量闸：%s", "；".join(issues))
+                retry_content = (
+                    content_md + "\n\n# 系统自动修正要求\n"
+                    + "请完整重做并修复：" + "；".join(issues)
+                    + "。保持页数和已确认大纲不变。"
+                )
+                retry = client.render(
+                    topic=(outline.get("title") or d.title or "未命名演示文稿"),
+                    content_markdown=retry_content,
+                    slide_count=expected,
+                    template_hint=(template or {}).get("name") or (template or {}).get("id") or "",
+                )
+                ok2, why2 = looks_like_pptx(retry)
+                retry_issues = self.assess_generated_pptx(retry, expected) if ok2 else [why2]
+                if retry_issues:
+                    raise PPTAgentError("质量检查未通过：" + "；".join(retry_issues))
+                data = retry
+                logger.info("[PPT] 同步 AI 智能设计自动重试通过：doc_id=%s", d.id)
+
             logger.info("PPTAgent 渲染成功：doc_id=%s，%d 字节", d.id, len(data))
             return data, "pptagent"
         except Exception as e:  # noqa: BLE001 - 任何异常都必须落到本地渲染
