@@ -1116,7 +1116,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     Text("排版视图", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
                         color = Primary)
                     Spacer(Modifier.width(Dimens.space3))
-                    Text("标题 22pt · 正文 16pt · 固定行距 28pt · 首行缩进 2 字符",
+                    Text("标题 22pt · 主送/正文 16pt · 固定行距 28pt · 首行缩进 2 字符",
                         fontSize = 11.sp, color = Muted)
                 }
                 Spacer(Modifier.height(Dimens.space5))
@@ -1128,10 +1128,18 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 Spacer(Modifier.height(Dimens.space3))
             }
             if (vm.task.title.isNotBlank()) {
-                Text(vm.task.title, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                Text(vm.task.title, fontSize = 22.sp, fontWeight = FontWeight.Normal,
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                     color = Ink, lineHeight = 34.sp)
                 Spacer(Modifier.height(Dimens.space5))
+            }
+            if (vm.task.recipient.isNotBlank()) {
+                Text(
+                    vm.task.recipient.trimEnd('：', ':') + "：",
+                    fontSize = 16.sp, color = Ink, lineHeight = 28.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(Dimens.space3))
             }
             if (sourceMode) {
                 OutlinedTextField(
