@@ -1452,7 +1452,16 @@ class PPTService:
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str]) -> str:
-        """渲染 pptx 并落盘，更新文档状态。返回文件路径。"""
+        """渲染 pptx 并落盘，更新文档状态。返回文件路径。
+
+        无论走 AI 智能设计还是严格套模板，渲染前都执行同一套确定性净化；
+        用户在确认页明确把目录改成正文时不重新强制补目录。
+        """
+        target = len((outline or {}).get("slides") or []) or None
+        outline = self.sanitize_outline(
+            outline, target_count=target, ensure_toc=False)
+        logger.info("[PPT] 渲染前规则净化完成：doc_id=%s pages=%d",
+                    d.id, len(outline.get("slides") or []))
         template, trow = self._resolve_template(template_id or d.template_id, d.theme_id or "")
         outline = ppt_engine.resolve_slide_images(outline, self._user_images(user.id))
         data, renderer = self._render_pptx_bytes(
