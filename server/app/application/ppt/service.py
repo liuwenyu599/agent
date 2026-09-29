@@ -198,18 +198,26 @@ class PPTService:
         if ensure_toc and len(slides) >= 6 and toc_index is None:
             titles = [
                 str(s.get("title") or "").strip()
-                for s in slides[2:-1]
+                for s in slides[1:-1]
                 if str(s.get("title") or "").strip()
+                and str(s.get("title") or "").strip() != "补充内容"
             ][:6]
-            old = slides[1]
-            slides[1] = {
-                **({"id": old["id"]} if old.get("id") else {}),
+            slides.insert(1, {
                 "type": "toc",
                 "title": "目录",
                 "points": titles or ["工作概况", "重点工作", "下一步安排"],
                 "sources": [],
-            }
-            logger.info("[PPT] 大纲净化：自动补齐目录页")
+            })
+            # 插目录后仍必须满足权威页数：优先删除 normalize_outline 自动补的空白页，
+            # 不直接牺牲原本的第 2 页正文。
+            if target_count and len(slides) > target_count:
+                drop = next(
+                    (i for i in range(len(slides) - 2, 1, -1)
+                     if str(slides[i].get("title") or "") == "补充内容"),
+                    len(slides) - 2,
+                )
+                slides.pop(drop)
+            logger.info("[PPT] 大纲净化：自动插入目录页并保持总页数")
 
         normalized["slides"] = slides
         normalized["title"] = slides[0].get("title") or normalized.get("title") or "演示文稿"
