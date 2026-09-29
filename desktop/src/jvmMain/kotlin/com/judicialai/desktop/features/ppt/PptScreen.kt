@@ -769,7 +769,7 @@ private fun PptTemplatesPane(vm: PptViewModel) {
 @Composable
 private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
     val id = t["id"].str()
-    val originalLayouts = t["layouts"].obj()
+    val originalLayouts = t["layouts"].obj() ?: JsonObject(emptyMap())
     val library = t["layout_library"].arr().mapNotNull { it.obj() }
 
     var name by remember(id) { mutableStateOf(t["name"].str()) }
