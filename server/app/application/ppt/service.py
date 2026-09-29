@@ -453,18 +453,33 @@ class PPTService:
         return {**self._doc_dto(d, template["name"]), "outline": d.outline, "template": template}
 
     def save_draft(self, doc_id: str, body, user: User) -> dict:
-        """自动保存草稿（编辑器定时调用）：只更新内容，不改变状态。"""
+        """自动保存草稿。
+
+        已生成文档若内容/模板真的发生变化，则标记回 draft，表示现有 pptx 已过期；
+        仅重新打开并原样保存时保持 generated，这样可以继续复用上次真实生成产物预览。
+        """
         d = self._get_doc_checked(doc_id, user)
+        changed = False
         if body.outline is not None:
-            d.outline = ppt_engine.normalize_outline(body.outline)
-            d.title = body.title or d.outline.get("title") or d.title
+            normalized = ppt_engine.normalize_outline(body.outline)
+            if normalized != (d.outline or {}):
+                changed = True
+            d.outline = normalized
+            new_title = body.title or d.outline.get("title") or d.title
+            if new_title != d.title:
+                changed = True
+            d.title = new_title
             d.subtitle = d.outline.get("subtitle") or d.subtitle
-        elif body.title:
+        elif body.title and body.title != d.title:
             d.title = body.title
+            changed = True
         if body.template_id:
             t = self.templates.get(body.template_id)
-            if t:
+            if t and t.id != d.template_id:
                 d.template_id = t.id
+                changed = True
+        if changed and d.status == "generated":
+            d.status = "draft"
         d = self.documents.update(d)
         return {"message": "已保存",
                 "updated_at": d.updated_at.strftime("%H:%M:%S") if d.updated_at else ""}
@@ -555,15 +570,22 @@ class PPTService:
                            ",".join(missing), doc_id)
             return self._degraded_preview(reason)
 
+        preview_source = "draft"
         try:
-            template, trow = self._resolve_template(d.template_id, d.theme_id or "")
-            outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
-            data = ppt_engine.render_pptx(outline, template,
-                                          base_pptx=self._tpl_base_bytes(trow))
+            # 已生成且未再编辑：直接预览上次真实产出的 pptx。
+            # 这保证“生成完成时看到什么，重新打开仍看到什么”，避免退回本地简化模板。
+            if d.status == "generated" and d.file_path and os.path.exists(d.file_path):
+                data = Path(d.file_path).read_bytes()
+                preview_source = "generated"
+            else:
+                template, trow = self._resolve_template(d.template_id, d.theme_id or "")
+                outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
+                data = ppt_engine.render_pptx(outline, template,
+                                              base_pptx=self._tpl_base_bytes(trow))
         except Exception as e:
-            logger.warning("PPT 逐页预览降级：草稿渲染 pptx 失败（doc_id=%s）：%s: %s",
+            logger.warning("PPT 逐页预览降级：渲染 pptx 失败（doc_id=%s）：%s: %s",
                            doc_id, type(e).__name__, e)
-            return self._degraded_preview("草稿渲染失败，暂无法显示真实版式预览")
+            return self._degraded_preview("版式渲染失败，暂无法显示真实预览")
 
         prev_dir = self.ppt_dir / "preview" / d.id
         if prev_dir.exists():
@@ -608,7 +630,8 @@ class PPTService:
             return self._degraded_preview(
                 "渲染流程完成但未生成预览图（请检查 pdftoppm 与字体依赖）")
         return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in names],
-                "count": len(names), "degraded": False, "reason": ""}
+                "count": len(names), "degraded": False, "reason": "",
+                "source": preview_source}
 
     def preview_image(self, doc_id: str, name: str, user: User) -> Path:
         """预览图下载（仅本人文档的预览目录，防目录穿越）。"""
