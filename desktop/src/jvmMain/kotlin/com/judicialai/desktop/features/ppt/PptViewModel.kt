@@ -116,6 +116,10 @@ class PptViewModel(private val repo: PptRepository) {
         private set
     var downloadingId by mutableStateOf<String?>(null)
         private set
+    var templateEditor by mutableStateOf<JsonObject?>(null)
+        private set
+    var templateEditorBusy by mutableStateOf(false)
+        private set
 
     // ---- 入口页 ----
     var topic by mutableStateOf("")
@@ -285,6 +289,51 @@ class PptViewModel(private val repo: PptRepository) {
                 is ApiResult.Ok -> loadTemplates()
                 is ApiResult.Err -> status = r.message
             }
+        }
+    }
+
+    fun openTemplateEditor(id: String) {
+        if (templateEditorBusy) return
+        templateEditorBusy = true
+        status = "正在读取模板骨架…"
+        scope.launch {
+            when (val r = repo.templateDetail(id)) {
+                is ApiResult.Ok -> {
+                    templateEditor = r.data
+                    status = null
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            templateEditorBusy = false
+        }
+    }
+
+    fun closeTemplateEditor() {
+        templateEditor = null
+    }
+
+    fun saveTemplateEditor(
+        id: String,
+        name: String,
+        category: String,
+        description: String,
+        font: String,
+        layouts: Map<String, String>,
+    ) {
+        if (templateEditorBusy) return
+        templateEditorBusy = true
+        status = "正在保存模板骨架…"
+        scope.launch {
+            when (val r = repo.updateTemplate(
+                id, name.trim(), category.trim(), description.trim(), font.trim(), layouts)) {
+                is ApiResult.Ok -> {
+                    status = "模板骨架已保存"
+                    templateEditor = null
+                    loadTemplates()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            templateEditorBusy = false
         }
     }
 
