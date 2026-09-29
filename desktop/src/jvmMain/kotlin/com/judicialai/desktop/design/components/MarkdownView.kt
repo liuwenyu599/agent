@@ -1,5 +1,9 @@
 package com.judicialai.desktop.design.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.SurfaceTonal
 
 private val OrderedListRegex = Regex("^\\d+\\.\\s+.*")
 
@@ -43,10 +49,67 @@ private fun inlineMd(text: String): AnnotatedString = buildAnnotatedString {
  */
 @Composable
 fun MarkdownView(text: String, modifier: Modifier = Modifier) {
+    val lines = text.split('\n')
+
+    fun tableCells(line: String): List<String> {
+        val raw = line.trim()
+        val parts = raw.split('|').toMutableList()
+        if (raw.startsWith("|") && parts.isNotEmpty()) parts.removeAt(0)
+        if (raw.endsWith("|") && parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
+        return parts.map { it.trim() }
+    }
+
+    fun isSeparator(line: String): Boolean {
+        val cells = tableCells(line)
+        return cells.isNotEmpty() && cells.all {
+            it.replace(":", "").trim().matches(Regex("-{3,}"))
+        }
+    }
+
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        text.split('\n').forEach { line ->
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
             val t = line.trimEnd()
             val s = t.trim()
+
+            if (s.startsWith("|") && i + 1 < lines.size && isSeparator(lines[i + 1])) {
+                val rows = mutableListOf<List<String>>()
+                rows += tableCells(s)
+                i += 2 // 跳过 Markdown 表头分隔行
+                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                    rows += tableCells(lines[i])
+                    i += 1
+                }
+                val cols = rows.maxOfOrNull { it.size } ?: 0
+                if (cols > 0) {
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .border(1.dp, Line, RoundedCornerShape(6.dp))
+                    ) {
+                        rows.forEachIndexed { rowIndex, row ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .background(if (rowIndex == 0) SurfaceTonal else androidx.compose.ui.graphics.Color.Transparent)
+                            ) {
+                                repeat(cols) { col ->
+                                    Text(
+                                        inlineMd(row.getOrElse(col) { "" }),
+                                        modifier = Modifier.weight(1f)
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        fontSize = 12.5.sp,
+                                        fontWeight = if (rowIndex == 0) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = Ink2,
+                                        lineHeight = 19.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                continue
+            }
+
             when {
                 s.isBlank() -> Spacer(Modifier.height(4.dp))
                 s == "---" || s == "***" || s == "___" -> {
@@ -75,10 +138,9 @@ fun MarkdownView(text: String, modifier: Modifier = Modifier) {
                             color = Ink, lineHeight = 26.sp)
                     }
                 }
-                s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
-                    lineHeight = 20.sp)
                 else -> Text(inlineMd(s), fontSize = 14.5.sp, color = Ink, lineHeight = 26.sp)
             }
+            i += 1
         }
     }
 }
