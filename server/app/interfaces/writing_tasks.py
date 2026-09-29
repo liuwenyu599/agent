@@ -49,6 +49,7 @@ class TaskCreateRequest(BaseModel):
     session_id: Optional[str] = None
     template_id: Optional[str] = None      # 关联写作模板
     kb_ids: Optional[list] = None          # 关联知识库（限定检索范围）
+    planned_context: Optional[Dict[str, Any]] = None  # /plan 已解析结果，避免重复 LLM 理解
 
 
 class TaskChatRequest(BaseModel):
@@ -84,7 +85,8 @@ def create_task(req: TaskCreateRequest,
                 user: User = Depends(get_current_user),
                 svc: WritingTaskService = Depends(get_task_service)):
     return svc.create_task(user.id, req.message, req.session_id,
-                           template_id=req.template_id, kb_ids=req.kb_ids)
+                           template_id=req.template_id, kb_ids=req.kb_ids,
+                           planned_context=req.planned_context)
 
 
 class TaskPlanRequest(BaseModel):
