@@ -2,7 +2,7 @@
 
 核心原则：
 - 任务上下文结构化，识别不出的字段为 None，绝不虚构；
-- 文号/成文日期默认关闭，只有用户明确要求才启用（用户指定值原样使用）；
+- 文号默认关闭；成文日期由程序接管，用户指定日期优先，否则使用系统当天；
 - revise 是"对当前文档的修改"，明确告知模型不得重新起草、不得改变事实；
 - 每次 AI 修改自动形成版本（复用 documents 版本快照）；
 - 所有查询按 user_id 隔离；
@@ -48,7 +48,7 @@ REVISION_RULES = (
     "而工作计划、方案、举措等用户自主规划的内容应充分展开，不得整段标注占位；\n"
     "4. 如果用户的要求在当前文档中已经满足、或不构成实质改动，"
     "原样输出全文，不得为了显得有改动而做无谓变动；\n"
-    "5. 直接输出修改后的完整公文，不要解释、不要加前后缀。"
+    "5. 标题、主送机关由系统结构化排版；输出修改后的正文主体，不要在正文开头重复标题或主送机关，不要解释、不要加前后缀。"
 )
 
 DRAFT_RULES = (
@@ -66,7 +66,7 @@ DRAFT_RULES = (
     "4. 严格服从已确认文种与任务边界：通知就写通知、报告就写报告、工作要点就写工作要点，"
     "不得擅自把一种文种改写成另一种；正文只能围绕已确认的主题、用途、报送对象、时间范围和写作要求展开，"
     "不得把一次报送通知扩写成全年工作部署等无关内容。\n"
-    "5. 结构完整：标题、主送（如适用）、正文、落款（如适用）。\n"
+    "5. 标题、主送机关属于系统结构化排版字段；模型只输出正文主体及必要落款内容，禁止在正文开头重复标题或主送机关。\n"
     "6. 文号和成文日期由系统程序处理，正文不要自行编写文号，不要输出 XX/xx/XXXX、"
     "2026年X月X日等占位符；联系人、电话、邮箱等材料未提供时直接省略，不得伪造。\n"
     "7. 输出前自检：逐节回看，凡是章节标题下面没有完整段落、只有「略」"
@@ -306,7 +306,11 @@ class WritingTaskService:
             if val:
                 fields.append({"label": label, "value": str(val)})
 
-        materials = self._plan_materials(ctx, user_id, org_ctx)
+        # 进入工作台不应被“推荐材料检索”拖住。只有用户明确表达要参考/结合材料时，
+        # 才在规划阶段做向量检索；真正起草时仍会按知识权限正常 RAG，不影响内容依据。
+        material_cues = ("参考", "结合", "根据", "依据", "材料", "范文", "案例", "政策", "文件")
+        materials = self._plan_materials(ctx, user_id, org_ctx) \
+            if any(cue in message for cue in material_cues) else []
         knowledge = self._plan_knowledge(user_id, org_ctx)
         template = self._plan_template(doc_type, org_ctx)
 
@@ -873,6 +877,9 @@ class WritingTaskService:
         已含落款行/日期，则不再用 ctx 中的发文机关/成文日期追加，避免出现两个落款。
         """
         from app.application.chat.docx_export import generate_official_document, markdown_to_docx
+        # 兼容旧任务：历史正文可能把标题/主送也写进 current_content；
+        # 导出前再次确定性去重，避免 Word 出现双标题/双主送。
+        content = self._strip_leading_structural_fields(content, ctx)
         doc_number = ""
         if ctx.get("document_number_enabled") and ctx.get("document_number"):
             doc_number = ctx["document_number"]
