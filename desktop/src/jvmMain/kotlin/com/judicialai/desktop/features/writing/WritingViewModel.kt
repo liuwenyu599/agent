@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import java.io.File
@@ -103,6 +104,25 @@ class WritingViewModel(
      */
     var restoring by mutableStateOf(false)
         private set
+
+    /**
+     * 轻提示（如「取消生成成功」）：居中浮层短暂展示后自动消失。
+     * 与 [status] 的区别：status 会驻留直到下一次操作覆盖，轻提示只闪一下，
+     * 用于「用户刚做的动作生效了」这类即时反馈，不打断后续操作。
+     */
+    var toast by mutableStateOf<String?>(null)
+        private set
+    private var toastJob: Job? = null
+
+    /** 弹一个轻提示，[durationMs] 后自动消失（默认 0.5 秒） */
+    fun showToast(msg: String, durationMs: Long = 500) {
+        toastJob?.cancel()
+        toast = msg
+        toastJob = scope.launch {
+            delay(durationMs)
+            toast = null
+        }
+    }
 
     /** 历史版本预览弹窗（查看 + 回退） */
     var versionPreview by mutableStateOf<JsonObject?>(null)
@@ -198,6 +218,10 @@ class WritingViewModel(
     /**
      * 取消本次生成：立即结束本地等待，界面恢复可操作。
      * 服务端若仍在生成会在后台收尾，其结果不再写回当前界面（协程已取消）。
+     *
+     * 注意：这里**不写 [status]**。取消是用户主动操作、不是失败，
+     * 写 status 会被按提示条/错误框渲染；协程取消后 ApiClient 会上抛
+     * CancellationException 正常收尾，不会再走 fail()。
      */
     fun cancelGeneration() {
         activeJob?.cancel()
@@ -205,7 +229,18 @@ class WritingViewModel(
         busy = false
         planning = false
         AppState.writingGenerating = false
-        status = "已取消本次生成"
+    }
+
+    /**
+     * 「取消生成」按钮语义：停止等待 → 轻提示「取消生成成功」（约 0.5 秒自动消失）
+     * → 回到任务入口初始状态。
+     */
+    fun cancelAndReset() {
+        cancelGeneration()
+        newTask()
+        spec = null
+        planError = null
+        showToast("取消生成成功")
     }
 
     // ---------------- 跨页面恢复 ----------------
