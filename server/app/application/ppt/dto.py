@@ -93,6 +93,13 @@ class StructureIn(BaseModel):
     instruction: str = ""
 
 
+class OutlineAdjustIn(BaseModel):
+    """大纲整体调整：一句自然语言指令（如「把目录页改成正文页」），作用于整份大纲。"""
+
+    instruction: str = Field(min_length=1, max_length=500)
+    outline: dict
+
+
 class CloudCfgIn(BaseModel):
     enabled: bool = False
     api_key: str = ""

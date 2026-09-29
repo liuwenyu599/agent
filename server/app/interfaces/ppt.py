@@ -19,6 +19,7 @@ from app.application.ppt.dto import (
     ImportUrlIn,
     JobClarifyIn,
     JobSubmitIn,
+    OutlineAdjustIn,
     OutlineIn,
     SlideActionIn,
     StructureIn,
@@ -104,7 +105,7 @@ def delete_template(template_id: str, user: User = Depends(get_current_user),
 
 @router.post("/templates/{template_id}/favorite")
 def toggle_favorite(template_id: str, user: User = Depends(get_current_user),
-                    svc: PPTService = Depends(get_ppt_service)):
+                  svc: PPTService = Depends(get_ppt_service)):
     return svc.toggle_favorite(template_id, user)
 
 
@@ -379,6 +380,14 @@ def ai_structure(body: StructureIn,
     return svc.ai_structure(body)
 
 
+@router.post("/ai/outline-adjust")
+def ai_outline_adjust(body: OutlineAdjustIn,
+                      user: User = Depends(get_current_user),
+                      svc: PPTService = Depends(get_ppt_service)):
+    """大纲整体调整：一句自然语言指令（如「把目录页改成正文页」）改写整份大纲。"""
+    return svc.ai_outline_adjust(body)
+
+
 # ================= 云端生成 =================
 
 @router.get("/cloud-config")
@@ -389,8 +398,8 @@ def get_cloud_config(user: User = Depends(get_current_user),
 
 @router.put("/cloud-config")
 def put_cloud_config(body: CloudCfgIn,
-                   user: User = Depends(get_current_user),
-                   svc: PPTService = Depends(get_ppt_service)):
+                     user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
     return svc.put_cloud_config(body)
 
 
