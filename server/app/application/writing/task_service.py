@@ -181,6 +181,17 @@ class WritingTaskService:
     _EXTERNAL_DOCNUM_RE = re.compile(
         r"[\u4e00-\u9fffA-Za-z]{1,16}〔20\d{2}〕\d{1,8}号"
     )
+    _DOCNUM_CUE_WORDS = ("根据", "依据", "按照", "依照", "遵照")
+
+    @classmethod
+    def _canonical_external_docnum(cls, raw: str) -> str:
+        """剥掉正文连接词，避免把“根据穗司发〔…〕号”整体当作文号。"""
+        value = raw
+        for cue in cls._DOCNUM_CUE_WORDS:
+            pos = value.rfind(cue)
+            if pos >= 0 and pos + len(cue) < len(value):
+                value = value[pos + len(cue):]
+        return value
 
     @classmethod
     def _guard_external_document_numbers(
@@ -212,7 +223,10 @@ class WritingTaskService:
         evidence_parts.extend(str(x) for x in (ctx.get("key_facts") or []))
         evidence = "\n".join(evidence_parts)
 
-        cited = list(dict.fromkeys(cls._EXTERNAL_DOCNUM_RE.findall(text)))
+        cited = list(dict.fromkeys(
+            cls._canonical_external_docnum(raw)
+            for raw in cls._EXTERNAL_DOCNUM_RE.findall(text)
+        ))
         unsupported = [num for num in cited if num not in evidence]
         if not unsupported:
             return text, []
