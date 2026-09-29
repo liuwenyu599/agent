@@ -121,10 +121,36 @@ class PptViewModel(private val repo: PptRepository) {
     var topic by mutableStateOf("")
     var slideCount by mutableStateOf("")
     private val today = LocalDate.now()
-    var presenter by mutableStateOf("")
-    var generationYear by mutableStateOf(today.year.toString())
-    var location by mutableStateOf("白云司法局")
-    var reportDate by mutableStateOf(today.toString())
+    var presenter by mutableStateOf(AppState.pptPresenter)
+        private set
+    var generationYear by mutableStateOf(
+        AppState.pptGenerationYear.ifBlank { today.year.toString() })
+        private set
+    var location by mutableStateOf(AppState.pptLocation)
+        private set
+    var reportDate by mutableStateOf(
+        AppState.pptReportDate.ifBlank { today.toString() })
+        private set
+
+    fun updatePresenter(value: String) {
+        presenter = value
+        AppState.pptPresenter = value
+    }
+
+    fun updateGenerationYear(value: String) {
+        generationYear = value
+        AppState.pptGenerationYear = value
+    }
+
+    fun updateLocation(value: String) {
+        location = value
+        AppState.pptLocation = value
+    }
+
+    fun updateReportDate(value: String) {
+        reportDate = value
+        AppState.pptReportDate = value
+    }
     val materials = mutableStateListOf<MaterialAnalysis>()
     var analyzing by mutableStateOf(false)
         private set
