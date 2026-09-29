@@ -65,22 +65,23 @@ def _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12)):
     ))
 
 
-def _add_red_header(doc, title=""):
-    """添加公文红头（发文机关标识）"""
+def _add_red_header(doc, authority=""):
+    """添加发文机关标志；正文标题必须另行排版，不能拿标题冒充红头。"""
     p = doc.add_paragraph()
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(6))
-    run = p.add_run(title if title else "××司法局文件")
+    name = (authority or "").strip()
+    header = (name + "文件") if name else "司法行政机关文件"
+    run = p.add_run(header)
     _set_font(run, FONT_TITLE, Pt(22), color=RGBColor(0xFF, 0x00, 0x00))
-
-    # 红色分割线：通栏段落下边框，不换行
-    _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12))
 
 
 def _add_doc_number(doc, number=""):
-    """添加发文字号"""
+    """添加发文字号；未启用文号时不输出任何占位符。"""
+    if not (number or "").strip():
+        return
     p = doc.add_paragraph()
-    _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
-    run = p.add_run(number if number else "××司发〔2026〕××号")
+    _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(6))
+    run = p.add_run(number.strip())
     _set_font(run, FONT_BODY, Pt(14))
 
 
@@ -280,16 +281,12 @@ def _add_page_setup(doc):
 
 
 def _add_header_footer(doc, title=""):
-    """添加页眉页脚"""
+    """公文页眉保持空白；页脚仅保留页码，不写平台名称或文档标题。"""
     for section in doc.sections:
-        # 页眉
         header = section.header
         header.is_linked_to_previous = False
         hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-        hp.text = title if title else "司法智能办公辅助平台 V1.0"
-        _set_paragraph_format(hp, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-        for run in hp.runs:
-            _set_font(run, '宋体', Pt(10), color=RGBColor(0x80, 0x80, 0x80))
+        hp.text = ""
 
         # 页脚 - 页码
         footer = section.footer
@@ -369,17 +366,20 @@ def markdown_to_docx(text: str, title: str = "公文",
     # 添加页眉页脚
     _add_header_footer(doc, title)
 
-    # 红头（可选）
+    # 发文机关标志（可选）：红头与正文标题是两个不同结构字段。
     if use_red_header:
-        _add_red_header(doc, title)
+        _add_red_header(doc, signature)
         _add_doc_number(doc, doc_number)
-    else:
-        # 普通标题
-        if title and title != "公文":
-            p = doc.add_paragraph()
-            _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
-            run = p.add_run(title)
-            _set_font(run, FONT_TITLE, Pt(22))
+        _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12))
+
+    # 正文标题：红头/普通导出都必须单独存在。
+    if title and title != "公文":
+        p = doc.add_paragraph()
+        _set_paragraph_format(
+            p, alignment=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=Pt(6), space_after=Pt(12))
+        run = p.add_run(title)
+        _set_font(run, FONT_TITLE, Pt(22))
 
     # 主送机关
     if recipient:
