@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -336,7 +337,7 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                     placeholder = { Text("搜索知识库", fontSize = 13.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
                     singleLine = true,
-                    modifier = Modifier.width(220.dp).height(52.dp),
+                    modifier = Modifier.width(220.dp).heightIn(min = 56.dp),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
                 )
@@ -531,7 +532,7 @@ private fun KnowledgeDetail(vm: KnowledgeViewModel) {
                 }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
             colors = TextFieldDefaults.outlinedTextFieldColors(
                 focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
         )
