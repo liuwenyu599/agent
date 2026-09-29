@@ -1055,6 +1055,64 @@ def ai_structure_action(assistant, action: str, slides: List[Dict], index: int,
     return normalize_outline({"title": "", "slides": slides})["slides"]
 
 
+def ai_outline_adjust(assistant, outline: Dict, instruction: str) -> Dict:
+    """AI 整体调整大纲：一句自然语言指令作用于整份大纲。
+
+    适用场景是**跨页的整体调整**，例如「把目录页改成正文页」「合并第 3、4 页」
+    「统一把章节页标题改成动宾结构」——这类需求用单页修改要点很多次，
+    用结构增删又表达不了，所以把整份大纲交给模型一次性改写。
+
+    页数不做硬性约束：指令本身可能要求增减页；normalize_outline 仍会
+    恒定保证首屏封面、末屏结束页，并规整每个 slide 的字段结构。
+
+    Args:
+        assistant: 模型助手（PPT 专用或主模型）。
+        outline: 当前完整大纲（title/subtitle/slides）。
+        instruction: 用户的调整指令（自然语言一句话）。
+
+    Returns:
+        规范化后的完整大纲 dict。
+
+    Raises:
+        RuntimeError: 大纲为空、模型调用失败或返回内容无法解析。
+    """
+    clean = {
+        "title": outline.get("title", ""),
+        "subtitle": outline.get("subtitle", ""),
+        "slides": [{k: v for k, v in s.items() if not k.startswith("_")}
+                   for s in (outline.get("slides") or [])],
+    }
+    if not clean["slides"]:
+        raise RuntimeError("大纲为空，请先生成大纲")
+    prompt = f"""请按用户指令整体调整这份 PPT 大纲。
+
+【用户指令】{instruction}
+【当前大纲 JSON】
+{json.dumps(clean, ensure_ascii=False)[:9000]}
+
+【输出要求】
+1. 只输出调整后的完整大纲 JSON（保持 title/subtitle/slides 结构，slide 字段与输入一致）；
+2. 严格按指令调整，不动指令未涉及的页面与文字；
+3. 页型只能从 cover/toc/section/content/data/chart/case/timeline/process/summary/closing 中选择；
+4. 页数跟随指令（指令要求合并/拆分时才变），否则保持原页数；
+5. 保留每页的 sources 内容依据字段；不要虚构事实和数据。"""
+    try:
+        raw = assistant.complete(
+            [{"role": "system", "content": _SLIDE_SYSTEM},
+             {"role": "user", "content": prompt}],
+            temperature=0.3, max_tokens=8192)
+    except Exception as e:
+        raise RuntimeError(f"调用模型失败: {e}")
+    if raw.startswith("【系统错误】") or raw.startswith("调用模型失败"):
+        raise RuntimeError(raw)
+    result = _loads_ai_json(raw, "AI 这次返回的内容格式不规范，大纲未被修改，请重试该操作")
+    if not isinstance(result.get("slides"), list) or not result["slides"]:
+        raise RuntimeError("AI 没有返回有效的页面列表，大纲未被修改，请重试")
+    result.setdefault("title", clean["title"] or "演示文稿")
+    result.setdefault("subtitle", clean["subtitle"])
+    return normalize_outline(result)
+
+
 # ================= 上传模板：从 pptx 提取视觉风格 =================
 
 def _lighten(hex_color: str, factor: float = 0.92) -> str:
