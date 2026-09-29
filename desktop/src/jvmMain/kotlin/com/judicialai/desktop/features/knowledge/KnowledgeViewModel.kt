@@ -25,6 +25,13 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
         private set
     var docs by mutableStateOf(listOf<JsonObject>())
         private set
+    var docPage by mutableStateOf(1)
+        private set
+    var docTotal by mutableStateOf(0)
+        private set
+    val docPageSize: Int = 20
+    var docSort by mutableStateOf("newest")
+        private set
     /** 顶部统计条：公共 / 科室 / 个人知识库数目 + 文档总数（由可见知识库列表计算，不走管理员统计接口） */
     var stats by mutableStateOf(listOf<Pair<String, String>>())
         private set
@@ -77,6 +84,8 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun back() {
         currentKb = null
         docs = emptyList()
+        docPage = 1
+        docTotal = 0
         clearSearch()
     }
 
@@ -94,18 +103,40 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
 
     fun select(kb: JsonObject) {
         currentKb = kb
+        docPage = 1
         clearSearch()
         loadDocs()
     }
 
-    fun loadDocs() {
+    fun loadDocs(page: Int = docPage) {
         val kbId = currentKb?.get("id")?.str() ?: return
+        val requested = page.coerceAtLeast(1)
         scope.launch {
-            when (val r = repo.listDocuments(kbId)) {
-                is ApiResult.Ok -> docs = r.data
+            when (val r = repo.listDocuments(kbId, requested, docPageSize, docSort)) {
+                is ApiResult.Ok -> {
+                    val o = r.data
+                    docs = o?.get("data").arr().mapNotNull { it.obj() }
+                    docTotal = o?.get("total").int()
+                    docPage = o?.get("page").int().coerceAtLeast(1)
+                }
                 is ApiResult.Err -> status = r.message
             }
         }
+    }
+
+    fun setDocSort(sort: String) {
+        if (sort == docSort) return
+        docSort = sort
+        docPage = 1
+        loadDocs(1)
+    }
+
+    fun prevDocPage() {
+        if (docPage > 1) loadDocs(docPage - 1)
+    }
+
+    fun nextDocPage() {
+        if (docPage * docPageSize < docTotal) loadDocs(docPage + 1)
     }
 
     // ---- 库内搜索：即输即搜，结果一返回就显示 ----
