@@ -32,9 +32,18 @@ class KnowledgeRepository(private val api: ApiClient) {
 
     suspend fun deleteKb(id: String) = api.del(Endpoints.Knowledge.kb(id))
 
-    suspend fun listDocuments(kbId: String): ApiResult<List<JsonObject>> =
-        when (val r = api.get(Endpoints.Knowledge.documents(kbId))) {
-            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+    suspend fun listDocuments(
+        kbId: String,
+        page: Int = 1,
+        pageSize: Int = 20,
+        sort: String = "newest",
+    ): ApiResult<JsonObject?> =
+        when (val r = api.get(
+            Endpoints.Knowledge.documents(kbId) +
+                "?page=$page&page_size=$pageSize&sort=" +
+                java.net.URLEncoder.encode(sort, "UTF-8")
+        )) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
             is ApiResult.Err -> r
         }
 
