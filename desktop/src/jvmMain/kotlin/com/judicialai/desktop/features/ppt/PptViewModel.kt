@@ -962,7 +962,7 @@ class PptViewModel(private val repo: PptRepository) {
      * 服务端尚未部署 /ppt/jobs（HTTP 404/405）时**回退到同步导出**，
      * 保证后端没跟上时功能不倒退（同步路径的超时已放宽到 20 分钟）。
      */
-    fun startGenerateAsync(target: File, overrideMessage: String? = null) {
+    fun startGenerateAsync(target: File? = null, overrideMessage: String? = null) {
         val id = docId ?: return
         // 同 startOutline：切回页面后 busy 已重置，仅靠 busy 挡不住重复发起
         if (AppState.pptExporting) {
@@ -991,18 +991,27 @@ class PptViewModel(private val repo: PptRepository) {
             AppState.pptExporting = false
             when (r) {
                 is ApiResult.Ok -> if (r.data.status == "failed") {
-                    // 后端明确拒绝（未配置 PPT_AGENT_URL 之类）：HTTP 仍是 200，只有 status 能看出来
-                    ClientLog.warn("异步生成被服务端拒绝，回退同步导出：" + r.data.hint)
+                    ClientLog.warn("异步生成被服务端拒绝：" + r.data.hint)
                     PptJobEngine.reset()
-                    generateAndExport(target)
+                    if (target != null) {
+                        generateAndExport(target)
+                    } else {
+                        status = r.data.hint.ifBlank { "后台生成服务暂不可用，请联系管理员" }
+                        AppState.pptLastError = status
+                    }
                 } else {
                     status = "已提交生成任务，可先去其他页面，完成后会自动回到这里"
                 }
                 is ApiResult.Err -> {
                     if (r.status == 404 || r.status == 405) {
-                        ClientLog.warn("异步生成接口不可用（HTTP ${r.status}），回退同步导出")
+                        ClientLog.warn("异步生成接口不可用（HTTP " + r.status + "）")
                         PptJobEngine.reset()
-                        generateAndExport(target)
+                        if (target != null) {
+                            generateAndExport(target)
+                        } else {
+                            status = "服务器暂不支持后台生成，请联系管理员完成服务升级"
+                            AppState.pptLastError = status
+                        }
                     } else {
                         AppState.pptLastError = r.message
                         status = r.message
@@ -1056,14 +1065,10 @@ class PptViewModel(private val repo: PptRepository) {
         status = null
     }
 
-    /** FAILED / CANCELLED 后重试：复用提交时的需求与保存位置重新提交 */
+    /** FAILED / CANCELLED 后重试：复用提交时需求；本地保存位置可稍后再选。 */
     fun retryJob() {
         val p = PptJobEngine.current ?: return
         val target = p.targetFile
-        if (target == null) {
-            status = "请先重新选择保存位置"
-            return
-        }
         val message = p.message
         PptJobEngine.reset()
         startGenerateAsync(target, message)
