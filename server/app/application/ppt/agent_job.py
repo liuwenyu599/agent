@@ -476,7 +476,7 @@ class PPTAgentJobRunner:
             slides = len((doc.outline or {}).get("slides") or [])
             _update_job(self.doc_id, file_path=str(path), status="generated",
                         slide_count=slides, job_status="succeeded",
-                        job_phase="succeeded", job_renderer="strict_template",
+                        job_phase="succeeded", job_renderer="local",
                         job_error="", job_question="",
                         job_finished_at=now_local(), job_progress_at=now_local())
             logger.warning("[PPT] 已切换严格套模板并完成：job_id=%s，内部原因=%s",
