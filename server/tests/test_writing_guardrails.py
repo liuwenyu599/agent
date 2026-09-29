@@ -14,12 +14,14 @@ from app.application.chat.docx_export import (
     markdown_to_docx,
     _split_markdown_table_row,
 )
+from app.application.writing.content_check import ContentChecker
 from app.application.writing.postprocessor import (
     TODAY_STR,
     PostProcessor,
     derive_daizi,
 )
 from app.application.writing.task_service import WritingTaskService
+from app.application.writing.task_parser import normalize_recipient_name
 
 
 def test_markdown_table_without_trailing_pipe_keeps_last_cell():
@@ -187,3 +189,73 @@ def test_official_export_keeps_red_header_separate_from_document_title():
     assert title_p.runs[0].font.size == Pt(22)
     assert title_p.runs[0].bold is not True
     assert all(not p.text.strip() for s in doc.sections for p in s.header.paragraphs)
+
+
+
+def test_postprocessor_corrects_explicit_multiplication_amount():
+    raw = "经测算，1336 × 150 × 12 = 239.85 万元。"
+    out, events, _number, _date = PostProcessor().process(
+        raw, inject_docnum=False, inject_date=False)
+    assert "240.48 万元" in out
+    assert "239.85 万元" not in out
+    assert any("算术校正" in e for e in events)
+
+
+def test_correspondence_uses_official_ending_and_concise_prompt():
+    svc = WritingTaskService.__new__(WritingTaskService)
+    instruction = svc._build_draft_instruction({
+        "document_type": "函",
+        "topic": "经费结算",
+        "recipient": "广州市白云区财政局",
+        "authority": "广州市白云区司法局",
+    }, outline_only=False)
+    assert "3-5 个自然段或部分" in instruction
+    assert "800-1200 字" in instruction
+    assert "6-8 个章节" not in instruction
+    assert "不得使用书信式“此致、敬礼”" in instruction
+
+    raw = "有关事项说明如下。\n\n此致\n敬礼"
+    out, events, _number, _date = PostProcessor().process(
+        raw, inject_docnum=False, inject_date=False, document_type="函")
+    assert "此致" not in out
+    assert "敬礼" not in out
+    assert "特此函告。" in out
+    assert any("函件结语校正" in e for e in events)
+
+
+def test_placeholder_docnum_and_date_are_removed_or_replaced():
+    raw = (
+        "关于测试事项的函\n"
+        "xx司发〔2026〕xx号\n\n"
+        "正文。\n\n"
+        "广州市白云区司法局\n"
+        "2026年×月×日"
+    )
+    out, events, number, out_date = PostProcessor().process(
+        raw,
+        signoff_hint="广州市白云区司法局",
+        inject_docnum=False,
+        inject_date=True,
+        document_type="函",
+    )
+    assert "xx司发" not in out
+    assert "×月×日" not in out
+    assert TODAY_STR in out
+    assert number is None
+    assert out_date == TODAY_STR
+
+
+def test_baiyun_recipient_is_normalized_to_full_agency_name():
+    assert normalize_recipient_name("白云区财政局") == "广州市白云区财政局"
+    assert normalize_recipient_name("广州市白云区财政局") == "广州市白云区财政局"
+    assert normalize_recipient_name("各镇街、各部门") == "各镇街、各部门"
+
+
+def test_document_number_citation_without_retrieved_evidence_is_flagged():
+    result = ContentChecker().check(
+        "根据穗司发〔2018〕278号有关要求执行。",
+        sources=[{"content": "这里只包含其他政策材料。"}],
+    )
+    messages = [i["message"] for i in result["issues"]]
+    assert any("穗司发〔2018〕278号" in m and "未在本次检索材料中找到" in m
+               for m in messages)
