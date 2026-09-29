@@ -95,7 +95,7 @@ class PptJobProgress {
     var docId by mutableStateOf<String?>(null)
     /** 提交时用户填的补充需求，「重试」时复用 */
     var message by mutableStateOf("")
-    /** 用户预先选好的 pptx 保存位置（离开页面再回来也还记得） */
+    /** 可选的本地下载位置；服务端生成产物会先自动保存，用户可稍后再下载。 */
     var targetFile: File? = null
 
     var status by mutableStateOf(PptJobStatus.SUBMITTED)
@@ -233,7 +233,7 @@ object PptJobEngine {
      * 此时 [PptJobProgress.submitRejected] = true，由调用方回退同步导出。
      */
     suspend fun submit(
-        repository: PptRepository, docId: String, message: String, target: File,
+        repository: PptRepository, docId: String, message: String, target: File? = null,
     ): ApiResult<PptJobSubmit> {
         stopPolling()
         exportJob?.cancel()
