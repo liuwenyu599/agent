@@ -475,7 +475,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             continue
 
         # 列表项
-        list_match = re.match(r'^(\s*)([-*]|\d+\.)\s+(.+)
+        list_match = re.fullmatch(r'(\s*)([-*]|\d+\.)\s+(.+)', line)
         if list_match:
             indent_len = len(list_match.group(1))
             level = indent_len // 2  # 每2个空格一级
