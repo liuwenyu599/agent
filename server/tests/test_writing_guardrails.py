@@ -9,6 +9,8 @@ from app.application.chat.docx_export import (
     FONT_BODY,
     FONT_H1,
     FONT_H2,
+    FONT_TITLE,
+    generate_official_document,
     markdown_to_docx,
 )
 from app.application.writing.postprocessor import (
@@ -152,3 +154,28 @@ def test_clear_plan_uses_rule_fast_without_llm_or_material_search():
     assert result["doc_type"] == "通知"
     assert "社区矫正" in result["title"]
     assert result["materials"] == []
+
+
+def test_official_export_keeps_red_header_separate_from_document_title():
+    authority = "中共广州市白云区委全面依法治区委员会办公室"
+    title = "关于报送有关材料的通知"
+    buf = generate_official_document(
+        content="现就有关事项通知如下。",
+        title=title,
+        doc_number="",
+        recipient="各镇街、各部门：",
+        signature=authority,
+        date_text=TODAY_STR,
+    )
+    doc = Document(BytesIO(buf.getvalue()))
+    texts = [p.text for p in doc.paragraphs if p.text.strip()]
+
+    assert texts[0] == authority + "文件"
+    assert title in texts
+    assert texts.index(title) > texts.index(authority + "文件")
+    assert not any("××司发" in t or "XX" in t or "××" in t for t in texts)
+    title_p = next(p for p in doc.paragraphs if p.text == title)
+    assert title_p.runs[0].font.name == FONT_TITLE
+    assert title_p.runs[0].font.size == Pt(22)
+    assert title_p.runs[0].bold is not True
+    assert all(not p.text.strip() for s in doc.sections for p in s.header.paragraphs)
