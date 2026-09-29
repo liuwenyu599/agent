@@ -13,7 +13,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -42,7 +41,6 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
     DOCUMENTS("我的文档", Icons.Default.Description),
     WORKFLOW("工作流程", Icons.Default.Share),
 
-    TRAINING("数据资产中心", Icons.Default.Storage),
     ADMIN("管理后台", Icons.Default.Settings),
     SETTINGS("服务器连接设置", Icons.Default.Settings),
 }
@@ -90,7 +88,6 @@ object AppNav {
     /** 管理后台 Tab 序号与 AdminScreen 内 TabRow 顺序一致（0 统计 / 1 用户 / 2 知识库 / 3 文档） */
     val adminItems: List<NavItem> = listOf(
         NavItem(AppScreen.ADMIN, "用户与组织", Icons.Default.Group, "账号、科室与角色", adminTab = 1),
-        NavItem(AppScreen.TRAINING, desc = "语料、样本与数据集"),
     )
 
     /** 科室管理员：只暴露本科室范围内的维护入口 */
