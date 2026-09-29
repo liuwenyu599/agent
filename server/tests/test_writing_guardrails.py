@@ -117,3 +117,38 @@ def test_docx_export_recognizes_plain_text_official_headings_and_indent():
     assert body.runs[0].font.size == Pt(16)
     assert body.paragraph_format.first_line_indent == Pt(32)
     assert body.paragraph_format.line_spacing == Pt(28)
+
+
+def test_body_structure_strips_duplicate_title_and_recipient():
+    ctx = {
+        "document_type": "通知",
+        "title": "关于报送有关材料的通知",
+        "recipient": "各镇街、各部门",
+    }
+    raw = (
+        "关于报送有关材料的通知\n\n"
+        "各镇街、各部门：\n\n"
+        "现就有关事项通知如下。"
+    )
+    assert WritingTaskService._strip_leading_structural_fields(raw, ctx) == (
+        "现就有关事项通知如下。"
+    )
+
+
+def test_clear_plan_uses_rule_fast_without_llm_or_material_search():
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = None
+    svc.rag = None
+    svc._interpret = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("明确文种+主题不应调用 LLM 规划"))
+    svc._plan_materials = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("未要求参考材料时不应同步做材料向量检索"))
+    svc._plan_knowledge = lambda *args, **kwargs: []
+    svc._plan_template = lambda *args, **kwargs: {}
+
+    result = svc.plan_task("u1", "请起草一份关于社区矫正工作的通知")
+
+    assert result["source"] == "rule_fast"
+    assert result["doc_type"] == "通知"
+    assert "社区矫正" in result["title"]
+    assert result["materials"] == []
