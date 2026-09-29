@@ -97,13 +97,16 @@ internal fun SkeletonBar(modifier: Modifier = Modifier) {
  * 顶部把关闭文档和 AI 生成设为明确的一级操作，避免用户被困在已打开的文档中。
  */
 @Composable
-fun PptWorkbench(vm: PptViewModel) {
+fun PptWorkbench(
+    vm: PptViewModel,
+    onClose: () -> Unit = { vm.closeDocument() },
+) {
     var showGenConfirm by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         WorkbenchTopBar(
             vm = vm,
-            onClose = { vm.closeDocument() },
+            onClose = onClose,
             onGenerate = { showGenConfirm = true },
         )
         Row(Modifier.weight(1f).fillMaxWidth()) {
