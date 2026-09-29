@@ -89,6 +89,7 @@ import com.judicialai.desktop.features.chat.model.ChatMessage
 import com.judicialai.desktop.features.chat.model.HistoryCategory
 import com.judicialai.desktop.features.chat.model.HistoryItem
 import java.time.LocalDate
+import java.util.prefs.Preferences
 
 /** 分类主题色：时间线与统计芯片共用同一套，保证一眼可辨 */
 private fun categoryColor(c: HistoryCategory): Color = when (c) {
@@ -108,10 +109,11 @@ private fun categoryIcon(c: HistoryCategory): ImageVector = when (c) {
 /** 一天一组的时间线分组 */
 private data class DayGroup(val label: String, val items: List<HistoryItem>)
 
-private fun groupByDay(items: List<HistoryItem>): List<DayGroup> {
+private fun groupByDay(items: List<HistoryItem>, newestFirst: Boolean): List<DayGroup> {
     val today = LocalDate.now()
+    val dayComparator = if (newestFirst) compareByDescending<String> { it } else compareBy { it }
     return items.groupBy { it.time.take(10) }
-        .toSortedMap(compareByDescending { it })
+        .toSortedMap(dayComparator)
         .map { (day, list) ->
             val d = runCatching { LocalDate.parse(day) }.getOrNull()
             val label = when (d) {
@@ -141,6 +143,13 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         vm.loadHistory(HistoryCategory.WORKFLOW)
     }
 
+    val historyPrefs = remember(AppState.username) {
+        Preferences.userRoot().node("com/judicialai/desktop/history/" +
+            AppState.username.ifBlank { "anonymous" })
+    }
+    var sortMode by remember(AppState.username) {
+        mutableStateOf(historyPrefs.get("sort", "newest"))
+    }
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf<HistoryCategory?>(null) } // null = 全部
     var renameTarget by remember { mutableStateOf<HistoryItem?>(null) }
@@ -154,13 +163,16 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
 
     val base = if (filter == null) vm.allHistoryItems()
     else vm.historyItemsOf(filter!!)
-    val items = base
-        .filter {
-            query.isBlank() || it.title.contains(query, ignoreCase = true) ||
-                it.sub.contains(query, ignoreCase = true)
-        }
-        .sortedByDescending { it.time }
-    val groups = groupByDay(items)
+    val filteredItems = base.filter {
+        query.isBlank() || it.title.contains(query, ignoreCase = true) ||
+            it.sub.contains(query, ignoreCase = true)
+    }
+    val items = if (sortMode == "oldest") {
+        filteredItems.sortedBy { it.time }
+    } else {
+        filteredItems.sortedByDescending { it.time }
+    }
+    val groups = groupByDay(items, newestFirst = sortMode != "oldest")
 
     Column(Modifier.fillMaxSize().background(AppBg)) {
         // ===== 顶部：标题 + 四类统计 =====
@@ -212,6 +224,19 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
                 if (filter == null) "全部 ${items.size} 条"
                 else "${filter?.label ?: ""} ${items.size} 条",
                 fontSize = 12.5.sp, color = Muted)
+            Spacer(Modifier.weight(1f))
+            Text("排序：", fontSize = 12.sp, color = Muted)
+            listOf("newest" to "最新优先", "oldest" to "最早优先").forEach { (key, label) ->
+                val selected = sortMode == key
+                TextButton(onClick = {
+                    sortMode = key
+                    historyPrefs.put("sort", key)
+                }) {
+                    Text(label, fontSize = 12.sp,
+                        color = if (selected) Primary else Ink2,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
         }
 
         vm.historyMessage?.let { msg ->
