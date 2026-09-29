@@ -1045,3 +1045,20 @@ def test_outline_page_count_hard_constraint_does_not_fabricate_fillers():
     fillers = out["slides"][1:-1]
     assert all(s["title"] == "补充内容" for s in fillers)
     assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
+
+
+def test_learned_layout_explicit_binding_overrides_auto_match():
+    """模板骨架编辑器显式绑定 L2 后，必须优先使用 L2 而不是自动挑同类型第一张。"""
+    from app.application.ppt import ppt_engine
+
+    layouts = [
+        {"id": "L0", "detected_type": "content", "name": "正文A"},
+        {"id": "L2", "detected_type": "cover", "name": "用户指定骨架"},
+    ]
+    picked = ppt_engine._pick_layout(
+        layouts, "content", used={}, preferred_layout_id="L2")
+    assert picked["id"] == "L2"
+
+    auto = ppt_engine._pick_layout(
+        layouts, "content", used={}, preferred_layout_id="")
+    assert auto["id"] == "L0"
