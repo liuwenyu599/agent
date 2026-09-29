@@ -869,19 +869,6 @@ class WritingViewModel(
         }
     }
 
-    fun addToTraining() {
-        val id = task.taskId ?: return
-        if (busy || !hasDraft) return
-        busy = true
-        scope.launch {
-            when (val r = repo.addToTraining(id, content)) {
-                is ApiResult.Ok -> status = "已加入训练候选样本（待审核）"
-                is ApiResult.Err -> fail(r.message)
-            }
-            busy = false
-        }
-    }
-
     fun newTask() {
         // 用户明确放弃当前任务：清掉跨页面恢复标记与上次失败原因，切回页面不应再恢复它
         AppState.pendingWritingTaskId = null
