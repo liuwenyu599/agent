@@ -515,6 +515,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                 "heading2" -> "二级标题"
                 "signature" -> "落款"
                 "date" -> "成文日期"
+                "content" -> "内容规范"
                 else -> "正文"
             }
             form.description.trim().take(18).ifBlank { prefix + "校验规则" }
@@ -772,6 +773,9 @@ private val CHECK_LABELS = linkedMapOf(
     "page_height_cm" to "页面高度",
     "no_extra_blank_lines" to "不允许多余空行",
     "no_trailing_spaces" to "不允许行尾空格",
+    "forbidden_words" to "禁用词",
+    "sensitive_words" to "敏感词",
+    "preferred_terms" to "规范替换词",
 )
 
 private val ALIGN_CN = mapOf(
