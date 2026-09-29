@@ -267,7 +267,7 @@ private fun AppHeader(
                     DropdownMenuItem(onClick = {
                         userMenuOpen = false
                         WindowManager.openNew()
-                    }) { Text("新开独立窗口", fontSize = 13.sp) }
+                    }) { Text("新开工作窗口（同一账号）", fontSize = 13.sp) }
                     if (AppState.isDeveloper) {
                         DropdownMenuItem(onClick = {
                             userMenuOpen = false
