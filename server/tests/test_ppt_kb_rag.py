@@ -335,9 +335,13 @@ def test_b1_search_raises_but_outline_still_200(client, accounts, fake_llm,
     assert r.status_code == 200, f"检索异常被冒泡成 {r.status_code}：{r.text}"
     body = r.json()
     assert body["outline"]["title"] == "行政复议工作汇报"
-    assert len(body["outline"]["slides"]) == 3
+    assert len(body["outline"]["slides"]) == 6
+    assert body["outline"]["slides"][0]["type"] == "cover"
+    assert body["outline"]["slides"][1]["type"] == "toc"
+    assert body["outline"]["slides"][-1]["type"] == "closing"
     assert body["doc_id"]
-    assert "【知识库检索材料】" not in fake_llm.last_prompt
+    prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]
+    assert all("【知识库检索材料】" not in p for p in prompts)
 
 
 def test_b2_stream_search_raises_still_emits_done(client, accounts, fake_llm,
@@ -349,7 +353,8 @@ def test_b2_stream_search_raises_still_emits_done(client, accounts, fake_llm,
         "kb_ids": [accounts["kbs"]["public"]]}, headers=_hdr(accounts["a"]["token"]))
     assert r.status_code == 200, r.text
     ev = _events(r.text)
-    assert [e["type"] for e in ev] == ["stage", "stage", "stage", "stage", "done"], ev
+    assert [e["type"] for e in ev] == [
+        "stage", "stage", "stage", "stage", "stage", "done"], ev
     assert ev[1]["text"] == "正在知识库中检索相关材料…"
     assert ev[-1]["data"]["outline"]["title"] == "行政复议工作汇报"
 
@@ -483,14 +488,16 @@ def test_e1_hit_sources_join_material_names(client, accounts, fake_llm,
         "material_names": ["材料A.txt"],
         "kb_ids": [accounts["kbs"]["public"]]}, headers=_hdr(accounts["a"]["token"]))
     assert r.status_code == 200, r.text
-    prompt = fake_llm.last_prompt
-    assert "知识库《复议案件办理规范》" in prompt
+    prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]
+    generation_prompt = next(
+        p for p in prompts if "知识库《复议案件办理规范》" in p)
+    assert "知识库《复议案件办理规范》" in generation_prompt
     # source_name 缺失时，从 source 字段提取干净标题（不再回落「知识库文档」）
-    assert "知识库《无主名 gjz新》" in prompt
+    assert "知识库《无主名 gjz新》" in generation_prompt
     # 原文 material_names 不被吞掉
-    assert "材料A.txt" in prompt
+    assert "材料A.txt" in generation_prompt
     # 片段带来源标注《名》（第N段）
-    assert "（复议办法（第3段））" in prompt
+    assert "（复议办法（第3段））" in generation_prompt
 
 
 def test_e2_unit_material_names_and_limit(accounts, fake_rag):
