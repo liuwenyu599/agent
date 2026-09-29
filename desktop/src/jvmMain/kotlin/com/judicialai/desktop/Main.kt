@@ -14,6 +14,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.judicialai.desktop.app.App
+import com.judicialai.desktop.app.LocalAwtWindow
 import com.judicialai.desktop.app.LocalWindowSession
 import com.judicialai.desktop.app.SplashScreen
 import com.judicialai.desktop.app.WindowManager
@@ -176,7 +177,10 @@ fun main() {
                     window.addWindowFocusListener(listener)
                     onDispose { window.removeWindowFocusListener(listener) }
                 }
-                CompositionLocalProvider(LocalWindowSession provides session) {
+                CompositionLocalProvider(
+                    LocalWindowSession provides session,
+                    LocalAwtWindow provides window,
+                ) {
                     val chromeActions = windowChromeActions(
                         maximized = maximized,
                         close = onCloseRequest,
