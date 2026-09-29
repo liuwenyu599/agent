@@ -814,8 +814,9 @@ def test_job_falls_back_to_local_on_agent_failure(monkeypatch, doc_and_token):
     assert len(Presentation(io.BytesIO(r.content)).slides) >= 1
 
 
-def test_job_returns_question_and_can_be_answered(monkeypatch, doc_and_token):
-    """R1 全链路：收到追问 → 前端拿到 question → 回答后续跑成功。"""
+def test_job_auto_handles_agent_question_without_user_interruption(
+        monkeypatch, doc_and_token):
+    """用户已确认大纲后，PPTAgent 再追问也不能打断用户；系统自动继续/降级。"""
     token, doc_id = doc_and_token
     outs = _filedata()
     outs[3] = None
@@ -824,29 +825,23 @@ def test_job_returns_question_and_can_be_answered(monkeypatch, doc_and_token):
 
     client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
     status = _wait_terminal(token, doc_id, timeout=10)
-    assert status["status"] == "awaiting_clarification", status
-    assert "上级机关" in status["question"]
-
-    # 换成能正常出产的 handler，再回答追问
-    pptx_bytes = _make_pptx_bytes("ANSWERED")
-    _install(monkeypatch, _handler_with(pptx_bytes))
-    r = client.post(f"{BASE}/ppt/jobs/{doc_id}/clarify",
-                    json={"answer": "面向上级机关"}, headers=_hdr(token))
-    assert r.status_code == 200, r.text
-    status = _wait_terminal(token, doc_id)
     assert status["status"] == "succeeded", status
-    assert status["renderer"] == "pptagent"
+    assert status["question"] == ""
+    # 替身每次都只会继续追问，所以自动重试后应无感切到严格模板。
+    assert status["renderer"] == "local"
 
 
-def test_empty_clarification_is_translated_to_instruction(monkeypatch, doc_and_token):
-    """空答复（用户选"按你的判断继续"）不能被原样发出去，要翻译成明确指令。"""
+def test_legacy_empty_clarification_is_translated_to_instruction(
+        monkeypatch, doc_and_token):
+    """兼容旧 awaiting_clarification 任务：空答复仍会翻译成明确默认指令。"""
     token, doc_id = doc_and_token
-    outs = _filedata()
-    outs[3] = None
-    outs[4] = "请确认汇报对象？"
-    _install(monkeypatch, _handler_with(b"", outputs=outs))
-    client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
-    assert _wait_terminal(token, doc_id, timeout=10)["status"] == "awaiting_clarification"
+    agent_job._update_job(
+        doc_id,
+        job_status="awaiting_clarification",
+        job_phase="awaiting_clarification",
+        job_question="请确认汇报对象？",
+        job_progress_at=now_local(),
+    )
 
     seen = {}
     pptx_bytes = _make_pptx_bytes("BLANK")
@@ -864,7 +859,6 @@ def test_empty_clarification_is_translated_to_instruction(monkeypatch, doc_and_t
     assert r.status_code == 200, r.text
     status = _wait_terminal(token, doc_id)
     assert status["status"] == "succeeded", status
-    # message 与 history 里都不能是空串
     assert seen["data"][0].strip(), "空答复必须被翻译成非空指令"
     user_turn = seen["data"][1][-1]["content"]
     assert user_turn.strip(), "history 的 user 轮次不能是空串"
