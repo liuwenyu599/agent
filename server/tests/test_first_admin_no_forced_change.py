@@ -14,7 +14,7 @@
 3. 默认参数向后兼容：`_create_user_checked()` 不传参时仍为 True。
 
 运行方式（在 server/ 目录下）：
-    D:/apps/anaconda3/python.exe -m pytest tests/test_first_admin_no_forced_change.py -v
+    D:/apps/anaconda3/python.exe -m pytest tests/test_firstadmin_no_forced_change.py -v
 
 数据隔离：服务层用内存仓储（零 IO）；接口层用独立临时 SQLite 库并覆盖 get_db，
 绝不写入测试共享库，更不会写入真实库。
@@ -100,7 +100,7 @@ def test_register_first_does_not_force_password_change():
     """正例：首个管理员自设强密码，注册后不得要求改密。"""
     svc = AuthService(InMemoryUserRepository())
     _token, user = svc.register_first(
-        username="first_admin", email="first_admin@test.local",
+        username="firstadmin", email="firstadmin@test.local",
         password=STRONG_PWD, real_name="首个系统管理员", role=ROLE_DEVELOPER,
     )
     assert user.role == ROLE_DEVELOPER
@@ -114,7 +114,7 @@ def test_register_first_rejects_weak_password():
     svc = AuthService(InMemoryUserRepository())
     with pytest.raises(Exception):
         svc.register_first(
-            username="first_admin", email="first_admin@test.local",
+            username="firstadmin", email="firstadmin@test.local",
             password=WEAK_PWD, role=ROLE_DEVELOPER,
         )
     assert svc.users.count() == 0
@@ -125,11 +125,11 @@ def test_admin_created_user_still_forced_to_change_password():
     repo = InMemoryUserRepository()
     svc = AuthService(repo)
     _token, admin = svc.register_first(
-        username="first_admin", email="first_admin@test.local",
+        username="firstadmin", email="firstadmin@test.local",
         password=STRONG_PWD, role=ROLE_DEVELOPER,
     )
     normal = svc.register(
-        actor=admin, username="normal_user", email="normal_user@test.local",
+        actor=admin, username="normaluser", email="normaluser@test.local",
         password=WEAK_PWD, role=ROLE_USER,
     )
     assert normal.must_change_password is True, "管理员代建账号必须保持强制改密"
@@ -149,16 +149,16 @@ def test_change_password_clears_the_flag():
     repo = InMemoryUserRepository()
     svc = AuthService(repo)
     _token, admin = svc.register_first(
-        username="first_admin", email="first_admin@test.local",
+        username="firstadmin", email="firstadmin@test.local",
         password=STRONG_PWD, role=ROLE_DEVELOPER,
     )
     normal = svc.register(
-        actor=admin, username="normal_user", email="normal_user@test.local",
+        actor=admin, username="normaluser", email="normaluser@test.local",
         password=WEAK_PWD, role=ROLE_USER,
     )
     assert normal.must_change_password is True
     svc.change_password(normal, WEAK_PWD, NEW_PWD, NEW_PWD)
-    assert repo.get_by_username("normal_user").must_change_password is False
+    assert repo.get_by_username("normaluser").must_change_password is False
 
 
 # ============================================================ 接口层（独立临时库）
@@ -173,7 +173,7 @@ def isolated_client(tmp_path):
     使 register-first 永远成功，断言不受执行顺序影响。
     """
     engine = create_engine(
-        f"sqlite:///{(tmp_path / 'first_admin.db').as_posix()}",
+        f"sqlite:///{(tmp_path / 'firstadmin.db').as_posix()}",
         connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(bind=engine)
@@ -197,12 +197,12 @@ def isolated_client(tmp_path):
         engine.dispose()
 
 
-def test_first_admin_token_reaches_business_endpoint(isolated_client):
+def test_firstadmin_token_reaches_business_endpoint(isolated_client):
     """核心回归：全新部署后首个管理员登录即可正常使用业务端点（不是 403）。"""
     client = isolated_client
 
     registered = client.post(f"{BASE}/auth/register-first", json={
-        "username": "first_admin", "email": "first_admin@test.local",
+        "username": "firstadmin", "email": "firstadmin@test.local",
         "password": STRONG_PWD, "real_name": "首个系统管理员",
     })
     assert registered.status_code == 200, registered.text
@@ -214,7 +214,7 @@ def test_first_admin_token_reaches_business_endpoint(isolated_client):
     assert me.json()["must_change_password"] is False
 
     relogin = client.post(f"{BASE}/auth/login", json={
-        "username": "first_admin", "password": STRONG_PWD})
+        "username": "firstadmin", "password": STRONG_PWD})
     assert relogin.status_code == 200
     assert relogin.json()["must_change_password"] is False
 
@@ -225,16 +225,16 @@ def test_first_admin_token_reaches_business_endpoint(isolated_client):
     )
 
 
-def test_first_admin_can_immediately_create_other_users(isolated_client):
+def test_firstadmin_can_immediately_create_other_users(isolated_client):
     """首个管理员注册后立刻具备管理动作权限（建号依赖 get_current_user）。"""
     client = isolated_client
     token = client.post(f"{BASE}/auth/register-first", json={
-        "username": "first_admin", "email": "first_admin@test.local",
+        "username": "firstadmin", "email": "firstadmin@test.local",
         "password": STRONG_PWD,
     }).json()["access_token"]
 
     created = client.post(f"{BASE}/auth/register", json={
-        "username": "normal_user", "email": "normal_user@test.local",
+        "username": "normaluser", "email": "normaluser@test.local",
         "password": WEAK_PWD, "role": ROLE_USER,
     }, headers=_hdr(token))
     assert created.status_code == 200, created.text
@@ -244,17 +244,17 @@ def test_admin_created_user_blocked_until_password_changed(isolated_client):
     """反例：管理员代建的账号仍被 403 拦截，改密后恢复——策略没被整体关掉。"""
     client = isolated_client
     dev_token = client.post(f"{BASE}/auth/register-first", json={
-        "username": "first_admin", "email": "first_admin@test.local",
+        "username": "firstadmin", "email": "firstadmin@test.local",
         "password": STRONG_PWD,
     }).json()["access_token"]
 
     assert client.post(f"{BASE}/auth/register", json={
-        "username": "normal_user", "email": "normal_user@test.local",
+        "username": "normaluser", "email": "normaluser@test.local",
         "password": WEAK_PWD, "role": ROLE_USER,
     }, headers=_hdr(dev_token)).status_code == 200
 
     login = client.post(f"{BASE}/auth/login", json={
-        "username": "normal_user", "password": WEAK_PWD})
+        "username": "normaluser", "password": WEAK_PWD})
     assert login.status_code == 200
     assert login.json()["must_change_password"] is True
     user_token = login.json()["access_token"]
