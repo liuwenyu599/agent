@@ -13,6 +13,17 @@ import kotlinx.coroutines.launch
 class AuthViewModel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    private fun validNewUsername(username: String): Boolean =
+        username.length in 3..32 && username.all { it.isLetterOrDigit() && it.code < 128 }
+
+    private fun validateNewUsername(username: String): Boolean {
+        if (!validNewUsername(username)) {
+            error = "用户名只能使用 3–32 位英文字母和数字，不能包含中文、空格或符号"
+            return false
+        }
+        return true
+    }
+
     var busy by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
@@ -52,6 +63,7 @@ class AuthViewModel {
         if (username.isBlank() || password.isBlank() || email.isBlank()) {
             error = "请填写完整信息"; return
         }
+        if (!validateNewUsername(username)) return
         busy = true; error = null; info = null
         scope.launch {
             when (val r = AppState.api.register(username, password, email, realName, department)) {
@@ -67,6 +79,7 @@ class AuthViewModel {
         if (username.isBlank() || password.isBlank() || email.isBlank()) {
             error = "请填写完整信息"; return
         }
+        if (!validateNewUsername(username)) return
         busy = true; error = null; info = null
         scope.launch {
             when (val r = AppState.api.registerFirst(username, password, email, realName, department)) {
