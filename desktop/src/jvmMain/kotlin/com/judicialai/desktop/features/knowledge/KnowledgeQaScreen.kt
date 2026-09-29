@@ -26,6 +26,7 @@ import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.AppTextField
 import com.judicialai.desktop.design.components.MarkdownView
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.chat.model.ChatMessage
@@ -155,11 +156,15 @@ fun KnowledgeQaScreen(
                     Text(if (vm.uploading) "上传中…" else "附件")
                 }
                 Spacer(Modifier.width(8.dp))
-                OutlinedTextField(
+                AppTextField(
                     value = input,
                     onValueChange = { input = it },
-                    placeholder = { Text("输入问题；也可拖拽文件或 Ctrl+V 粘贴文件/图片") },
-                    modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 120.dp),
+                    label = "问题",
+                    placeholder = "输入问题；也可拖拽文件或 Ctrl+V 粘贴文件/图片",
+                    modifier = Modifier.weight(1f),
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 4,
                     enabled = !vm.sending,
                 )
                 Spacer(Modifier.width(8.dp))
