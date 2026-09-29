@@ -1322,16 +1322,25 @@ class PPTService:
 
     def _resolve_template(self, template_id: Optional[str],
                           fallback_theme: str = "") -> Tuple[Dict, Optional[PPTTemplate]]:
+        """解析模板；任何缺省/失效选择都显式回到默认政务模板。"""
         if template_id:
             t = self.templates.get(template_id)
             if t:
                 return ppt_engine.template_to_dict(t), t
-        spec = next((s for s in BUILTIN_TEMPLATES if s["id"] == fallback_theme), None)
-        if not spec:
-            spec = BUILTIN_TEMPLATES[0]
-            t = self.templates.get_by_builtin_id(spec["id"])
-            if t:
-                return ppt_engine.template_to_dict(t), t
+            logger.warning("[PPT] 指定模板不存在，回退默认政务模板：template_id=%s",
+                           template_id)
+
+        desired = fallback_theme or DEFAULT_GOV_TEMPLATE_ID
+        spec = next((s for s in BUILTIN_TEMPLATES if s["id"] == desired), None)
+        if spec is None:
+            logger.warning("[PPT] 主题不存在，回退默认政务模板：theme_id=%s", desired)
+            spec = next(
+                (s for s in BUILTIN_TEMPLATES if s["id"] == DEFAULT_GOV_TEMPLATE_ID),
+                BUILTIN_TEMPLATES[0],
+            )
+        t = self.templates.get_by_builtin_id(spec["id"])
+        if t:
+            return ppt_engine.template_to_dict(t), t
         return ppt_engine.template_to_dict(spec), None
 
     def _render_pptx_bytes(self, d: PPTDocument, outline: dict, template: Dict,
@@ -1417,25 +1426,29 @@ class PPTService:
                            type(e).__name__, str(e)[:300])
             return local_render(), "local"
 
-    def render_local_pptx(self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
-        """**只走本地渲染**：用于 PPTAgent 失败后的兜底通道。
-
-        与 :meth:`_render_pptx_bytes` 的区别：本方法无条件调用
-        ``ppt_engine.render_pptx``，因此在 ``PPT_AGENT_URL`` 已配置的情况下也能
-        安全地作为兜底，不会二次触发 PPTAgent（否则会来回死循环）。
-
-        Args:
-            d: 文档（提供模板与主题）。
-            outline: 大纲。
-            user_id: 用户 ID（用于解析素材图片）。
-
-        Returns:
-            pptx 字节。
-        """
+    def render_strict_template_pptx(
+            self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
+        """严格套模板路径：不调用 PPTAgent，不允许模型重新决定布局。"""
         template, trow = self._resolve_template(d.template_id, d.theme_id or "")
-        outline = ppt_engine.resolve_slide_images(outline, self._user_images(user_id))
-        return ppt_engine.render_pptx(outline, template,
-                                      base_pptx=self._tpl_base_bytes(trow))
+        clean = self.sanitize_outline(
+            outline,
+            target_count=len((outline or {}).get("slides") or []) or None,
+            ensure_toc=False,
+        )
+        clean = ppt_engine.resolve_slide_images(clean, self._user_images(user_id))
+        base = self._tpl_base_bytes(trow)
+        logger.info(
+            "[PPT] 严格套模板渲染：doc_id=%s template=%s learned_base=%s pages=%d",
+            d.id,
+            template.get("name") or template.get("id") or DEFAULT_GOV_TEMPLATE_ID,
+            bool(base),
+            len(clean.get("slides") or []),
+        )
+        return ppt_engine.render_pptx(clean, template, base_pptx=base)
+
+    def render_local_pptx(self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
+        """兼容旧调用名：本地渲染即严格套模板路径。"""
+        return self.render_strict_template_pptx(d, outline, user_id)
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str]) -> str:
