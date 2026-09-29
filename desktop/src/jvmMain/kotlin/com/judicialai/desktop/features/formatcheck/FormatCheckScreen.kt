@@ -67,6 +67,7 @@ import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
@@ -79,6 +80,7 @@ import com.judicialai.desktop.design.components.EmptyState
 import com.judicialai.desktop.design.components.FilterChip
 import com.judicialai.desktop.design.components.LoadingBlock
 import com.judicialai.desktop.design.components.NoticeBar
+import com.judicialai.desktop.design.theme.AiIndigo
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.DangerSoft
@@ -104,6 +106,8 @@ import com.judicialai.desktop.design.theme.TextRegular
 import com.judicialai.desktop.design.theme.TextSecondary
 import com.judicialai.desktop.design.theme.Warn
 import com.judicialai.desktop.design.theme.WarnSoft
+import com.judicialai.desktop.design.theme.VioletInk
+import com.judicialai.desktop.design.theme.VioletSoft
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
