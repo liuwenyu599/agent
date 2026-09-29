@@ -41,6 +41,7 @@ from pptx.util import Inches  # noqa: E402
 from app.application.ppt import agent_job  # noqa: E402
 from app.application.ppt.service import PPTService  # noqa: E402
 from app.core.config import settings  # noqa: E402
+from app.core.timeutil import now_local  # noqa: E402
 from app.infrastructure.database import Base, engine  # noqa: E402
 from app.infrastructure.ppt.ppt_agent_client import (  # noqa: E402
     PPTAgentClient, PPTAgentError, looks_like_pptx,
