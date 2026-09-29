@@ -8,6 +8,7 @@
 import re
 import unicodedata
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
 from app.core.config import settings
@@ -93,6 +94,14 @@ HEADER_DOCNUM_LINE_RE = re.compile(
     r"[〔\[【［][^〕\]】］\]\n]{1,15}[〕\]】］\]]?"
     r"\s*[0-9０-９OoＯｏIl\s]{0,8}\s*[号好]?$"
 )
+PLACEHOLDER_DOCNUM_LINE_RE = re.compile(
+    r"^(?:[xX×＊*]{1,4})?[\u4e00-\u9fa5]{0,10}"
+    r"[〔\[【［]\s*20\d{2}\s*[〕\]】］]"
+    r"\s*[xX×＊*]{1,6}\s*号?$"
+)
+PLACEHOLDER_DATE_RE = re.compile(
+    r"20\d{2}\s*年\s*[xX×＊*]+\s*月\s*[xX×＊*]+\s*日"
+)
 
 SIGNOFF_LINE_RE = re.compile(
     r"^[\u4e00-\u9fa5]{2,20}"
@@ -135,9 +144,9 @@ def strip_header_docnum(text: str) -> Tuple[str, Optional[str]]:
     stripped = None
     for i in nonempty_idx[:6]:
         line = lines[i].strip()
-        if HEADER_DOCNUM_LINE_RE.match(line) and (
+        if (HEADER_DOCNUM_LINE_RE.match(line) and (
             "〔" in line or "［" in line or "[" in line or "【" in line
-        ):
+        )) or PLACEHOLDER_DOCNUM_LINE_RE.match(line):
             stripped = line
             lines[i] = ""
             break
@@ -337,6 +346,68 @@ def detect_garbled(text: str) -> Optional[str]:
     return None
 
 
+def fix_placeholder_signoff_date(text: str, target: str) -> Tuple[str, Optional[str]]:
+    """把文末“2026年×月×日”这类占位日期替换为真实目标日期。"""
+    matches = list(PLACEHOLDER_DATE_RE.finditer(text))
+    if not matches:
+        return text, None
+    last = matches[-1]
+    if last.start() < max(0, len(text) - 300):
+        return text, None
+    old = last.group(0)
+    return text[:last.start()] + target + text[last.end():], \
+        f"落款日期占位符替换：{old} → {target}"
+
+
+_MUL_AMOUNT_RE = re.compile(
+    r"(?P<a>\d+(?:\.\d+)?)\s*[×xX*]\s*"
+    r"(?P<b>\d+(?:\.\d+)?)"
+    r"(?:\s*[×xX*]\s*(?P<c>\d+(?:\.\d+)?))?"
+    r"(?P<middle>\s*(?:=|＝|合计|共计|总计|应为|为)\s*)"
+    r"(?P<stated>\d+(?:\.\d+)?)\s*万"
+)
+
+
+def fix_simple_multiplication_amounts(text: str) -> Tuple[str, List[str]]:
+    """纠正“明确乘法表达式 = X 万”中的机械算术错误。
+
+    只在等号/合计等明确结果语境下改，避免猜测普通统计数字。
+    """
+    events: List[str] = []
+
+    def repl(m: "re.Match") -> str:
+        try:
+            value = Decimal(m.group("a")) * Decimal(m.group("b"))
+            if m.group("c"):
+                value *= Decimal(m.group("c"))
+            expected = value / Decimal("10000")
+            stated = Decimal(m.group("stated"))
+        except (InvalidOperation, TypeError):
+            return m.group(0)
+        expected = expected.quantize(Decimal("0.01"))
+        if abs(expected - stated) < Decimal("0.005"):
+            return m.group(0)
+        shown = format(expected, "f").rstrip("0").rstrip(".")
+        events.append(
+            f"算术校正：{m.group('stated')}万 → {shown}万"
+        )
+        prefix = m.group(0)[:m.start("stated") - m.start()]
+        suffix = m.group(0)[m.end("stated") - m.start():]
+        return prefix + shown + suffix
+
+    return _MUL_AMOUNT_RE.sub(repl, text), events
+
+
+def normalize_correspondence_ending(text: str, document_type: Optional[str]) -> Tuple[str, Optional[str]]:
+    """函件禁止使用书信式“此致敬礼”，统一改为公文函结语。"""
+    if "函" not in (document_type or ""):
+        return text, None
+    pattern = re.compile(r"此致\s*[，,。！!]?\s*敬礼[！!。]?", re.M)
+    if not pattern.search(text):
+        return text, None
+    return pattern.sub("特此函告。", text), "函件结语校正：此致敬礼 → 特此函告"
+
+
 # ---------- 后处理流水线 ----------
 
 class PostProcessor:
@@ -356,6 +427,7 @@ class PostProcessor:
         doc_date: Optional[str] = None,
         inject_docnum: bool = True,
         inject_date: bool = True,
+        document_type: Optional[str] = None,
     ) -> Tuple[str, List[str], Optional[str], Optional[str]]:
         """后处理。
 
@@ -382,8 +454,18 @@ class PostProcessor:
         if fixes:
             events.append(f"历史文号格式规范化 {len(fixes)} 处")
 
+        text, ending_event = normalize_correspondence_ending(text, document_type)
+        if ending_event:
+            events.append(ending_event)
+
+        text, arithmetic_events = fix_simple_multiplication_amounts(text)
+        events.extend(arithmetic_events)
+
         # 3. 落款日期：用户指定 > 系统当天 > 不处理
         if doc_date:
+            text, placeholder_fix = fix_placeholder_signoff_date(text, doc_date)
+            if placeholder_fix:
+                events.append(placeholder_fix)
             text, date_fix = fix_signoff_date(text, target=doc_date)
             if date_fix:
                 events.append(date_fix)
@@ -391,6 +473,9 @@ class PostProcessor:
             if date_add:
                 events.append(date_add)
         elif inject_date:
+            text, placeholder_fix = fix_placeholder_signoff_date(text, TODAY_STR)
+            if placeholder_fix:
+                events.append(placeholder_fix)
             text, date_fix = fix_signoff_date(text)
             if date_fix:
                 events.append(date_fix)
