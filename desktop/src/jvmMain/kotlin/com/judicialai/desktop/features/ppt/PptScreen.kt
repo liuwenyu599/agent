@@ -82,6 +82,7 @@ fun slideTypeLabel(type: String) = SLIDE_TYPE_LABELS[type] ?: type
 fun PptScreen() {
     val vm = remember { PptViewModel(Repositories.ppt) }
     var libraryView by remember { mutableStateOf<String?>(null) }
+    var returnToWorksAfterClose by remember { mutableStateOf(false) }
     val pendingDocId = AppState.pendingPptDocId
     val generating = AppState.pptOutlineGenerating
     val pendingJobId = AppState.pendingPptJobId
@@ -105,7 +106,14 @@ fun PptScreen() {
         }
         when {
             vm.jobVisible -> PptAsyncWorkbench(vm)
-            vm.step == PptStep.WORKBENCH -> PptWorkbench(vm)
+            vm.step == PptStep.WORKBENCH -> PptWorkbench(vm) {
+                vm.closeDocument()
+                if (returnToWorksAfterClose) {
+                    returnToWorksAfterClose = false
+                    libraryView = "docs"
+                    vm.loadDocuments()
+                }
+            }
             vm.step == PptStep.OUTLINE -> OutlineConfirmPane(vm)
             libraryView == "docs" -> Column(Modifier.fillMaxSize().padding(24.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -114,7 +122,10 @@ fun PptScreen() {
                     Text("我的作品", style = MaterialTheme.typography.h6)
                 }
                 Spacer(Modifier.height(12.dp))
-                PptDocsPane(vm, onOpen = { libraryView = null })
+                PptDocsPane(vm, onOpen = {
+                    returnToWorksAfterClose = true
+                    libraryView = null
+                })
             }
             libraryView == "templates" -> Column(Modifier.fillMaxSize().padding(24.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -126,7 +137,11 @@ fun PptScreen() {
                 PptTemplatesPane(vm)
             }
             else -> PptEntryPane(vm,
-                onOpenDocuments = { libraryView = "docs"; vm.loadDocuments() },
+                onOpenDocuments = {
+                    returnToWorksAfterClose = false
+                    libraryView = "docs"
+                    vm.loadDocuments()
+                },
                 onOpenTemplates = { libraryView = "templates"; vm.loadTemplates() })
         }
     }
