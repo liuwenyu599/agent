@@ -205,11 +205,18 @@ class RagService:
 
             meta = (chunk.document.doc_metadata or {}) if chunk.document else {}
             src_type = meta.get("source_type", "file")
+            kb = chunk.document.knowledge_base if chunk.document else None
             results.append({
                 "content": content,
                 "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
+                "chunk_id": chunk_id,
+                "chunk_index": chunk.chunk_index,
                 # 带出文档 id：调用方（写作规划的材料清单）要按文档去重并给出「查看」入口
                 "doc_id": doc_id,
+                "doc_title": chunk.document.title if chunk.document else "",
+                "kb_id": kb.id if kb else "",
+                "kb_name": kb.name if kb else "",
+                "kb_type": kb.kb_type if kb else "",
                 "score": score,
                 "match_type": "hybrid" if (hit and kw) else ("vector" if hit else "keyword"),
                 "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
