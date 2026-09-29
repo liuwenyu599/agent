@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import java.awt.Window
 
 /**
  * 窗口会话：每个独立窗口一份。
@@ -68,3 +69,7 @@ object WindowManager {
 
 /** 当前组合所在的窗口会话；App / AppShell 据此渲染本窗口自己的页面与抽屉 */
 val LocalWindowSession = staticCompositionLocalOf<WindowSession> { WindowManager.ensureMain() }
+
+
+/** 当前 Compose Window 对应的 AWT Window；桌面原生拖拽等平台能力使用。 */
+val LocalAwtWindow = staticCompositionLocalOf<Window?> { null }
