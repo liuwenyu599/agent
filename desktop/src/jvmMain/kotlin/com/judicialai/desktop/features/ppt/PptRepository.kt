@@ -56,7 +56,7 @@ class PptRepository(private val api: ApiClient) {
             is ApiResult.Ok -> {
                 val obj = r.data.obj()
                 if (obj != null) ApiResult.Ok(obj)
-                else ApiResult.Err("模板详情格式错误")
+                else ApiResult.Err(null, "模板详情格式错误")
             }
             is ApiResult.Err -> r
         }
