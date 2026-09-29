@@ -380,7 +380,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
             run = p.add_run(title)
-            _set_font(run, FONT_TITLE, Pt(22), bold=True)
+            _set_font(run, FONT_TITLE, Pt(22))
 
     # 主送机关
     if recipient:
