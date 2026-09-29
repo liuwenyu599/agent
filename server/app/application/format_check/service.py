@@ -674,7 +674,7 @@ class FormatCheckService:
         """对「当前（已应用修正后）」的文档重跑规则检查，结果收敛回同一条记录。
 
         要点：
-        - ``use_ai=False``；AI 类 issue（``fix_hint`` 为 None）不参与 resolved 判定。
+        - 规则、确定性内容检查、AI 内容审校、知识库一致性检查全部重跑；
         - issues 是 append-only：老条目 id/下标永不变，只追加新问题；
           「已修正」由 resolved_ids 表达。
         - 段落位移补偿：应用过 ``delete_paragraph`` 后后续段落下标会前移，
@@ -689,28 +689,6 @@ class FormatCheckService:
         applied_issues = [issues[i] for i in applied
                           if isinstance(i, int) and 0 <= i < len(issues)
                           and isinstance(issues[i], dict)]
-        actionable = [i for i in issues if isinstance(i, dict) and i.get("fix_hint")]
-
-        # 纯 AI 校验记录（无规则快照）或无任何可应用的规则问题 → 跳过复检
-        if not record.rule_snapshot or not actionable:
-            logger.info("记录 %s 无可复检的规则问题，跳过 recheck", record.id)
-            return {
-                "id": record.id, "record_id": record.id,
-                "filename": record.filename, "file_type": record.file_type,
-                "check_mode": "ai_only" if not record.rule_snapshot else "rule",
-                "ai_used": False,
-                "skipped_reason": "ai_only_record",
-                "issue_count": len(issues),
-                "open_issue_count": _open_issue_count(record),
-                "applied_ids": load_id_list(record.applied_ids),
-                "resolved_ids": sorted(resolved),
-                "issues": issues,
-                "rules_used": [{"id": r.get("id"), "name": r.get("name"),
-                                "target": r.get("target")}
-                               for r in (record.rule_snapshot or [])
-                               if isinstance(r, dict)],
-            }
-
         # 被删除的段落（原始下标），用于位移补偿
         deleted_idx = sorted({
             it["paragraph_index"] for it in applied_issues
@@ -724,14 +702,18 @@ class FormatCheckService:
 
         def match_key(it: Dict, mapped_index: Optional[int]) -> Tuple:
             hint = it.get("fix_hint") or {}
-            value = hint.get("value")
-            return (mapped_index, it.get("element"), hint.get("type"),
-                    hint.get("field"), str(value) if value is not None else None)
+            if hint:
+                value = hint.get("value")
+                return ("fix", mapped_index, it.get("element"), hint.get("type"),
+                        hint.get("field"), str(value) if value is not None else None)
+            # AI / 知识库 / 仅提示类问题没有 fix_hint，用来源 + 问题项 + 当前原文定位。
+            current = str(it.get("current") or "").strip()[:120]
+            return ("review", mapped_index, it.get("source"), it.get("element"), current)
 
-        # 老问题：把原始下标换算到当前文档坐标系
+        # 老问题：把原始下标换算到当前文档坐标系；AI/知识库问题也参与解决判定。
         old_keys: Dict[Tuple, int] = {}
         for it in issues:
-            if not isinstance(it, dict) or not it.get("fix_hint"):
+            if not isinstance(it, dict):
                 continue
             p = it.get("paragraph_index")
             mapped = (p - offset(p)) if p is not None else None
@@ -742,8 +724,15 @@ class FormatCheckService:
                  for r in (record.rule_snapshot or []) if isinstance(r, dict)]
 
         doc_path = self._build_current_doc(record, applied)
-        result = self.engine.check_file(doc_path, record.filename, rules, use_ai=False)
+        result = self.engine.check_file(doc_path, record.filename, rules, use_ai=True)
         new_issues: List[Dict] = result.get("issues", [])
+        if self.rag is not None and self.engine.assistant is not None:
+            try:
+                doc = DocxDocument(str(doc_path))
+                full_text = "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+                new_issues.extend(self._knowledge_conflict_issues(full_text, user))
+            except Exception as e:
+                logger.warning("复检时知识库冲突检查失败，已跳过: %s", e)
         new_keys = {match_key(it, it.get("paragraph_index"))
                     for it in new_issues if isinstance(it, dict)}
 
@@ -785,7 +774,7 @@ class FormatCheckService:
             "id": record.id, "record_id": record.id,
             "filename": record.filename, "file_type": record.file_type,
             "check_mode": "rule",
-            "ai_used": False,
+            "ai_used": result.get("ai_used", False),
             "issue_count": len(issues),
             "open_issue_count": _open_issue_count(record),
             "applied_ids": [],
