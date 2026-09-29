@@ -252,10 +252,13 @@ class FormatCheckEngine:
         for rule in rule_map.get("general", []):
             issues.extend(self._check_general(paragraphs, rule))
 
-        # ---- AI 辅助 ----
+        # ---- 内容确定性检查：与排版规则并行，任何时候都执行 ----
+        full_text = "\n".join(p.text for p in paragraphs if p.text.strip())
+        issues.extend(self._content_rule_check(full_text, paragraphs))
+
+        # ---- AI 辅助：与确定性规则同时执行，不互相替代 ----
         ai_used = False
         if use_ai and self.assistant is not None:
-            full_text = "\n".join(p.text for p in paragraphs if p.text.strip())
             ai_issues = self._ai_check(full_text[:settings.FORMAT_CHECK_AI_BUDGET], rules)
             if ai_issues is not None:
                 issues.extend(ai_issues)
@@ -430,6 +433,7 @@ class FormatCheckEngine:
             "source": "rule", "severity": "warning",
             "paragraph_index": None, "fix_hint": None
         }]
+        issues.extend(self._content_rule_check(text, None))
         ai_used = False
         if use_ai and self.assistant is not None:
             ai_issues = self._ai_check(text[:settings.FORMAT_CHECK_AI_BUDGET], rules)
@@ -437,6 +441,73 @@ class FormatCheckEngine:
                 issues.extend(ai_issues)
                 ai_used = True
         return {"filename": filename, "file_type": "txt", "issues": issues, "ai_used": ai_used}
+
+    # ================= 内容确定性检查 =================
+    def _content_rule_check(self, text: str, paragraphs=None) -> List[Dict]:
+        """不依赖模型的内容规范检查。
+
+        敏感词/禁用词来自环境变量，避免把单位内部词表写死在代码中；
+        其余仅保留高置信、可解释的公文表达规则。
+        """
+        issues: List[Dict] = []
+        para_texts = [getattr(p, "text", "") for p in paragraphs] if paragraphs is not None else text.splitlines()
+
+        def locate(term: str):
+            for idx, raw in enumerate(para_texts):
+                if term and term in (raw or ""):
+                    return idx, f"第{idx + 1}段"
+            return None, "全文"
+
+        def add(term: str, element: str, expected: str, suggestion: str,
+                severity: str = "warning", replacement: Optional[str] = None):
+            idx, location = locate(term)
+            hint = None
+            if replacement is not None and idx is not None:
+                hint = {"type": "replace_text", "old": term, "new": replacement}
+            issues.append({
+                "location": location,
+                "element": element,
+                "current": term,
+                "expected": expected,
+                "suggestion": suggestion,
+                "source": "rule",
+                "severity": severity,
+                "paragraph_index": idx,
+                "fix_hint": hint,
+            })
+
+        for word in settings.FORMAT_CHECK_FORBIDDEN_WORDS:
+            if word and word in text:
+                add(word, "禁用词", "不得使用", f"删除或改写禁用词“{word}”。", "error")
+        for word in settings.FORMAT_CHECK_SENSITIVE_WORDS:
+            if word and word in text:
+                add(word, "敏感词", "需人工核实语境", f"请核实“{word}”是否符合本单位发布口径。")
+
+        # 高置信表达规范：仅检查明确可替换项，避免误伤正常公文表达。
+        replacements = {
+            "截止目前": ("时间表述", "截至目前"),
+            "截止现在": ("时间表述", "截至目前"),
+            "我们局": ("称谓规范", "我局"),
+            "我们单位": ("称谓规范", "我单位"),
+            "咱们": ("称谓规范", "本单位"),
+        }
+        for old, (element, new) in replacements.items():
+            if old in text:
+                add(old, element, new, f"建议将“{old}”规范为“{new}”。", replacement=new)
+
+        # 日期写法：正式公文中优先使用“YYYY年M月D日”，避免斜杠/点号日期。
+        for m in re.finditer(r"(?<!\d)(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?!\d)", text):
+            old = m.group(0)
+            new = f"{m.group(1)}年{int(m.group(2))}月{int(m.group(3))}日"
+            add(old, "日期写法", new, f"建议使用完整中文日期“{new}”。", replacement=new)
+
+        # 相对时间容易在归档后失真：提示人工确认，不自动替换。
+        for term in ("近日", "近期", "今年", "明年", "去年", "昨天", "今日"):
+            if term in text:
+                add(term, "时间表述", "必要时写明具体日期或时间范围",
+                    f"“{term}”属于相对时间，请确认归档后是否仍能准确理解；正式材料宜尽量写明具体时间。", "info")
+
+        return issues
 
     # ================= AI 辅助判断 =================
     def _ai_check(self, text: str, rules: List[Dict]) -> Optional[List[Dict]]:
@@ -446,20 +517,17 @@ class FormatCheckEngine:
         rule_brief = "；".join(
             f"{r['name']}（{r['target']}）" for r in rules[:15]
         ) or "（暂无已配置规则）"
-        if rules:
-            scope = """请只检查这些规则难以判断的问题：
-1. 落款（发文机关署名）和成文日期是否缺失或明显位置不当；
-2. 标题与正文结构是否明显混乱；
-3. 是否存在明显的重复段落、残留占位符（如"××"、"XXX"、"待补充"）；
-4. 文号格式是否明显不规范（若有文号）。"""
-        else:
-            # 无规则模式：AI 承担完整格式/规范审查（参照党政机关公文格式惯例）
-            scope = """当前系统尚未配置格式规则，请你参照党政机关公文格式惯例做全面审查：
-1. 标题、主送、正文、落款（发文机关署名）、成文日期等要素是否缺失或位置明显不当；
-2. 结构层次是否清晰（"一、""（一）""1."层级是否混乱）；
-3. 是否存在重复段落、残留占位符（如"××"、"XXX"、"待补充"）、明显口语化表述；
-4. 文号格式是否明显不规范（若有文号）；
-5. 其他明显不符合公文规范的问题。"""
+        scope = """在程序已经完成字体、字号、缩进、行距、页边距等确定性排版校验的基础上，
+请继续做内容规范审校，重点检查：
+1. 敏感词、禁用词、明显不宜用于正式公文的表述；
+2. 不规范、口语化、歧义或不够严谨的表达；
+3. 机关、部门、人员称谓是否前后一致、是否使用不规范简称；
+4. 数字、百分比、金额、序数、日期和时间的写法是否规范且前后一致；
+5. “截至/截止”“目前/近期/近日/今年/明年”等时间表述是否准确、是否需要明确具体日期；
+6. 标题、主送、落款、成文日期、文号及层级结构是否存在明显问题；
+7. 同一文档内部是否存在事实、数字、时间、主体或结论自相矛盾；
+8. 重复段落、残留占位符（如“××”“XXX”“待补充”）以及其他明显内容质量问题。
+不要重复报告程序规则已经明确发现的纯排版问题。"""
         prompt = f"""你是公文格式审核助手。以下是一份公文的纯文本内容（排版属性已另行检查，无需关注字体字号）。
 {scope}
 
