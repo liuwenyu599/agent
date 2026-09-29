@@ -254,7 +254,7 @@ class FormatCheckEngine:
 
         # ---- 内容确定性检查：与排版规则并行，任何时候都执行 ----
         full_text = "\n".join(p.text for p in paragraphs if p.text.strip())
-        issues.extend(self._content_rule_check(full_text, paragraphs))
+        issues.extend(self._content_rule_check(full_text, paragraphs, rules))
 
         # ---- AI 辅助：与确定性规则同时执行，不互相替代 ----
         ai_used = False
@@ -433,7 +433,7 @@ class FormatCheckEngine:
             "source": "rule", "severity": "warning",
             "paragraph_index": None, "fix_hint": None
         }]
-        issues.extend(self._content_rule_check(text, None))
+        issues.extend(self._content_rule_check(text, None, rules))
         ai_used = False
         if use_ai and self.assistant is not None:
             ai_issues = self._ai_check(text[:settings.FORMAT_CHECK_AI_BUDGET], rules)
@@ -443,7 +443,7 @@ class FormatCheckEngine:
         return {"filename": filename, "file_type": "txt", "issues": issues, "ai_used": ai_used}
 
     # ================= 内容确定性检查 =================
-    def _content_rule_check(self, text: str, paragraphs=None) -> List[Dict]:
+    def _content_rule_check(self, text: str, paragraphs=None, rules: Optional[List[Dict]] = None) -> List[Dict]:
         """不依赖模型的内容规范检查。
 
         敏感词/禁用词来自环境变量，避免把单位内部词表写死在代码中；
@@ -476,11 +476,22 @@ class FormatCheckEngine:
                 "fix_hint": hint,
             })
 
-        for word in settings.FORMAT_CHECK_FORBIDDEN_WORDS:
-            if word and word in text:
+        forbidden_words = list(settings.FORMAT_CHECK_FORBIDDEN_WORDS)
+        sensitive_words = list(settings.FORMAT_CHECK_SENSITIVE_WORDS)
+        preferred_terms = {}
+        for rule in (rules or []):
+            if not isinstance(rule, dict) or rule.get("target") != "content":
+                continue
+            checks = rule.get("checks") or {}
+            forbidden_words.extend(checks.get("forbidden_words") or [])
+            sensitive_words.extend(checks.get("sensitive_words") or [])
+            preferred_terms.update(checks.get("preferred_terms") or {})
+
+        for word in dict.fromkeys(str(x).strip() for x in forbidden_words if str(x).strip()):
+            if word in text:
                 add(word, "禁用词", "不得使用", f"删除或改写禁用词“{word}”。", "error")
-        for word in settings.FORMAT_CHECK_SENSITIVE_WORDS:
-            if word and word in text:
+        for word in dict.fromkeys(str(x).strip() for x in sensitive_words if str(x).strip()):
+            if word in text:
                 add(word, "敏感词", "需人工核实语境", f"请核实“{word}”是否符合本单位发布口径。")
 
         # 高置信表达规范：仅检查明确可替换项，避免误伤正常公文表达。
@@ -491,6 +502,11 @@ class FormatCheckEngine:
             "我们单位": ("称谓规范", "我单位"),
             "咱们": ("称谓规范", "本单位"),
         }
+        for old, new in preferred_terms.items():
+            old = str(old).strip()
+            new = str(new).strip()
+            if old and new:
+                replacements[old] = ("规范表达", new)
         for old, (element, new) in replacements.items():
             if old in text:
                 add(old, element, new, f"建议将“{old}”规范为“{new}”。", replacement=new)
