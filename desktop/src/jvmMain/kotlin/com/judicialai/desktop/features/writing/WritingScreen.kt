@@ -561,6 +561,30 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
 
             Spacer(Modifier.height(Dimens.space6))
 
+            // 初始格式设计入口：复用现有模板中心，不另造一套格式系统。
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(Dimens.radiusLg))
+                    .background(SurfaceTonal)
+                    .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+                    .clickable(enabled = !vm.busy) { AppState.navigate(AppScreen.TEMPLATES) }
+                    .padding(horizontal = Dimens.space4, vertical = Dimens.space3),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Description, null, tint = Primary,
+                    modifier = Modifier.size(Dimens.iconMd))
+                Spacer(Modifier.width(Dimens.space3))
+                Column(Modifier.weight(1f)) {
+                    Text("格式方案（可选）", fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold, color = Ink)
+                    Text("先选择或设计公文模板的结构、格式与写作要求；不选择则由系统自动匹配。",
+                        fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
+                }
+                Text("选择 / 设计 →", fontSize = 12.sp, color = Primary)
+            }
+
+            Spacer(Modifier.height(Dimens.space3))
+
             // 输入卡
             Column(
                 Modifier.fillMaxWidth()
