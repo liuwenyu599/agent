@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.application.ppt import ppt_engine
@@ -633,13 +633,22 @@ class PPTService:
         rows = self.db.scalars(select(KnowledgeBaseModel).where(
             KnowledgeBaseModel.is_active == True,  # noqa: E712
             KnowledgeBaseModel.id.in_(allowed))).all()
-        items = []
-        for kb in rows:
-            cnt = len(self.db.scalars(select(DocumentModel).where(
-                DocumentModel.kb_id == kb.id,
-                DocumentModel.status == "published")).all())
-            items.append({"id": kb.id, "name": kb.name,
-                          "description": kb.description or "", "doc_count": cnt})
+        # 一次聚合统计全部知识库文档数，避免“每个知识库再查一遍全部文档”的 N+1。
+        count_rows = self.db.execute(
+            select(DocumentModel.kb_id, func.count(DocumentModel.id))
+            .where(
+                DocumentModel.kb_id.in_(allowed),
+                DocumentModel.status == "published",
+            )
+            .group_by(DocumentModel.kb_id)
+        ).all()
+        counts = {kb_id: int(cnt or 0) for kb_id, cnt in count_rows}
+        items = [{
+            "id": kb.id,
+            "name": kb.name,
+            "description": kb.description or "",
+            "doc_count": counts.get(kb.id, 0),
+        } for kb in rows]
         return {"items": items}
 
     def _kb_content(self, kb_ids: list, limit: int = 6000) -> Tuple[str, List[str]]:
