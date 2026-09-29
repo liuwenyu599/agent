@@ -39,7 +39,8 @@ def test_draft_instruction_keeps_document_type_and_content_boundary():
 
     assert "文种：通知" in instruction
     assert "不得把通知写成工作要点" in instruction
-    assert "不得把一次报送通知扩写成全年工作部署" in instruction
+    assert "不得把通知写成工作要点" in instruction
+    assert "把报送事项扩写成全年工作部署" in instruction
     assert "文号与成文日期由系统程序处理" in instruction
 
 
