@@ -45,6 +45,28 @@ _PPTX_MIME = ("application/vnd.openxmlformats-officedocument."
 _PREVIEW_TOOLS: Tuple[str, ...] = ("soffice", "pdftoppm")
 _PREVIEW_TIMEOUTS: Dict[str, int] = {"soffice": 180, "pdftoppm": 120}
 
+# 用户不再承担“怎么设计”的提示工程。服务端按场景自动附加视觉约束。
+DEFAULT_DESIGN_PROMPT: Dict[str, str] = {
+    "gov": (
+        "庄重政务风格，深蓝主色，少装饰；每页不超过 4 个要点；"
+        "封面只放标题、副标题、汇报单位和日期，不放图表、流程图和数据框；"
+        "数据统一优先用清晰的数据卡片页呈现；正文突出结论，避免大段文字；"
+        "图表必须足够大且可直接阅读，不得用角落小图凑版面；结束页保持简洁。"
+    ),
+    "policy": (
+        "沉稳政策解读风格，深蓝与白色为主，层级清楚、少装饰；"
+        "每页不超过 4 个要点；政策条款用结构卡片或对照结构表达；"
+        "封面不放图表，正文避免密集小字，结论和执行要求优先突出。"
+    ),
+    "training": (
+        "清晰培训课件风格，蓝白主色，结构直观；每页不超过 4 个要点；"
+        "知识点优先使用步骤、对比、案例卡片表达；图片和图表必须足够大；"
+        "封面保持干净，不叠加数据框，结束页简洁。"
+    ),
+}
+DEFAULT_GOV_TEMPLATE_ID = "gov_report_red"
+_TOC_TITLE_RE = re.compile(r"^(目录|汇报提纲|内容提要|主要内容|汇报目录)$")
+
 
 class _PreviewRenderError(Exception):
     """预览渲染流程内部可控失败（如命令执行成功但未产出文件）。"""
@@ -100,6 +122,194 @@ class PPTService:
             gw = get_ppt_gateway()
             self._ppt_asst = WritingAssistant(gw) if gw is not None else self.assistant
         return self._ppt_asst
+
+    @staticmethod
+    def _auto_slide_count(content: str) -> int:
+        """用户未指定页数时按材料长度确定服务端权威页数。"""
+        chars = len(re.sub(r"\s+", "", content or ""))
+        if chars < 1000:
+            return 6
+        if chars <= 3000:
+            return 10
+        return 15
+
+    @classmethod
+    def _effective_slide_count(cls, requested: int, explicit: bool, content: str) -> int:
+        raw = requested if explicit else cls._auto_slide_count(content)
+        value = max(2, min(int(raw or 6), 18))
+        logger.info("[PPT] 页数决策：explicit=%s material_chars=%d target=%d",
+                    explicit, len(re.sub(r"\s+", "", content or "")), value)
+        return value
+
+    @staticmethod
+    def sanitize_outline(outline: Dict[str, Any], target_count: Optional[int] = None,
+                         ensure_toc: bool = True) -> Dict[str, Any]:
+        """纯规则净化：封面/目录/结束页的视觉字段由系统控制，不交给模型自由发挥。"""
+        normalized = ppt_engine.normalize_outline(
+            dict(outline or {}), target_count=target_count)
+        slides = [dict(s) for s in (normalized.get("slides") or [])]
+        if not slides:
+            return normalized
+
+        def cover_clean(src: Dict[str, Any]) -> Dict[str, Any]:
+            out: Dict[str, Any] = {
+                "type": "cover",
+                "title": str(src.get("title") or normalized.get("title") or "演示文稿"),
+                "subtitle": str(src.get("subtitle") or normalized.get("subtitle") or ""),
+            }
+            if src.get("id"):
+                out["id"] = src["id"]
+            for key in ("unit", "organization", "location", "date", "report_date",
+                        "presenter", "汇报单位", "日期"):
+                if src.get(key):
+                    out[key] = src[key]
+            # 兼容旧大纲把单位/日期塞进 points 的情况：提取元数据后丢弃 points/blocks。
+            for point in src.get("points") or []:
+                text = str(point).strip()
+                if re.match(r"^(汇报单位|单位|地点)[：:]", text) and "unit" not in out:
+                    out["unit"] = re.split(r"[：:]", text, maxsplit=1)[-1].strip()
+                elif re.match(r"^(汇报时间|日期|落款日期)[：:]", text) and "date" not in out:
+                    out["date"] = re.split(r"[：:]", text, maxsplit=1)[-1].strip()
+            return out
+
+        def closing_clean(src: Dict[str, Any]) -> Dict[str, Any]:
+            out = {"type": "closing",
+                   "title": str(src.get("title") or "谢谢聆听，请批评指正")}
+            if src.get("id"):
+                out["id"] = src["id"]
+            return out
+
+        slides[0] = cover_clean(slides[0])
+        if len(slides) > 1:
+            slides[-1] = closing_clean(slides[-1])
+
+        toc_index: Optional[int] = None
+        for i in range(1, max(1, len(slides) - 1)):
+            s = slides[i]
+            title = str(s.get("title") or "").strip()
+            if s.get("type") == "toc" or (ensure_toc and _TOC_TITLE_RE.match(title)):
+                s["type"] = "toc"
+                s.pop("blocks", None)
+                s.pop("image", None)
+                s.pop("chart", None)
+                toc_index = i if toc_index is None else toc_index
+
+        # 6 页以上的政务汇报默认应有目录；模型漏掉时由系统确定性补齐。
+        if ensure_toc and len(slides) >= 6 and toc_index is None:
+            titles = [
+                str(s.get("title") or "").strip()
+                for s in slides[2:-1]
+                if str(s.get("title") or "").strip()
+            ][:6]
+            old = slides[1]
+            slides[1] = {
+                **({"id": old["id"]} if old.get("id") else {}),
+                "type": "toc",
+                "title": "目录",
+                "points": titles or ["工作概况", "重点工作", "下一步安排"],
+                "sources": [],
+            }
+            logger.info("[PPT] 大纲净化：自动补齐目录页")
+
+        normalized["slides"] = slides
+        normalized["title"] = slides[0].get("title") or normalized.get("title") or "演示文稿"
+        normalized["subtitle"] = slides[0].get("subtitle") or normalized.get("subtitle") or ""
+        return normalized
+
+    def _audit_and_repair_outline(self, outline: Dict[str, Any], target_count: int,
+                                  content: str) -> Dict[str, Any]:
+        """大纲给用户确认前自动审查一次；模型失败时只降级为规则净化，不阻塞用户。"""
+        clean = self.sanitize_outline(outline, target_count=target_count, ensure_toc=True)
+        prompt = (
+            "你是司法行政机关 PPT 大纲质量检查员。检查并在必要时直接修正大纲。\n"
+            "重点检查：页面注水或重复、封面杂乱、6页以上缺目录、章节顺序不合理、"
+            "一页要点过多、结束页夹带正文内容。不得新增材料中不存在的事实或数据。\n"
+            f"最终页数必须严格等于 {target_count} 页。封面和结束页均计入页数。\n"
+            "只输出 JSON："
+            '{"needs_fix":true或false,"issues":["问题"],"outline":{"title":"","subtitle":"","slides":[]}}。'
+            "\n若无需修正，outline 原样返回。\n"
+            f"【材料节选】\n{(content or '')[:1800]}\n"
+            f"【当前大纲】\n{_json.dumps(clean, ensure_ascii=False)[:10000]}"
+        )
+        try:
+            raw = self._ppt_assistant().complete(
+                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=5000)
+            data = _parse_json_object(raw or "")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[PPT] 大纲自动审查失败，保留规则净化结果：%s", e)
+            return clean
+        if not data:
+            logger.warning("[PPT] 大纲自动审查返回不可解析内容，保留规则净化结果")
+            return clean
+        issues = [str(x)[:160] for x in (data.get("issues") or []) if str(x).strip()]
+        repaired = data.get("outline")
+        if data.get("needs_fix") and isinstance(repaired, dict) and repaired.get("slides"):
+            logger.info("[PPT] 大纲自动审查触发修正：%s", "；".join(issues) or "结构质量")
+            return self.sanitize_outline(
+                repaired, target_count=target_count, ensure_toc=True)
+        logger.info("[PPT] 大纲自动审查通过%s",
+                    f"（提示：{'；'.join(issues)}）" if issues else "")
+        return clean
+
+    def design_prompt_for_document(self, doc: PPTDocument) -> str:
+        """根据已选模板/场景生成服务端内置设计约束；未选模板默认政务模板。"""
+        category = "工作汇报"
+        name = "政务工作汇报"
+        font = "微软雅黑"
+        colors: Dict[str, Any] = {}
+        if doc.template_id:
+            t = self.templates.get(doc.template_id)
+            if t:
+                category, name, font, colors = t.category, t.name, t.font, dict(t.colors or {})
+        else:
+            spec = next((s for s in BUILTIN_TEMPLATES
+                         if s["id"] == (doc.theme_id or DEFAULT_GOV_TEMPLATE_ID)),
+                        BUILTIN_TEMPLATES[0])
+            category, name = spec["category"], spec["name"]
+            colors = dict(spec.get("colors") or {})
+        scene = "training" if "培训" in category else ("policy" if "政策" in category else "gov")
+        base = DEFAULT_DESIGN_PROMPT[scene]
+        palette = "、".join(str(v) for v in list(colors.values())[:6] if v)
+        return (
+            f"{base}\n已选模板：{name}（{category}）；字体：{font or '微软雅黑'}；"
+            + (f"主色参考：{palette}。" if palette else "")
+        )
+
+    @staticmethod
+    def assess_generated_pptx(data: bytes, expected_pages: int) -> List[str]:
+        """静态质量闸：页数、封面越界、明显不适合中文的显式字体。"""
+        issues: List[str] = []
+        try:
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(data))
+        except Exception as e:
+            return [f"文件解析失败：{type(e).__name__}"]
+        if expected_pages and len(prs.slides) != expected_pages:
+            issues.append(f"页数不符：期望{expected_pages}页，实际{len(prs.slides)}页")
+        if prs.slides:
+            sw, sh = int(prs.slide_width), int(prs.slide_height)
+            tol = max(sw, sh) // 1000
+            for shape in prs.slides[0].shapes:
+                left = int(getattr(shape, "left", 0) or 0)
+                top = int(getattr(shape, "top", 0) or 0)
+                width = int(getattr(shape, "width", 0) or 0)
+                height = int(getattr(shape, "height", 0) or 0)
+                if left < -tol or top < -tol or left + width > sw + tol or top + height > sh + tol:
+                    issues.append("封面存在越界元素")
+                    break
+        risky_fonts = ("dejavu", "liberation sans")
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if re.search(r"[\u4e00-\u9fff]", run.text or ""):
+                            name = (run.font.name or "").lower()
+                            if any(bad in name for bad in risky_fonts):
+                                issues.append(f"中文字体异常：{run.font.name}")
+                                return list(dict.fromkeys(issues))
+        return list(dict.fromkeys(issues))
 
     # ---- 存储路径 ----
     @property
