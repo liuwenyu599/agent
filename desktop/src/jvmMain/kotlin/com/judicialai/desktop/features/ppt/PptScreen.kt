@@ -25,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
+import androidx.compose.material.DropdownMenu
+import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
 import androidx.compose.material.LinearProgressIndicator
@@ -53,6 +55,9 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.platform.rememberServerImage
+import com.judicialai.desktop.core.utils.arr
+import com.judicialai.desktop.core.utils.bool
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
@@ -722,9 +727,15 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                                 Text(t["layout_count"].str().ifBlank { "?" } + " 种版式",
                                     style = MaterialTheme.typography.caption, color = SecondaryText)
                             }
-                            IconButton(onClick = { pendingDelete = t }) {
-                                Icon(Icons.Default.Delete, "删除",
-                                    tint = MaterialTheme.colors.error)
+                            if (t["is_mine"].bool()) {
+                                TextButton(
+                                    enabled = !vm.templateEditorBusy,
+                                    onClick = { vm.openTemplateEditor(t["id"].str()) },
+                                ) { Text("编辑骨架") }
+                                IconButton(onClick = { pendingDelete = t }) {
+                                    Icon(Icons.Default.Delete, "删除",
+                                        tint = MaterialTheme.colors.error)
+                                }
                             }
                         }
                     }
@@ -749,6 +760,125 @@ private fun PptTemplatesPane(vm: PptViewModel) {
             },
         ) {
             Text(t["name"].str().ifBlank { "未命名模板" })
+        }
+    }
+
+    vm.templateEditor?.let { TemplateSkeletonEditor(vm, it) }
+}
+
+@Composable
+private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
+    val id = t["id"].str()
+    val originalLayouts = t["layouts"].obj()
+    val library = t["layout_library"].arr().mapNotNull { it.obj() }
+
+    var name by remember(id) { mutableStateOf(t["name"].str()) }
+    var category by remember(id) { mutableStateOf(t["category"].str()) }
+    var description by remember(id) { mutableStateOf(t["description"].str()) }
+    var font by remember(id) { mutableStateOf(t["font"].str().ifBlank { "微软雅黑" }) }
+
+    var cover by remember(id) { mutableStateOf(originalLayouts["cover"].str()) }
+    var toc by remember(id) { mutableStateOf(originalLayouts["toc"].str()) }
+    var content by remember(id) { mutableStateOf(originalLayouts["content"].str()) }
+    var data by remember(id) { mutableStateOf(originalLayouts["data"].str()) }
+    var closing by remember(id) { mutableStateOf(originalLayouts["closing"].str()) }
+
+    AppDialog(
+        onDismissRequest = { vm.closeTemplateEditor() },
+        title = "编辑模板骨架",
+        subtitle = "给核心页型指定实际学习到的模板页。保存后“严格套模板”会优先使用这些版式。",
+        width = 720.dp,
+        actions = {
+            AppButton("取消", onClick = { vm.closeTemplateEditor() },
+                kind = AppButtonKind.SECONDARY)
+            Spacer(Modifier.width(8.dp))
+            AppButton(
+                "保存骨架",
+                enabled = !vm.templateEditorBusy && name.isNotBlank(),
+                loading = vm.templateEditorBusy,
+                onClick = {
+                    val mappings = buildMap {
+                        if (cover.isNotBlank()) put("cover", cover)
+                        if (toc.isNotBlank()) put("toc", toc)
+                        if (content.isNotBlank()) put("content", content)
+                        if (data.isNotBlank()) put("data", data)
+                        if (closing.isNotBlank()) put("closing", closing)
+                    }
+                    vm.saveTemplateEditor(id, name, category, description, font, mappings)
+                },
+            )
+        },
+    ) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("模板名称") },
+                    modifier = Modifier.weight(1f), singleLine = true)
+                OutlinedTextField(category, { category = it }, label = { Text("类别") },
+                    modifier = Modifier.weight(1f), singleLine = true)
+                OutlinedTextField(font, { font = it }, label = { Text("默认字体") },
+                    modifier = Modifier.weight(1f), singleLine = true)
+            }
+            OutlinedTextField(
+                description, { description = it }, label = { Text("模板说明") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("核心版式骨架", style = MaterialTheme.typography.subtitle2)
+            Text(
+                if (library.isEmpty()) "该模板尚未识别到可编辑版式；可重新上传结构更完整的 PPTX。"
+                else "系统已识别 ${library.size} 种实际页面版式。为核心页型指定来源页后，生成时会优先克隆对应骨架。",
+                style = MaterialTheme.typography.caption, color = SecondaryText,
+            )
+            if (library.isNotEmpty()) {
+                TemplateLayoutSelector("封面", cover, library) { cover = it }
+                TemplateLayoutSelector("目录", toc, library) { toc = it }
+                TemplateLayoutSelector("正文", content, library) { content = it }
+                TemplateLayoutSelector("数据页", data, library) { data = it }
+                TemplateLayoutSelector("结束页", closing, library) { closing = it }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TemplateLayoutSelector(
+    label: String,
+    selectedId: String,
+    layouts: List<JsonObject>,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = layouts.firstOrNull { it["id"].str() == selectedId }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.width(72.dp), style = MaterialTheme.typography.body2)
+        Box(Modifier.weight(1f)) {
+            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    selected?.get("name")?.str()
+                        ?.let { "$it（${selected["id"].str()}）" }
+                        ?: "自动匹配",
+                    maxLines = 1,
+                )
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(onClick = {
+                    onSelected("")
+                    expanded = false
+                }) { Text("自动匹配") }
+                layouts.forEach { lay ->
+                    DropdownMenuItem(onClick = {
+                        onSelected(lay["id"].str())
+                        expanded = false
+                    }) {
+                        Text(
+                            lay["name"].str().ifBlank { lay["id"].str() } +
+                                " · " + slideTypeLabel(lay["detected_type"].str())
+                        )
+                    }
+                }
+            }
         }
     }
 }
