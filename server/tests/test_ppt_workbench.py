@@ -607,6 +607,24 @@ def test_outline_stream_slide_count_clamped(client, accounts, fake_llm,
     assert any("18 页左右" in p or "18 页" in p for p in prompts)
 
 
+
+def test_default_template_fallback_is_explicit_government_blue():
+    """未选模板时必须显式回到 gov_report_blue，不能依赖模板数组顺序。"""
+    class _Templates:
+        def get(self, _template_id):
+            return None
+
+        def get_by_builtin_id(self, _builtin_id):
+            return None
+
+    svc = PPTService.__new__(PPTService)
+    svc.templates = _Templates()
+    template, row = svc._resolve_template(None, "")
+    assert row is None
+    assert template["name"] == "政务工作汇报（深蓝）"
+    assert template["colors"]["primary"] == "17365D"
+
+
 def test_server_auto_page_count_thresholds():
     assert PPTService._auto_slide_count("甲" * 999) == 6
     assert PPTService._auto_slide_count("甲" * 1000) == 10
