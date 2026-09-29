@@ -617,6 +617,27 @@ class FormatCheckEngine:
                     for r in doc.paragraphs[p_idx].runs:
                         if r.text != r.text.rstrip():
                             r.text = r.text.rstrip()
+                elif htype == "replace_text":
+                    if p_idx is None or p_idx >= len(doc.paragraphs):
+                        continue
+                    old = str(hint.get("old") or "")
+                    new = str(hint.get("new") or "")
+                    if old:
+                        para = doc.paragraphs[p_idx]
+                        # 优先逐 run 替换以尽量保留原格式；跨 run 命中时退化为整段替换。
+                        replaced = False
+                        for r in para.runs:
+                            if old in r.text:
+                                r.text = r.text.replace(old, new)
+                                replaced = True
+                        if not replaced and old in para.text:
+                            full = para.text.replace(old, new)
+                            if para.runs:
+                                para.runs[0].text = full
+                                for r in para.runs[1:]:
+                                    r.text = ""
+                            else:
+                                para.add_run(full)
                 elif htype == "delete_paragraph":
                     if p_idx is not None:
                         deletes.append(p_idx)
