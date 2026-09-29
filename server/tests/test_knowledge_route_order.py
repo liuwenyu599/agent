@@ -121,3 +121,33 @@ def test_missing_kb_still_404(client, dev_token):
     r = client.get(f"{BASE}/knowledge/does-not-exist-xyz", headers=_hdr(dev_token))
     assert r.status_code == 404
     assert "Knowledge base not found" in r.text
+
+
+
+# ----------------------------------------------------- 知识问答：具名路由 + 会话落库
+
+def test_knowledge_ask_creates_history_session(client, dev_token):
+    r = client.post(
+        f"{BASE}/knowledge/ask",
+        headers=_hdr(dev_token),
+        json={"message": "现有知识库中有哪些司法行政工作要求？"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["session_id"]
+    assert "reply" in data
+    assert isinstance(data["sources"], list)
+
+    sessions = client.get(
+        f"{BASE}/knowledge/ask/sessions", headers=_hdr(dev_token))
+    assert sessions.status_code == 200, sessions.text
+    assert any(x["id"] == data["session_id"] for x in sessions.json())
+
+
+def test_knowledge_ask_rejects_blank_question(client, dev_token):
+    r = client.post(
+        f"{BASE}/knowledge/ask",
+        headers=_hdr(dev_token),
+        json={"message": "   "},
+    )
+    assert r.status_code == 400
