@@ -268,14 +268,38 @@ class KnowledgeService:
         return {"message": "Document archived"}
 
     def list_kb_documents(self, kb_id: str, user, status: str = "published",
-                          page: int = 1, page_size: int = 20) -> dict:
+                          page: int = 1, page_size: int = 20,
+                          sort: str = "newest") -> dict:
         self.get_kb_checked(kb_id, user)
         can_review = self._can_review(user)
         effective_status = None if (status == "all" and can_review) else "published"
-        total, items = self.docs.list_with_display(
-            kb_id=kb_id, status=effective_status, page=page, page_size=page_size
-        )
-        return {"total": total, "page": page, "page_size": page_size, "data": items}
+
+        page = max(1, int(page or 1))
+        page_size = max(1, min(int(page_size or 20), 100))
+        q = select(DocumentModel).where(DocumentModel.kb_id == kb_id)
+        if effective_status:
+            q = q.where(DocumentModel.status == effective_status)
+
+        sort_key = (sort or "newest").strip().lower()
+        if sort_key == "oldest":
+            q = q.order_by(DocumentModel.created_at.asc(), DocumentModel.id.asc())
+        elif sort_key == "title":
+            q = q.order_by(DocumentModel.title.asc(), DocumentModel.created_at.desc())
+        else:
+            sort_key = "newest"
+            q = q.order_by(DocumentModel.created_at.desc(), DocumentModel.id.desc())
+
+        total = len(self.db.scalars(q).all())
+        rows = self.db.scalars(
+            q.offset((page - 1) * page_size).limit(page_size)
+        ).all()
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "sort": sort_key,
+            "data": [self.docs._display_dict(m) for m in rows],
+        }
 
     def search_kb_documents(self, kb_id: str, user, query: str,
                             limit: int = 50) -> dict:
