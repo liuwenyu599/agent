@@ -147,7 +147,7 @@ def accounts(client):
         assert changed.status_code == 200, changed.text
         return tok
 
-    return {"dev": dev, "a": reg("ppt_user_a"), "b": reg("ppt_user_b")}
+    return {"dev": dev, "a": reg("pptusera"), "b": reg("pptuserb")}
 
 
 # ============================================================ 工具
