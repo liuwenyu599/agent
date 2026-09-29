@@ -52,6 +52,7 @@ class SlideEdit(
     title: String,
     points: List<String>,
     sources: List<String>,
+    raw: JsonObject = buildJsonObject {},
 ) {
     var type by mutableStateOf(type)
     var title by mutableStateOf(title)
@@ -59,10 +60,20 @@ class SlideEdit(
     var pointsText by mutableStateOf(points.joinToString("\n"))
     var sources by mutableStateOf(sources)
 
+    /**
+     * 保留服务端大纲中的完整页面 JSON。
+     * 工作台目前只直接编辑 type/title/points/sources，但 blocks/image/chart/notes/layout
+     * 等字段必须原样保留，否则“重新打开 → 保存草稿”会把丰富页面降维成纯文本页。
+     */
+    private var rawSlide by mutableStateOf(raw)
+
     fun points(): List<String> =
         pointsText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
 
+    fun rawSnapshot(): JsonObject = rawSlide
+
     fun toJson(): JsonObject = buildJsonObject {
+        rawSlide.forEach { (key, value) -> put(key, value) }
         put("type", type)
         put("title", title)
         putJsonArray("points") { points().forEach { add(it) } }
@@ -70,6 +81,7 @@ class SlideEdit(
     }
 
     fun replaceWith(slide: JsonObject) {
+        rawSlide = slide
         val t = slide["type"].str()
         if (t.isNotBlank()) type = t
         title = slide["title"].str().ifBlank { title }
@@ -85,6 +97,7 @@ class SlideEdit(
             title = slide["title"].str(),
             points = slide["points"].arr().map { it.str() }.filter { it.isNotBlank() },
             sources = slide["sources"].arr().map { it.str() }.filter { it.isNotBlank() },
+            raw = slide,
         )
     }
 }
@@ -187,6 +200,7 @@ class PptViewModel(private val repo: PptRepository) {
     private data class SlideSnap(
         val type: String, val title: String,
         val pointsText: String, val sources: List<String>,
+        val raw: JsonObject,
     )
     private data class DeckSnap(
         val title: String, val subtitle: String, val slides: List<SlideSnap>,
@@ -272,7 +286,9 @@ class PptViewModel(private val repo: PptRepository) {
 
     private fun snapshot(): DeckSnap = DeckSnap(
         outlineTitle, outlineSubtitle,
-        slides.map { SlideSnap(it.type, it.title, it.pointsText, it.sources.toList()) },
+        slides.map {
+            SlideSnap(it.type, it.title, it.pointsText, it.sources.toList(), it.rawSnapshot())
+        },
     )
 
     private fun pushUndo() {
@@ -287,7 +303,9 @@ class PptViewModel(private val repo: PptRepository) {
         outlineTitle = s.title
         outlineSubtitle = s.subtitle
         slides.clear()
-        s.slides.forEach { slides.add(SlideEdit(it.type, it.title, it.pointsText.split("\n"), it.sources)) }
+        s.slides.forEach {
+            slides.add(SlideEdit(it.type, it.title, it.pointsText.split("\n"), it.sources, it.raw))
+        }
         selected = selected.coerceIn(0, (slides.size - 1).coerceAtLeast(0))
         canUndo = undoStack.isNotEmpty()
         status = "已撤销"
