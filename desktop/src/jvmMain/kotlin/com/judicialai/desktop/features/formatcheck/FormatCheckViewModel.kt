@@ -507,9 +507,17 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
 
     fun saveRule() {
         val form = editingRule ?: return
-        if (form.name.isBlank()) {
-            status = "规则名称不能为空"
-            return
+        val effectiveName = form.name.trim().ifBlank {
+            val prefix = when (form.target) {
+                "page" -> "页面设置"
+                "title" -> "标题"
+                "heading1" -> "一级标题"
+                "heading2" -> "二级标题"
+                "signature" -> "落款"
+                "date" -> "成文日期"
+                else -> "正文"
+            }
+            form.description.trim().take(18).ifBlank { prefix + "校验规则" }
         }
         if (form.checksJson.isBlank() || form.checksJson.trim() == "{}") {
             status = "请先点「AI 生成校验项」，根据白话描述生成校验项后再保存"
@@ -522,7 +530,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             return
         }
         val body = mapOf<String, Any?>(
-            "name" to form.name, "target" to form.target, "checks" to checks,
+            "name" to effectiveName, "target" to form.target, "checks" to checks,
             "severity" to form.severity, "is_default" to form.isDefault,
             "is_active" to form.isActive,
             // 白话描述同时存为备注，下次编辑时原样回填
