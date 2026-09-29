@@ -19,8 +19,7 @@ FONT_BODY = '仿宋_GB2312'      # 正文
 FONT_H1 = '黑体'              # 一级标题
 FONT_H2 = '楷体_GB2312'        # 二级标题
 
-# 纯文本公文层级标题。写作服务会剥掉 Markdown 标记，因此导出器必须能识别
-# “一、……” / “（一）……”这类真实公文结构，否则会误按仿宋正文导出。
+# 纯文本公文层级标题：写作服务正文通常不带 Markdown 标记。
 GW_HEADING1_RE = re.compile(r"^[一二三四五六七八九十百]+、[^。；，]{2,60}$")
 GW_HEADING2_RE = re.compile(r"^（[一二三四五六七八九十]+）[^。；，]{2,60}$")
 
@@ -459,8 +458,8 @@ def markdown_to_docx(text: str, title: str = "公文",
         # 纯文本公文层级标题（模型输出通常不带 Markdown #）
         if GW_HEADING1_RE.match(stripped):
             p = doc.add_paragraph()
-            _set_paragraph_format(p, space_before=Pt(6), space_after=Pt(3),
-                                  line_spacing=Pt(28))
+            _set_paragraph_format(
+                p, space_before=Pt(6), space_after=Pt(3), line_spacing=Pt(28))
             run = p.add_run(stripped)
             _set_font(run, FONT_H1, Pt(16), bold=True)
             i += 1
@@ -468,8 +467,8 @@ def markdown_to_docx(text: str, title: str = "公文",
 
         if GW_HEADING2_RE.match(stripped):
             p = doc.add_paragraph()
-            _set_paragraph_format(p, space_before=Pt(3), space_after=Pt(3),
-                                  line_spacing=Pt(28))
+            _set_paragraph_format(
+                p, space_before=Pt(3), space_after=Pt(3), line_spacing=Pt(28))
             run = p.add_run(stripped)
             _set_font(run, FONT_H2, Pt(16))
             i += 1
