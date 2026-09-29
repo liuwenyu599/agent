@@ -830,10 +830,12 @@ class FormatCheckService:
             catalog = (
                 "- no_extra_blank_lines：不允许出现连续多余空行（true/false）\n"
                 "- no_trailing_spaces：不允许段落末尾有多余空格（true/false）"
-                "\n内容规范 target=content 可用："
-                "\n- forbidden_words：禁用词数组，如 [\"严禁出现词\"]"
-                "\n- sensitive_words：敏感词数组，如 [\"需核实词\"]"
-                "\n- preferred_terms：不规范表达到规范表达的对象，如 {\"截止目前\": \"截至目前\"}"
+            )
+        elif target == "content":
+            catalog = (
+                "- forbidden_words：禁用词数组，如 [\"严禁出现词\"]\n"
+                "- sensitive_words：敏感词数组，如 [\"需核实词\"]\n"
+                "- preferred_terms：不规范表达到规范表达的对象，如 {\"截止目前\": \"截至目前\"}"
             )
         else:
             catalog = (
