@@ -163,7 +163,8 @@ class WritingTaskService:
             "session_id": t.session_id,
             "document_id": t.document_id,
             "task_context": t.context or {},
-            "current_content": t.current_content or "",
+            "current_content": WritingTaskService._strip_leading_structural_fields(
+                t.current_content or "", t.context or {}),
             "version_no": t.version_no or 0,
             "status": t.status,
             "char_count": len(t.current_content or ""),
