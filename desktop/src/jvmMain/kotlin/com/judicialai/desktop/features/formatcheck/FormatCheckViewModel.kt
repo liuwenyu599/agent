@@ -113,7 +113,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     var notice by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
-    var useAi by mutableStateOf(true)
+    val useAi: Boolean = true
 
     // ---------------- 中栏编辑器 ----------------
 
@@ -221,7 +221,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         error = null
         status = "校验中，请稍候…"
         scope.launch {
-            when (val r = repo.check(file, useAi)) {
+            when (val r = repo.check(file, true)) {
                 is ApiResult.Ok -> {
                     val o = r.data.obj()
                     if (o == null) {
@@ -552,6 +552,34 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         }
     }
 
+    fun duplicateRule(rule: JsonObject) {
+        val id = rule["id"].str()
+        if (id.isBlank()) {
+            status = "无法复制：规则 id 为空"
+            return
+        }
+        val body = mapOf<String, Any?>(
+            "name" to (rule["name"].str().ifBlank { "未命名规则" } + "（副本）"),
+            "target" to rule["target"].str().ifBlank { "body" },
+            "checks" to (rule["checks"] ?: kotlinx.serialization.json.JsonObject(emptyMap())),
+            "severity" to rule["severity"].str().ifBlank { "error" },
+            "is_default" to false,
+            "is_active" to rule["is_active"].bool(true),
+            "remark" to rule["remark"].str(),
+        )
+        busy = true
+        scope.launch {
+            when (val r = repo.createRule(body)) {
+                is ApiResult.Ok -> {
+                    status = "规则已复制"
+                    loadRules()
+                }
+                is ApiResult.Err -> fail("复制规则失败", ruleErrorOf(r))
+            }
+            busy = false
+        }
+    }
+
     fun deleteRule(id: String) {
         if (id.isBlank()) {
             error = "未能定位规则（id 为空），请刷新后重试"
@@ -571,6 +599,42 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     }
 
     // ---------------- 内部 ----------------
+
+    fun formatDiffForIssue(index: Int): List<FormatPropertyDiff> {
+        val issue = issues.getOrNull(index) ?: return emptyList()
+        val pi = (issue["paragraph_index"] as? JsonPrimitive)?.intOrNull ?: return emptyList()
+        val before = paragraphsOriginal.getOrNull(pi) ?: return emptyList()
+        val after = paragraphsCurrent.getOrNull(pi) ?: return emptyList()
+
+        data class Spec(val key: String, val label: String, val suffix: String = "")
+        val specs = listOf(
+            Spec("font_name", "字体"),
+            Spec("font_pt", "字号", " 磅"),
+            Spec("bold", "加粗"),
+            Spec("align", "对齐方式"),
+            Spec("indent_chars", "首行缩进", " 字符"),
+            Spec("line_spacing", "行距"),
+            Spec("space_before_pt", "段前间距", " 磅"),
+            Spec("space_after_pt", "段后间距", " 磅"),
+        )
+        fun text(o: JsonObject, s: Spec): String {
+            val raw = o[s.key].str()
+            if (raw.isBlank()) return "未设置"
+            return when (s.key) {
+                "bold" -> if (raw == "true") "加粗" else "不加粗"
+                "align" -> when (raw) {
+                    "left" -> "左对齐"; "center" -> "居中"; "right" -> "右对齐"
+                    "justify" -> "两端对齐"; else -> raw
+                }
+                else -> raw + s.suffix
+            }
+        }
+        return specs.mapNotNull { s ->
+            val a = text(before, s)
+            val b = text(after, s)
+            if (a == b) null else FormatPropertyDiff(s.label, a, b)
+        }
+    }
 
     private fun clearCurrent() {
         currentRecordId = null
@@ -676,6 +740,8 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
  * 用户只写白话描述（description），校验项 JSON（checksJson）由 AI 在后台生成，
  * 表单与界面上都不要求手写 JSON。
  */
+data class FormatPropertyDiff(val label: String, val before: String, val after: String)
+
 data class RuleForm(
     val id: String = "",
     val name: String = "",
