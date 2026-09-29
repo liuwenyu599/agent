@@ -44,7 +44,7 @@ def _dev_token(client):
     此时直接为库中的系统管理员账号签发令牌。
     """
     r = client.post(f"{BASE}/auth/register-first", json={
-        "username": "pwd_dev", "email": "pwd_dev@test.local",
+        "username": "pwddev", "email": "pwddev@test.local",
         "password": OLD_PWD, "real_name": "系统管理员",
     })
     if r.status_code == 200:
@@ -72,14 +72,14 @@ def accounts(client):
     dev_token = _dev_token(client)
 
     r = client.post(f"{BASE}/auth/register", json={
-        "username": "pwd_user", "email": "pwd_user@test.local",
+        "username": "pwduser", "email": "pwduser@test.local",
         "password": OLD_PWD, "department": "行政复议科", "role": "user",
     }, headers=_hdr(dev_token))
     assert r.status_code == 200
     user_id = client.get(f"{BASE}/users/", headers=_hdr(dev_token)).json()
-    uid = next(u["id"] for u in user_id if u["username"] == "pwd_user")
+    uid = next(u["id"] for u in user_id if u["username"] == "pwduser")
     user_token = client.post(f"{BASE}/auth/login", json={
-        "username": "pwd_user", "password": OLD_PWD}).json()["access_token"]
+        "username": "pwduser", "password": OLD_PWD}).json()["access_token"]
     return {"dev": dev_token, "user": user_token, "user_id": uid}
 
 
@@ -119,11 +119,11 @@ def test_change_password_success_and_relogin(client, accounts):
     assert r.status_code == 200, r.text
     # 新密码可登录
     ok = client.post(f"{BASE}/auth/login", json={
-        "username": "pwd_user", "password": NEW_PWD})
+        "username": "pwduser", "password": NEW_PWD})
     assert ok.status_code == 200
     # 旧密码失效
     bad = client.post(f"{BASE}/auth/login", json={
-        "username": "pwd_user", "password": OLD_PWD})
+        "username": "pwduser", "password": OLD_PWD})
     assert bad.status_code == 401
     accounts["user"] = ok.json()["access_token"]
 
@@ -153,7 +153,7 @@ def test_admin_reset_success_forces_change(client, accounts):
 
     # 登录返回强制改密标记
     login = client.post(f"{BASE}/auth/login", json={
-        "username": "pwd_user", "password": "Reseted@2026"})
+        "username": "pwduser", "password": "Reseted@2026"})
     assert login.status_code == 200
     assert login.json()["must_change_password"] is True
     token = login.json()["access_token"]
@@ -187,7 +187,7 @@ def test_admin_reset_accepts_weak_password_but_forces_change(client, accounts):
 
     # 弱密码可以登录，但业务接口仍被拦截，直到本人改成强密码
     login = client.post(f"{BASE}/auth/login", json={
-        "username": "pwd_user", "password": "12345678"})
+        "username": "pwduser", "password": "12345678"})
     assert login.status_code == 200
     assert login.json()["must_change_password"] is True
 
