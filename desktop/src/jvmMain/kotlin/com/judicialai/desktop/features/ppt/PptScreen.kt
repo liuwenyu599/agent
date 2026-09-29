@@ -342,10 +342,16 @@ private fun PptEntryPane(
                     (vm.slideCount.toIntOrNull()?.let { it !in 2..18 } != false),
                 modifier = Modifier.weight(1f),
             )
+            OutlinedTextField(vm.generationYear, { vm.generationYear = it.filter(Char::isDigit).take(4) },
+                label = { Text("年度") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.location, { vm.location = it },
+                label = { Text("单位/地点") }, modifier = Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(vm.presenter, { vm.presenter = it },
                 label = { Text("汇报人（可选）") }, modifier = Modifier.weight(1f))
             OutlinedTextField(vm.reportDate, { vm.reportDate = it },
-                label = { Text("汇报时间（可选）") }, modifier = Modifier.weight(1f))
+                label = { Text("落款日期") }, modifier = Modifier.weight(1f))
         }
 
         Text("视觉风格", style = MaterialTheme.typography.subtitle2)
