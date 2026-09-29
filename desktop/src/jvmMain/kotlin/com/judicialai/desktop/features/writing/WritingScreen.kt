@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -362,31 +363,31 @@ private fun FormattedLine(raw: String) {
         }
         s.startsWith("### ") -> Text(
             inlineMd(s.removePrefix("### ")), fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold, color = Ink, lineHeight = 22.sp)
+            fontWeight = FontWeight.SemiBold, color = Ink, lineHeight = 28.sp)
         s.startsWith("## ") -> Text(
-            inlineMd(s.removePrefix("## ")), fontSize = 16.5.sp,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 24.sp)
+            inlineMd(s.removePrefix("## ")), fontSize = 16.sp,
+            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.sp)
         s.startsWith("# ") -> Text(
-            inlineMd(s.removePrefix("# ")), fontSize = 18.sp,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 26.sp,
+            inlineMd(s.removePrefix("# ")), fontSize = 22.sp,
+            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 34.sp,
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         GwHeading1Regex.matches(s) -> Text(
             inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = 28.8.sp)
+            color = Ink, lineHeight = 28.sp)
         GwHeading2Regex.matches(s) -> Text(
             inlineMd(s), fontSize = 16.sp, fontWeight = FontWeight.Medium,
-            color = Ink, lineHeight = 28.8.sp)
+            color = Ink, lineHeight = 28.sp)
         s.startsWith("- ") || s.startsWith("* ") -> Row {
             Text("•  ", fontSize = 16.sp, color = Ink)
             Text(inlineMd(s.substring(2)), fontSize = 16.sp, color = Ink,
-                lineHeight = 28.8.sp)
+                lineHeight = 28.sp)
         }
         OrderedListRegex.matches(s) -> {
             val idx = s.indexOf('.')
             Row {
-                Text(s.substring(0, idx + 1) + "  ", fontSize = 14.5.sp, color = Ink)
+                Text(s.substring(0, idx + 1) + "  ", fontSize = 16.sp, color = Ink)
                 Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 16.sp,
-                    color = Ink, lineHeight = 28.8.sp)
+                    color = Ink, lineHeight = 28.sp)
             }
         }
         s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
@@ -394,7 +395,7 @@ private fun FormattedLine(raw: String) {
         else -> Text(
             inlineMd(s),
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp,
+                fontSize = 16.sp, color = Ink, lineHeight = 28.sp,
                 textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
             ),
         )
@@ -421,9 +422,13 @@ private fun MarkdownText(text: String) {
  * 清空段落内容再点「完成」= 删除该段。
  */
 @Composable
-private fun FormattedBodyEditor(vm: WritingViewModel) {
+private fun FormattedBodyEditor(
+    vm: WritingViewModel,
+    modifier: Modifier = Modifier,
+) {
     var editIdx by remember { mutableStateOf<Int?>(null) }
     var editText by remember { mutableStateOf("") }
+    val lines = remember(vm.content) { vm.content.split('\n') }
 
     fun commit() {
         val i = editIdx ?: return
@@ -438,9 +443,11 @@ private fun FormattedBodyEditor(vm: WritingViewModel) {
         editIdx = null
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        val lines = vm.content.split('\n')
-        lines.forEachIndexed { i, raw ->
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        itemsIndexed(lines, key = { index, _ -> index }) { i, raw ->
             if (editIdx == i) {
                 Column(
                     Modifier.fillMaxWidth()
@@ -453,7 +460,7 @@ private fun FormattedBodyEditor(vm: WritingViewModel) {
                         onValueChange = { editText = it },
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp),
+                            fontSize = 16.sp, color = Ink, lineHeight = 28.sp),
                         shape = RoundedCornerShape(Dimens.radiusXs),
                         colors = TextFieldDefaults.outlinedTextFieldColors(
                             backgroundColor = SurfaceTonal,
@@ -488,7 +495,10 @@ private fun FormattedBodyEditor(vm: WritingViewModel) {
             }
         }
         if (vm.content.isBlank()) {
-            Text("（正文为空，生成初稿后可在此直接修改）", fontSize = 13.sp, color = Muted)
+            item {
+                Text("（正文为空，生成初稿后可在此直接修改）",
+                    fontSize = 13.sp, color = Muted)
+            }
         }
     }
 }
@@ -1106,7 +1116,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     Text("排版视图", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
                         color = Primary)
                     Spacer(Modifier.width(Dimens.space3))
-                    Text("标题 22pt · 正文 16pt · 行距 28.8pt · 首行缩进 2 字符",
+                    Text("标题 22pt · 正文 16pt · 固定行距 28pt · 首行缩进 2 字符",
                         fontSize = 11.sp, color = Muted)
                 }
                 Spacer(Modifier.height(Dimens.space5))
@@ -1129,7 +1139,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     onValueChange = { vm.content = it },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 16.sp, color = Ink, lineHeight = 28.8.sp),
+                        fontSize = 16.sp, color = Ink, lineHeight = 28.sp),
                     shape = RoundedCornerShape(Dimens.radiusMd),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         backgroundColor = Surface,
@@ -1138,12 +1148,10 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                         cursorColor = Primary),
                 )
             } else {
-                Column(
-                    Modifier.fillMaxWidth().weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    FormattedBodyEditor(vm)
-                }
+                FormattedBodyEditor(
+                    vm = vm,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                )
             }
             Spacer(Modifier.height(Dimens.space3))
             val versionText = if (vm.versionNo > 0) "版本 v${vm.versionNo}" else "未保存版本"
