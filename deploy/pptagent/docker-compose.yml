@@ -31,6 +31,7 @@ services:
       --served-model-name ${PPT_LLM_MODEL_NAME:-DeepPresenter-9B}
       --port 8003
       --max-model-len ${PPT_LLM_MAX_LEN:-16384}
+      --enable-prefix-caching
       --gpu-memory-utilization ${PPT_LLM_GPU_MEM:-0.85}
       ${PPT_LLM_EXTRA_ARGS:-}
     volumes:
