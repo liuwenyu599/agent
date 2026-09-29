@@ -797,13 +797,13 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
                 enabled = !vm.templateEditorBusy && name.isNotBlank(),
                 loading = vm.templateEditorBusy,
                 onClick = {
-                    val mappings = buildMap {
-                        if (cover.isNotBlank()) put("cover", cover)
-                        if (toc.isNotBlank()) put("toc", toc)
-                        if (content.isNotBlank()) put("content", content)
-                        if (data.isNotBlank()) put("data", data)
-                        if (closing.isNotBlank()) put("closing", closing)
-                    }
+                    val mappings = mapOf(
+                        "cover" to cover,
+                        "toc" to toc,
+                        "content" to content,
+                        "data" to data,
+                        "closing" to closing,
+                    )
                     vm.saveTemplateEditor(id, name, category, description, font, mappings)
                 },
             )
