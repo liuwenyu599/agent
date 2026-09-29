@@ -25,6 +25,7 @@ from app.application.format_check.check_engine import (
     extract_paragraph_properties,
 )
 from app.application.shared.writing_assistant import WritingAssistant
+from app.application.knowledge.rag_service import RagService
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundError, PermissionDeniedError
 from app.core.llm_json import LLMJsonError, loads_lenient
@@ -178,11 +179,13 @@ def _record_brief(r: FormatCheckRecord) -> dict:
 
 
 class FormatCheckService:
-    def __init__(self, db: Session, assistant: Optional[WritingAssistant] = None) -> None:
+    def __init__(self, db: Session, assistant: Optional[WritingAssistant] = None,
+                 rag: Optional[RagService] = None) -> None:
         self.db = db
         self.rules = SqlAlchemyFormatRuleRepository(db)
         self.records = SqlAlchemyFormatCheckRecordRepository(db)
         self.engine = FormatCheckEngine(assistant)
+        self.rag = rag
 
     # ---- 校验文件存放（审阅/修正用，docx 保留，其他类型校验后即删） ----
     @property
@@ -270,6 +273,17 @@ class FormatCheckService:
             raise AppError(500, f"校验过程出错: {e}")
 
         issues = result["issues"]
+
+        # ---- 与知识库冲突检查：必须有真实检索证据，AI 不得凭空判冲突 ----
+        if result["file_type"] == "docx" and self.rag is not None and self.engine.assistant is not None:
+            try:
+                doc = DocxDocument(str(tmp_path))
+                full_text = "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+                issues.extend(self._knowledge_conflict_issues(full_text, user))
+            except Exception as e:
+                # 知识库冲突检查是增强项，失败不阻断基础格式/内容校验。
+                logger.warning("知识库冲突检查失败，已跳过: %s", e)
+
         # 注入稳定整数 id（= 下标）。不用 uuid：复检后必须能与老条目对齐。
         for idx, issue in enumerate(issues):
             if isinstance(issue, dict):
@@ -312,6 +326,114 @@ class FormatCheckService:
             "rules_used": [{"id": r["id"], "name": r["name"], "target": r["target"]}
                            for r in rule_dicts],
         }
+
+    def _knowledge_conflict_issues(self, text: str, user: User) -> List[dict]:
+        """用当前用户可访问知识库核对正文事实/口径。
+
+        只允许基于 RagService 的真实命中判定；每条冲突都绑定知识库、文档、chunk，
+        没有证据索引或证据无法映射时直接丢弃。
+        """
+        if not text.strip() or self.rag is None or self.engine.assistant is None:
+            return []
+
+        query = text[:1800]
+        hits = self.rag.search(query=query, user_id=user.id, top_k=8)
+        if not hits:
+            return []
+
+        evidence_lines = []
+        for idx, h in enumerate(hits, start=1):
+            evidence_lines.append(
+                f"[{idx}] 知识库={h.get('kb_name') or ''}；"
+                f"文档={h.get('doc_title') or h.get('source') or ''}；"
+                f"段落={h.get('chunk_index')}; 原文={h.get('chunk_content') or h.get('content') or ''}"
+            )
+        evidence = "\n".join(evidence_lines)
+
+        prompt = f"""你是司法行政公文内容一致性审校助手。
+请把【待审正文】与【知识库证据】逐项比较，只报告有明确原文证据支持的冲突或口径不一致。
+
+规则：
+1. 不要用你的常识判断，只能依据给出的知识库证据。
+2. 若正文只是知识库没有提到，不算冲突。
+3. 若知识库证据之间互相矛盾，不要替用户裁决，提示“知识库内部口径不一致”。
+4. 每条必须给 evidence_index，对应下面 [1]...[N] 中的一条；没有证据索引的不要输出。
+5. current 必须摘录正文中可定位的短语或句子，不要编造。
+6. expected 写知识库证据表达的口径；suggestion 给出保守修改建议。
+7. 没有明确冲突返回 []。
+
+【待审正文】
+{text[:settings.FORMAT_CHECK_AI_BUDGET]}
+
+【知识库证据】
+{evidence}
+
+只输出 JSON 数组：
+[{{"current":"正文原句","expected":"知识库口径","suggestion":"建议","evidence_index":1}}]"""
+        try:
+            reply = self.engine.assistant.complete(
+                [
+                    {"role": "system", "content": "你只做有证据的知识库一致性核对，只输出 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=1200,
+            )
+            if not reply:
+                return []
+            items = loads_lenient(reply)
+            if not isinstance(items, list):
+                return []
+        except Exception as e:
+            logger.warning("知识库冲突 AI 判定失败: %s", e)
+            return []
+
+        result: List[dict] = []
+        for it in items[:12]:
+            if not isinstance(it, dict):
+                continue
+            try:
+                evidence_index = int(it.get("evidence_index"))
+            except (TypeError, ValueError):
+                continue
+            if evidence_index < 1 or evidence_index > len(hits):
+                continue
+            hit = hits[evidence_index - 1]
+            current = str(it.get("current") or "").strip()
+            if not current or current not in text:
+                continue
+
+            paragraph_index = None
+            for idx, line in enumerate(text.splitlines()):
+                if current in line:
+                    paragraph_index = idx
+                    break
+
+            doc_title = hit.get("doc_title") or hit.get("source") or "知识库文档"
+            kb_name = hit.get("kb_name") or "知识库"
+            chunk_index = hit.get("chunk_index")
+            result.append({
+                "location": f"第{paragraph_index + 1}段" if paragraph_index is not None else "全文",
+                "element": "知识库口径冲突",
+                "current": current,
+                "expected": str(it.get("expected") or "").strip(),
+                "suggestion": str(it.get("suggestion") or "").strip(),
+                "source": "knowledge",
+                "severity": "warning",
+                "paragraph_index": paragraph_index,
+                "fix_hint": None,
+                "evidence": {
+                    "kb_id": hit.get("kb_id"),
+                    "kb_name": kb_name,
+                    "kb_type": hit.get("kb_type"),
+                    "doc_id": hit.get("doc_id"),
+                    "doc_title": doc_title,
+                    "chunk_id": hit.get("chunk_id"),
+                    "chunk_index": chunk_index,
+                    "excerpt": hit.get("chunk_content") or hit.get("content") or "",
+                },
+            })
+        return result
 
     # ================= 记录 =================
     def list_records(self, user: User, page: int, page_size: int) -> dict:
