@@ -40,7 +40,16 @@ class AuthViewModel {
     /** 服务器地址切换后重新判断是否需要创建首个系统管理员。 */
     fun refreshFirstUser() {
         scope.launch {
-            isFirstUser = AppState.api.checkFirstUser()
+            when (val r = AppState.api.checkFirstUser()) {
+                is ApiResult.Ok -> {
+                    isFirstUser = r.data
+                    if (error?.startsWith("无法确认系统初始化状态") == true) error = null
+                }
+                is ApiResult.Err -> {
+                    isFirstUser = false
+                    error = "无法确认系统初始化状态：${r.message}"
+                }
+            }
         }
     }
 
