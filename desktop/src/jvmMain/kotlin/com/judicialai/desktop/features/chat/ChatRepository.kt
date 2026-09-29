@@ -33,7 +33,7 @@ private fun citationOf(e: kotlinx.serialization.json.JsonElement): KnowledgeCita
         docTitle = o["doc_title"].str(),
         chunkId = o["chunk_id"].str(),
         chunkIndex = o["chunk_index"].int(),
-        excerpt = o["content"].str(),
+        excerpt = o["chunk_content"].str().ifBlank { o["content"].str() },
     )
 }
 
