@@ -35,6 +35,7 @@ from app.core.exceptions import AppError
 from app.domain.identity.entities import ROLE_KNOWLEDGE_ADMIN, User
 from app.infrastructure.database import get_db
 from app.infrastructure.database.models.identity import UserModel
+from app.infrastructure.database.models.chat import ChatMessageModel, ChatSessionModel
 from app.infrastructure.rag import get_embedder, get_vector_store
 from app.interfaces.deps import (
     get_current_user,
@@ -172,6 +173,27 @@ def get_batch_task(task_id: str, user: User = Depends(get_current_user)):
 @router.get("/queue-status")
 def queue_status(user: User = Depends(require_knowledge_admin)):
     return get_queue_status()
+
+
+@router.get("/ask/sessions")
+def list_knowledge_qa_sessions(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """仅返回当前用户的知识问答会话，按最近创建时间倒序。"""
+    from sqlalchemy import select
+    rows = db.scalars(
+        select(ChatSessionModel)
+        .join(ChatMessageModel, ChatMessageModel.session_id == ChatSessionModel.id)
+        .where(
+            ChatSessionModel.user_id == user.id,
+            ChatMessageModel.source == "knowledge_qa",
+        )
+        .distinct()
+        .order_by(ChatSessionModel.created_at.desc())
+    ).all()
+    return [{"id": s.id, "title": s.title or "未命名会话", "created_at": s.created_at}
+            for s in rows]
 
 
 @router.post("/ask")
