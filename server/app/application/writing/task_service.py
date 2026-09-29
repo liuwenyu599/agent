@@ -177,6 +177,54 @@ class WritingTaskService:
 
     # RAG 返回的 source 形如「文档标题（第N段）」，这里只用来剥掉段号取回文档标题
     _CHUNK_SUFFIX_RE = re.compile(r"（第\d+段）\s*$")
+    # 正文里引用外部文件时常见的规范文号；只允许保留可从用户输入/RAG 证据中找到的文号。
+    _EXTERNAL_DOCNUM_RE = re.compile(
+        r"[\u4e00-\u9fffA-Za-z]{1,16}〔20\d{2}〕\d{1,8}号"
+    )
+
+    @classmethod
+    def _guard_external_document_numbers(
+            cls, text: str, sources: List[Dict], ctx: Dict[str, Any]):
+        """阻断无来源的外部文号引用。
+
+        模型偶发会“记忆”出看似真实的历史文号。正文中的文号只有在本轮 RAG
+        命中片段或用户已确认上下文里能逐字找到时才保留；否则替换为“相关文件”，
+        并把原文号记录到 citation_warnings，避免把无法核实的号码交付给用户。
+        """
+        if not text:
+            return "", []
+
+        evidence_parts: List[str] = []
+        for src in sources or []:
+            if not isinstance(src, dict):
+                continue
+            evidence_parts.extend([
+                str(src.get("content") or ""),
+                str(src.get("source") or ""),
+                str(src.get("source_name") or ""),
+            ])
+        for key in (
+                "title", "topic", "requirements", "document_number",
+                "recipient", "authority"):
+            value = ctx.get(key)
+            if value:
+                evidence_parts.append(str(value))
+        evidence_parts.extend(str(x) for x in (ctx.get("key_facts") or []))
+        evidence = "\n".join(evidence_parts)
+
+        cited = list(dict.fromkeys(cls._EXTERNAL_DOCNUM_RE.findall(text)))
+        unsupported = [num for num in cited if num not in evidence]
+        if not unsupported:
+            return text, []
+
+        cleaned = text
+        for num in unsupported:
+            cleaned = cleaned.replace(num, "相关文件")
+        logger.warning(
+            "[写作任务] 移除无来源外部文号：%s",
+            "、".join(unsupported),
+        )
+        return cleaned, unsupported
 
     @classmethod
     def _reference_labels(cls, sources: List[Dict]) -> List[str]:
@@ -742,6 +790,12 @@ class WritingTaskService:
         # 后处理：文号/日期按任务开关决定，默认不注入
         text, events, doc_number, doc_date = self._postprocess(text, ctx)
         text = self._strip_leading_structural_fields(text, ctx)
+        text, citation_warnings = self._guard_external_document_numbers(
+            text, sources, ctx)
+        if citation_warnings:
+            ctx["citation_warnings"] = citation_warnings
+        else:
+            ctx.pop("citation_warnings", None)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(text, topic=ctx.get("title") or ctx.get("topic") or "")
         from app.application.writing.content_check import ContentChecker
@@ -780,6 +834,11 @@ class WritingTaskService:
                      "不满意可先修改左侧参数再点「继续生成」。")
         if references:
             reply += f"本次检索到 {len(references)} 份内部资料作为写作依据。"
+        if citation_warnings:
+            reply += (
+                f"系统发现 {len(citation_warnings)} 处无法从本次资料或用户输入核实的文号，"
+                "已移除具体号码并改为“相关文件”，请在确认来源后再补回。"
+            )
         if ctx.get("missing_fields"):
             reply += "以下内容因缺少事实依据已标注：" + "、".join(ctx["missing_fields"]) + "。"
         reply += "您可以继续对话修改，或直接编辑正文后保存版本。"
@@ -817,6 +876,12 @@ class WritingTaskService:
 
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         revised = self._strip_leading_structural_fields(revised, ctx)
+        revised, citation_warnings = self._guard_external_document_numbers(
+            revised, sources, ctx)
+        if citation_warnings:
+            ctx["citation_warnings"] = citation_warnings
+        else:
+            ctx.pop("citation_warnings", None)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
         from app.application.writing.content_check import ContentChecker
@@ -847,6 +912,11 @@ class WritingTaskService:
         self.db.commit()
 
         reply = f"已按您的要求修改当前文档（{mode_desc.split('：')[0]}），保存为 v{ver}。"
+        if citation_warnings:
+            reply += (
+                f"系统同时移除了 {len(citation_warnings)} 处无法核实的具体文号，"
+                "请确认资料来源后再补回。"
+            )
         if changes:
             reply += "任务信息同步更新：" + "；".join(changes) + "。"
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
