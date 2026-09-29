@@ -12,6 +12,7 @@
 2. 工作台中栏的人工正文修改经 ``update_record_content`` 显式保存后直接写回
    ``{id}.docx``（人工修改成为新基线），同时重置 applied/resolved 状态。
 """
+import re
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -59,6 +60,7 @@ _PARA_KEYS = {
     "first_line_indent_chars", "space_before_pt", "space_after_pt",
 }
 _GENERAL_KEYS = {"no_extra_blank_lines", "no_trailing_spaces"}
+_CONTENT_KEYS = {"forbidden_words", "sensitive_words", "preferred_terms"}
 _NUMERIC_KEYS = _PAGE_KEYS | {
     "font_size_pt", "line_spacing_pt", "first_line_indent_chars",
     "space_before_pt", "space_after_pt",
@@ -69,7 +71,7 @@ _ALIGN_VALUES = ("left", "center", "right", "justify")
 _TARGET_LABELS = {
     "page": "页面设置", "title": "标题", "body": "正文",
     "heading1": "一级标题", "heading2": "二级标题",
-    "signature": "落款", "date": "成文日期", "general": "全文通用",
+    "signature": "落款", "date": "成文日期", "general": "全文通用", "content": "内容规范",
 }
 _KEY_LABELS = {
     "top_margin_cm": "上边距", "bottom_margin_cm": "下边距",
@@ -80,6 +82,7 @@ _KEY_LABELS = {
     "first_line_indent_chars": "首行缩进",
     "space_before_pt": "段前间距", "space_after_pt": "段后间距",
     "no_extra_blank_lines": "不允许多余空行", "no_trailing_spaces": "不允许行尾空格",
+    "forbidden_words": "禁用词", "sensitive_words": "敏感词", "preferred_terms": "规范替换词",
 }
 _ALIGN_CN = {"left": "左对齐", "center": "居中", "right": "右对齐", "justify": "两端对齐"}
 
@@ -89,6 +92,8 @@ def _allowed_keys(target: str) -> set:
         return set(_PAGE_KEYS)
     if target == "general":
         return set(_GENERAL_KEYS)
+    if target == "content":
+        return set(_CONTENT_KEYS)
     return set(_PARA_KEYS)
 
 
@@ -116,6 +121,15 @@ def _sanitize_checks(target: str, raw) -> Dict:
                 v = cn.get(str(value).strip(), v)
                 if v in _ALIGN_VALUES:
                     out[key] = v
+            elif key in ("forbidden_words", "sensitive_words"):
+                if isinstance(value, list):
+                    out[key] = [str(x).strip() for x in value if str(x).strip()]
+                elif isinstance(value, str):
+                    out[key] = [x.strip() for x in re.split(r"[,，;；\n]", value) if x.strip()]
+            elif key == "preferred_terms":
+                if isinstance(value, dict):
+                    out[key] = {str(k).strip(): str(v).strip()
+                                for k, v in value.items() if str(k).strip() and str(v).strip()}
             else:
                 out[key] = str(value).strip()
         except (TypeError, ValueError):
@@ -816,6 +830,10 @@ class FormatCheckService:
             catalog = (
                 "- no_extra_blank_lines：不允许出现连续多余空行（true/false）\n"
                 "- no_trailing_spaces：不允许段落末尾有多余空格（true/false）"
+                "\n内容规范 target=content 可用："
+                "\n- forbidden_words：禁用词数组，如 [\"严禁出现词\"]"
+                "\n- sensitive_words：敏感词数组，如 [\"需核实词\"]"
+                "\n- preferred_terms：不规范表达到规范表达的对象，如 {\"截止目前\": \"截至目前\"}"
             )
         else:
             catalog = (
