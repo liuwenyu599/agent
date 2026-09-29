@@ -123,6 +123,7 @@ object Endpoints {
         /** 可选知识库列表（服务端已按可见范围过滤）：PPT 结合知识库生成的选择入口 */
         const val KBS = "/ppt/kbs"
         const val TEMPLATE_UPLOAD = "/ppt/templates/upload"
+        fun template(id: String) = "/ppt/templates/$id"
         fun templateDelete(id: String) = "/ppt/templates/$id"
         const val OUTLINE = "/ppt/outline"
         /** 流式大纲（SSE）：stage 阶段事件 + done 携带权威大纲 */
