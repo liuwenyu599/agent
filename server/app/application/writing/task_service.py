@@ -262,13 +262,23 @@ class WritingTaskService:
         LLM 不可用或解析失败时降级为规则规划，并在 source 中标注 rule，绝不假装规划过。
         """
         ctx = task_parser.empty_context()
-        it = self._interpret(message, ctx, has_draft=False)
-        if it:
-            self._apply_interpretation(ctx, it, message)
-            source = "llm"
+        # 常见明确任务走规则快速路径，避免“进入写作台”先等一次完整 LLM。
+        # 只有规则无法同时确定文种和主题/标题时，才调用语义解释模型。
+        rule_upd = task_parser.parse_message(message)
+        task_parser.merge_context(ctx, rule_upd)
+        has_clear_core = bool(
+            ctx.get("document_type") and
+            (ctx.get("topic") or ctx.get("title") or task_parser.build_title(ctx))
+        )
+        if has_clear_core:
+            source = "rule_fast"
         else:
-            task_parser.merge_context(ctx, task_parser.parse_message(message))
-            source = "rule"
+            it = self._interpret(message, ctx, has_draft=False)
+            if it:
+                self._apply_interpretation(ctx, it, message)
+                source = "llm"
+            else:
+                source = "rule"
 
         # 科室 Agent 与知识边界（后端强隔离，前端不参与推导）
         try:
@@ -682,6 +692,7 @@ class WritingTaskService:
         """起草收尾（draft 与 draft_stream 共用）：后处理 → 质量评估 → 落库 → 版本快照。"""
         # 后处理：文号/日期按任务开关决定，默认不注入
         text, events, doc_number, doc_date = self._postprocess(text, ctx)
+        text = self._strip_leading_structural_fields(text, ctx)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(text, topic=ctx.get("title") or ctx.get("topic") or "")
 
@@ -749,6 +760,7 @@ class WritingTaskService:
                     "context_changes": []}
 
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
+        revised = self._strip_leading_structural_fields(revised, ctx)
         from app.application.writing.quality_gate import QualityGate
         quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
 
@@ -936,6 +948,38 @@ class WritingTaskService:
     # ---------------- 内部 ----------------
 
     @staticmethod
+    def _strip_leading_structural_fields(text: str, ctx: Dict[str, Any]) -> str:
+        """正文只保存正文段落；标题/主送由结构化字段单独渲染。
+
+        模型即使按旧提示重复输出标题、主送机关，也在这里确定性去重，
+        避免桌面排版视图和 Word 导出出现“双标题/双主送”。
+        只处理开头完全匹配的结构行，不碰正文中的同名引用。
+        """
+        if not text:
+            return ""
+        lines = text.splitlines()
+        while lines and not lines[0].strip():
+            lines.pop(0)
+
+        title = (ctx.get("title") or task_parser.build_title(ctx) or "").strip()
+        recipient = (ctx.get("recipient") or "").strip()
+
+        if lines and title and lines[0].strip().rstrip("。") == title.rstrip("。"):
+            lines.pop(0)
+            while lines and not lines[0].strip():
+                lines.pop(0)
+
+        if lines and recipient:
+            first = lines[0].strip()
+            normalized = first.rstrip("：:").strip()
+            if normalized == recipient.rstrip("：:").strip():
+                lines.pop(0)
+                while lines and not lines[0].strip():
+                    lines.pop(0)
+
+        return "\n".join(lines).strip()
+
+    @staticmethod
     def _clean_markdown(text: str) -> str:
         """剥离模型可能输出的 Markdown 标记（公文应为纯文本排版）。"""
         if not text:
@@ -985,7 +1029,7 @@ class WritingTaskService:
             parts.append(
                 "\n严格要求：\n"
                 "1) 必须输出完整公文，禁止提纲、片段、列表；\n"
-                "2) 结构完整：标题、主送机关、正文、落款单位、成文日期；\n"
+                "2) 标题、主送机关由系统结构化字段单独排版；你的输出正文不要重复标题或主送机关，从正文第一段直接开始；\n"
                 "3) 正文分 6-8 个章节，每章节 200 字以上，全文不少于 1800 字；\n"
                 "4) 禁止使用任何 Markdown 标记：不要 ###、####、**、---、-、* 等；\n"
                 "5) 直接以纯文本输出，段落之间用一个空行分隔；\n"
