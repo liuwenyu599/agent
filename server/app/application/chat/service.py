@@ -152,7 +152,8 @@ class ChatService:
 
         # 写作意图主判据：本条消息是否要在工作台产出/修改内容。
         # 只读问答（咨询/查询/闲聊）一律跳过澄清与写作流水线，直接作答。
-        writing_request = self.intent.is_writing_request(message)
+        knowledge_qa = source == "knowledge_qa"
+        writing_request = False if knowledge_qa else self.intent.is_writing_request(message)
 
         # 写作类请求的信息完整度判断（模板表单模式跳过）
         clarify_reply = None
@@ -241,12 +242,12 @@ class ChatService:
         # 消息入库
         self.messages.add(ChatMessage(
             session_id=session.id, role="user", content=message, source=source,
-            sources=[s["source"] for s in sources] if sources else [],
+            sources=[],
             attachments=self.attachments.summarize_for_message(new_attachments) if new_attachments else [],
         ))
         self.messages.add(ChatMessage(
             session_id=session.id, role="assistant", content=reply,
-            source=source, tokens_used=len(reply),
+            source=source, sources=sources if sources else [], tokens_used=len(reply),
         ))
         self.db.commit()
 
