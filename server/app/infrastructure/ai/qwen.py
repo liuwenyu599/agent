@@ -3,7 +3,7 @@
 业务模块一律通过 application.ports.LLMGateway 调用，禁止直接 HTTP 调模型服务。
 """
 import json
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
 
@@ -41,13 +41,12 @@ class QwenGateway:
     def model_name(self) -> str:
         return self.model
 
-    # ---- 请求准备（complete 与 complete_stream 共用） ----
+    # ---- 请求准备（complete / tool call / complete_stream 共用） ----
 
     def _prepare(self, messages: List[Dict[str, str]],
                  temperature: Optional[float],
                  max_tokens: Optional[int]) -> Tuple[List[Dict[str, str]], int, float]:
         """上下文预算保护：返回 (裁剪后消息, 安全 max_tokens, 温度)。"""
-        # 不传时取全局配置：温度与最大输出统一由 .env 调节，不再硬编码
         if temperature is None:
             temperature = settings.MODEL_TEMPERATURE
         if max_tokens is None:
@@ -104,6 +103,15 @@ class QwenGateway:
             logger.error("[AI网关] HTTP 错误: %s", detail)
             raise AIServiceError("模型调用失败")
 
+    @staticmethod
+    def _log_choice(result: Dict[str, Any], choice: Dict[str, Any]) -> None:
+        logger.info(
+            "[AI网关] finish_reason: %s, usage: %s",
+            choice.get("finish_reason"), result.get("usage"),
+        )
+        if choice.get("finish_reason") == "length":
+            logger.warning("[AI网关] 输出被 max_tokens 截断")
+
     def complete(
         self,
         messages: List[Dict[str, str]],
@@ -123,13 +131,47 @@ class QwenGateway:
 
         result = response.json()
         choice = result["choices"][0]
-        logger.info(
-            "[AI网关] finish_reason: %s, usage: %s",
-            choice.get("finish_reason"), result.get("usage"),
-        )
-        if choice.get("finish_reason") == "length":
-            logger.warning("[AI网关] 输出被 max_tokens 截断")
+        self._log_choice(result, choice)
         return choice["message"]["content"]
+
+    def complete_with_tools(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Dict[str, Any]],
+        tool_choice: Optional[Dict[str, Any]] = None,
+        temperature: Optional[float] = 0.0,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """一次 OpenAI-compatible function/tool completion，返回原始 assistant message。
+
+        业务层负责校验 tool name 与 arguments。这里不执行工具，也不偷偷把 tool call
+        转成普通文本，避免“看起来结构化、实际仍靠自然语言解析”的假工具调用。
+        若生产 vLLM 未启用相应 tool parser，HTTP 错误会按统一 AIServiceError 抛出，
+        上层可显式降级到旧 JSON schema，不影响现网写作。
+        """
+        messages, safe_max_tokens, temperature = self._prepare(
+            messages, temperature, max_tokens)
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": safe_max_tokens,
+            "top_p": 0.9,
+            "tools": tools,
+        }
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
+        response = self._post(payload)
+        result = response.json()
+        choice = result["choices"][0]
+        self._log_choice(result, choice)
+        message = choice.get("message") or {}
+        return {
+            "role": message.get("role") or "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": message.get("tool_calls") or [],
+        }
 
     def complete_stream(
         self,
@@ -154,11 +196,6 @@ class QwenGateway:
             "stream": True,
         }, stream=True)
 
-        # requests 在响应头未声明 charset 时按 ISO-8859-1 解码（HTTP 文本类型的历史默认），
-        # 会把模型返回的 UTF-8 中文解成 'è¿\x9bä¸...' 乱码并随 delta 落库。
-        # OpenAI 兼容端点的 SSE data 载荷是 JSON（RFC 8259 规定 UTF-8），故直接声明 UTF-8：
-        # 不用 apparent_encoding，因为它会读 r.content 把整个响应缓冲进内存，
-        # 使 stream=True 失去边收边发的意义（实测 _content_consumed=True）。
         response.encoding = "utf-8"
 
         finish_reason = None
@@ -192,7 +229,6 @@ class QwenGateway:
         for m in msgs:
             c = m.get("content", "")
             if isinstance(c, list):
-                # 多模态消息：统计文本部分字符，图片按固定额度计入
                 for part in c:
                     if part.get("type") == "text":
                         chars += len(part.get("text", ""))
@@ -200,7 +236,7 @@ class QwenGateway:
                         images += 1
             else:
                 chars += len(c)
-        return int(chars / 0.75) + images * _IMAGE_TOKEN_ALLOWANCE  # 中文约 1 字 ≈ 1 token，偏保守按 0.75 字/token
+        return int(chars / 0.75) + images * _IMAGE_TOKEN_ALLOWANCE
 
     @staticmethod
     def _trim_messages(messages: List[Dict[str, str]], keep_rounds: int = 3) -> List[Dict[str, str]]:
@@ -217,7 +253,7 @@ class QwenGateway:
         sys_char_budget = int((ctx_limit - 512) * 0.75 * 0.5)
         content = system[0].get("content", "")
         if not isinstance(content, str):
-            return messages  # 多模态 system 不截断（实际不会出现）
+            return messages
         if len(content) > sys_char_budget:
             content = content[:sys_char_budget] + "\n（上下文过长，参考材料已按长度截断）"
         return [{"role": "system", "content": content}] + others
