@@ -5,9 +5,10 @@ intent from keywords/regular expressions. Deterministic code may still validate 
 values later (for example an explicitly supplied document number), but it must not decide
 whether a message means "draft", "revise", "change title", or "ask a question".
 
-If the model is temporarily unavailable or returns malformed JSON, we fail closed with a
-non-mutating response instead of falling back to regex heuristics. That is important for a
-writing workbench: doing nothing is recoverable; applying the wrong edit is not.
+If the model is temporarily unavailable or returns malformed JSON, we fail closed with
+``None``. Callers must treat that as a non-mutating turn. Returning ``None`` also preserves
+the public contract used by service/tests; production semantic services no longer use the
+legacy regex intent fallback when interpretation fails.
 """
 from __future__ import annotations
 
@@ -27,8 +28,6 @@ INTENTS = (
 )
 SIDE_EFFECTS = ("none", "workspace")
 
-# Fields whose meaning must be understood semantically by the model. Exact formatting and
-# validation can still be enforced later by deterministic code.
 SEMANTIC_FIELDS = (
     "document_type",
     "title",
@@ -118,7 +117,6 @@ revision_mode 仅可为 expand/polish/condense/normalize/complete/rewrite/revise
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """Parse the first JSON object without using regex-based semantic heuristics."""
     if not text:
         return None
     s = text.strip()
@@ -155,7 +153,6 @@ def _blank_result(reply: str) -> Dict[str, Any]:
 
 def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
     out = _blank_result("")
-
     intent = str(raw.get("intent") or "").strip()
     if intent in INTENTS:
         out["intent"] = intent
@@ -165,8 +162,6 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["side_effect"] = side
     else:
         out["side_effect"] = "none" if out["intent"] in ("answer", "clarify") else "workspace"
-
-    # Safety invariant: a read-only classification can never mutate the workspace.
     if out["side_effect"] == "none" and out["intent"] not in ("answer", "clarify"):
         out["intent"] = "answer"
 
@@ -196,7 +191,6 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
         v = raw.get(f)
         if isinstance(v, str) and v.strip():
             out[f] = v.strip()
-
     if isinstance(raw.get("needs_clarification"), bool):
         out["needs_clarification"] = raw["needs_clarification"]
 
@@ -205,7 +199,6 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
     ):
         out["revision_mode"] = "revise" if out["revision_instruction"] else None
 
-    # Structural-only changes must never enter the body-revision path.
     structural_values = any(
         out.get(k) is not None
         for k in (
@@ -240,9 +233,10 @@ class WritingIntentInterpreter:
     def __init__(self, assistant) -> None:
         self.assistant = assistant
 
-    def _safe_failure(self, reason: str) -> Dict[str, Any]:
+    @staticmethod
+    def _safe_failure(reason: str) -> None:
         logger.warning("[意图解释] %s；为避免误改正文，本轮不执行工作台变更", reason)
-        return _blank_result("这条指令我没有可靠理解，因此没有改动文档。请换一种说法，我会重新理解后再执行。")
+        return None
 
     def interpret(
         self,
@@ -251,9 +245,6 @@ class WritingIntentInterpreter:
         has_draft: bool = False,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Optional[Dict[str, Any]]:
-        # Keep Optional in the public signature for compatibility, but when an assistant exists
-        # this method always returns a structured result. That prevents task_service from entering
-        # its legacy regex intent fallback in production.
         if not self.assistant:
             return self._safe_failure("模型未配置")
 
@@ -267,7 +258,6 @@ class WritingIntentInterpreter:
             "是否已有正文草稿": has_draft,
             "用户最新消息": message,
         }
-
         messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for h in (history or [])[-8:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
@@ -281,7 +271,6 @@ class WritingIntentInterpreter:
 
         obj = _extract_json(raw or "")
         if obj is None or obj.get("_schema") not in ("writing_intent_v2", "writing_intent_v1"):
-            # One model-based repair attempt. We still do not infer the user's intent locally.
             repair_messages = messages + [
                 {"role": "assistant", "content": (raw or "")[:3000]},
                 {"role": "user", "content": (
