@@ -73,6 +73,7 @@ class DocumentService:
         else:
             chunks = self.official_chunker.chunk(text, doc_id, title=title)
 
+        # 初始状态：管理员/知识管理员直接发布；个人库直接发布；公共库待审核
         kb = db.get(KnowledgeBaseModel, kb_id)
         if is_privileged(user_role):
             initial_status = "published"
@@ -82,6 +83,8 @@ class DocumentService:
             else:
                 initial_status = "pending"
 
+        # 检索作用域：随知识库归属写入向量元数据，检索阶段据此做隔离
+        # 个人库→USER:<owner>；科室库→DEPT:<code>；全局公共库→GLOBAL
         scope = scope_of_kb(kb)
         dept_code = getattr(kb, "department_code", "") or ""
 
@@ -105,7 +108,7 @@ class DocumentService:
 
         chunk_records = []
         for i, chunk_data in enumerate(chunks):
-            chunk_id = f"{doc_id}_{i}"
+            chunk_id = f"{doc_id}_{i}"  # 数据库 ID 和向量库一致
             chunk = ChunkModel(
                 id=chunk_id,
                 doc_id=doc_id,
@@ -128,6 +131,7 @@ class DocumentService:
 
         db.commit()
 
+        # 向量化（仅对已发布文档）
         if initial_status == "published":
             self._vectorize(chunk_records, scope=scope)
 
@@ -161,13 +165,20 @@ class DocumentService:
     # ========== 正文在线编辑 ==========
 
     def update_content(self, db: Session, doc_id: str, text: str) -> Dict:
+        """更新文档正文：重新分块、替换 chunk 记录并重建该文档的向量索引。
+
+        权限由路由层（KnowledgeService.update_document）先行校验。
+        """
         doc = db.get(DocumentModel, doc_id)
         if not doc:
             return {"doc_id": doc_id, "chunks": 0, "message": "文档不存在"}
 
         text = text or ""
         doc.content = text[:500000]
-        db.query(ChunkModel).filter(ChunkModel.doc_id == doc_id).delete(synchronize_session=False)
+
+        # 旧块删除，按新正文重新分块
+        db.query(ChunkModel).filter(ChunkModel.doc_id == doc_id).delete(
+            synchronize_session=False)
         if doc.doc_type == "法规":
             chunks = self.legal_chunker.chunk(text, doc_id, title=doc.title or "")
         else:
@@ -196,6 +207,7 @@ class DocumentService:
             })
         db.commit()
 
+        # 重建向量：先标记删除旧向量，再按当前状态重新索引
         if self.vector_store:
             try:
                 self.vector_store.delete_by_document(doc_id)
@@ -204,7 +216,8 @@ class DocumentService:
         if doc.status == "published":
             self._vectorize(records, scope=scope_of_doc(db, doc))
 
-        return {"doc_id": doc_id, "chunks": len(chunks), "message": "正文已更新，检索内容已同步"}
+        return {"doc_id": doc_id, "chunks": len(chunks),
+                "message": "正文已更新，检索内容已同步"}
 
     # ========== 网页入库 ==========
 
@@ -215,17 +228,20 @@ class DocumentService:
                              publish_time: Optional[str] = None) -> Dict:
         text = (fetched.get("content") or "").strip()
         final_title = (title or fetched.get("title") or url).strip()[:500]
+
         header = f"【来源网页】{url}"
         src = source_name or fetched.get("source_name") or ""
         if src:
             header += f"（{src}）"
         full_text = header + "\n\n" + text
+
         meta = {
             "source_type": "web",
             "source_url": url,
             "source_name": src,
             "publish_time": publish_time or fetched.get("publish_time") or "",
         }
+
         result = self._persist_document(
             db=db, kb_id=kb_id, title=final_title, text=full_text,
             user_id=user_id, user_role=user_role,
@@ -237,12 +253,16 @@ class DocumentService:
         return result
 
     def find_by_source_url(self, db: Session, source_url: str) -> Optional[DocumentModel]:
+        """按 source_url 查重（archived 的也算已存在）。"""
+        from sqlalchemy import select
         try:
             return db.scalar(select(DocumentModel).where(
                 DocumentModel.doc_metadata["source_url"].as_string() == source_url
             ))
         except Exception:
-            docs = db.scalars(select(DocumentModel).where(DocumentModel.doc_metadata.isnot(None))).all()
+            docs = db.scalars(
+                select(DocumentModel).where(DocumentModel.doc_metadata.isnot(None))
+            ).all()
             for d in docs:
                 if (d.doc_metadata or {}).get("source_url") == source_url:
                     return d
@@ -254,9 +274,11 @@ class DocumentService:
                              db: Session, title=None, doc_type=None,
                              department=None, doc_number=None) -> Dict:
         doc_id = new_doc_id()
+
         tmp_dir = settings.DATA_DIR / "tmp" / "knowledge-upload"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp_path = tmp_dir / f"{doc_id}_{file.filename}"
+
         content = await file.read()
         with open(tmp_path, "wb") as f:
             f.write(content)
@@ -288,12 +310,17 @@ class DocumentService:
             doc.reviewed_at = now_local()
             doc.review_comment = comment or "审核通过"
             db.commit()
+
+            # 审核通过时才向量化，作用域取自文档所属知识库归属
             doc_scope = scope_of_doc(db, doc)
-            chunks = db.scalars(select(ChunkModel).where(ChunkModel.doc_id == doc_id)).all()
+            chunks = db.scalars(
+                select(ChunkModel).where(ChunkModel.doc_id == doc_id)
+            ).all()
             self._vectorize([{
                 "chunk_id": c.id, "doc_id": doc_id, "kb_id": doc.kb_id,
                 "content": c.content, "title": c.title or "",
             } for c in chunks], scope=doc_scope)
+
         elif action in ["reject", "rejected"]:
             doc.status = "rejected"
             doc.reviewed_by = reviewer_id
@@ -305,10 +332,14 @@ class DocumentService:
 
     # ========== 文件解析 ==========
 
+    #: 经 LibreOffice 转换解析的格式
     _SOFFICE_EXTS = ("doc", "wps", "rtf")
 
     def extract_text(self, file_path: Path, filename: str) -> str:
-        """提取文件纯文本。支持 docx / doc / pdf / wps / rtf / txt / md / xlsx。"""
+        """提取文件纯文本。支持 docx / doc / pdf / wps / rtf / txt / md / xlsx。
+
+        解析失败或不支持的格式直接抛 400，不再把「解析失败」占位文字当正文入库。
+        """
         suffix = filename.lower().rsplit('.', 1)[-1] if '.' in (filename or "") else ""
 
         if suffix == 'docx':
@@ -380,50 +411,67 @@ class DocumentService:
                 continue
             except Exception:
                 break
-        return ""
+        return Path(file_path).read_text(encoding="utf-8", errors="ignore")
 
     @staticmethod
     def _extract_pdf(file_path: Path) -> str:
+        """PDF 文本提取：pypdf 优先，PyPDF2 兜底。"""
         try:
             from pypdf import PdfReader
+        except ImportError:
+            try:
+                from PyPDF2 import PdfReader
+            except ImportError:
+                logger.error("未安装 pypdf/PyPDF2，无法解析 PDF")
+                return ""
+        try:
             reader = PdfReader(str(file_path))
-            return "\n\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()
+            return "\n".join((page.extract_text() or "") for page in reader.pages)
         except Exception as e:
             logger.error("PDF 解析失败: %s", e)
             return ""
 
     @staticmethod
-    def _extract_via_soffice(file_path: Path) -> str:
-        import shutil
-        import subprocess
-        import tempfile
-        soffice = shutil.which("libreoffice") or shutil.which("soffice")
-        if not soffice:
-            return ""
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                subprocess.run([
-                    soffice, "--headless", "--convert-to", "txt:Text",
-                    "--outdir", td, str(file_path)
-                ], check=False, timeout=60, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                txt = Path(td) / (Path(file_path).stem + ".txt")
-                if txt.exists():
-                    return DocumentService._read_text_file(txt)
-            except Exception as e:
-                logger.warning("LibreOffice 文本转换失败: %s", e)
-        return ""
-
-    @staticmethod
     def _extract_doc_legacy(file_path: Path) -> str:
+        """.doc 传统解析：antiword → docx2txt（环境没有 LibreOffice 时的兜底）。"""
         try:
             import subprocess
-            result = subprocess.run(["antiword", str(file_path)], check=False, timeout=30,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            for enc in ("utf-8", "gb18030"):
-                try:
-                    return result.stdout.decode(enc)
-                except UnicodeDecodeError:
-                    continue
+            result = subprocess.run(['antiword', str(file_path)],
+                                    capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout
         except Exception:
             pass
-        return ""
+        try:
+            import docx2txt
+            return docx2txt.process(str(file_path)) or ""
+        except Exception:
+            return ""
+
+    def _extract_via_soffice(self, file_path: Path) -> str:
+        """用 LibreOffice 无头模式把 doc / wps / rtf 转成 UTF-8 文本再读取。
+
+        LibreOffice 对中文旧格式（含 WPS）覆盖率最高；环境未安装时返回空串走兜底。
+        """
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.TemporaryDirectory() as out_dir:
+                result = subprocess.run(
+                    ["soffice", "--headless", "--convert-to", "txt:Text (encoded):UTF8",
+                     "--outdir", out_dir, str(file_path)],
+                    capture_output=True, timeout=120)
+                if result.returncode != 0:
+                    logger.warning("[文档解析] LibreOffice 转换返回非零: %s",
+                                   (result.stderr or b"")[:200])
+                    return ""
+                txt_files = list(Path(out_dir).glob("*.txt"))
+                if not txt_files:
+                    return ""
+                return txt_files[0].read_text(encoding="utf-8", errors="ignore")
+        except FileNotFoundError:
+            logger.warning("[文档解析] 未检测到 LibreOffice（soffice），doc/wps/rtf 走兜底解析")
+            return ""
+        except Exception as e:
+            logger.error("[文档解析] LibreOffice 转换失败: %s", e)
+            return ""
