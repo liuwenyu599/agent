@@ -92,7 +92,8 @@ import com.judicialai.desktop.features.chat.model.HistoryItem
 import java.time.LocalDate
 import java.util.prefs.Preferences
 
-/** 分类主题色：时间线与统计芯片共用同一套，保证一眼可辨 */
+private const val HISTORY_TITLE_MAX = 200
+
 private fun categoryColor(c: HistoryCategory): Color = when (c) {
     HistoryCategory.CHAT -> QuickBlue
     HistoryCategory.DOC -> QuickGreen
@@ -107,7 +108,6 @@ private fun categoryIcon(c: HistoryCategory): ImageVector = when (c) {
     HistoryCategory.WORKFLOW -> Icons.Default.Share
 }
 
-/** 一天一组的时间线分组 */
 private data class DayGroup(val label: String, val items: List<HistoryItem>)
 
 private fun groupByDay(items: List<HistoryItem>, newestFirst: Boolean): List<DayGroup> {
@@ -127,13 +127,6 @@ private fun groupByDay(items: List<HistoryItem>, newestFirst: Boolean): List<Day
         }
 }
 
-/**
- * 历史记录（重设计）：全页时间线卡片流。
- * - 右侧对话区已移除：这里只做「我生成的内容」的查看与管理，对话记录以只读弹窗回看；
- * - 顶部统计条（四类计数）+ 搜索 + 分类筛选；
- * - 主体按天分组（今天 / 昨天 / M月d日），卡片显示类型图标、标题、摘要与时间，
- *   hover 出现「打开 / 重命名 / 删除」。
- */
 @Composable
 fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }) {
     LaunchedEffect(Unit) {
@@ -148,35 +141,37 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         Preferences.userRoot().node("com/judicialai/desktop/history/" +
             AppState.username.ifBlank { "anonymous" })
     }
-    var sortMode by remember(AppState.username) {
-        mutableStateOf(historyPrefs.get("sort", "newest"))
-    }
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf<HistoryCategory?>(null) } // null = 全部
+    var filter by remember { mutableStateOf<HistoryCategory?>(null) }
+    val sortPrefKey = "sort." + (filter?.name?.lowercase() ?: "all")
+    var sortMode by remember(AppState.username, sortPrefKey) {
+        mutableStateOf(historyPrefs.get(sortPrefKey, "newest"))
+    }
     var renameTarget by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteTarget by remember { mutableStateOf<HistoryItem?>(null) }
     var viewingChat by remember { mutableStateOf<HistoryItem?>(null) }
 
-    // 打开对话记录时载入其消息（只读回看）
     LaunchedEffect(viewingChat?.id) {
         viewingChat?.let { vm.openSession(it.id) }
     }
 
-    val base = if (filter == null) vm.allHistoryItems()
-    else vm.historyItemsOf(filter!!)
+    val base = if (filter == null) vm.allHistoryItems() else vm.historyItemsOf(filter!!)
     val filteredItems = base.filter {
         query.isBlank() || it.title.contains(query, ignoreCase = true) ||
             it.sub.contains(query, ignoreCase = true)
     }
-    val items = if (sortMode == "oldest") {
-        filteredItems.sortedBy { it.time }
-    } else {
-        filteredItems.sortedByDescending { it.time }
+    val items = when (sortMode) {
+        "oldest" -> filteredItems.sortedBy { it.time }
+        "title" -> filteredItems.sortedBy { it.title.lowercase() }
+        else -> filteredItems.sortedByDescending { it.time }
     }
-    val groups = groupByDay(items, newestFirst = sortMode != "oldest")
+    val groups = if (sortMode == "title") {
+        listOf(DayGroup("按标题排序", items))
+    } else {
+        groupByDay(items, newestFirst = sortMode != "oldest")
+    }
 
     Column(Modifier.fillMaxSize().background(AppBg)) {
-        // ===== 顶部：标题 + 四类统计 =====
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -198,7 +193,6 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
             }
         }
 
-        // ===== 工具条：搜索 + 说明 =====
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -227,11 +221,15 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
                 fontSize = 12.5.sp, color = Muted)
             Spacer(Modifier.weight(1f))
             Text("排序：", fontSize = 12.sp, color = Muted)
-            listOf("newest" to "最新优先", "oldest" to "最早优先").forEach { (key, label) ->
+            listOf(
+                "newest" to "最新优先",
+                "oldest" to "最早优先",
+                "title" to "标题 A-Z",
+            ).forEach { (key, label) ->
                 val selected = sortMode == key
                 TextButton(onClick = {
                     sortMode = key
-                    historyPrefs.put("sort", key)
+                    historyPrefs.put(sortPrefKey, key)
                 }) {
                     Text(label, fontSize = 12.sp,
                         color = if (selected) Primary else Ink2,
@@ -251,7 +249,6 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
 
         Spacer(Modifier.height(10.dp))
 
-        // ===== 时间线主体 =====
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 vm.historyLoading && items.isEmpty() -> LoadingBlock("正在读取记录…")
@@ -282,13 +279,8 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         }
     }
 
-    // ===== 弹窗：对话只读回看 / 文档预览 / 重命名 / 删除 =====
     viewingChat?.let { item ->
-        ChatViewDialog(
-            item = item,
-            messages = vm.messages,
-            onClose = { viewingChat = null },
-        )
+        ChatViewDialog(item = item, messages = vm.messages, onClose = { viewingChat = null })
     }
     if (vm.openedDoc != null || vm.openedDocLoading) {
         DocPreviewDialog(vm)
@@ -317,7 +309,6 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
     }
 }
 
-/** 顶部分类统计芯片：点击即筛选该分类，再点取消筛选 */
 @Composable
 private fun StatChip(
     icon: ImageVector, label: String, count: Int, color: Color,
@@ -338,7 +329,6 @@ private fun StatChip(
     }
 }
 
-/** 日期分组头：圆点 + 标签 + 延展细线，形成时间线节奏 */
 @Composable
 private fun DayHeader(label: String) {
     Row(
@@ -353,7 +343,6 @@ private fun DayHeader(label: String) {
     }
 }
 
-/** 时间线卡片：类型图标 + 标题 + 摘要/时间，hover 浮现操作 */
 @Composable
 private fun TimelineCard(
     item: HistoryItem,
@@ -416,7 +405,6 @@ private fun TimelineCard(
     }
 }
 
-/** 空态：区分「真的没有」和「筛选/搜索后没有」 */
 @Composable
 private fun TimelineEmpty(filter: HistoryCategory?, searching: Boolean) {
     Column(
@@ -451,7 +439,6 @@ private fun TimelineEmpty(filter: HistoryCategory?, searching: Boolean) {
     }
 }
 
-/** 对话只读回看：右侧对话区已移除，历史里的对话以弹窗形式回看 */
 @Composable
 private fun ChatViewDialog(
     item: HistoryItem,
@@ -501,10 +488,6 @@ private fun ChatViewDialog(
     }
 }
 
-/**
- * 文档预览：弹窗内只读查看；需要编辑/存版本/导出时带 id 跳「我的文档」页。
- * 正文用共享的 [MarkdownView] 带格式渲染（标题/粗体/列表），不再是裸 txt。
- */
 @Composable
 private fun DocPreviewDialog(vm: ChatViewModel) {
     val doc = vm.openedDoc
@@ -542,7 +525,6 @@ private fun DocPreviewDialog(vm: ChatViewModel) {
     }
 }
 
-/** 重命名弹窗：非空、≤200 字校验，超限/为空时确定禁用并给出提示 */
 @Composable
 private fun RenameDialog(
     item: HistoryItem,
@@ -587,7 +569,6 @@ private fun RenameDialog(
     }
 }
 
-/** 删除二次确认：明确告知删除对象与不可恢复 */
 @Composable
 private fun DeleteConfirmDialog(
     item: HistoryItem,
@@ -621,7 +602,6 @@ private fun DeleteConfirmDialog(
     }
 }
 
-/** 「打开」按钮的说明文案：如实写明每类的打开方式 */
 private fun historyOpenLabelOf(category: HistoryCategory): String = when (category) {
     HistoryCategory.CHAT -> "回看对话"
     HistoryCategory.DOC -> "预览文档"
