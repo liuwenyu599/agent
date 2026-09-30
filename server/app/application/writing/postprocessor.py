@@ -49,9 +49,9 @@ def _parse_date_year(date_str: str) -> Optional[int]:
 
 DOCNUM_LOOSE_RE = re.compile(
     r"([\u4e00-\u9fa5]{1,10})"       # 机关代字
-    r"[〔\[【［]"
+    r"[〔\[【［﹝]"                   # 含全角小括号 ﹝ （LLM 常见误用，国标应为 〔〕）
     r"([0-9０-９OoＯｏIl\s]{1,12})"  # 年份部分
-    r"[〕\]】］\]]"
+    r"[〕\]】］﹞]"
     r"\s*([0-9０-９OoＯｏIl\s]{1,8})"  # 序号部分
     r"\s*[号好]"
 )
@@ -359,10 +359,14 @@ def fix_placeholder_signoff_date(text: str, target: str) -> Tuple[str, Optional[
         f"落款日期占位符替换：{old} → {target}"
 
 
+# 数字后面常跟中文量词（人/元/个月/名/项/次…），必须容忍，否则
+# “1336人×150元×12个月=239.85万元”这类最常见的写法根本匹配不到。
+_AMOUNT_UNIT = r"(?:[\u4e00-\u9fa5]{0,3})"
+
 _MUL_AMOUNT_RE = re.compile(
-    r"(?P<a>\d+(?:\.\d+)?)\s*[×xX*]\s*"
-    r"(?P<b>\d+(?:\.\d+)?)"
-    r"(?:\s*[×xX*]\s*(?P<c>\d+(?:\.\d+)?))?"
+    r"(?P<a>\d+(?:\.\d+)?)" + _AMOUNT_UNIT + r"\s*[×xX*]\s*"
+    r"(?P<b>\d+(?:\.\d+)?)" + _AMOUNT_UNIT +
+    r"(?:\s*[×xX*]\s*(?P<c>\d+(?:\.\d+)?)" + _AMOUNT_UNIT + r")?"
     r"(?P<middle>\s*(?:=|＝|合计|共计|总计|应为|为)\s*)"
     r"(?P<stated>\d+(?:\.\d+)?)\s*万"
 )
@@ -398,14 +402,36 @@ def fix_simple_multiplication_amounts(text: str) -> Tuple[str, List[str]]:
     return _MUL_AMOUNT_RE.sub(repl, text), events
 
 
+# 文种拿不到时（对话写作入口不传 document_type）从文本兜底判断是不是函
+_LETTER_TITLE_RE = re.compile(r"函\s*$|的函")
+_LETTER_BODY_RE = re.compile(r"函告|函复|特此函|函请")
+# 请求类函件（商请/请批）与告知类函件结语不同
+_LETTER_REQUEST_RE = re.compile(
+    r"请予|请予支持|请审批|请审核|请拨付|请研究|予以支持|望予|为盼|盼复|函请"
+)
+
+
+def _is_letter(text: str, document_type: Optional[str]) -> bool:
+    if "函" in (document_type or ""):
+        return True
+    head = next((l.strip() for l in text.split("\n") if l.strip()), "")
+    if _LETTER_TITLE_RE.search(head):
+        return True
+    return bool(_LETTER_BODY_RE.search(text))
+
+
 def normalize_correspondence_ending(text: str, document_type: Optional[str]) -> Tuple[str, Optional[str]]:
-    """函件禁止使用书信式“此致敬礼”，统一改为公文函结语。"""
-    if "函" not in (document_type or ""):
+    """函件禁止使用书信式“此致敬礼”，统一改为公文函结语。
+
+    请求类（商请/请批）用“特此函请，请予支持。”，告知类用“特此函告。”。
+    """
+    if not _is_letter(text, document_type):
         return text, None
     pattern = re.compile(r"此致\s*[，,。！!]?\s*敬礼[！!。]?", re.M)
     if not pattern.search(text):
         return text, None
-    return pattern.sub("特此函告。", text), "函件结语校正：此致敬礼 → 特此函告"
+    ending = "特此函请，请予支持。" if _LETTER_REQUEST_RE.search(text) else "特此函告。"
+    return pattern.sub(ending, text), f"函件结语校正：此致敬礼 → {ending}"
 
 
 # ---------- 后处理流水线 ----------

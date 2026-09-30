@@ -750,10 +750,15 @@ class WritingTaskService:
 
         degenerate = bool(detect_outline_degeneration(text))
         doc_type = str(ctx.get("document_type") or "")
+        # 函件体例问题不只是“太长”，更是“被写成了报告”：章节一多就是结构错，
+        # 所以字数未超 1500 但一级条目超过 5 条时同样要精简。
+        heading_count = len(
+            re.findall(r"(?m)^\s*(一|二|三|四|五|六|七|八|九|十)+、", text)
+        )
         compact函 = (
             "函" in doc_type
             and not ctx.get("word_count_target")
-            and len(re.sub(r"\s+", "", text)) > 1500
+            and (len(re.sub(r"\s+", "", text)) > 1500 or heading_count > 5)
         )
         if not degenerate and not compact函:
             return text, None
@@ -1185,7 +1190,15 @@ class WritingTaskService:
                        else "通常控制在 800-1200 字，能合并的事项不要拆成多条；")
                     + "不得套用总结、报告的长篇结构；\n"
                 )
-                ending_rule = "10) 函件不得使用书信式“此致、敬礼”，结尾使用“特此函告。”等规范函件结语。\n"
+                ending_rule = (
+                    "10) 函件不得使用书信式“此致、敬礼”，结尾用规范公文函结语："
+                    "告知类用“特此函告。”，商请/请批类用“特此函请，请予支持。”"
+                    "或“请予拨付为盼。”；\n"
+                    "11) 函是平级或不相隶属机关之间的商洽文种，正文不得用下行文口气"
+                    "（不得用“我局决定……现将……函告如下”来表达请求事项）；"
+                    "凡涉及请对方拨款、审批、配合的事项，必须明确写出"
+                    "“请予……”“望予……”“……为盼”等商请表述；\n"
+                )
             else:
                 length_rule = "3) 按文种组织必要结构，避免机械凑章节；除用户另有字数要求外，以完整、精炼为准；\n"
                 ending_rule = ""
@@ -1202,7 +1215,7 @@ class WritingTaskService:
                 "8) 当前文件的文号与成文日期由系统程序处理，正文不要自行输出文号或日期占位符；\n"
                 "9) 严格遵守已确认文种和内容边界，不得把通知写成工作要点、把报送事项扩写成全年工作部署；\n"
                 + ending_rule +
-                "11) 外部事实（姓名、电话、文号、统计数字、具体日期）必须有来源；"
+                "12) 外部事实（姓名、电话、文号、统计数字、具体日期）必须有来源；"
                 "工作思路、具体举措、责任分工、预期目标属于作者自主规划，应写实写具体。"
             )
         return "".join(parts)

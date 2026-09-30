@@ -247,6 +247,44 @@ def test_placeholder_docnum_and_date_are_removed_or_replaced():
 
 def test_baiyun_recipient_is_normalized_to_full_agency_name():
     assert normalize_recipient_name("白云区财政局") == "广州市白云区财政局"
+
+
+def test_multiplication_with_chinese_units_is_corrected():
+    """中文量词（人/元/个月）夹在数字与运算符之间时也必须能校正。"""
+    raw = "按现有人民调解员1336人计算，预算经费为1336人×150元×12个月=239.85万元。"
+    out, events, _number, _date = PostProcessor().process(
+        raw, inject_docnum=False, inject_date=False)
+    assert "240.48万元" in out
+    assert "239.85万元" not in out
+    assert any("算术校正" in e for e in events)
+
+
+def test_small_bracket_docnum_is_normalized_to_standard_bracket():
+    """LLM 常用 ﹝﹞ 全角小括号，国标应为〔〕。"""
+    raw = "根据《广州市关于加强人民调解工作的意见》（穗司发﹝2018﹞278号）执行。"
+    out, events, _number, _date = PostProcessor().process(
+        raw, inject_docnum=False, inject_date=False)
+    assert "穗司发〔2018〕278号" in out
+    assert "﹝2018﹞" not in out
+    assert any("历史文号格式规范化" in e for e in events)
+
+
+def test_letter_ending_is_fixed_even_without_document_type():
+    """对话写作入口不传 document_type 时，也要能识别函并校正结语。"""
+    raw = (
+        "现将划拨2027年村（社区）兼职人民调解员工作补贴的相关事宜函告如下：\n"
+        "一、补贴发放依据\n依据相关文件执行。\n\n"
+        "此致\n敬礼！\n"
+        "广州市白云区司法局\n"
+        "2026年X月X日"
+    )
+    out, events, _number, _date = PostProcessor().process(
+        raw, signoff_hint="广州市白云区司法局",
+        inject_docnum=False, inject_date=True, document_type=None)
+    assert "敬礼" not in out
+    assert "特此函告。" in out
+    assert "X月X日" not in out
+    assert any("函件结语校正" in e for e in events)
     assert normalize_recipient_name("广州市白云区财政局") == "广州市白云区财政局"
     assert normalize_recipient_name("各镇街、各部门") == "各镇街、各部门"
 
