@@ -59,12 +59,14 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
 
 ; Compose 桌面端是 x64
+; 只声明 ArchitecturesAllowed 即可：Inno Setup 6.3+ 起在 ArchitecturesAllowed 仅含
+; 64 位架构时会自动以 64 位模式安装，ArchitecturesInstallIn64BitMode 已废弃，
+; Inno Setup 7 更是直接移除（写了会报 Unrecognized directive）。
 ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
 
 WizardStyle=modern
 WizardResizable=no
-Unicode=yes
+; Unicode 指令自 Inno Setup 6 起恒为 yes（已无 ANSI 版），7 已移除该指令
 Compression=lzma2/max
 SolidCompression=yes
 AllowNoIcons=yes

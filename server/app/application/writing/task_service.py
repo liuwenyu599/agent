@@ -579,6 +579,7 @@ class WritingTaskService:
         has_draft = bool((t.current_content or "").strip())
         self._push_history(ctx, "user", message)
 
+        before_ctx = dict(ctx)
         # 1. LLM 意图理解（含当前上下文/草稿状态/对话历史）
         it = self._interpret(message, ctx, has_draft=has_draft)
         if it:
@@ -593,6 +594,13 @@ class WritingTaskService:
                 intent = "draft"
             else:
                 intent = "update_context"
+
+        # 本轮实际变动的结构化字段（落款日期/文号）——后面要把它们落到正文上
+        structured_changes = {
+            k for k in ("document_date", "document_number",
+                        "document_number_enabled")
+            if before_ctx.get(k) != ctx.get(k)
+        }
 
         missing = task_parser.compute_missing(ctx)
         t.context = ctx
@@ -621,6 +629,13 @@ class WritingTaskService:
             return result
 
         # 3. 追问 / 要素更新 / 普通回答
+        #    结构化字段改了但没走 AI 改写时，必须同步落进正文：
+        #    否则就是「助手说已更新落款日期，正文里的日期纹丝不动」
+        if has_draft and structured_changes:
+            sync_note = self._sync_structured_fields(t, user_id)
+            if sync_note:
+                changes = list(changes) + [sync_note]
+
         if it and it.get("reply"):
             reply = it["reply"]
         else:
@@ -630,6 +645,29 @@ class WritingTaskService:
         self.db.commit()
         return {**self._to_dict(t), "reply": reply, "content_changed": False,
                 "context_changes": changes}
+
+    def _sync_structured_fields(self, t, user_id: str) -> str:
+        """把 ctx 里已变更的结构化字段（落款日期 / 文号）同步到正文。
+
+        只在这两个字段上做：它们由后处理器程序化注入，不会篡改正文语义。
+        发文机关（落款单位）不在此列——正文里的署名行属于正文内容，
+        改它需要重写正文，不能悄悄替换。
+        没有任何实际变化时返回空串，避免制造噪音版本。
+        """
+        content = (t.current_content or "").strip()
+        if not content:
+            return ""
+        new_text, events, _doc_number, _doc_date = self._postprocess(
+            content, dict(t.context or {}))
+        if not new_text.strip() or new_text.strip() == content:
+            return ""
+        t.current_content = new_text
+        self.db.flush()
+        _, ver = self._snapshot(t, user_id, note="结构化字段同步")
+        t.version_no = ver
+        t.updated_at = now_local()
+        self.db.commit()
+        return ("；".join(events) if events else "正文已同步") + f"（v{ver}）"
 
     def _collecting_reply(self, ctx, changes, missing, message) -> str:
         parts: List[str] = []
@@ -921,6 +959,14 @@ class WritingTaskService:
             return {**self._to_dict(t), "reply": reply, "content_changed": False,
                     "context_changes": []}
 
+        # ⚠ 顺序很重要：必须**先**把用户这句话里的上下文变更合进 ctx
+        # （"落款改成 X" / "日期填 X" / "不要文号" 这类指令），**再**走后处理。
+        # 从前是先 _postprocess 再 merge_context，结果后处理拿到的还是旧日期：
+        # 助手回复里报告"任务信息已同步更新：落款日期 X"，正文里的日期却纹丝不动，
+        # 而且紧随其后的 `ctx["document_date"] = doc_date` 还会把用户刚给的新值覆盖回去。
+        changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
+        task_parser.compute_missing(ctx)
+
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         revised = self._strip_leading_structural_fields(revised, ctx)
         revised, citation_warnings = self._guard_external_document_numbers(
@@ -939,9 +985,7 @@ class WritingTaskService:
             if quality.get("level") == "A":
                 quality["level"] = "B"
 
-        # 上下文同步（例如"不要文号"这类指令）
-        changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
-        task_parser.compute_missing(ctx)
+        # 后处理**实际采用**的文号/成文日期回写 ctx，保证任务信息与正文一致
         if doc_number:
             ctx["document_number"] = doc_number
         if doc_date:

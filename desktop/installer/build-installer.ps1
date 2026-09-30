@@ -66,9 +66,20 @@ $isccCmd = Get-Command iscc -ErrorAction SilentlyContinue
 if ($isccCmd) {
     $iscc = $isccCmd.Source
 } else {
-    $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-    if (-not (Test-Path $iscc)) {
-        Fail "ISCC.exe not found. Install Inno Setup 6, or add it to PATH."
+    # 任意版本 / 任意位数：Inno Setup 6 是 32 位（装在 Program Files (x86)），
+    # Inno Setup 7 有 64 位版（装在 Program Files）。两者都能编译同一份 setup.iss。
+    $roots = @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs")
+    $iscc = $null
+    foreach ($r in $roots) {
+        $hit = Get-ChildItem -Path $r -Filter "Inno Setup*" -Directory -ErrorAction SilentlyContinue |
+               ForEach-Object { Join-Path $_.FullName "ISCC.exe" } |
+               Where-Object { Test-Path $_ } |
+               Sort-Object -Descending |
+               Select-Object -First 1
+        if ($hit) { $iscc = $hit; break }
+    }
+    if (-not $iscc) {
+        Fail "ISCC.exe not found. Install Inno Setup: winget install --id JRSoftware.InnoSetup.7 --exact  (or JRSoftware.InnoSetup for v6)"
     }
 }
 Write-Host "[3/3] ISCC: $iscc" -ForegroundColor Cyan

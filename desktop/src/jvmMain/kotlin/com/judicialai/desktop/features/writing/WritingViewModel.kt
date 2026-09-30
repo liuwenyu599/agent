@@ -593,6 +593,14 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
+        // 服务端语义是「按当前参数整篇重新起草，旧正文自动归档为 v{n+1}」
+        // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
+        // 不是「在旧文后面续写」。所以开流前必须先清空编辑器：
+        // 否则 content += delta 会把新一版直接拼在上一版下面，界面上出现 v1+v2 连体。
+        // 旧内容并未丢失——服务端已把它存进历史版本，可随时查看/回退。
+        // 注意：这里**不动** serverContent，让 content 与它保持不一致，
+        // 期间 refreshTask() 就不会拿服务端的旧正文把正在流的这一版盖掉。
+        content = ""
         activeJob = scope.launch {
             var streamed = false
             val r = repo.draftStream(id, outlineOnly) { delta ->

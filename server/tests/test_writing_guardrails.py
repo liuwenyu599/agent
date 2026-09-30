@@ -21,7 +21,10 @@ from app.application.writing.postprocessor import (
     derive_daizi,
 )
 from app.application.writing.task_service import WritingTaskService
-from app.application.writing.task_parser import normalize_recipient_name
+from app.application.writing.task_parser import (
+    normalize_recipient_name,
+    parse_message,
+)
 
 
 def test_markdown_table_without_trailing_pipe_keeps_last_cell():
@@ -338,3 +341,147 @@ def test_document_number_with_retrieved_evidence_is_preserved():
     )
     assert cleaned == text
     assert warnings == []
+
+
+class _StubDB:
+    def flush(self):
+        pass
+
+    def commit(self):
+        pass
+
+
+class _StubTask:
+    """最小可用的写作任务替身，只覆盖 revise 真正用到的字段。"""
+
+    def __init__(self, content, ctx):
+        self.id = "t-test"
+        self.session_id = "s-test"
+        self.document_id = "d-test"
+        self.context = ctx
+        self.current_content = content
+        self.version_no = 1
+        self.status = "editing"
+        self.ai_draft = content
+        self.created_at = None
+        self.updated_at = None
+
+
+def test_revise_applies_user_date_before_postprocess():
+    """回归：对话里改落款日期，必须真的落到正文上。
+
+    历史 bug：revise() 先 _postprocess 再 merge_context，后处理拿到的还是旧日期；
+    紧接着的 `ctx["document_date"] = doc_date` 又把用户刚给的新日期覆盖回去。
+    表现为「助手回复说已把落款日期更新为 X，正文里的日期却纹丝不动」。
+    """
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = _StubDB()
+
+    old = ("关于举办专题讲座的函\n\n"
+           "为提升业务能力，拟举办专题讲座。\n\n"
+           "广州市白云区司法局\n2026年1月1日")
+    ctx = {
+        "document_type": "函",
+        "title": "关于举办专题讲座的函",
+        "authority": "广州市白云区司法局",
+        "document_date": "2026年1月1日",
+        "document_number_enabled": False,
+        "document_number": None,
+        "key_facts": [],
+    }
+    task = _StubTask(old, ctx)
+
+    svc._get_owned = lambda task_id, user_id: task
+    svc._load_template = lambda template_id: None
+    svc._retrieve = lambda ctx_, user_id, extra_query="": []
+    svc._attachment_context = lambda t, ctx_: None
+    svc._llm_revise = lambda prompt, sources, attachment_ctx, user_id: old.replace(
+        "拟举办专题讲座。", "拟于十月举办专题讲座。")
+    svc._snapshot = lambda t, user_id, note=None: ("d-test", 2)
+
+    out = svc.revise("t-test", "u1", "落款日期改成2026年10月10日")
+
+    assert task.context["document_date"] == "2026年10月10日"
+    assert "2026年10月10日" in task.current_content
+    assert "2026年1月1日" not in task.current_content
+    assert out["content_changed"] is True
+
+
+def test_parser_understands_everyday_phrasings_for_context_updates():
+    """回归：用户口语化的改要素说法必须能被解析，否则「我让改的都没改」。
+
+    历史 bug：正则只认「落款是/发文机关是/单位是」这类"是"字结构和
+    「日期是/日期为/日期：」，用户说「落款改成 X」「日期再填 X」「落款是今天」
+    时 parse_message 返回空（或把年份误判成 time_range），
+    于是助手回复"已更新"，实际一个字段都没动。
+    """
+    from datetime import date
+
+    # 日期：动词覆盖「填/再填/改成/改为/换成/设为」
+    assert parse_message("日期再填2026年10月10日") == {"document_date": "2026年10月10日"}
+    assert parse_message("落款日期改成2026年10月10日") == {"document_date": "2026年10月10日"}
+    assert parse_message("成文日期设为2026年10月10日") == {"document_date": "2026年10月10日"}
+
+    # 「日期再填X」里的年份不能再被当成时间范围
+    assert "time_range" not in parse_message("日期再填2026年10月10日")
+
+    # 今天：口语说法
+    today = date.today()
+    expected_today = f"{today.year}年{today.month}月{today.day}日"
+    assert parse_message("落款是今天") == {"document_date": expected_today}
+    assert parse_message("日期用今天") == {"document_date": expected_today}
+
+    # 发文机关：动词覆盖「改成/改为/换成/填」
+    assert parse_message("落款改成广州市白云区司法局").get("authority") == "广州市白云区司法局"
+    assert parse_message("落款是广州市白云区司法局").get("authority") == "广州市白云区司法局"
+
+    # 标题是结构化字段，必须写进 ctx 才会变
+    assert parse_message("标题改成关于邀请张教授作专题讲座的函").get("title") == \
+        "关于邀请张教授作专题讲座的函"
+
+    # 「标题换一个」没给具体内容，不能瞎猜成标题
+    assert "title" not in parse_message("标题换一个")
+
+
+def test_sync_structured_fields_rewrites_signoff_date_in_body():
+    """回归：只改 ctx（不走 AI 改写）时，落款日期必须同步进正文。"""
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = _StubDB()
+
+    body = "请予支持为盼。\n\n广州市白云区司法局\n2026年1月1日"
+    ctx = {
+        "document_type": "函",
+        "authority": "广州市白云区司法局",
+        "document_date": "2026年10月10日",
+        "document_number_enabled": False,
+        "document_number": None,
+    }
+    task = _StubTask(body, ctx)
+    svc._snapshot = lambda t, user_id, note=None: ("d-test", 2)
+
+    note = svc._sync_structured_fields(task, "u1")
+
+    assert note
+    assert "2026年1月1日" not in task.current_content
+    assert "2026年10月10日" in task.current_content
+    assert task.version_no == 2
+
+
+def test_sync_structured_fields_is_noop_when_nothing_to_change():
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = _StubDB()
+
+    body = "请予支持为盼。\n\n广州市白云区司法局\n2026年10月10日"
+    ctx = {
+        "document_type": "函",
+        "authority": "广州市白云区司法局",
+        "document_date": "2026年10月10日",
+        "document_number_enabled": False,
+        "document_number": None,
+    }
+    task = _StubTask(body, ctx)
+    svc._snapshot = lambda t, user_id, note=None: ("d-test", 2)
+
+    assert svc._sync_structured_fields(task, "u1") == ""
+    assert task.current_content == body
+    assert task.version_no == 1
