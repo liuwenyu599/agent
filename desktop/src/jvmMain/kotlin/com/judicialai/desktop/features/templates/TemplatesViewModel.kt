@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class TemplatesViewModel(private val repo: TemplatesRepository) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -29,50 +30,51 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
     var filterCat by mutableStateOf<String?>(null)
     var status by mutableStateOf<String?>(null)
 
-    /** 正在填写要素的模板（内联填表，不再是弹窗） */
     var usingTemplate by mutableStateOf<JsonObject?>(null)
         private set
 
-    // ---- 模板三层：系统模板 / 本科室模板 / 我的模板（tier 由后端按归属判定）----
     var tier by mutableStateOf<String?>(null)
 
-    /**
-     * 系统模板 → AI 调整草案（未落库）。
-     * 校核后按角色保存：科室管理员 → 科室模板，普通用户 → 我的模板。
-     */
     var adapting by mutableStateOf(false)
         private set
     var adaptError by mutableStateOf<String?>(null)
         private set
 
-    /**
-     * AI 调整草案（未落库，AI 建议 + 人工确认后才保存）。
-     * 直接持有后端 adapt_for_department 返回的完整 JSON 对象，
-     * 保存时透传全部字段（含 params_schema / structure / system_prompt 等），
-     * 避免逐字段挑选时漏掉要素导致科室模板不可填写。
-     */
     var draft by mutableStateOf<JsonObject?>(null)
         private set
 
-    /** 右侧预览：选中模板后拉取完整结构（列表接口不带正文） */
     var selectedId by mutableStateOf<String?>(null)
         private set
     var preview by mutableStateOf<JsonObject?>(null)
         private set
 
-    /** AI 调整结果是否保存为科室模板（科室管理员/系统管理员），否则保存为我的模板 */
     val canSaveDeptTemplate: Boolean
         get() = AppState.isKnowledgeAdmin || AppState.isDeveloper
 
     fun tierOf(t: JsonObject): String = t["tier"].str().ifBlank { "system" }
 
+    /**
+     * 预览兼容层：服务端 structure 的正式结构是 [{name, guide}, ...]，
+     * 旧 PreviewPane 仍按字符串数组渲染。这里只对 preview 做显示归一化，
+     * 原模板对象/编辑保存仍保留对象数组，避免破坏 guide 等结构化字段。
+     */
+    private fun normalizePreviewStructure(t: JsonObject): JsonObject {
+        val raw = t["structure"].arr()
+        if (raw.isEmpty()) return t
+        val names = raw.mapNotNull { item ->
+            item.obj()?.get("name").str().ifBlank { item.str() }.takeIf { it.isNotBlank() }
+        }
+        if (names.isEmpty()) return t
+        return JsonObject(t + ("structure" to JsonArray(names.map(::JsonPrimitive))))
+    }
+
     fun select(t: JsonObject) {
         val id = t["id"].str()
         selectedId = id
-        preview = t
+        preview = normalizePreviewStructure(t)
         scope.launch {
             when (val r = repo.detail(id)) {
-                is ApiResult.Ok -> preview = r.data.obj() ?: t
+                is ApiResult.Ok -> preview = normalizePreviewStructure(r.data.obj() ?: t)
                 is ApiResult.Err -> Unit
             }
         }
@@ -97,12 +99,6 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         usingTemplate = null
     }
 
-    /**
-     * 使用模板生成：不再弹窗直接出文，而是把「模板 + 已填要素」
-     * 交给智能写作工作台——创建绑定该模板的写作任务并自动起草，
-     * 后续对话修改、历史版本与导出都在工作台完成。
-     * 已填要素同时留在 AppState，工作台「返回模板重新填写」时预填，不用重打。
-     */
     fun launchWorkspace(params: Map<String, Pair<String, String>>) {
         val t = usingTemplate ?: return
         val elements = t["params_schema"].arr().mapNotNull { it.obj() }.mapNotNull { f ->
@@ -154,14 +150,12 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 
-    /** 把系统模板按写作习惯生成调整草案（只返回建议，不落库） */
     fun adaptForDepartment(t: JsonObject, hints: String) {
         adapting = true
         status = null
         scope.launch {
             when (val r = repo.adaptForDept(t["id"].str(), hints)) {
                 is ApiResult.Ok -> {
-                    // 整份草案原样保留：后续保存时按完整字段透传，不再手工挑字段。
                     draft = r.data.obj()
                     if (draft == null) status = "未生成模板调整草案"
                 }
@@ -171,24 +165,17 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         }
     }
 
-    /**
-     * 人工确认后保存调整结果：
-     * - 科室管理员 / 系统管理员 → 科室模板（科室归属由服务端写入）；
-     * - 普通用户 → 我的模板（仅本人可见）。
-     */
     fun saveAdaptedTemplate(name: String, content: String) {
         val d = draft ?: return
         if (name.isBlank() || content.isBlank()) {
             status = "模板名称与正文不能为空"
             return
         }
-        // 从草案里取完整字段：缺失时按后端默认值回落，避免存出空要素模板。
         val category = d["category"].str().ifBlank { "科室模板" }
         val baseType = d["base_type"].str().ifBlank { "公文" }
         val templateKind = d["template_kind"].str().ifBlank { "official_doc" }
         val writingStyle = d["writing_style"].str().ifBlank { "正式公文" }
         val wordCount = d["word_count"].int().let { if (it > 0) it else 1000 }
-        // 数组字段原样透传 JSON（ApiClient 支持 JsonElement 直通），缺省给空数组。
         val paramsSchema = d["params_schema"] ?: JsonArray(emptyList())
         val structure = d["structure"] ?: JsonArray(emptyList())
         val tags = d["tags"] ?: JsonArray(emptyList())
