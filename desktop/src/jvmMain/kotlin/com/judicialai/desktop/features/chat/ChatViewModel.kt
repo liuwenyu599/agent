@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /** 记录标题长度上限：与后端 String(200) 对齐 */
-const val HISTORY_TITLE_MAX = 200
+private const val CHAT_HISTORY_TITLE_MAX = 200
 
 class ChatViewModel(
     private val repo: ChatRepository,
@@ -97,7 +97,7 @@ class ChatViewModel(
      */
     fun renameHistory(item: HistoryItem, title: String) {
         val name = title.trim()
-        if (historyBusy || name.isBlank() || name.length > HISTORY_TITLE_MAX) return
+        if (historyBusy || name.isBlank() || name.length > CHAT_HISTORY_TITLE_MAX) return
         historyBusy = true
         historyMessage = null
         scope.launch {
