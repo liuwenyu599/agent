@@ -1,4 +1,4 @@
-# Judicial AI Desktop（司法智能办公辅助平台 · 桌面端）
+# 云法智办 YunFaZhiBan（司法智能办公辅助平台 · 桌面端）
 
 Compose Desktop 客户端，界面与交互 1:1 对齐 Web 端（Element Plus 风格）：
 深色侧边栏（#16223f，可折叠）、56px 白色顶栏、蓝渐变登录页（登录/注册/首次注册三 Tab）、
@@ -31,8 +31,20 @@ App + Core + Data + Design + Features 分层：
 ## 运行
 
 ```bash
-./gradlew run            # 开发运行
-./gradlew packageMsi     # Windows 打包 MSI
-./gradlew packageDmg     # macOS
+./gradlew run                   # 开发运行
+./gradlew createDistributable   # 产出 app image（含自带 JRE）
+                                #   -> build/compose/binaries/main/app/YunFaZhiBan/
 ```
+Windows 安装包（中文名 + 中文桌面快捷方式）由 Inno Setup 从 app image 打包：
+
+```powershell
+.\installer\build-installer.ps1            # 先 createDistributable，再 iscc
+.\installer\build-installer.ps1 -SkipBuild # 已有 app image 时只重打安装包
+# -> build/installer/云法智办-安装程序-<版本>.exe
+```
+
+说明：jpackage 自带的 exe/msi **不再产出**——jpackage 的 `--name` 同时决定 exe 名、
+安装目录名和快捷方式名，三者拆不开，快捷方式只能是英文 `YunFaZhiBan`。
+所以 exe 名保持英文（jpackage 限制），中文显示名 / 桌面快捷方式 / 开始菜单
+全部交给 `installer/setup.iss`。
 

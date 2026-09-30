@@ -159,3 +159,9 @@ deploy/.env
 
 # 本地临时下载目录（LibreOffice 安装包等，不入库）
 .tmp/
+
+# =========================
+# Gradle / Kotlin 本地缓存（不入库）
+# =========================
+desktop/.gradle/
+desktop/.kotlin/
