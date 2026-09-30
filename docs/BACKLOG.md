@@ -147,6 +147,46 @@ val structure = t["structure"].arr().map { it.str() }.filter { it.isNotBlank() }
 
 ---
 
+## 6. PPTAgent E2E 反馈后续（2026-09-30 实测）
+
+**两个好消息**：模型已改用 `write_file`（不再是 heredoc）；已用 `plt.rcParams['font.sans-serif'] = ['SimHei']`
+→ 说明**撤销「禁 matplotlib」、顺着模型先验只约束字体**的方向是对的（见 `10f1776`）。
+
+**三个待解决问题**：
+
+### 6.1 模型无限造图，不进 manuscript（P0）
+
+- **已做**：`Research.yaml` v2 —— 把强制约束**从 `<工作流程>` 末尾提到文件最前**（权重最高），
+  并改成**计数式硬约束**：「最多 5 张图片（搜索/生成/下载/加工全计入），达 5 张后禁止再调任何图片工具」；
+  失败 2 次弃图进写稿。
+- **⚠️ 但 prompt 治不好根因**：与"计算正确性"同理，**文本约束对 9B 不可靠**。要靠执行层：
+  - [ ] host 侧 agent loop 加**最大步数 / 最大工具调用次数**（`config.yaml` 里目前只有 `context_folding`，
+    没有 max_turns / max_images —— 需查服务器上的完整 `config.yaml` 与 DeepPresenter 是否支持）
+  - [ ] 或 `toolset.exclude_tools` 收敛可用造图工具（需先列出工具清单）
+- **涉及文件**：`deploy/pptagent/roles/Research.yaml`（仓库内）、服务器 `config.yaml`（⛔ 够不到）
+
+### 6.2 脚本语法错误 + 土耳其语乱码（`268çük için sonuç`）
+
+- 乱码 = 9B 在长上下文下的**多语言退化**，根因是上下文膨胀（见 6.3），不是 prompt 能单独修的
+- 已做：加约束「写脚本前先确认 API 签名（如 FancyBboxPatch 参数名）；报错只按报错改局部，同一脚本最多改 2 次」
+  + 「所有输出限中英文，严禁其它语言字符」
+- [ ] 待做（执行层）：sandbox 执行脚本前先 `ast.parse` 语法检查，把 SyntaxError 原文回灌给模型（限次），
+      比"模型自己发现报错"更快收敛
+
+### 6.3 LLM 61-71 秒 + 上下文膨胀（P1）
+
+- **已核对**：仓库 `deploy/pptagent/docker-compose.yml:34` **已有 `--enable-prefix-caching`**（:33 `--max-model-len 16384`）
+  → 但**生产 compose 在服务器 `/opt/justice-office/deploy/`，不是仓库这份**（仓库是 dev 模板）。
+  **必须确认生产 compose 是否也有这个参数** —— 若没有，就是 71s 的主因之一。
+  ```bash
+  docker inspect justice-qwen-14b --format '{{.Config.Cmd}}' | tr ' ' '\n' | grep -i prefix
+  ```
+- `config.yaml.example` 已有 `context_folding: true`，但仍膨胀 → [ ] 需 history 摘要/裁剪而非全量重发
+- [ ] 若模型服务支持，适当降 temperature（乱码/退化常与高温采样相关）
+- 详见 `docs/pptagent-fixes-for-gpt.md` §1.2
+
+---
+
 ## 附：本次会话已交付（供对照）
 
 | commit | 内容 |
