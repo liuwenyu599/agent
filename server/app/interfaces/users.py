@@ -1,6 +1,7 @@
 """用户管理路由（管理端）。响应结构与旧系统一致。"""
 import csv
 import io
+import re
 
 from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.orm import Session
@@ -93,7 +94,6 @@ def delete_user(
 
 # ---------------- 批量导入（Excel / CSV） ----------------
 
-# 支持的表头别名（中英文均可，大小写不敏感）
 _HEADER_ALIASES = {
     "username": ("username", "用户名", "账号"),
     "email": ("email", "邮箱", "电子邮件"),
@@ -104,7 +104,6 @@ _HEADER_ALIASES = {
     "password": ("password", "密码", "初始密码"),
 }
 
-# 角色中文别名 → 系统角色值
 _ROLE_ALIASES = {
     "user": "user", "普通用户": "user",
     "knowledge_admin": "knowledge_admin", "科室管理员": "knowledge_admin", "知识管理员": "knowledge_admin",
@@ -112,6 +111,7 @@ _ROLE_ALIASES = {
 }
 
 DEFAULT_BATCH_PASSWORD = "123456"
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9]{3,32}$")
 
 
 def _norm_header(text: str) -> str:
@@ -133,7 +133,7 @@ def _read_rows(filename: str, raw: bytes) -> list[dict]:
             rows = [["" if c is None else str(c).strip() for c in row] for row in ws.iter_rows(values_only=True)]
         except Exception:
             raise AppError(400, "Excel 文件解析失败，请确认为有效的 .xlsx 文件")
-    else:  # 默认按 CSV 处理
+    else:
         text = None
         for enc in ("utf-8-sig", "utf-8", "gbk"):
             try:
@@ -173,7 +173,7 @@ def batch_import_users(
 ):
     """批量创建用户：上传 .xlsx 或 .csv。
 
-    表头（首行，中英文均可）：用户名*、邮箱*、姓名、科室代码、角色（普通用户/科室管理员）、初始密码。
+    用户名规则与单个创建保持一致：仅 3~32 位英文字母或数字。
     初始密码缺省为 123456；所有批量创建的用户 must_change_password=True，首次登录强制改密。
     逐行处理：单行失败不影响其他行，返回每行结果。
     """
@@ -206,6 +206,10 @@ def batch_import_users(
             results.append({"row": row_no, "username": username, "ok": False,
                             "message": "用户名和邮箱不能为空"})
             continue
+        if not _USERNAME_RE.fullmatch(username):
+            results.append({"row": row_no, "username": username, "ok": False,
+                            "message": "用户名只能使用 3~32 位英文字母或数字，不能包含中文、空格或符号"})
+            continue
         if not role:
             results.append({"row": row_no, "username": username, "ok": False,
                             "message": f"角色无效：{role_raw}（支持 普通用户/科室管理员）"})
@@ -215,7 +219,7 @@ def batch_import_users(
                             real_name, department, role, department_code)
             succeeded += 1
             results.append({"row": row_no, "username": username, "ok": True, "message": "创建成功"})
-        except Exception as e:  # 单行失败不中断
+        except Exception as e:
             msg = getattr(e, "message", None) or str(e)
             results.append({"row": row_no, "username": username, "ok": False, "message": msg})
 
