@@ -55,26 +55,3 @@ jobs:
           pip install -r requirements-server.txt pytest
       - name: Run acceptance tests
         run: python -m pytest tests -q
-
-
-  windows-package:
-    name: Windows EXE packaging
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: desktop
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: gradle
-      - name: Package Windows EXE
-        run: .\gradlew.bat packageExe --no-daemon --stacktrace
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: JudicialAIDesktop-windows
-          path: desktop/build/compose/binaries/main/exe/*.exe
-          if-no-files-found: error
