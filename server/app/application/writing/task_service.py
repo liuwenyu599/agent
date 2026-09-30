@@ -755,10 +755,17 @@ class WritingTaskService:
         heading_count = len(
             re.findall(r"(?m)^\s*(一|二|三|四|五|六|七|八|九|十)+、", text)
         )
+        # 用户指定了字数时也不能靠加章节凑字数：条目一旦超过 6 条，
+        # 即便字数达标照样精简（只合并条目，不砍字数）。
+        word_target = ctx.get("word_count_target")
         compact函 = (
             "函" in doc_type
-            and not ctx.get("word_count_target")
-            and (len(re.sub(r"\s+", "", text)) > 1500 or heading_count > 5)
+            and (
+                heading_count > 6
+                or (not word_target
+                    and (len(re.sub(r"\s+", "", text)) > 1500
+                         or heading_count > 5))
+            )
         )
         if not degenerate and not compact函:
             return text, None
@@ -773,15 +780,26 @@ class WritingTaskService:
                 "不得出现任何「略」「待补充」「仅保留思路」式占位文字。")
             reason = "检测到初稿只有提纲，已自动重写为完整成文。"
         else:
-            logger.warning("[写作任务] 检测到函件过长（%d 字），自动精简一次",
-                           len(re.sub(r"\s+", "", text)))
+            logger.warning("[写作任务] 检测到函件体例偏报告（%d 字 / %d 个条目），"
+                           "自动精简一次", len(re.sub(r"\s+", "", text)), heading_count)
+            if word_target:
+                compact_requirement = (
+                    f"上一版为了凑字数拆成了 {heading_count} 个条目，不符合函件体例。"
+                    f"请在仍然不少于 {word_target} 字的前提下，把一级条目合并到 3-5 个，"
+                    "达标的办法是把每段的依据、标准、流程、时限、要求写实写足，"
+                    "而不是继续增加章节条目。"
+                )
+            else:
+                compact_requirement = (
+                    "上一版函件过长，不符合函件简明直接的体例。"
+                    "请在不丢失事实、金额、时限、办理要求和责任主体的前提下，"
+                    "合并重复事项，将正文压缩为 3-5 个自然段或部分，通常控制在 800-1200 字；"
+                    "不得写成 7、8 个条目的长篇报告。"
+                )
             retry_instruction = (
-                instruction +
-                "\n\n【精简重写要求】上一版函件过长，不符合函件简明直接的体例。"
-                "请在不丢失事实、金额、时限、办理要求和责任主体的前提下，"
-                "合并重复事项，将正文压缩为 3-5 个自然段或部分，通常控制在 800-1200 字；"
-                "不得写成 7、8 个条目的长篇报告，不得新增材料中没有的事实。")
-            reason = "检测到函件篇幅偏长，已自动精简为更符合函件体例的版本。"
+                instruction + "\n\n【精简重写要求】" + compact_requirement
+                + "不得新增材料中没有的事实。")
+            reason = "检测到函件被写成了长篇报告体例，已自动精简为更符合函件体例的版本。"
 
         try:
             retry = self._llm_draft(retry_instruction, sources, attachment_ctx,
@@ -798,7 +816,17 @@ class WritingTaskService:
         if compact函:
             retry_len = len(re.sub(r"\s+", "", retry))
             original_len = len(re.sub(r"\s+", "", text))
-            if retry_len >= original_len or retry_len > 1500:
+            retry_headings = len(
+                re.findall(r"(?m)^\s*(一|二|三|四|五|六|七|八|九|十)+、", retry)
+            )
+            if word_target:
+                # 有字数目标：看条目有没有并下来，同时字数不能塌到目标的 80% 以下
+                if retry_headings > 5 or retry_len < word_target * 0.8:
+                    logger.warning(
+                        "[写作任务] 函件精简未达标（条目 %d / 字数 %d），保留原文",
+                        retry_headings, retry_len)
+                    return text, None
+            elif retry_len >= original_len or retry_len > 1500:
                 logger.warning("[写作任务] 函件精简结果仍过长，保留原文供质量门提示：%d 字", retry_len)
                 return text, None
         return retry, reason
@@ -1185,10 +1213,13 @@ class WritingTaskService:
             doc_type = str(ctx.get("document_type") or "")
             if "函" in doc_type:
                 length_rule = (
-                    "3) 函件务必简明，一般控制为 3-5 个自然段或部分；"
-                    + ("全文按用户指定字数执行；" if ctx.get("word_count_target")
-                       else "通常控制在 800-1200 字，能合并的事项不要拆成多条；")
-                    + "不得套用总结、报告的长篇结构；\n"
+                    "3) 函件务必简明，"
+                    + ("全文按用户指定字数执行，字数必须通过把每段写实写足来达标，"
+                       "严禁靠增加章节条目凑字数；" if ctx.get("word_count_target")
+                       else "一般控制为 3-5 个自然段或部分，通常控制在 800-1200 字，"
+                            "能合并的事项不要拆成多条；")
+                    + "无论字数要求多少，一级条目不得超过 5 个；"
+                    "不得套用总结、报告的长篇结构；\n"
                 )
                 ending_rule = (
                     "10) 函件不得使用书信式“此致、敬礼”，结尾用规范公文函结语："

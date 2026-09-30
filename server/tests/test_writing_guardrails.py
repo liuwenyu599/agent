@@ -269,6 +269,21 @@ def test_small_bracket_docnum_is_normalized_to_standard_bracket():
     assert any("历史文号格式规范化" in e for e in events)
 
 
+def test_word_count_target_does_not_cancel_letter_structure_rule():
+    """指定字数不能把「函件 3-5 段 / 条目不超 5 个」的结构约束换掉，
+    否则模型只能靠加章节凑字数，函会被写成报告。"""
+    svc = WritingTaskService.__new__(WritingTaskService)
+    instruction = svc._build_draft_instruction({
+        "document_type": "函",
+        "topic": "划拨人民调解员工作补贴",
+        "recipient": "广州市白云区财政局",
+        "word_count_target": 1500,
+    }, outline_only=False)
+    assert "1500 字" in instruction
+    assert "一级条目不得超过 5 个" in instruction
+    assert "严禁靠增加章节条目凑字数" in instruction
+
+
 def test_letter_ending_is_fixed_even_without_document_type():
     """对话写作入口不传 document_type 时，也要能识别函并校正结语。"""
     raw = (
