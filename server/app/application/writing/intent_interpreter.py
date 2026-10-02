@@ -52,6 +52,37 @@ SEMANTIC_FIELDS = (
     "document_date",
 )
 
+LEGACY_JSON_SCHEMA = """
+兼容 JSON 输出格式（仅当工具调用不可用时使用）：
+{
+  "_schema":"writing_intent_v2",
+  "side_effect":"none|workspace",
+  "intent":"update_context|revise_content|draft|outline|answer|clarify",
+  "document_type":null,
+  "title":null,
+  "topic":null,
+  "purpose":null,
+  "time_range":null,
+  "recipient":null,
+  "authority":null,
+  "key_facts":[],
+  "requirements":null,
+  "tone":null,
+  "word_count_target":null,
+  "document_number_enabled":null,
+  "document_number":null,
+  "document_date":null,
+  "revision_instruction":null,
+  "revision_mode":null,
+  "needs_clarification":false,
+  "clarification_question":null,
+  "reply":""
+}
+revision_mode 仅可为 expand/polish/condense/normalize/complete/rewrite/revise。
+JSON 兼容模式无法可靠表达唯一局部目标，因此 revise_content 会由后端按全文修改旧语义处理；
+只有真实 tool call 的 patch_section 才允许走程序级局部 splice。
+"""
+
 SYSTEM_PROMPT = """你是司法行政公文写作工作台的“指令理解器”。
 你的职责只有一个：理解用户此刻真正想做什么，并转换成结构化操作。不要执行写作本身。
 不要靠关键词机械匹配，要结合当前任务、是否已有正文、最近对话和用户最新消息进行语义判断。
@@ -68,9 +99,7 @@ SYSTEM_PROMPT = """你是司法行政公文写作工作台的“指令理解器�
 同一句既改结构字段又改正文时，field_updates 与正文 operation 可以同时存在；不要把字段修改塞进正文 instruction。
 数字、日期、单位、人名按用户原文抽取，不得自行换算或改写。未知字段留空，不得猜。
 reply 只说明理解到的操作，不要声称尚未执行的修改已经完成。
-
-如果当前端点不支持工具调用而要求 JSON，则输出 writing_intent_v2 兼容 JSON，不要 markdown。
-"""
+""" + LEGACY_JSON_SCHEMA
 
 _FIELD_PROPERTIES: Dict[str, Any] = {
     "document_type": {"type": "string"},
@@ -232,7 +261,7 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     out["operation"] = {
         "update_context": "set_fields",
-        "revise_content": "rewrite_document",  # legacy JSON cannot safely prove a local target
+        "revise_content": "rewrite_document",
         "draft": "draft_document",
         "outline": "outline",
         "answer": "answer",
@@ -256,7 +285,6 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sanitize_tool_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Validate route_writing_ops arguments and map them onto the existing service contract."""
     operation = str(raw.get("operation") or "").strip()
     if operation not in OPERATIONS:
         return None
@@ -373,8 +401,6 @@ class WritingIntentInterpreter:
 
         messages = self._messages(message, context, has_draft, history)
 
-        # Production path: a real function call. Forced tool choice prevents the 14B model from
-        # replying with persuasive prose when the backend needs an executable operation.
         tool_complete = getattr(self.assistant, "complete_with_tools", None)
         if callable(tool_complete):
             try:
@@ -395,8 +421,6 @@ class WritingIntentInterpreter:
                     return result
                 logger.warning("[意图解释] tool call arguments 非法，降级到 JSON v2")
             except Exception as exc:
-                # Tool parser/flags can differ between deployed vLLM instances. Keep the old JSON
-                # path as an explicit compatibility fallback instead of turning edits into 500s.
                 logger.warning("[意图解释] tool calling 不可用，降级到 JSON v2: %s", exc)
 
         try:
@@ -410,7 +434,7 @@ class WritingIntentInterpreter:
                 {"role": "assistant", "content": (raw or "")[:3000]},
                 {"role": "user", "content": (
                     "上一条输出不是合法的 writing_intent_v2 JSON。请重新理解原始用户消息，"
-                    "只输出符合 schema 的单个 JSON 对象，不要解释。"
+                    "只输出符合 system 中兼容 schema 的单个 JSON 对象，不要解释。"
                 )},
             ]
             try:
