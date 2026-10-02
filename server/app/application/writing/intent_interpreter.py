@@ -1,14 +1,12 @@
 """Writing instruction interpreter.
 
-Semantic routing belongs to the LLM. This module deliberately does not infer a user's
-intent from keywords/regular expressions. Deterministic code may still validate exact
-values later (for example an explicitly supplied document number), but it must not decide
-whether a message means "draft", "revise", "change title", or "ask a question".
+Production routing prefers a real OpenAI-compatible function call. The model chooses one
+explicit operation (set fields / patch one section / rewrite document / draft / answer), while
+deterministic code validates arguments and executes the mutation. A legacy JSON-v2 path remains
+as a compatibility fallback for model endpoints that do not expose tool calling yet.
 
-If the model is temporarily unavailable or returns malformed JSON, we fail closed with
-``None``. Callers must treat that as a non-mutating turn. Returning ``None`` also preserves
-the public contract used by service/tests; production semantic services no longer use the
-legacy regex intent fallback when interpretation fails.
+Regex/keyword parsers never decide whether a message means draft/revise/change-title/etc.
+If both tool calling and JSON interpretation fail, callers receive ``None`` and must not mutate.
 """
 from __future__ import annotations
 
@@ -27,6 +25,15 @@ INTENTS = (
     "clarify",
 )
 SIDE_EFFECTS = ("none", "workspace")
+OPERATIONS = (
+    "set_fields",
+    "patch_section",
+    "rewrite_document",
+    "draft_document",
+    "outline",
+    "answer",
+    "clarify",
+)
 
 SEMANTIC_FIELDS = (
     "document_type",
@@ -46,74 +53,82 @@ SEMANTIC_FIELDS = (
 )
 
 SYSTEM_PROMPT = """你是司法行政公文写作工作台的“指令理解器”。
-你的职责只有一个：理解用户此刻真正想做什么，并把意图转换成结构化 JSON。
+你的职责只有一个：理解用户此刻真正想做什么，并转换成结构化操作。不要执行写作本身。
 不要靠关键词机械匹配，要结合当前任务、是否已有正文、最近对话和用户最新消息进行语义判断。
-只输出 JSON，不要输出 markdown 或额外解释。
 
-【最重要的结构边界】
-公文由“结构字段”和“正文主体”两层组成：
-- 结构字段：标题、文种、主送机关、发文机关/落款单位、文号、成文日期、时间范围、字数等；
-- 正文主体：正文段落、章节、措辞、事实、措施、结尾用语等。
+【操作边界】
+- set_fields：只修改标题、主送、落款、日期、文号、文种、字数等结构字段，不重写正文。
+- patch_section：用户只要求修改某一段、某一节或明确局部。target 必须描述唯一目标，优先保留用户给出的原文；instruction 只写该局部怎么改。
+- rewrite_document：只有用户明确要求“全文重写/重新写一版/整体改写”时使用。普通润色、补一句、改某段不得升级成全文重写。
+- draft_document：生成完整初稿。
+- outline：只生成提纲。
+- answer：只咨询/解释/评价，不改变工作台。
+- clarify：确实无法安全定位或缺少关键条件时才用。
 
-用户只是在改结构字段时，必须 intent=update_context，不要把这些内容改写进正文。
-例如：
-- “标题改成《关于开展……的通知》” → update_context，title=对应标题；
-- “主送改成广州市白云区财政局” → update_context，recipient=对应单位；
-- “落款改成广州市白云区司法局” → update_context，authority=对应单位；
-- “日期改成2026年10月10日” → update_context，document_date=对应日期；
-- “不要文号” → update_context，document_number_enabled=false。
+同一句既改结构字段又改正文时，field_updates 与正文 operation 可以同时存在；不要把字段修改塞进正文 instruction。
+数字、日期、单位、人名按用户原文抽取，不得自行换算或改写。未知字段留空，不得猜。
+reply 只说明理解到的操作，不要声称尚未执行的修改已经完成。
 
-只有用户明确要求修改正文内容时才用 revise_content，例如：
-“第二段精简”“把措施写具体”“删掉最后一段”“整体润色”“改成800字但保留事实”。
-如果同一句既改结构字段又改正文，intent=revise_content，同时把结构字段也提取出来；
-revision_instruction 只描述正文需要怎样修改，不要把“标题/主送/落款/日期/文号”写进正文修改指令。
+如果当前端点不支持工具调用而要求 JSON，则输出 writing_intent_v2 兼容 JSON，不要 markdown。
+"""
 
-【动作类型】
-- answer：只问问题、咨询、解释、评价，不改变工作台；side_effect=none。
-- update_context：只补充或修改结构化任务信息；side_effect=workspace。
-- revise_content：修改已有正文主体；side_effect=workspace。
-- draft：生成完整初稿；side_effect=workspace。
-- outline：只生成提纲；side_effect=workspace。
-- clarify：确实缺少无法合理默认的关键信息；原则上少用，最多问1个关键问题。
-
-【行为要求】
-1. “能不能帮我改成800字？”虽然是疑问句，实际是 revise_content。
-2. “这份函哪里不规范？”如果只是询问，不自动改，answer。
-3. 已经有正文时，用户说“重新写一版/重写全文”才允许 rewrite；普通修改不得擅自重写全文。
-4. 一次包含多个要求必须全部保留，不能只取第一个。
-5. 不知道的字段填 null，不得猜人名、单位、数字、日期、文号。
-6. 数字和日期按用户原文抽取，禁止自行换算或改值。
-7. reply 是给用户看的助手回复：要说明“我理解了什么/将改什么”；如果执行修改，简短列出改动范围，不能只回“已完成”。
-8. 不得因为用户修改正文而把标题、主送、落款、日期复制到正文里。
-
-输出字段：
-{
-  "_schema":"writing_intent_v2",
-  "side_effect":"none|workspace",
-  "intent":"update_context|revise_content|draft|outline|answer|clarify",
-  "document_type":null,
-  "title":null,
-  "topic":null,
-  "purpose":null,
-  "time_range":null,
-  "recipient":null,
-  "authority":null,
-  "key_facts":[],
-  "requirements":null,
-  "tone":null,
-  "word_count_target":null,
-  "document_number_enabled":null,
-  "document_number":null,
-  "document_date":null,
-  "revision_instruction":null,
-  "revision_mode":null,
-  "needs_clarification":false,
-  "clarification_question":null,
-  "reply":""
+_FIELD_PROPERTIES: Dict[str, Any] = {
+    "document_type": {"type": "string"},
+    "title": {"type": "string"},
+    "topic": {"type": "string"},
+    "purpose": {"type": "string"},
+    "time_range": {"type": "string"},
+    "recipient": {"type": "string"},
+    "authority": {"type": "string"},
+    "key_facts": {"type": "array", "items": {"type": "string"}},
+    "requirements": {"type": "string"},
+    "tone": {"type": "string"},
+    "word_count_target": {"type": "integer", "minimum": 50, "maximum": 100000},
+    "document_number_enabled": {"type": "boolean"},
+    "document_number": {"type": "string"},
+    "document_date": {"type": "string"},
 }
 
-revision_mode 仅可为 expand/polish/condense/normalize/complete/rewrite/revise。
-"""
+WRITING_OPS_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "route_writing_ops",
+        "description": "把用户写作指令路由成后端可执行操作；不要直接生成正文。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": list(OPERATIONS),
+                    "description": "本轮正文/对话主操作。结构字段可同时放在 field_updates。",
+                },
+                "field_updates": {
+                    "type": "object",
+                    "properties": _FIELD_PROPERTIES,
+                    "additionalProperties": False,
+                    "description": "只放用户本轮明确补充或修改的结构字段。",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "patch_section 的唯一目标，如‘第二段’、‘三、工作措施’或用户引用的原文。",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "patch_section/rewrite_document 的正文修改要求，不含结构字段修改。",
+                },
+                "revision_mode": {
+                    "type": "string",
+                    "enum": ["expand", "polish", "condense", "normalize", "complete", "rewrite", "revise"],
+                },
+                "needs_clarification": {"type": "boolean"},
+                "clarification_question": {"type": "string"},
+                "reply": {"type": "string"},
+            },
+            "required": ["operation", "field_updates", "reply"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -145,6 +160,9 @@ def _blank_result(reply: str) -> Dict[str, Any]:
         "needs_clarification": False,
         "clarification_question": None,
         "reply": reply,
+        "operation": "answer",
+        "patch_target": None,
+        "routing": "json_fallback",
     }
     for f in SEMANTIC_FIELDS:
         out[f] = [] if f == "key_facts" else None
@@ -152,6 +170,7 @@ def _blank_result(reply: str) -> Dict[str, Any]:
 
 
 def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize legacy writing_intent_v1/v2 JSON and synthesize a safe operation."""
     out = _blank_result("")
     intent = str(raw.get("intent") or "").strip()
     if intent in INTENTS:
@@ -211,11 +230,20 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["intent"] = "update_context"
         out["revision_mode"] = None
 
+    out["operation"] = {
+        "update_context": "set_fields",
+        "revise_content": "rewrite_document",  # legacy JSON cannot safely prove a local target
+        "draft": "draft_document",
+        "outline": "outline",
+        "answer": "answer",
+        "clarify": "clarify",
+    }[out["intent"]]
+
     if not out["reply"]:
         if out["intent"] == "update_context":
             out["reply"] = "已理解你的结构调整要求，我会更新对应字段，不把它重复写进正文。"
         elif out["intent"] == "revise_content":
-            out["reply"] = "已理解你的正文修改要求，我会只改指定内容，并保留其他部分。"
+            out["reply"] = "已理解你的正文修改要求。"
         elif out["intent"] == "draft":
             out["reply"] = "已理解，开始生成完整初稿。"
         elif out["intent"] == "outline":
@@ -227,8 +255,79 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _sanitize_tool_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Validate route_writing_ops arguments and map them onto the existing service contract."""
+    operation = str(raw.get("operation") or "").strip()
+    if operation not in OPERATIONS:
+        return None
+
+    field_updates = raw.get("field_updates")
+    if not isinstance(field_updates, dict):
+        field_updates = {}
+
+    legacy: Dict[str, Any] = {"_schema": "writing_intent_v2"}
+    for key in SEMANTIC_FIELDS:
+        if key in field_updates:
+            legacy[key] = field_updates[key]
+
+    intent_map = {
+        "set_fields": "update_context",
+        "patch_section": "revise_content",
+        "rewrite_document": "revise_content",
+        "draft_document": "draft",
+        "outline": "outline",
+        "answer": "answer",
+        "clarify": "clarify",
+    }
+    legacy["intent"] = intent_map[operation]
+    legacy["side_effect"] = "none" if operation in ("answer", "clarify") else "workspace"
+    legacy["reply"] = raw.get("reply") or ""
+    legacy["needs_clarification"] = bool(raw.get("needs_clarification", False))
+    legacy["clarification_question"] = raw.get("clarification_question")
+
+    instruction = raw.get("instruction")
+    target = raw.get("target")
+    mode = raw.get("revision_mode")
+    if operation in ("patch_section", "rewrite_document"):
+        if not isinstance(instruction, str) or not instruction.strip():
+            return None
+        legacy["revision_instruction"] = instruction.strip()
+        legacy["revision_mode"] = (
+            mode if mode in ("expand", "polish", "condense", "normalize", "complete", "rewrite", "revise")
+            else ("rewrite" if operation == "rewrite_document" else "revise")
+        )
+    if operation == "patch_section":
+        if not isinstance(target, str) or not target.strip():
+            return None
+
+    out = _sanitize(legacy)
+    out["operation"] = operation
+    out["patch_target"] = target.strip() if isinstance(target, str) and target.strip() else None
+    out["routing"] = "tool_call"
+    return out
+
+
+def _tool_args_from_message(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    calls = message.get("tool_calls") if isinstance(message, dict) else None
+    if not isinstance(calls, list) or len(calls) != 1:
+        return None
+    fn = (calls[0] or {}).get("function") or {}
+    if fn.get("name") != "route_writing_ops":
+        return None
+    args = fn.get("arguments")
+    if isinstance(args, dict):
+        return args
+    if not isinstance(args, str):
+        return None
+    try:
+        parsed = json.loads(args)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class WritingIntentInterpreter:
-    """LLM-only semantic router with one JSON-repair retry and fail-closed behavior."""
+    """Tool-first semantic router with one legacy JSON repair fallback."""
 
     def __init__(self, assistant) -> None:
         self.assistant = assistant
@@ -238,16 +337,13 @@ class WritingIntentInterpreter:
         logger.warning("[意图解释] %s；为避免误改正文，本轮不执行工作台变更", reason)
         return None
 
-    def interpret(
+    def _messages(
         self,
         message: str,
-        context: Optional[Dict[str, Any]] = None,
-        has_draft: bool = False,
-        history: Optional[List[Dict[str, str]]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        if not self.assistant:
-            return self._safe_failure("模型未配置")
-
+        context: Optional[Dict[str, Any]],
+        has_draft: bool,
+        history: Optional[List[Dict[str, str]]],
+    ) -> List[Dict[str, str]]:
         ctx_view = {
             k: v for k, v in (context or {}).items()
             if k in SEMANTIC_FIELDS + ("missing_fields",)
@@ -263,6 +359,45 @@ class WritingIntentInterpreter:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": h["content"][:1200]})
         messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
+        return messages
+
+    def interpret(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        has_draft: bool = False,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self.assistant:
+            return self._safe_failure("模型未配置")
+
+        messages = self._messages(message, context, has_draft, history)
+
+        # Production path: a real function call. Forced tool choice prevents the 14B model from
+        # replying with persuasive prose when the backend needs an executable operation.
+        tool_complete = getattr(self.assistant, "complete_with_tools", None)
+        if callable(tool_complete):
+            try:
+                tool_message = tool_complete(
+                    messages,
+                    tools=[WRITING_OPS_TOOL],
+                    tool_choice={"type": "function", "function": {"name": "route_writing_ops"}},
+                    temperature=0.0,
+                    max_tokens=1200,
+                )
+                tool_args = _tool_args_from_message(tool_message)
+                result = _sanitize_tool_args(tool_args or {}) if tool_args else None
+                if result:
+                    logger.info(
+                        "[意图解释] tool operation=%s intent=%s target=%s",
+                        result["operation"], result["intent"], result.get("patch_target"),
+                    )
+                    return result
+                logger.warning("[意图解释] tool call arguments 非法，降级到 JSON v2")
+            except Exception as exc:
+                # Tool parser/flags can differ between deployed vLLM instances. Keep the old JSON
+                # path as an explicit compatibility fallback instead of turning edits into 500s.
+                logger.warning("[意图解释] tool calling 不可用，降级到 JSON v2: %s", exc)
 
         try:
             raw = self.assistant.complete(messages, temperature=0.0, max_tokens=1400)
@@ -289,7 +424,7 @@ class WritingIntentInterpreter:
 
         result = _sanitize(obj)
         logger.info(
-            "[意图解释] model-only side_effect=%s intent=%s topic=%s dtype=%s",
+            "[意图解释] json-fallback side_effect=%s intent=%s topic=%s dtype=%s",
             result["side_effect"], result["intent"], result.get("topic"), result.get("document_type"),
         )
         return result
