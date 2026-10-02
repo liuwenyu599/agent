@@ -1,5 +1,6 @@
 import json
 
+from app.application.writing.eval_capture_service import EvalCaptureWritingTaskService
 from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
 from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
@@ -43,11 +44,12 @@ class ToolAssistant:
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
-def test_public_writing_service_routes_to_quality_retry_service():
-    assert WritingTaskService is QualityRetryWritingTaskService
+def test_public_writing_service_routes_to_eval_capture_service():
+    assert WritingTaskService is EvalCaptureWritingTaskService
 
 
-def test_quality_retry_service_preserves_ops_layer():
+def test_eval_capture_service_preserves_quality_retry_and_ops_layers():
+    assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
     assert issubclass(QualityRetryWritingTaskService, OpsWritingTaskService)
 
 
