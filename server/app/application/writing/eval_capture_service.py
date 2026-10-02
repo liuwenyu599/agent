@@ -92,7 +92,14 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
         }
 
     def _persist_eval_sample(self, task, user_id: str, ai_content: str,
-                             final_content: str) -> TrainingSampleModel:
+                             final_content: str, *,
+                             status: str = "candidate") -> TrainingSampleModel:
+        """Persist one AI→human pair with an explicit review state.
+
+        Automatic captures use ``candidate`` so they never enter training without review. The
+        legacy manual ``/training-sample`` endpoint passes ``pending_review`` to preserve its
+        existing API and database contract.
+        """
         ctx = dict(task.context or {})
         sample = TrainingSampleModel(
             instruction=self._sample_instruction(ctx),
@@ -102,7 +109,7 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
             source="writing_eval",
             session_id=task.session_id,
             biz_type=ctx.get("document_type") or "writing",
-            status="candidate",
+            status=status,
             created_by=user_id,
         )
         self.db.add(sample)
@@ -152,7 +159,7 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
 
     def add_to_training(self, task_id: str, user_id: str,
                         final_content: str) -> Dict[str, Any]:
-        """Keep the manual endpoint, but pair final text with the latest AI version, not V1 only."""
+        """Keep the manual endpoint and its pending_review contract, using the latest AI version."""
         task = self._get_owned(task_id, user_id)
         ai_version = self._latest_ai_version(task)
         ai_content = ai_version.content if ai_version else (task.ai_draft or "")
@@ -160,11 +167,18 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
             from fastapi import HTTPException
             raise HTTPException(status_code=400, detail="该任务没有AI版本，无法形成训练样本")
         if ai_content.strip() == (final_content or "").strip():
-            return {"sample_id": None, "message": "人工稿与最近AI版本一致，未重复加入训练集"}
+            return {
+                "sample_id": None,
+                "status": "not_created",
+                "message": "人工稿与最近AI版本一致，未重复加入训练集",
+            }
 
-        sample = self._persist_eval_sample(task, user_id, ai_content, final_content)
+        sample = self._persist_eval_sample(
+            task, user_id, ai_content, final_content, status="pending_review"
+        )
         return {
             "sample_id": sample.id,
+            "status": sample.status,
             "message": "已加入候选训练样本",
             "source_version": ai_version.version_no if ai_version else None,
             "diff": self._diff_stats(ai_content, final_content),
