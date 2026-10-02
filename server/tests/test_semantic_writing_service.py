@@ -1,4 +1,7 @@
+import json
+
 from app.application.writing.intent_interpreter import WritingIntentInterpreter
+from app.application.writing.ops_task_service import OpsWritingTaskService
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.writing.task_service import WritingTaskService
 
@@ -12,10 +15,35 @@ class BrokenAssistant:
         return "这不是合法 JSON"
 
 
-def test_public_writing_service_routes_to_semantic_service():
-    # Existing FastAPI routes import WritingTaskService from task_service. The package-level
-    # compatibility binding must therefore expose the semantic implementation.
-    assert WritingTaskService is SemanticWritingTaskService
+class ToolAssistant:
+    def __init__(self, arguments):
+        self.arguments = arguments
+        self.tool_calls = 0
+        self.complete_calls = 0
+
+    def complete_with_tools(self, messages, tools, **kwargs):
+        self.tool_calls += 1
+        assert tools[0]["function"]["name"] == "route_writing_ops"
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "route_writing_ops",
+                    "arguments": json.dumps(self.arguments, ensure_ascii=False),
+                },
+            }],
+        }
+
+    def complete(self, *args, **kwargs):
+        self.complete_calls += 1
+        raise AssertionError("valid tool call must not fall back to JSON completion")
+
+
+def test_public_writing_service_routes_to_ops_service():
+    assert WritingTaskService is OpsWritingTaskService
 
 
 def test_intent_failure_fails_closed_instead_of_regex_fallback():
@@ -25,12 +53,80 @@ def test_intent_failure_fails_closed_instead_of_regex_fallback():
         context={"title": "旧标题"},
         has_draft=True,
     )
-    assert assistant.calls == 2  # initial parse + model repair retry
-    assert result["side_effect"] == "none"
-    assert result["intent"] == "answer"
-    assert "没有改动" in result["reply"]
-    # Crucially, no local regex inferred the obvious-looking title command.
-    assert result["title"] is None
+    assert assistant.calls == 2  # initial JSON parse + one model repair retry
+    assert result is None
+
+
+def test_tool_call_routes_local_edit_to_patch_section():
+    assistant = ToolAssistant({
+        "operation": "patch_section",
+        "field_updates": {},
+        "target": "第二段",
+        "instruction": "把这一段精简一半，事实不变",
+        "revision_mode": "condense",
+        "reply": "将只精简第二段。",
+    })
+    result = WritingIntentInterpreter(assistant).interpret(
+        "第二段太长了，精简一半",
+        context={"title": "测试通知"},
+        has_draft=True,
+    )
+    assert result["operation"] == "patch_section"
+    assert result["patch_target"] == "第二段"
+    assert result["revision_instruction"] == "把这一段精简一半，事实不变"
+    assert result["routing"] == "tool_call"
+    assert assistant.tool_calls == 1
+    assert assistant.complete_calls == 0
+
+
+def test_tool_call_keeps_field_updates_separate_from_body_operation():
+    assistant = ToolAssistant({
+        "operation": "patch_section",
+        "field_updates": {"title": "新标题", "document_date": "2026年10月2日"},
+        "target": "三、工作措施",
+        "instruction": "把措施写得更具体",
+        "revision_mode": "expand",
+        "reply": "更新标题和日期，并扩写工作措施。",
+    })
+    result = WritingIntentInterpreter(assistant).interpret(
+        "标题改成新标题，日期改成2026年10月2日，第三部分措施写具体",
+        context={"title": "旧标题"},
+        has_draft=True,
+    )
+    assert result["title"] == "新标题"
+    assert result["document_date"] == "2026年10月2日"
+    assert result["operation"] == "patch_section"
+    assert "标题" not in result["revision_instruction"]
+
+
+def test_patch_target_resolves_ordinal_paragraph_without_touching_neighbors():
+    text = "第一段保持不变。\n\n第二段需要修改，内容较长。\n\n第三段也保持不变。"
+    resolved = OpsWritingTaskService._resolve_patch_target(text, "第二段")
+    assert resolved is not None
+    start, end, fragment = resolved
+    assert fragment == "第二段需要修改，内容较长。"
+    replaced = text[:start] + "第二段已精简。" + text[end:]
+    assert replaced == "第一段保持不变。\n\n第二段已精简。\n\n第三段也保持不变。"
+
+
+def test_patch_target_resolves_one_section_until_next_same_level_heading():
+    text = (
+        "开头。\n\n"
+        "一、基本情况\n基本情况正文。\n\n"
+        "二、工作措施\n第一项措施。\n第二项措施。\n\n"
+        "三、下一步计划\n下一步正文。"
+    )
+    resolved = OpsWritingTaskService._resolve_patch_target(text, "二、工作措施")
+    assert resolved is not None
+    _, _, fragment = resolved
+    assert fragment.startswith("二、工作措施")
+    assert "第二项措施。" in fragment
+    assert "三、下一步计划" not in fragment
+
+
+def test_patch_target_rejects_ambiguous_literal_excerpt():
+    text = "有关事项通知如下。\n\n第一项。\n\n有关事项通知如下。"
+    assert OpsWritingTaskService._resolve_patch_target(text, "有关事项通知如下。") is None
 
 
 def test_canonical_body_removes_duplicate_headers_and_signoffs():
