@@ -2,6 +2,7 @@
 
 路由统一挂载在 /api/v1 前缀下（见 app/interfaces/api.py 的 include_router）。
 """
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -38,15 +39,20 @@ def get_format_check_service(db: Session = Depends(get_db)) -> FormatCheckServic
 # ========== 校验 ==========
 
 @router.post("/check")
-async def check_document(
+def check_document(
     file: UploadFile = File(...),
     use_ai: bool = Query(True, description="是否启用 AI 辅助判断"),
     rule_ids: Optional[str] = Query(None, description="逗号分隔的规则ID；不传则用全部默认规则"),
     user: User = Depends(get_current_user),
     svc: FormatCheckService = Depends(get_format_check_service),
 ):
-    """上传文件进行格式校验。返回逐条问题清单（位置/当前/要求/建议）。"""
-    return await svc.check_upload(file, user, use_ai=use_ai, rule_ids=rule_ids)
+    """上传文件进行格式校验。返回逐条问题清单（位置/当前/要求/建议）。
+
+    该链路内部仍包含同步文档解析、RAG 与模型 HTTP 调用，因此路由故意保持
+    ``def``：FastAPI 会把整个处理放进 worker thread，避免阻塞主事件循环。
+    service 暂时保留 async 签名只是为了复用 UploadFile.read()。
+    """
+    return asyncio.run(svc.check_upload(file, user, use_ai=use_ai, rule_ids=rule_ids))
 
 
 @router.get("/records")
