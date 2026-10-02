@@ -1,4 +1,5 @@
 """PPT 助手路由。路径与响应结构与旧系统一致（/ppt/...）。"""
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -166,12 +167,15 @@ async def upload_material(name: str = Form(...), caption: str = Form(""),
 
 
 @router.post("/materials/analyze")
-async def analyze_materials(files: List[UploadFile] = File(...),
-                            user: User = Depends(get_current_user),
-                            svc: PPTService = Depends(get_ppt_service)):
-    """上传材料并逐份分析（doc/docx/pdf/txt/md/xlsx/xls/csv/pptx）：
-    返回每份文件的 AI 分析摘要 + 重点清单 + 数据表数量 + 提取文本，让材料不再黑盒。"""
-    return await svc.analyze_materials(files, user)
+def analyze_materials(files: List[UploadFile] = File(...),
+                      user: User = Depends(get_current_user),
+                      svc: PPTService = Depends(get_ppt_service)):
+    """上传材料并逐份分析（doc/docx/pdf/txt/md/xlsx/xls/csv/pptx）。
+
+    材料分析内部会同步调用模型 HTTP 客户端，因此这里故意使用同步路由，让
+    FastAPI 把整个链路放进 worker thread；service 的 async 签名仅用于 UploadFile.read()。
+    """
+    return asyncio.run(svc.analyze_materials(files, user))
 
 
 @router.put("/materials/{mid}")
@@ -322,12 +326,19 @@ def outline_stream(body: OutlineIn,
 
 
 @router.post("/outline-from-doc")
-async def outline_from_doc(file: UploadFile = File(...), topic: str = Form(""),
-                         audience: str = Form(""), scene: str = Form(""),
-                         slide_count: int = Form(10),
-                         user: User = Depends(get_current_user),
-                         svc: PPTService = Depends(get_ppt_service)):
-    return await svc.outline_from_doc(file, topic, audience, scene, slide_count, user)
+def outline_from_doc(file: UploadFile = File(...), topic: str = Form(""),
+                     audience: str = Form(""), scene: str = Form(""),
+                     slide_count: int = Form(10),
+                     user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
+    """上传文档并生成大纲。
+
+    下游 ``_do_outline`` 使用同步模型 HTTP 客户端；保持同步路由可由 FastAPI
+    自动在线程池执行，避免长模型请求占住主事件循环。
+    """
+    return asyncio.run(
+        svc.outline_from_doc(file, topic, audience, scene, slide_count, user)
+    )
 
 
 @router.post("/generate")
