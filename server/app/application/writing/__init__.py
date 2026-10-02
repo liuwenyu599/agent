@@ -6,6 +6,7 @@
 - grounded_task_service：检索知识库范文用于风格模仿，并对派生金额做程序化复核；
 - ops_task_service：执行 set_fields / patch_section / rewrite_document 等操作，局部修改由程序 splice；
 - quality_retry_service：D 级结果回灌具体 issues，最多重试两次，仍失败则禁止落库；
+- eval_capture_service：人工保存紧跟 AI 版本时自动沉淀 AI→人工终稿候选评测样本；
 - task_service：保留成熟的版本/RAG/导出/质量链路作为基类；
 - postprocessor / quality_gate / content_check：只做确定性文档约束，不负责猜用户意图。
 
@@ -18,12 +19,14 @@ from .semantic_task_service import SemanticWritingTaskService
 from .grounded_task_service import GroundedWritingTaskService
 from .ops_task_service import OpsWritingTaskService
 from .quality_retry_service import QualityRetryWritingTaskService
+from .eval_capture_service import EvalCaptureWritingTaskService
 
-_task_service.WritingTaskService = QualityRetryWritingTaskService
+_task_service.WritingTaskService = EvalCaptureWritingTaskService
 
 __all__ = [
     "SemanticWritingTaskService",
     "GroundedWritingTaskService",
     "OpsWritingTaskService",
     "QualityRetryWritingTaskService",
+    "EvalCaptureWritingTaskService",
 ]
