@@ -2,6 +2,7 @@ import json
 
 from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
+from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.writing.task_service import WritingTaskService
 
@@ -42,8 +43,12 @@ class ToolAssistant:
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
-def test_public_writing_service_routes_to_ops_service():
-    assert WritingTaskService is OpsWritingTaskService
+def test_public_writing_service_routes_to_quality_retry_service():
+    assert WritingTaskService is QualityRetryWritingTaskService
+
+
+def test_quality_retry_service_preserves_ops_layer():
+    assert issubclass(QualityRetryWritingTaskService, OpsWritingTaskService)
 
 
 def test_intent_failure_fails_closed_instead_of_regex_fallback():
@@ -53,7 +58,7 @@ def test_intent_failure_fails_closed_instead_of_regex_fallback():
         context={"title": "旧标题"},
         has_draft=True,
     )
-    assert assistant.calls == 2  # initial JSON parse + one model repair retry
+    assert assistant.calls == 2
     assert result is None
 
 
