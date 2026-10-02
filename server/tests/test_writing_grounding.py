@@ -46,6 +46,9 @@ def test_kb_examples_are_labeled_as_style_exemplars_not_plain_sources():
     assert "不得只把范文当作事实引用" in block
 
 
-def test_production_service_is_grounded_service():
+def test_production_service_keeps_grounded_behavior():
     from app.application.writing import task_service
-    assert task_service.WritingTaskService is GroundedWritingTaskService
+
+    # The public production service may add stricter layers (ops routing / QualityGate retries),
+    # but it must continue to inherit all grounded-writing behavior rather than bypass it.
+    assert issubclass(task_service.WritingTaskService, GroundedWritingTaskService)
