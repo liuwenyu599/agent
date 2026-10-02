@@ -1,9 +1,10 @@
 """智能写作后处理与质量校验包。
 
 生产写作链路分层：
-- intent_interpreter：模型理解用户自然语言并输出结构化动作；
-- semantic_task_service：执行模型动作、维护结构字段与正文边界、返回修改摘要；
-- grounded_task_service：检索完整知识库范文用于风格模仿，并对派生金额做程序化复核；
+- intent_interpreter：模型理解用户自然语言并输出结构化动作 / tool call；
+- semantic_task_service：维护结构字段与正文边界、返回修改摘要；
+- grounded_task_service：检索知识库范文用于风格模仿，并对派生金额做程序化复核；
+- ops_task_service：执行 set_fields / patch_section / rewrite_document 等操作，局部修改由程序 splice；
 - task_service：保留成熟的版本/RAG/导出/质量链路作为基类；
 - postprocessor / quality_gate / content_check：只做确定性文档约束，不负责猜用户意图。
 
@@ -14,7 +15,12 @@
 from . import task_service as _task_service
 from .semantic_task_service import SemanticWritingTaskService
 from .grounded_task_service import GroundedWritingTaskService
+from .ops_task_service import OpsWritingTaskService
 
-_task_service.WritingTaskService = GroundedWritingTaskService
+_task_service.WritingTaskService = OpsWritingTaskService
 
-__all__ = ["SemanticWritingTaskService", "GroundedWritingTaskService"]
+__all__ = [
+    "SemanticWritingTaskService",
+    "GroundedWritingTaskService",
+    "OpsWritingTaskService",
+]
