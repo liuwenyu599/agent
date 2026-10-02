@@ -287,6 +287,46 @@ class ChatService:
         }
 
     # ========== 智能写作流水线 ==========
+    @staticmethod
+    def _quality_retry_message(original_message: str, failed_text: str,
+                               issues: list, attempt: int) -> str:
+        """Build a repair request from the actual failed candidate and QualityGate issues."""
+        issue_lines = []
+        for idx, issue in enumerate((issues or [])[:20], start=1):
+            if isinstance(issue, dict):
+                severity = str(issue.get("severity") or "issue")
+                detail = str(issue.get("message") or issue.get("type") or "未说明问题")
+            else:
+                severity = "issue"
+                detail = str(issue)
+            issue_lines.append(f"{idx}. [{severity}] {detail[:240]}")
+        issue_block = "\n".join(issue_lines) or "1. [critical] 未通过质量门，请完整重写并自检。"
+        return (
+            f"这是第 {attempt} 次质量修复，不是新的写作任务。\n"
+            "上一版已经被质量门判定为 D 级。请基于原始要求重新生成一份完整成文，"
+            "逐项修复下面列出的实际问题；不要解释质检过程，不要输出修改说明。\n\n"
+            f"【原始写作要求】\n{original_message}\n\n"
+            f"【必须修复的问题】\n{issue_block}\n\n"
+            f"【上一版未通过稿】\n{failed_text}\n\n"
+            "只输出修复后的完整正文。"
+        )
+
+    @staticmethod
+    def _quality_candidate_score(quality: dict) -> tuple:
+        """Prefer a better grade, then fewer hard issues, then fewer total issues, then completeness."""
+        rank = {"A": 2, "B": 1, "D": 0}
+        issues = quality.get("issues") or []
+        critical_count = sum(
+            1 for issue in issues
+            if isinstance(issue, dict) and issue.get("severity") == "critical"
+        )
+        return (
+            rank.get(quality.get("level"), -1),
+            -critical_count,
+            -len(issues),
+            int(quality.get("char_count") or 0),
+        )
+
     def _writing_pipeline(self, reply: str, message: str,
                           sources: list, history: list, examples: list,
                           system_prompt, template_category,
@@ -295,10 +335,10 @@ class ChatService:
                           template_reference_context, user: User,
                           user_preference: Optional[str] = None,
                           image_paths: Optional[List[str]] = None) -> tuple:
-        """后处理 → 质量门 → 内容校验 → D 级自动重试一次。
+        """后处理 → 质量门 → 内容校验 → D 级按问题回灌自动重试。
 
         返回 (最终文本, 文号, 成文日期, quality, content_check, events)。
-        任何环节失败都降级为返回原文，不阻塞对话。
+        任何环节失败都降级为返回当前最佳文本，不阻塞对话。
         """
         from app.application.writing.content_check import ContentChecker
         from app.application.writing.postprocessor import PostProcessor
@@ -323,17 +363,28 @@ class ChatService:
         processed, events, doc_number, doc_date, quality, content = \
             run_pipeline(reply)
 
-        # D 级（退化/截断/占位符等硬伤）自动重试，取评级更优者
+        # D 级（退化/截断/占位符等硬伤）把真实 issues + 未通过稿回灌，按配置上限重试。
         retries = 0
         while quality["level"] == "D" and retries < settings.WRITING_RETRY_MAX:
             retries += 1
-            events.append(f"质量门 D 级，自动重试第 {retries} 次")
-            logger.info("[写作流水线] D 级重试: %s",
-                        [i["message"] for i in quality["issues"]
-                         if i["severity"] == "critical"])
+            current_issues = list(quality.get("issues") or [])
+            retry_message = self._quality_retry_message(
+                original_message=message,
+                failed_text=processed,
+                issues=current_issues,
+                attempt=retries,
+            )
+            events.append(f"质量门 D 级，携带 {len(current_issues)} 项问题自动重试第 {retries} 次")
+            logger.info(
+                "[写作流水线] D 级重试 attempt=%d issues=%d critical=%d",
+                retries,
+                len(current_issues),
+                sum(1 for i in current_issues
+                    if isinstance(i, dict) and i.get("severity") == "critical"),
+            )
             try:
                 retry_reply = self.assistant.chat(
-                    message=message, history=history, sources=sources,
+                    message=retry_message, history=history, sources=sources,
                     user_role=user.role, memories=None, examples=examples,
                     system_prompt=system_prompt,
                     template_category=template_category,
@@ -346,17 +397,20 @@ class ChatService:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("[写作流水线] 重试生成失败: %s", e)
+                events.append(f"重试第 {retries} 次生成失败")
                 break
+
             p2, ev2, dn2, dd2, q2, c2 = run_pipeline(retry_reply)
-            rank = {"A": 2, "B": 1, "D": 0}
-            if (rank[q2["level"]], q2["char_count"]) > \
-                    (rank[quality["level"]], quality["char_count"]):
-                events.append("采用重试结果")
+            events.append(
+                f"重试第 {retries} 次评级 {q2['level']}，问题 {len(q2.get('issues') or [])} 项"
+            )
+            if self._quality_candidate_score(q2) > self._quality_candidate_score(quality):
+                events.append(f"采用第 {retries} 次重试结果")
                 processed, doc_number, doc_date = p2, dn2, dd2
                 quality, content = q2, c2
-                events.extend(f"重试后{e}" for e in ev2)
+                events.extend(f"重试后{event}" for event in ev2)
             else:
-                events.append("重试结果未更优，保留首次")
+                events.append(f"第 {retries} 次重试结果未更优，保留当前最佳稿")
 
         if quality["level"] == "D":
             events.append("重试后仍为 D 级，已标记问题，请人工处理")
