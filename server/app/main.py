@@ -31,9 +31,7 @@ from app.infrastructure.database.models import (  # noqa: E402,F401
 
 
 def _ensure_directories() -> None:
-    """确保运行时数据目录存在。"""
     settings.ensure_dirs()
-    # PPT 子目录
     for sub in ("tpl_src", "tpl_prev", "materials", "generated", "tmp"):
         (settings.ppt_dir / sub).mkdir(parents=True, exist_ok=True)
     (settings.uploads_dir / "chat").mkdir(parents=True, exist_ok=True)
@@ -41,7 +39,6 @@ def _ensure_directories() -> None:
 
 
 def _init_database() -> None:
-    """自动迁移：优先 Alembic，失败或无迁移脚本时回退到 Base.metadata.create_all。"""
     if not settings.DB_AUTO_MIGRATE:
         return
     try:
@@ -60,7 +57,6 @@ def _init_database() -> None:
 
 
 def _init_facilities() -> None:
-    """初始化 AI Gateway / Embedding / VectorStore 等外部设施（懒加载 + 连接检测）。"""
     try:
         get_llm_gateway()
         logger.info("AI Gateway 初始化完成")
@@ -79,7 +75,6 @@ async def lifespan(app: FastAPI):
     _ensure_directories()
     _init_database()
     _init_facilities()
-    # 预置内置模板（幂等）：存在系统管理员则用之；全新部署由本机 create_admin 命令初始化账号
     try:
         db = SessionLocal()
         from app.application.identity.service import AuthService
@@ -97,7 +92,6 @@ async def lifespan(app: FastAPI):
         db.close()
     except Exception as e:
         logger.warning("内置模板初始化警告: %s", e)
-    # v3.1 组织架构：科室字典 / 科室 Agent 默认配置 / 历史用户科室归属回填
     try:
         db = SessionLocal()
         from app.application.organization.service import OrganizationService
@@ -108,7 +102,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("组织架构初始化警告: %s", e)
     yield
-    # 关闭引擎连接池
     engine.dispose()
 
 
@@ -120,7 +113,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS：生产环境请配置具体来源
     origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()] or ["*"]
     app.add_middleware(
         CORSMiddleware,
@@ -130,13 +122,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # 监控：低基数 HTTP 指标 + readiness；/metrics 不进入请求计数，避免自抓取反馈。
     from app.core.monitoring import metrics_response, prometheus_middleware, readiness
     app.middleware("http")(prometheus_middleware)
 
-    # 核心路由：全部挂在 /api/v1。上传原件禁止 StaticFiles 匿名暴露，统一走 files.router 鉴权。
     from app.interfaces import (
-        approvals,
         auth,
         chat,
         dashboard,
@@ -168,19 +157,14 @@ def create_app() -> FastAPI:
         writing_tasks.router,
         workflow.router,
         ppt.router,
-        # v3.0 已实现但此前未挂载：审批 / 首页聚合 / 系统配置
-        approvals.router,
         dashboard.router,
         system.router,
-        # v3.1 组织架构与科室 Agent
         organization.router,
-        # v3.3 用户个人偏好（Prompt 分层第 5 层，仅本人可读写）
         preferences.router,
     ]
     for r in routers:
         app.include_router(r, prefix="/api/v1")
 
-    # 偏好路由的字段校验统一转 400 + 中文 detail（其余路由保持默认 422）
     from fastapi.exceptions import RequestValidationError
     from app.interfaces.preferences import validation_error_handler
     app.add_exception_handler(RequestValidationError, validation_error_handler)
