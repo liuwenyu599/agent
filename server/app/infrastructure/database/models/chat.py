@@ -1,9 +1,9 @@
-"""对话模块 ORM 模型（表结构与旧系统一致）。"""
+"""对话模块 ORM 模型。"""
 from app.core.timeutil import now_local
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.base import Base, IdMixin
@@ -33,9 +33,9 @@ class ChatMessageModel(Base, IdMixin):
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    source: Mapped[str] = mapped_column(String(50), default="chat")  # chat/template
+    source: Mapped[str] = mapped_column(String(50), default="chat")
     sources: Mapped[Optional[list]] = mapped_column(JSON)
-    attachments: Mapped[Optional[list]] = mapped_column(JSON)  # [{id, filename, kind}]
+    attachments: Mapped[Optional[list]] = mapped_column(JSON)
     tool_calls: Mapped[Optional[list]] = mapped_column(JSON)
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
@@ -55,7 +55,7 @@ class ChatAttachmentModel(Base, IdMixin):
     )
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # doc / image
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
     file_path: Mapped[Optional[str]] = mapped_column(String(500))
     file_size: Mapped[Optional[int]] = mapped_column(BigInteger)
     text_content: Mapped[Optional[str]] = mapped_column(Text)
@@ -66,6 +66,30 @@ class ChatAttachmentModel(Base, IdMixin):
     session: Mapped[Optional[ChatSessionModel]] = relationship(
         "ChatSessionModel", back_populates="attachments"
     )
+
+
+class AIResponseFeedbackModel(Base, IdMixin):
+    """用户对 AI 回复或文本版本的显式反馈。
+
+    rating 只允许 1（赞）或 -1（踩）。source_chunk_ids 是提交反馈时该 AI 回复实际引用的
+    chunk 快照，用于之后对该用户做轻量 rerank；不把单个用户反馈传播给其他用户。
+    """
+    __tablename__ = "ai_response_feedback"
+    __table_args__ = (
+        UniqueConstraint("user_id", "target_type", "target_id", name="uq_ai_feedback_user_target"),
+    )
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)  # chat_message/document_version
+    target_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    detail: Mapped[Optional[str]] = mapped_column(Text)
+    source_chunk_ids: Mapped[Optional[list]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
 
 
 class SessionSummaryModel(Base, IdMixin):
