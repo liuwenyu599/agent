@@ -6,14 +6,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/deploy/.env}"
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
+read_env_value() {
+  local key="$1" raw=""
+  [[ -f "$ENV_FILE" ]] || return 0
+  raw="$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+  raw="${raw%$'\r'}"
+  if [[ "$raw" == \"*\" && "$raw" == *\" ]]; then raw="${raw:1:${#raw}-2}"; fi
+  if [[ "$raw" == \'*\' && "$raw" == *\' ]]; then raw="${raw:1:${#raw}-2}"; fi
+  printf '%s' "$raw"
+}
+HOST_DATA_DIR="${HOST_DATA_DIR:-$(read_env_value HOST_DATA_DIR)}"
 HOST_DATA_DIR="${HOST_DATA_DIR:-$ROOT_DIR/data}"
+BACKUP_DIR="${BACKUP_DIR:-$(read_env_value BACKUP_DIR)}"
 BACKUP_DIR="${BACKUP_DIR:-$HOST_DATA_DIR/backups}"
+DATABASE_URL="${DATABASE_URL:-$(read_env_value DATABASE_URL)}"
 DATABASE_URL="${DATABASE_URL:-sqlite:///$HOST_DATA_DIR/judicial_app.db}"
 TARGET="${1:-}"
 
