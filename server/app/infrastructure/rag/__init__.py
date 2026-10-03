@@ -1,4 +1,6 @@
 """RAG 基础设施工厂：按配置返回 Embedder / VectorStore。"""
+import os
+
 from app.application.ports import Embedder, VectorStore
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -13,7 +15,7 @@ def get_embedder() -> Embedder:
     global _embedder
     if _embedder is not None:
         return _embedder
-    provider = settings.EMBEDDING_PROVIDER
+    provider = os.getenv("EMBEDDING_PROVIDER", settings.EMBEDDING_PROVIDER).strip().lower()
     if provider == "mock":
         from app.infrastructure.rag.embedder import MockEmbedder
         _embedder = MockEmbedder()
@@ -34,9 +36,14 @@ def get_vector_store() -> VectorStore:
     try:
         from app.infrastructure.rag.vector_store import FAISSVectorStore
         _vector_store = FAISSVectorStore()
-    except Exception as e:
-        logger.warning("[RAG] 向量库初始化失败，回退关键词检索: %s", e)
-        _vector_store = None
+    except Exception as exc:
+        provider = os.getenv("AI_PROVIDER", settings.AI_PROVIDER).strip().lower()
+        if provider == "mock":
+            logger.warning("[RAG] 测试环境向量库不可用，回退关键词检索: %s", exc)
+            _vector_store = None
+        else:
+            logger.error("[RAG] 生产向量库初始化失败，拒绝静默降级: %s", exc)
+            raise
     return _vector_store
 
 
