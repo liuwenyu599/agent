@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,14 +18,10 @@ import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
 import androidx.compose.material.CircularProgressIndicator
-import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedTextField
-import androidx.compose.material.Tab
-import androidx.compose.material.TabRow
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,24 +37,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.AppButtonKind
+import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.layout.LocalWindowChrome
 import com.judicialai.desktop.design.layout.WindowControlGroup
 import com.judicialai.desktop.design.layout.dragWindow
-import com.judicialai.desktop.design.components.AppButtonKind
-import com.judicialai.desktop.design.components.AppDialog
-import com.judicialai.desktop.features.settings.SettingsViewModel
-import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
 import com.judicialai.desktop.design.theme.EpPrimaryDark
-import com.judicialai.desktop.design.theme.EpSuccess
-import com.judicialai.desktop.design.theme.LoginGradEnd
-import com.judicialai.desktop.design.theme.LoginGradStart
 import com.judicialai.desktop.design.theme.TextRegular
 import com.judicialai.desktop.design.theme.TextSecondary
+import com.judicialai.desktop.features.settings.SettingsViewModel
 
 /**
- * 登录页：1:1 还原 Web 端 LoginView.vue
- * 135° 蓝渐变背景（#1a5fb4 → #4a90d9）+ 居中 420px 圆角卡片 + 登录/注册/首次注册 Tab。
+ * 登录页。
+ *
+ * 首个系统管理员必须由部署主机执行 `python -m scripts.create_admin` 创建，客户端不再暴露
+ * 匿名 register-first/check-first-user 流程，消除全新部署阶段的管理员抢注窗口。
  */
 @Composable
 fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
@@ -68,24 +61,26 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
 
     Box(
         Modifier.fillMaxSize().background(
-            Brush.linearGradient(listOf(LoginGradStart, LoginGradEnd))
+            Brush.linearGradient(listOf(
+                com.judicialai.desktop.design.theme.LoginGradStart,
+                com.judicialai.desktop.design.theme.LoginGradEnd,
+            ))
         ),
         contentAlignment = Alignment.Center,
     ) {
-        // 无边框窗口自绘控制条：拖动 + 最小化 / 最大化·还原 / 关闭。
-        // 登录页不经过 AppShell，原本没有顶部窗口控制按钮，这里复用同一套 WindowControlGroup。
         val chrome = LocalWindowChrome.current
         if (chrome != null) {
             Row(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth().height(40.dp)
                     .dragWindow(chrome.window),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Spacer(Modifier.weight(1f))
                 WindowControlGroup(chrome)
                 Spacer(Modifier.width(10.dp))
             }
         }
+
         Card(
             Modifier.width(420.dp).verticalScroll(rememberScrollState()),
             shape = RoundedCornerShape(12.dp),
@@ -101,54 +96,11 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(20.dp))
-                // 「首次注册」入口仅在系统还没有系统管理员时出现（由后端 check-first-user 判定）；
-                // 已有管理员时只保留登录，不再显示一个点了没反应的 Tab
-                val tabs = if (vm.isFirstUser) {
-                    listOf("登录", "首次注册（系统管理员）")
-                } else {
-                    listOf("登录")
-                }
-
-                var tab by remember { mutableStateOf(0) }
-                // check-first-user 是异步返回的：首帧通常还是 false。
-                // 如果系统确实是首次部署，结果回来后自动进入管理员创建页，
-                // 避免用户先看到一个必然登录失败的表单，或误以为“首次注册没反应”。
-                LaunchedEffect(vm.isFirstUser) {
-                    if (vm.isFirstUser) tab = 1
-                    else if (tab > 0) tab = 0
-                }
-
-                TabRow(
-                    selectedTabIndex = tab.coerceIn(0, tabs.lastIndex),
-                    backgroundColor = Color.White,
-                    contentColor = EpPrimary,
-                ) {
-                    tabs.forEachIndexed { i, title ->
-                        Tab(
-                            selected = tab == i,
-                            onClick = { tab = i },
-                        ) {
-                            Text(
-                                title,
-                                fontSize = 14.sp,
-                                modifier = Modifier.padding(vertical = 12.dp),
-                            )
-                        }
-                    }
-                }
-
-                when (tab.coerceIn(0, tabs.lastIndex)) {
-                    0 -> LoginForm(vm)
-                    1 -> RegisterForm(vm, first = true)
-                }
+                Spacer(Modifier.height(24.dp))
+                LoginForm(vm)
                 vm.error?.let {
                     Spacer(Modifier.height(12.dp))
-                    Text(it, color = EpDanger, fontSize = 13.sp)
-                }
-                vm.info?.let {
-                    Spacer(Modifier.height(12.dp))
-                    Text(it, color = EpSuccess, fontSize = 13.sp)
+                    Text(it, color = com.judicialai.desktop.design.theme.EpDanger, fontSize = 13.sp)
                 }
                 Spacer(Modifier.height(14.dp))
                 TextButton(
@@ -162,16 +114,13 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
     }
 
     if (showServerSettings) {
-        LoginServerSettingsDialog(settingsVm, onServerChanged = { vm.refreshFirstUser() }) {
-            showServerSettings = false
-        }
+        LoginServerSettingsDialog(settingsVm) { showServerSettings = false }
     }
 }
 
 @Composable
 private fun LoginServerSettingsDialog(
     vm: SettingsViewModel,
-    onServerChanged: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AppDialog(
@@ -182,12 +131,11 @@ private fun LoginServerSettingsDialog(
         actions = {
             AppButton("关闭", onClick = onDismiss, kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
-            AppButton(if (vm.testing) "测试中…" else "保存并测试",
-                onClick = {
-                    vm.saveAndTest()
-                    // saveAndTest 内部先同步保存配置、再异步探活；此时即可用新地址重查首次部署状态。
-                    onServerChanged()
-                }, enabled = !vm.testing)
+            AppButton(
+                if (vm.testing) "测试中…" else "保存并测试",
+                onClick = { vm.saveAndTest() },
+                enabled = !vm.testing,
+            )
         },
     ) {
         OutlinedTextField(
@@ -198,12 +146,18 @@ private fun LoginServerSettingsDialog(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text("当前配置：${AppState.serverConfig.baseUrl}",
-            fontSize = 11.5.sp, color = TextSecondary)
+        Text(
+            "当前配置：${AppState.serverConfig.baseUrl}",
+            fontSize = 11.5.sp,
+            color = TextSecondary,
+        )
         vm.message?.let {
-            Text(it, fontSize = 12.5.sp,
+            Text(
+                it,
+                fontSize = 12.5.sp,
                 color = if (it.contains("成功") || it.contains("正常") || it == "已保存")
-                    EpSuccess else TextRegular)
+                    com.judicialai.desktop.design.theme.EpSuccess else TextRegular,
+            )
         }
     }
 }
@@ -220,53 +174,11 @@ private fun LoginForm(vm: AuthViewModel) {
 }
 
 @Composable
-private fun RegisterForm(vm: AuthViewModel, first: Boolean) {
-    var username by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var realName by remember { mutableStateOf("") }
-    var department by remember { mutableStateOf("") }
-
-    if (first) {
-        Card(
-            backgroundColor = Color(0xFFF4F4F5),
-            elevation = 0.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(12.dp)) {
-                Text("系统首次使用", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    color = TextRegular)
-                Text("当前系统没有用户，请创建系统管理员账号", fontSize = 12.sp,
-                    color = TextSecondary)
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-    Field(username, { username = it }, "用户名")
-    Spacer(Modifier.height(12.dp))
-    Field(email, { email = it }, "邮箱")
-    Spacer(Modifier.height(12.dp))
-    Field(password, { password = it }, "密码", isPassword = true)
-    Spacer(Modifier.height(12.dp))
-    Field(realName, { realName = it }, "真实姓名")
-    Spacer(Modifier.height(12.dp))
-    Field(department, { department = it }, "部门")
-    Spacer(Modifier.height(20.dp))
-    if (first) {
-        SubmitButton("创建系统管理员", EpDanger, vm.busy) {
-            vm.registerFirst(username, password, email, realName, department)
-        }
-    } else {
-        SubmitButton("注册", EpSuccess, vm.busy) {
-            vm.register(username, password, email, realName, department)
-        }
-    }
-}
-
-@Composable
 private fun Field(
-    value: String, onChange: (String) -> Unit,
-    placeholder: String, isPassword: Boolean = false,
+    value: String,
+    onChange: (String) -> Unit,
+    placeholder: String,
+    isPassword: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
@@ -293,10 +205,15 @@ private fun SubmitButton(text: String, color: Color, busy: Boolean, onClick: () 
         shape = RoundedCornerShape(6.dp),
     ) {
         if (busy) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp,
-                    modifier = Modifier.height(16.dp).width(16.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.height(16.dp).width(16.dp),
+                )
                 Text("请稍候…", color = Color.White, fontSize = 15.sp)
             }
         } else {
