@@ -2,6 +2,7 @@
 
 - RAG facts remain evidence sources.
 - Style exemplars are compact structured cards (top_k=1), never full historical articles.
+- Exemplar retrieval explicitly prefixes the detected document type so same-type examples rank first.
 - Arithmetic is verified by Python after generation/revision.
 - Explicit literal values are protected deterministically after semantic routing.
 """
@@ -30,6 +31,22 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             "word_count_target",
         )
         return {k: parsed[k] for k in allowed if k in parsed}
+
+    @staticmethod
+    def _exemplar_query(message: str) -> str:
+        """Make the requested document type an explicit ranking signal.
+
+        Historical examples share many generic official-writing words. Without a strong type
+        signal a semantically similar report can outrank a notice/request. Prefixing the
+        server-parsed type keeps retrieval compatible with the existing RAG API while making
+        same-type matching deterministic at the query-contract level.
+        """
+        raw = (message or "").strip()
+        parsed = task_parser.parse_message(raw)
+        doc_type = str(parsed.get("document_type") or "").strip()
+        if not doc_type:
+            return raw
+        return f"文种：{doc_type}\n同文种范文优先：{doc_type}\n{raw}"
 
     def _interpret(self, message: str, ctx: Dict[str, Any], has_draft: bool = False):
         result = super()._interpret(message, ctx, has_draft=has_draft)
@@ -95,12 +112,12 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         }
 
     def _example_style_block(self, query: str, user_id: str) -> str:
-        """Retrieve one doc-type-near exemplar and inject only a structured style card."""
+        """Retrieve one doc-type-aware exemplar and inject only a structured style card."""
         if not self.rag:
             return ""
         try:
             examples = self.rag.search_examples(
-                query=query,
+                query=self._exemplar_query(query),
                 user_id=user_id,
                 top_k=1,
                 max_chars=1200,
@@ -112,7 +129,7 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             return ""
         return (
             "\n\n【知识库范文风格卡】\n"
-            "只学习以下范文提炼出的结构层级、段落节奏、固定套语、过渡方式和结尾方式；"
+            "只学习以下同文种优先范文提炼出的结构层级、段落节奏、固定套语、过渡方式和结尾方式；"
             "禁止迁移范文中的具体单位、人名、数字、日期、文号和个案事实。"
             "本次事实只能来自用户输入、附件和本轮 RAG 资料。\n\n" + cards
         )
