@@ -143,6 +143,8 @@ def test_change_password_clears_the_flag():
 
 
 def test_first_admin_bootstrap_is_not_exposed_over_http():
-    paths = {route.path for route in create_app().routes}
+    # 用 OpenAPI 路径表而不是遍历 app.routes：新版 FastAPI 把子路由包进
+    # _IncludedRouter，route.path 不再稳定存在，遍历会抛 AttributeError。
+    paths = set(create_app().openapi()["paths"])
     assert "/api/v1/auth/register-first" not in paths
     assert "/api/v1/auth/check-first-user" not in paths

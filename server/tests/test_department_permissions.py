@@ -81,11 +81,13 @@ def _mk_doc(kb_id, title, status="published", department_code="", content="内�
 @pytest.fixture(scope="module")
 def users(client):
     """注册 5 类账号并返回 token 映射。"""
-    dev = client.post(f"{BASE}/auth/register-first", json={
-        "username": "developer", "email": "developer@test.local",
-        "password": "Passw0rd!2026", "real_name": "系统管理员", "department": "",
-    }).json()
-    dev_token = dev["access_token"]
+    # P0 安全整改已删除 POST /auth/register-first（改由部署时
+    # ``python -m scripts.create_admin`` 在服务器本地建号），首管理员由
+    # conftest 的 _seed_developer 以同名账号 "developer" 预置，这里直接登录。
+    r = client.post(f"{BASE}/auth/login", json={
+        "username": "developer", "password": "Passw0rd!2026"})
+    assert r.status_code == 200, r.text
+    dev_token = r.json()["access_token"]
 
     def reg(username, role, dept):
         r = client.post(f"{BASE}/auth/register", json={
