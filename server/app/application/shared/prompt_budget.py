@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable, List
 
-_STYLE_TOTAL_CHAR_BUDGET = 1100  # ~1.5K tokens under the gateway's conservative estimator
+_STYLE_TOTAL_CHAR_BUDGET = 1100  # <= 1.5K tokens under the gateway's conservative estimator
 _HEADING_RE = re.compile(
     r"^(?:[一二三四五六七八九十]+[、.]|（[一二三四五六七八九十]+）|\d+[、.．])\s*(.+)$"
 )
@@ -85,20 +85,13 @@ def compact_style_example(title: str, content: str, max_chars: int = _STYLE_TOTA
 
 def compact_style_examples(examples: Iterable[Dict],
                            max_chars: int = _STYLE_TOTAL_CHAR_BUDGET) -> str:
-    """Build structured few-shot cards under one shared total budget."""
-    blocks: List[str] = []
-    used = 0
-    for example in examples or []:
-        remain = max_chars - used
-        if remain < 120:
-            break
-        block = compact_style_example(
-            str(example.get("title") or "范文"),
-            str(example.get("content") or ""),
-            max_chars=remain,
-        )
-        if not block:
-            continue
-        blocks.append(block)
-        used += len(block) + 2
-    return "\n\n".join(blocks)[:max_chars]
+    """Build one structured few-shot card under one shared total budget (top_k=1)."""
+    example_list = list(examples or [])[:1]
+    if not example_list:
+        return ""
+    example = example_list[0]
+    return compact_style_example(
+        str(example.get("title") or "范文"),
+        str(example.get("content") or "")[:1200],
+        max_chars=max_chars,
+    )[:max_chars]
