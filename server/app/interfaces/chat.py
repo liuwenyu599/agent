@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.chat.async_service import AsyncChatService
 from app.application.chat.attachment_service import AttachmentService
 from app.application.chat.docx_export import generate_official_document, markdown_to_docx
 from app.application.chat.dto import (
@@ -19,9 +20,8 @@ from app.application.chat.dto import (
     SessionRenameRequest,
 )
 from app.application.chat.feedback_service import FeedbackService
-from app.application.chat.service import ChatService
 from app.application.knowledge.rag_service import RagService
-from app.application.shared.writing_assistant import WritingAssistant
+from app.application.shared.async_writing_assistant import AsyncWritingAssistant
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundError
 from app.domain.identity.entities import User
@@ -41,10 +41,10 @@ router = APIRouter(prefix="/chat", tags=["对话"])
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def get_chat_service(db: Session = Depends(get_db)) -> ChatService:
-    return ChatService(
+def get_chat_service(db: Session = Depends(get_db)) -> AsyncChatService:
+    return AsyncChatService(
         db,
-        WritingAssistant(get_llm_gateway(), get_vision_gateway()),
+        AsyncWritingAssistant(get_llm_gateway(), get_vision_gateway()),
         RagService(db, get_embedder(), get_vector_store()),
     )
 
@@ -74,8 +74,6 @@ def export_official(req: OfficialExportRequest, user: User = Depends(get_current
     })
 
 
-# ========== 对话附件 ==========
-
 @router.post("/attachments/upload")
 async def upload_attachments(
     files: List[UploadFile] = File(...),
@@ -84,7 +82,6 @@ async def upload_attachments(
 ):
     if len(files) > settings.CHAT_MAX_ATTACHMENTS:
         raise AppError(400, f"单次最多上传 {settings.CHAT_MAX_ATTACHMENTS} 个附件")
-
     svc = AttachmentService(db)
     results = []
     for f in files:
@@ -131,18 +128,16 @@ def delete_attachment(attachment_id: str, user: User = Depends(get_current_user)
 
 
 @router.post("/send", response_model=ChatResponse)
-def chat(req: ChatRequest, user: User = Depends(get_current_user),
-         db: Session = Depends(get_db),
-         svc: ChatService = Depends(get_chat_service)):
-    result = svc.send_message(
+async def chat(req: ChatRequest, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db),
+               svc: AsyncChatService = Depends(get_chat_service)):
+    result = await svc.send_message_async(
         user, message=req.message, session_id=req.session_id, use_rag=req.use_rag,
         system_prompt=req.system_prompt, template_category=req.template_category,
         source=req.source or "chat", attachment_ids=req.attachment_ids,
         reference_template_id=req.reference_template_id,
         task_reference_ids=req.task_reference_ids,
     )
-    # ChatService 保持原返回契约；接口层补出本轮已持久化 assistant message id，
-    # 供桌面端 👍/👎 精确绑定，不依赖正文内容匹配。
     assistant_row = db.scalar(
         select(ChatMessageModel)
         .where(
@@ -160,10 +155,8 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user),
 def submit_feedback(req: FeedbackRequest,
                     user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
-    """对自己的 AI 回复或自己的文本版本提交/修改 👍(1) / 👎(-1)。"""
     return FeedbackService(SqlAlchemyChatFeedbackRepository(db)).submit(
-        user.id, req.target_type, req.target_id, req.rating, req.detail
-    )
+        user.id, req.target_type, req.target_id, req.rating, req.detail)
 
 
 @router.get("/sessions")
@@ -227,8 +220,6 @@ def delete_session(session_id: str, user: User = Depends(get_current_user),
     sessions.delete(session)
     return {"ok": True}
 
-
-# ========== 管理员接口 ==========
 
 @router.get("/admin/sessions")
 def list_all_sessions(user: User = Depends(require_admin_or_above),
