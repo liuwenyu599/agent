@@ -1,33 +1,22 @@
-"""RAG 检索服务（v2：混合检索）。
+"""RAG 检索服务：混合召回 + RRF + CrossEncoder 二阶段重排。
 
-召回：向量检索 + 关键词检索双路并行，RRF（Reciprocal Rank Fusion）融合排序；
-过滤：向量侧按阈值门控，文档级多样性上限（默认每篇最多 2 块）；
-扩展：命中块自动拼接前后相邻块作为上下文（总长受 RAG_EXPAND_BUDGET 约束）。
-显式反馈：只使用当前用户自己的 👍/👎 对曾引用 chunk 做小幅、有界 rerank。
-范文检索 search_examples 按文档聚合取整篇。
+安全基线：向量阈值先过滤，向量/关键词最多召回 30 个候选，经 RRF 与用户本人反馈
+轻量调整后，交给本地 bge-reranker-v2-m3 重排，最终只返回 top_k（默认 3）。
 """
 import re
-
 from typing import Dict, List
 
-from sqlalchemy import select, or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.application.knowledge.reranker import reranker
 from app.application.ports import Embedder, VectorStore
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.domain.identity.authorization import is_system_admin
-from app.domain.organization.departments import (
-    SCOPE_GLOBAL,
-    dept_scope,
-    user_scope,
-)
+from app.domain.organization.departments import SCOPE_GLOBAL, dept_scope, user_scope
 from app.infrastructure.database.models.identity import UserModel
-from app.infrastructure.database.models.knowledge import (
-    ChunkModel,
-    DocumentModel,
-    KnowledgeBaseModel,
-)
+from app.infrastructure.database.models.knowledge import ChunkModel, DocumentModel, KnowledgeBaseModel
 
 logger = get_logger(__name__)
 
@@ -104,13 +93,12 @@ class RagService:
         )
 
     def _feedback_weights(self, user_id: str, chunk_ids: List[str]) -> Dict[str, float]:
-        """读取当前用户自己的反馈。失败时只跳过学习信号，绝不影响正常检索。"""
         if not chunk_ids:
             return {}
         try:
             from app.infrastructure.repositories.feedback import SqlAlchemyChatFeedbackRepository
             return SqlAlchemyChatFeedbackRepository(self.db).chunk_weights(user_id, chunk_ids)
-        except Exception as exc:  # migration rolling upgrade / damaged optional feedback must not break RAG
+        except Exception as exc:
             logger.warning("[RAG] 反馈 rerank 不可用，已跳过: %s", exc)
             return {}
 
@@ -119,11 +107,12 @@ class RagService:
                kb_ids: List[str] = None, dept_code: str = None,
                scopes: List[str] = None) -> List[Dict]:
         top_k = top_k or settings.RAG_TOP_K
-        min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
+        configured_min = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
+        # 调用方不能把政务检索阈值降回不安全值。
+        min_score = max(float(configured_min), 0.7)
 
         dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
-
         server_scopes = self.resolve_scopes(dept_code, admin, user_id)
         if server_scopes is None:
             scopes = None
@@ -141,8 +130,9 @@ class RagService:
         if not kb_ids:
             return []
 
-        logger.info("[RAG] 查询: %s（scope=%s）", query, scopes or "ALL")
-        candidates = settings.RAG_VECTOR_CANDIDATES
+        candidates = max(30, int(settings.RAG_VECTOR_CANDIDATES))
+        logger.info("[RAG] 查询: %s（scope=%s, threshold=%.2f）",
+                    query, scopes or "ALL", min_score)
 
         vector_hits = []
         if self.vector_store is not None:
@@ -153,42 +143,45 @@ class RagService:
                 vector_hits = [h for h in raw_hits if h["distance"] >= min_score]
                 logger.info("[RAG] 向量命中: %d（阈值过滤后 %d）",
                             len(raw_hits), len(vector_hits))
-            except Exception as e:
-                logger.warning("[RAG] 向量检索失败，仅关键词召回: %s", e)
-                vector_hits = []
+            except Exception as exc:
+                logger.warning("[RAG] 向量检索失败，仅关键词召回: %s", exc)
 
         keyword_hits = self._keyword_search(query, kb_ids, candidates)
 
         rrf_k = settings.RAG_RRF_K
         fused: Dict[str, Dict] = {}
-        for rank, h in enumerate(vector_hits):
-            e = fused.setdefault(h["chunk_id"], {"rrf": 0.0, "v": None, "k": None})
-            e["v"] = h
-            e["rrf"] += 1.0 / (rrf_k + rank + 1)
-        for rank, r in enumerate(keyword_hits):
-            cid = r.get("chunk_id")
+        for rank, hit in enumerate(vector_hits):
+            entry = fused.setdefault(hit["chunk_id"], {"rrf": 0.0, "v": None, "k": None})
+            entry["v"] = hit
+            entry["rrf"] += 1.0 / (rrf_k + rank + 1)
+        for rank, hit in enumerate(keyword_hits):
+            cid = hit.get("chunk_id")
             if not cid:
                 continue
-            e = fused.setdefault(cid, {"rrf": 0.0, "v": None, "k": None})
-            e["k"] = r
-            e["rrf"] += 1.0 / (rrf_k + rank + 1)
+            entry = fused.setdefault(cid, {"rrf": 0.0, "v": None, "k": None})
+            entry["k"] = hit
+            entry["rrf"] += 1.0 / (rrf_k + rank + 1)
 
-        # 反馈只做轻量乘法微调，不覆盖本轮语义相关度：赞最多 +9%，踩最多 -15%。
         feedback_weights = self._feedback_weights(user_id, list(fused.keys()))
         for chunk_id, entry in fused.items():
             entry["feedback_delta"] = feedback_weights.get(chunk_id, 0.0)
             entry["rrf"] *= 1.0 + entry["feedback_delta"]
-        ranked = sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)
+        ranked = sorted(fused.values(), key=lambda item: item["rrf"], reverse=True)
 
-        results: List[Dict] = []
+        # 先生成可审计的候选对象，再做 cross-encoder 重排。不能在这里提前截断 top_k。
+        candidate_results: List[Dict] = []
         per_doc: Dict[str, int] = {}
         doc_cap = settings.RAG_PER_DOC_CAP
-        for e in ranked:
-            hit, kw = e["v"], e["k"]
-            if hit is not None:
-                chunk_id, doc_id, score = hit["chunk_id"], hit["doc_id"], hit["distance"]
+        for entry in ranked:
+            vector_hit, keyword_hit = entry["v"], entry["k"]
+            if vector_hit is not None:
+                chunk_id = vector_hit["chunk_id"]
+                doc_id = vector_hit["doc_id"]
+                score = vector_hit["distance"]
             else:
-                chunk_id, doc_id, score = kw["chunk_id"], kw["doc_id"], kw["score"]
+                chunk_id = keyword_hit["chunk_id"]
+                doc_id = keyword_hit["doc_id"]
+                score = keyword_hit["score"]
 
             if per_doc.get(doc_id, 0) >= doc_cap:
                 continue
@@ -206,11 +199,10 @@ class RagService:
             content = chunk.content
             if settings.RAG_NEIGHBOR_EXPAND:
                 content = self._expand_neighbors(chunk)
-
             meta = (chunk.document.doc_metadata or {}) if chunk.document else {}
-            src_type = meta.get("source_type", "file")
             kb = chunk.document.knowledge_base if chunk.document else None
-            results.append({
+            src_type = meta.get("source_type", "file")
+            candidate_results.append({
                 "content": content,
                 "chunk_content": chunk.content,
                 "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
@@ -222,17 +214,28 @@ class RagService:
                 "kb_name": kb.name if kb else "",
                 "kb_type": kb.kb_type if kb else "",
                 "score": score,
-                "match_type": "hybrid" if (hit and kw) else ("vector" if hit else "keyword"),
-                "feedback_delta": e.get("feedback_delta", 0.0),
+                "rrf_score": entry["rrf"],
+                "match_type": "hybrid" if (vector_hit and keyword_hit) else (
+                    "vector" if vector_hit else "keyword"),
+                "feedback_delta": entry.get("feedback_delta", 0.0),
                 "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
                 "source_url": meta.get("source_url"),
                 "source_name": meta.get("source_name"),
             })
-            if len(results) >= top_k:
+            if len(candidate_results) >= candidates:
                 break
 
-        logger.info("[RAG] 最终返回: %d 个（向量 %d / 关键词 %d，融合 top_k=%d）",
-                    len(results), len(vector_hits), len(keyword_hits), top_k)
+        final_k = min(top_k, int(settings.RAG_RERANK_TOP_K)) if settings.RAG_RERANK_ENABLED else top_k
+        if settings.RAG_RERANK_ENABLED:
+            results = reranker.rerank(query, candidate_results, final_k)
+        else:
+            results = candidate_results[:final_k]
+
+        logger.info(
+            "[RAG] 最终返回: %d 个（候选 %d / 向量 %d / 关键词 %d / rerank=%s）",
+            len(results), len(candidate_results), len(vector_hits), len(keyword_hits),
+            settings.RAG_RERANK_ENABLED,
+        )
         return results
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
@@ -248,7 +251,6 @@ class RagService:
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
                 hits = self.vector_store.search(query_vec, kb_ids, top_k=30, scopes=scopes)
-
                 seen, examples = set(), []
                 for hit in hits:
                     doc_id = hit["doc_id"]
@@ -264,9 +266,8 @@ class RagService:
                         break
                 if examples:
                     return examples
-            except Exception as e:
-                logger.warning("[RAG] 向量范文检索失败，回退关键词: %s", e)
-
+            except Exception as exc:
+                logger.warning("[RAG] 向量范文检索失败，回退关键词: %s", exc)
         return self._keyword_examples(query, kb_ids, top_k, max_chars)
 
     @staticmethod
@@ -276,29 +277,29 @@ class RagService:
         if len(content) >= budget:
             return content
         rows = chunk.document.chunks if chunk.document else []
-        prev_c = next((c for c in rows if c.chunk_index == chunk.chunk_index - 1), None)
-        next_c = next((c for c in rows if c.chunk_index == chunk.chunk_index + 1), None)
+        prev_chunk = next((c for c in rows if c.chunk_index == chunk.chunk_index - 1), None)
+        next_chunk = next((c for c in rows if c.chunk_index == chunk.chunk_index + 1), None)
         parts = []
-        if prev_c is not None:
-            parts.append(prev_c.content)
+        if prev_chunk is not None:
+            parts.append(prev_chunk.content)
         parts.append(content)
-        if next_c is not None:
-            parts.append(next_c.content)
+        if next_chunk is not None:
+            parts.append(next_chunk.content)
         merged = "\n".join(parts)
         return merged if len(merged) <= budget else content
 
     @staticmethod
     def _tokenize(query: str) -> List[str]:
         tokens: List[str] = []
-        for w in re.findall(r"[a-zA-Z0-9]+", query.lower()):
-            if len(w) >= 2:
-                tokens.append(w)
-        for seg in re.findall(r"[\u4e00-\u9fff]+", query):
-            if len(seg) == 1:
-                tokens.append(seg)
+        for word in re.findall(r"[a-zA-Z0-9]+", query.lower()):
+            if len(word) >= 2:
+                tokens.append(word)
+        for segment in re.findall(r"[\u4e00-\u9fff]+", query):
+            if len(segment) == 1:
+                tokens.append(segment)
             else:
-                for i in range(len(seg) - 1):
-                    tokens.append(seg[i:i + 2])
+                for index in range(len(segment) - 1):
+                    tokens.append(segment[index:index + 2])
         return tokens
 
     def _keyword_search(self, query: str, kb_ids: List[str], top_k: int) -> List[Dict]:
@@ -310,26 +311,26 @@ class RagService:
             .join(DocumentModel, ChunkModel.doc_id == DocumentModel.id)
             .where(DocumentModel.kb_id.in_(kb_ids), DocumentModel.status == "published")
         )
-        stmt = stmt.where(or_(*[ChunkModel.content.like(f"%{t}%") for t in tokens]))
+        stmt = stmt.where(or_(*[ChunkModel.content.like(f"%{token}%") for token in tokens]))
         chunks = self.db.scalars(stmt).all()
         scored = []
-        for c in chunks:
-            cnt = sum(1 for t in tokens if t in c.content)
-            if cnt == 0:
+        for chunk in chunks:
+            count = sum(1 for token in tokens if token in chunk.content)
+            if count == 0:
                 continue
-            score = min(1.0, cnt / len(tokens))
+            score = min(1.0, count / len(tokens))
             scored.append({
-                "chunk_id": c.id,
-                "doc_id": c.doc_id,
-                "content": c.content,
-                "source": f"{c.document.title}（第{c.chunk_index}段）",
+                "chunk_id": chunk.id,
+                "doc_id": chunk.doc_id,
+                "content": chunk.content,
+                "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
                 "score": score,
                 "match_type": "keyword",
                 "source_type": "文件",
                 "source_url": None,
                 "source_name": None,
             })
-        scored.sort(key=lambda x: x["score"], reverse=True)
+        scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
     def _keyword_examples(self, query: str, kb_ids: List[str], top_k: int, max_chars: int) -> list:
@@ -344,11 +345,12 @@ class RagService:
             )
         ).all()
         scored = []
-        for d in docs:
-            cnt = sum(1 for t in tokens if t in (d.content or ""))
-            if cnt == 0:
+        for doc in docs:
+            count = sum(1 for token in tokens if token in (doc.content or ""))
+            if count == 0:
                 continue
-            score = min(1.0, cnt / len(tokens))
-            scored.append((score, d))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [{"title": d.title, "content": d.content[:max_chars]} for _, d in scored[:top_k]]
+            score = min(1.0, count / len(tokens))
+            scored.append((score, doc))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [{"title": doc.title, "content": doc.content[:max_chars]}
+                for _, doc in scored[:top_k]]
