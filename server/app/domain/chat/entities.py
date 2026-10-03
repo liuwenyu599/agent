@@ -18,7 +18,7 @@ class ChatMessage:
     role: str
     content: str
     id: Optional[str] = None
-    source: str = "chat"  # chat / template
+    source: str = "chat"
     sources: List[Any] = field(default_factory=list)
     attachments: List[Dict] = field(default_factory=list)
     tool_calls: Optional[list] = None
@@ -28,17 +28,31 @@ class ChatMessage:
 
 
 @dataclass
+class AIResponseFeedback:
+    user_id: str
+    target_type: str
+    target_id: str
+    rating: int
+    id: Optional[str] = None
+    message_id: Optional[str] = None
+    detail: Optional[str] = None
+    source_chunk_ids: List[str] = field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+@dataclass
 class ChatAttachment:
     """对话附件：只服务于对话，不进知识库、不需要审核。"""
     user_id: str
     filename: str
-    kind: str  # doc / image
+    kind: str
     id: Optional[str] = None
     session_id: Optional[str] = None
     file_path: Optional[str] = None
     file_size: Optional[int] = None
     text_content: Optional[str] = None
-    parse_status: str = "ok"  # ok / partial / failed
+    parse_status: str = "ok"
     parse_note: Optional[str] = None
     created_at: Optional[datetime] = None
 
