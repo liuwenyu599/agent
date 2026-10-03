@@ -106,7 +106,16 @@ async def upload_document(
 @router.get("/documents/{doc_id}")
 def get_document(doc_id: str, user: User = Depends(get_current_user),
                  svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.get_document_detail(doc_id, user)
+    result = svc.get_document_detail(doc_id, user)
+    doc = svc.docs.get_model(doc_id)
+    meta = dict((doc.doc_metadata if doc else None) or {})
+    result["indexing_status"] = meta.get("indexing_status") or (
+        "indexed" if result.get("status") == "published" else "pending_review"
+    )
+    if meta.get("indexing_error"):
+        result["indexing_error"] = meta["indexing_error"]
+    result["indexed_chunks"] = int(meta.get("indexed_chunks") or 0)
+    return result
 
 
 @router.put("/documents/{doc_id}")
@@ -288,7 +297,23 @@ def update_kb(kb_id: str, req: KBUpdateRequest,
 @router.delete("/{kb_id}")
 def delete_kb(kb_id: str, user: User = Depends(require_admin_or_above),
               svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.delete_kb(kb_id, user)
+    svc.get_kb_managed(kb_id, user)
+    _, docs = svc.docs.list_by_kb(kb_id, page=1, page_size=100000)
+    result = svc.delete_kb(kb_id, user)
+    removed = 0
+    cleanup_errors = []
+    store = get_vector_store()
+    for doc in docs:
+        try:
+            removed += int(store.delete_by_document(doc.id) or 0)
+        except Exception as exc:
+            logger.exception("[RAG] 删除知识库后物理删除向量失败: kb=%s doc=%s", kb_id, doc.id)
+            cleanup_errors.append({"doc_id": doc.id, "error": str(exc)[:300]})
+    result["removed_vectors"] = removed
+    result["indexing_status"] = "cleanup_failed" if cleanup_errors else "removed"
+    if cleanup_errors:
+        result["indexing_errors"] = cleanup_errors
+    return result
 
 
 @router.get("/{kb_id}/documents")
