@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/judicial-ai-alerts.yml
+
+scrape_configs:
+  - job_name: judicial-ai-api
+    metrics_path: /metrics
+    static_configs:
+      # If Prometheus runs in Docker, replace 127.0.0.1 with the API service/container address.
+      - targets: ["127.0.0.1:8000"]
