@@ -83,7 +83,7 @@ class SqlAlchemyChatSessionRepository(ChatSessionRepository):
     def delete(self, session: ChatSession) -> None:
         m = self.db.get(ChatSessionModel, session.id)
         if m:
-            self.db.delete(m)  # cascade 删除 messages / attachments
+            self.db.delete(m)
             self.db.commit()
 
 
@@ -118,7 +118,9 @@ class SqlAlchemyChatMessageRepository(ChatMessageRepository):
             tokens_used=message.tokens_used, latency_ms=message.latency_ms,
         )
         self.db.add(m)
-        return message
+        # flush 分配 UUID，但事务仍由用例层统一 commit；反馈接口因此可稳定拿到 message_id。
+        self.db.flush()
+        return _msg_to_entity(m)
 
     def delete(self, message: ChatMessage) -> None:
         m = self.db.get(ChatMessageModel, message.id)
