@@ -5,6 +5,7 @@ from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
 from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
+from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_service import WritingTaskService
 
 
@@ -44,11 +45,12 @@ class ToolAssistant:
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
-def test_public_writing_service_routes_to_eval_capture_service():
-    assert WritingTaskService is EvalCaptureWritingTaskService
+def test_public_writing_service_routes_to_structured_field_service():
+    assert WritingTaskService is StructuredFieldWritingTaskService
 
 
-def test_eval_capture_service_preserves_quality_retry_and_ops_layers():
+def test_structured_field_service_preserves_eval_capture_quality_retry_and_ops_layers():
+    assert issubclass(StructuredFieldWritingTaskService, EvalCaptureWritingTaskService)
     assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
     assert issubclass(QualityRetryWritingTaskService, OpsWritingTaskService)
 
@@ -136,7 +138,7 @@ def test_patch_target_rejects_ambiguous_literal_excerpt():
     assert OpsWritingTaskService._resolve_patch_target(text, "有关事项通知如下。") is None
 
 
-def test_canonical_body_removes_duplicate_headers_and_signoffs():
+def test_legacy_semantic_body_still_canonicalizes_one_signoff_for_compatibility():
     ctx = {
         "title": "关于开展专项工作的通知",
         "recipient": "广州市白云区财政局",
@@ -165,6 +167,28 @@ def test_canonical_body_removes_duplicate_headers_and_signoffs():
     assert body.count("2026年9月30日") == 1
     assert "2026年9月29日" not in body
     assert "现将有关事项通知如下。" in body
+
+
+def test_production_body_contains_no_structured_chrome_at_all():
+    ctx = {
+        "title": "关于开展专项工作的通知",
+        "recipient": "广州市白云区财政局",
+        "document_number": "云司发〔2026〕12号",
+        "authority": "广州市白云区司法局",
+        "document_date": "2026年9月30日",
+    }
+    raw = """关于开展专项工作的通知
+广州市白云区财政局：
+云司发〔2026〕12号
+
+现将有关事项通知如下。
+
+广州市白云区司法局
+2026年9月30日
+"""
+    body = StructuredFieldWritingTaskService._canonicalize_body(raw, ctx)
+    assert body == "现将有关事项通知如下。"
+    assert all(value not in body for value in ctx.values())
 
 
 def test_revision_summary_is_visible_in_conversation():
