@@ -9,10 +9,11 @@
 - eval_capture_service：人工保存紧跟 AI 版本时自动沉淀 AI→人工终稿候选评测样本；
 - structured_field_service：标题/主送/文号/署名/日期彻底由结构化字段接管，正文只保存正文；
 - sectioned_generation_service：长文按一级章节分别检索、生成、质检后组装，避免整篇反复重写；
+- async_task_service：ASGI 生产入口，所有长耗时模型 HTTP 调用原生 await，不占 worker thread；
 - task_service：保留成熟的版本/RAG/导出/质量链路作为基类。
 
 兼容说明：现有路由历史上直接从 ``writing.task_service`` 导入 ``WritingTaskService``。
-包初始化阶段把该公开类绑定到最新生产实现，路由无需重写。
+包初始化阶段把该公开类绑定到最新生产实现，路由无需改导入路径。
 """
 
 from . import task_service as _task_service
@@ -23,8 +24,9 @@ from .quality_retry_service import QualityRetryWritingTaskService
 from .eval_capture_service import EvalCaptureWritingTaskService
 from .structured_field_service import StructuredFieldWritingTaskService
 from .sectioned_generation_service import SectionedGenerationWritingTaskService
+from .async_task_service import AsyncWritingTaskService
 
-_task_service.WritingTaskService = SectionedGenerationWritingTaskService
+_task_service.WritingTaskService = AsyncWritingTaskService
 
 __all__ = [
     "SemanticWritingTaskService",
@@ -34,4 +36,5 @@ __all__ = [
     "EvalCaptureWritingTaskService",
     "StructuredFieldWritingTaskService",
     "SectionedGenerationWritingTaskService",
+    "AsyncWritingTaskService",
 ]
