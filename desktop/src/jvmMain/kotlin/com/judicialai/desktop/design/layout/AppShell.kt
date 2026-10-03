@@ -297,7 +297,7 @@ private fun AppHeader(
  * 仅在无边框窗口（[LocalWindowChrome] 非空）时显示。
  */
 @Composable
-private fun WindowControlGroup(actions: WindowChromeActions) {
+fun WindowControlGroup(actions: WindowChromeActions) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         WindowControlButton(
             icon = Icons.Default.Remove,
@@ -337,7 +337,7 @@ private fun WindowControlGroup(actions: WindowChromeActions) {
  * @param hoverBorder 悬停描边色
  */
 @Composable
-private fun WindowControlButton(
+fun WindowControlButton(
     icon: ImageVector,
     description: String,
     onClick: () -> Unit,

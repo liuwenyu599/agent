@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.layout.LocalWindowChrome
+import com.judicialai.desktop.design.layout.WindowControlGroup
+import com.judicialai.desktop.design.layout.dragWindow
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.features.settings.SettingsViewModel
@@ -68,6 +72,20 @@ fun LoginScreen(vm: AuthViewModel = remember { AuthViewModel() }) {
         ),
         contentAlignment = Alignment.Center,
     ) {
+        // 无边框窗口自绘控制条：拖动 + 最小化 / 最大化·还原 / 关闭。
+        // 登录页不经过 AppShell，原本没有顶部窗口控制按钮，这里复用同一套 WindowControlGroup。
+        val chrome = LocalWindowChrome.current
+        if (chrome != null) {
+            Row(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().height(40.dp)
+                    .dragWindow(chrome.window),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                WindowControlGroup(chrome)
+                Spacer(Modifier.width(10.dp))
+            }
+        }
         Card(
             Modifier.width(420.dp).verticalScroll(rememberScrollState()),
             shape = RoundedCornerShape(12.dp),
