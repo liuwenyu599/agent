@@ -33,6 +33,9 @@ class Settings:
         self.MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
         # 模型上下文总长度（与模型服务 max_model_len 一致），用于上下文预算估算
         self.MODEL_CTX_LIMIT = int(os.getenv("MODEL_CTX_LIMIT", "16384"))
+        # 多副本故障切换：MODEL_SERVICE_URLS/PPT_MODEL_URLS 由网关工厂读取逗号分隔列表
+        self.MODEL_HEALTH_TIMEOUT = int(os.getenv("MODEL_HEALTH_TIMEOUT", "5"))
+        self.MODEL_FAILOVER_COOLDOWN = int(os.getenv("MODEL_FAILOVER_COOLDOWN", "15"))
         # 视觉模型服务（可选，Qwen2.5-VL 等，OpenAI 兼容）：
         # 配置后对话中的图片附件直接送视觉模型；留空则走 OCR 文本通道
         self.VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", "")
@@ -200,7 +203,7 @@ class Settings:
         self.EMBEDDING_HTTP_URL = os.getenv("EMBEDDING_HTTP_URL", "")
         self.EMBEDDING_HTTP_MODEL = os.getenv("EMBEDDING_HTTP_MODEL", "")
         self.EMBEDDING_HTTP_TIMEOUT = int(os.getenv("EMBEDDING_HTTP_TIMEOUT", "30"))
-        self.RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+        self.RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
         self.RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.5"))
         # 分块：结构段再按句子边界约束到 MAX_CHARS，块间保留 OVERLAP 重叠，
         # 过短碎块（< MIN_CHARS）并入前一块
@@ -213,7 +216,7 @@ class Settings:
         self.RAG_PER_DOC_CAP = int(os.getenv("RAG_PER_DOC_CAP", "2"))
         # 命中块上下文扩展：拼接前后相邻块（总长不超 EXPAND_BUDGET）
         self.RAG_NEIGHBOR_EXPAND = _bool(os.getenv("RAG_NEIGHBOR_EXPAND", "true"), True)
-        self.RAG_EXPAND_BUDGET = int(os.getenv("RAG_EXPAND_BUDGET", "1500"))
+        self.RAG_EXPAND_BUDGET = int(os.getenv("RAG_EXPAND_BUDGET", "800"))
 
         # 上传
         self.UPLOAD_MAX_SIZE = int(os.getenv("UPLOAD_MAX_SIZE", str(50 * 1024 * 1024)))
