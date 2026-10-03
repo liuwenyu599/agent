@@ -1,0 +1,640 @@
+"""Async production writing service.
+
+All long model I/O is awaited. Deterministic SQL/RAG/post-processing helpers stay shared with the
+mature synchronous service chain so item-1..5/9..15 guarantees are not forked or weakened.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+
+from fastapi import HTTPException
+
+from app.application.writing import task_parser
+from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
+from app.application.writing.quality_gate import QualityGate
+from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
+from app.application.writing.task_service import REVISE_MODES, _sse
+from app.core.timeutil import now_local
+
+
+class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
+    """Final production writing service for ASGI routes."""
+
+    def __init__(self, db, assistant=None, rag=None, attachments=None):
+        super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
+        self.interpreter = AsyncWritingIntentInterpreter(assistant) if assistant else None
+
+    async def _interpret_async(self, message: str, ctx: Dict[str, Any],
+                               has_draft: bool = False):
+        if not self.interpreter:
+            return None
+        result = await self.interpreter.interpret_async(
+            message,
+            context=ctx,
+            has_draft=has_draft,
+            history=(ctx.get("history") or [])[-6:],
+        )
+        if not result:
+            return None
+        # Preserve GroundedWritingTaskService's deterministic literal precedence.
+        result.update(self._literal_overrides(message))
+        return result
+
+    # ----------------------------------------------------------- model helpers
+    async def _llm_draft_async(self, instruction: str, sources, attachment_ctx, user_id,
+                               template: Optional[Dict[str, Any]] = None) -> str:
+        if not self.assistant:
+            raise HTTPException(status_code=503, detail="模型服务不可用")
+        system = self._draft_system(user_id, template)
+        system += self._example_style_block(instruction, user_id)
+        system += (
+            "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计。凡正文必须给出由多个数字推导的结果，"
+            "应确保运算关系明确且结果精确；最终文本还会由程序做确定性复核。"
+        )
+        return await self.assistant.achat(
+            message=instruction, history=[], sources=sources, user_role="user",
+            system_prompt=system, attachment_context=attachment_ctx,
+        ) or ""
+
+    async def _llm_revise_once_async(self, prompt: str, sources, attachment_ctx, user_id) -> str:
+        if not self.assistant:
+            raise HTTPException(status_code=503, detail="模型服务不可用")
+        agent = self._agent_prompt(user_id)
+        from app.application.writing.task_service import REVISION_RULES
+        system = (agent + "\n" if agent else "") + REVISION_RULES
+        system += self._example_style_block(prompt, user_id)
+        system += (
+            "\n\n若用户要求规范化、仿写、按单位口径调整，应以以上知识库风格卡的结构和措辞习惯作为风格依据；"
+            "不要迁移历史稿的事实。"
+        )
+        return await self.assistant.achat(
+            message=prompt, history=[], sources=sources, user_role="user",
+            system_prompt=system, attachment_context=attachment_ctx,
+        ) or ""
+
+    async def _llm_revise_async(self, prompt: str, sources, attachment_ctx, user_id) -> str:
+        """QualityRetryWritingTaskService semantics, with awaited model calls."""
+        candidate = await self._llm_revise_once_async(prompt, sources, attachment_ctx, user_id)
+        quality = self._quality_result(candidate)
+        retry_no = 0
+        while quality.get("level") == "D" and retry_no < 2:
+            retry_no += 1
+            retry_prompt = self._retry_prompt(prompt, candidate, quality, retry_no)
+            candidate = await self._llm_revise_once_async(
+                retry_prompt, sources, attachment_ctx, user_id)
+            quality = self._quality_result(candidate)
+        if quality.get("level") == "D":
+            raise HTTPException(status_code=422, detail={
+                "code": "WRITING_QUALITY_GATE_D",
+                "message": "生成结果连续两次修复后仍存在硬伤，未保存该版本。",
+                "issues": quality.get("issues") or [],
+                "retry_count": 2,
+            })
+        return candidate
+
+    # ------------------------------------------------------------- create/plan
+    async def create_task_async(self, user_id: str, message: str,
+                                session_id: Optional[str] = None,
+                                template_id: Optional[str] = None,
+                                kb_ids: Optional[List[str]] = None,
+                                planned_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from app.infrastructure.database.models.writing_task import WritingTaskModel
+
+        ctx = task_parser.empty_context()
+        changes: List[str] = []
+        interpreted = None
+        if planned_context:
+            for key in tuple(ctx.keys()):
+                if key in planned_context and key not in ("history", "missing_fields"):
+                    ctx[key] = planned_context[key]
+            # Strict literals can still be refreshed from the original sentence.
+            literal = self._literal_overrides(message)
+            changes = task_parser.merge_context(ctx, literal)
+        else:
+            interpreted = await self._interpret_async(message, ctx, has_draft=False)
+            if interpreted:
+                changes = self._merge_interpretation(ctx, interpreted)
+
+        if not ctx.get("title"):
+            derived = task_parser.build_title(ctx)
+            if derived:
+                ctx["title"] = derived
+        if template_id:
+            tmpl = self._load_template(template_id)
+            if tmpl:
+                ctx["template_id"] = tmpl["id"]
+                ctx["template_name"] = tmpl["name"]
+        if kb_ids:
+            ctx["kb_ids"] = [x for x in kb_ids if x]
+
+        missing = task_parser.compute_missing(ctx)
+        self._push_history(ctx, "user", message)
+        task = WritingTaskModel(
+            user_id=user_id, session_id=session_id, context=ctx, status="collecting")
+        self.db.add(task)
+        self.db.commit()
+        self.db.refresh(task)
+
+        reply = (interpreted or {}).get("reply") or self._collecting_reply(
+            ctx, changes, missing, message)
+        self._push_history(ctx, "assistant", reply)
+        task.context = ctx
+        self.db.commit()
+        return {**self._to_dict(task), "reply": reply, "content_changed": False}
+
+    async def plan_task_async(self, user_id: str, message: str) -> Dict[str, Any]:
+        ctx = task_parser.empty_context()
+        literal_plan = task_parser.parse_message(message)
+        task_parser.merge_context(ctx, literal_plan)
+        has_clear_core = bool(
+            ctx.get("document_type") and
+            (ctx.get("topic") or ctx.get("title") or task_parser.build_title(ctx))
+        )
+        if has_clear_core:
+            source = "rule_fast"
+        else:
+            interpreted = await self._interpret_async(message, ctx, has_draft=False)
+            if interpreted:
+                self._merge_interpretation(ctx, interpreted)
+                source = "llm"
+            else:
+                source = "rule"
+
+        if not ctx.get("title"):
+            derived = task_parser.build_title(ctx)
+            if derived:
+                ctx["title"] = derived
+        task_parser.compute_missing(ctx)
+
+        try:
+            from app.application.organization.service import OrganizationService
+            org_ctx = OrganizationService(self.db).user_context(user_id)
+        except Exception:
+            org_ctx = {"dept_code": "", "dept_name": "", "short_name": "",
+                       "agent": None, "scopes": ["GLOBAL"]}
+        doc_type = str(ctx.get("document_type") or "")
+        fields: List[Dict[str, str]] = []
+        for key, label in (("document_type", "文种"), ("recipient", "报送对象"),
+                           ("authority", "发文机关"), ("time_range", "时间范围"),
+                           ("purpose", "用途"), ("topic", "主题")):
+            value = ctx.get(key)
+            if value:
+                fields.append({"label": label, "value": str(value)})
+        # Preserve existing quick-plan policy: materials are searched only when explicitly useful.
+        material_cues = ("参考", "结合", "根据", "依据", "材料", "范文", "案例", "政策", "文件")
+        materials = self._plan_materials(ctx, user_id, org_ctx) \
+            if any(cue in message for cue in material_cues) else []
+        knowledge = self._plan_knowledge(user_id, org_ctx)
+        template = self._plan_template(doc_type, org_ctx)
+        return {
+            "doc_type": doc_type,
+            "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
+            "audience": ctx.get("recipient") or "",
+            "department": org_ctx.get("dept_name") or org_ctx.get("short_name") or "",
+            "agent": (org_ctx.get("agent") or {}).get("name") or "",
+            "title": ctx.get("title") or "",
+            "source": source,
+            "planned_context": {
+                k: v for k, v in ctx.items() if k not in ("history", "missing_fields")
+            },
+            "fields": fields,
+            "materials": materials,
+            "knowledge": knowledge,
+            "template_id": template.get("id") or "",
+            "template_name": template.get("name") or "",
+            "scopes": org_ctx.get("scopes") or ["GLOBAL"],
+            "kb_ids": [k["id"] for k in knowledge],
+            "ai_actions": self._plan_actions(doc_type),
+        }
+
+    # --------------------------------------------------------------- revisions
+    async def patch_section_async(self, task_id: str, user_id: str, target: str,
+                                  instruction: str, mode: str = "revise") -> Dict[str, Any]:
+        task = self._get_owned(task_id, user_id)
+        ctx = dict(task.context or {})
+        current = self._canonicalize_body((task.current_content or "").strip(), ctx)
+        if not current:
+            raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
+        resolved = self._resolve_patch_target(current, target)
+        if not resolved:
+            return {
+                **self._to_dict(task),
+                "reply": (f"没有安全执行修改：无法把“{target or '未指定目标'}”唯一定位到当前正文。"
+                          "请选中具体原文，或明确到某一段/某一节后再修改；系统没有退化成整篇重写。"),
+                "content_changed": False,
+                "context_changes": [],
+                "operation": "patch_section",
+                "patch_target": target,
+            }
+        start, end, fragment = resolved
+        mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
+        prompt = self._build_patch_prompt(fragment, instruction, mode_desc)
+        sources = self._retrieve(ctx, user_id, extra_query=instruction)
+        attachment_ctx = self._attachment_context(task, ctx)
+        replacement = (await self._llm_revise_async(
+            prompt, sources, attachment_ctx, user_id)).strip()
+        if not replacement:
+            raise HTTPException(status_code=502, detail="模型未返回局部修改内容，请重试")
+        if replacement == fragment:
+            return {**self._to_dict(task),
+                    "reply": "目标片段核对后没有产生实际文字变化，因此未创建新版本。",
+                    "content_changed": False, "context_changes": [],
+                    "operation": "patch_section", "patch_target": target}
+
+        revised = current[:start] + replacement + current[end:]
+        revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
+        revised = self._canonicalize_body(revised, {
+            **ctx,
+            **({"document_number": doc_number} if doc_number else {}),
+            **({"document_date": doc_date} if doc_date else {}),
+        })
+        revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
+        if citation_warnings:
+            ctx["citation_warnings"] = citation_warnings
+        else:
+            ctx.pop("citation_warnings", None)
+        if doc_number:
+            ctx["document_number"] = doc_number
+        if doc_date:
+            ctx["document_date"] = doc_date
+        from app.application.writing.content_check import ContentChecker
+        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
+        if content_check["issues"]:
+            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
+            if quality.get("level") == "A":
+                quality["level"] = "B"
+        references = self._reference_labels(sources) or list(ctx.get("references") or [])
+        ctx["references"] = references
+        task.context = ctx
+        task.current_content = revised
+        self.db.flush()
+        _, version = self._snapshot(task, user_id, note=f"AI 局部修改：{instruction[:30]}")
+        task.version_no = version
+        task.updated_at = now_local()
+        self.db.commit()
+        summary = self._revision_diff(current, revised)
+        reply = f"已只修改定位到的目标片段并保存为 v{version}，未让模型重生成其余正文。"
+        if summary:
+            reply += "\n\n本次实际变化：\n" + summary
+        return {**self._to_dict(task), "reply": reply, "content_changed": True,
+                "quality": quality, "content_check": content_check,
+                "postprocess_events": events, "context_changes": [],
+                "references": references, "revision_summary": summary,
+                "operation": "patch_section", "patch_target": target}
+
+    async def revise_async(self, task_id: str, user_id: str, instruction: str,
+                           mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
+        if selection and selection.strip():
+            return await self.patch_section_async(
+                task_id, user_id, target=selection, instruction=instruction, mode=mode)
+        task = self._get_owned(task_id, user_id)
+        current = (task.current_content or "").strip()
+        if not current:
+            raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
+        ctx = dict(task.context or {})
+        literal = self._literal_overrides(instruction)
+        if literal:
+            task_parser.merge_context(ctx, literal)
+            task_parser.compute_missing(ctx)
+            task.context = ctx
+            self.db.commit()
+        mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
+        prompt = self._build_revise_prompt(current, instruction, mode_desc, None, ctx)
+        sources = self._retrieve(ctx, user_id, extra_query=instruction)
+        attachment_ctx = self._attachment_context(task, ctx)
+        revised = await self._llm_revise_async(prompt, sources, attachment_ctx, user_id)
+        if not revised.strip():
+            raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
+        revised = self._canonicalize_body(revised, ctx)
+        if revised.strip() == current:
+            return {**self._to_dict(task),
+                    "reply": "对照您的要求检查了当前文档，没有需要实际改动的地方，正文保持原样，也未生成新版本。",
+                    "content_changed": False, "context_changes": []}
+
+        changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
+        task_parser.compute_missing(ctx)
+        revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
+        revised = self._canonicalize_body(revised, ctx)
+        revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
+        from app.application.writing.content_check import ContentChecker
+        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
+        if content_check["issues"]:
+            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
+            if quality.get("level") == "A":
+                quality["level"] = "B"
+        if citation_warnings:
+            ctx["citation_warnings"] = citation_warnings
+        else:
+            ctx.pop("citation_warnings", None)
+        if doc_number:
+            ctx["document_number"] = doc_number
+        if doc_date:
+            ctx["document_date"] = doc_date
+        references = self._reference_labels(sources) or list(ctx.get("references") or [])
+        ctx["references"] = references
+        task.context = ctx
+        task.current_content = revised
+        self.db.flush()
+        _, version = self._snapshot(task, user_id, note=f"AI 修改：{instruction[:30]}")
+        task.version_no = version
+        task.updated_at = now_local()
+        self.db.commit()
+        reply = f"已按您的要求修改当前文档（{mode_desc.split('：')[0]}），保存为 v{version}。"
+        if citation_warnings:
+            reply += f"系统同时移除了 {len(citation_warnings)} 处无法核实的具体文号，请确认资料来源后再补回。"
+        if changes:
+            reply += "任务信息同步更新：" + "；".join(changes) + "。"
+        return {**self._to_dict(task), "reply": reply, "content_changed": True,
+                "quality": quality, "content_check": content_check,
+                "postprocess_events": events, "context_changes": changes,
+                "references": references}
+
+    # ----------------------------------------------------------- draft/retries
+    async def _regenerate_if_needed_async(self, instruction: str, sources, attachment_ctx,
+                                          user_id: str, template: Optional[Dict[str, Any]],
+                                          text: str, ctx: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        from app.application.writing.postprocessor import detect_outline_degeneration
+        candidate = text
+        reasons: List[str] = []
+        retries_used = 0
+
+        degenerate = bool(detect_outline_degeneration(candidate))
+        doc_type = str(ctx.get("document_type") or "")
+        heading_count = len(re.findall(
+            r"(?m)^\s*(一|二|三|四|五|六|七|八|九|十)+、", candidate))
+        word_target = ctx.get("word_count_target")
+        compact_letter = (
+            "函" in doc_type and (
+                heading_count > 6 or (
+                    not word_target and
+                    (len(re.sub(r"\s+", "", candidate)) > 1500 or heading_count > 5)
+                )
+            )
+        )
+        if degenerate or compact_letter:
+            retries_used = 1
+            if degenerate:
+                retry_instruction = instruction + (
+                    "\n\n【重写要求】上一版只有章节标题和占位说明，是提纲不是公文。"
+                    "逐节展开为完整段落，不得出现‘略’‘待补充’等占位文字。")
+                reason = "检测到初稿只有提纲，已自动重写为完整成文。"
+            else:
+                target_rule = (
+                    f"仍然不少于 {word_target} 字，同时把一级条目合并到 3-5 个。"
+                    if word_target else
+                    "合并重复事项，将正文压缩为 3-5 个自然段或部分，通常控制在 800-1200 字。"
+                )
+                retry_instruction = instruction + "\n\n【精简重写要求】" + target_rule
+                reason = "检测到函件被写成了长篇报告体例，已自动精简。"
+            try:
+                retried = self._clean_markdown(await self._llm_draft_async(
+                    retry_instruction, sources, attachment_ctx, user_id, template=template))
+                if retried.strip() and not detect_outline_degeneration(retried):
+                    candidate = retried
+                    reasons.append(reason)
+            except Exception:
+                pass
+
+        quality = self._quality_result(
+            candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
+        while quality.get("level") == "D" and retries_used < 2:
+            retries_used += 1
+            retry_instruction = self._retry_prompt(
+                instruction, candidate, quality, retries_used)
+            try:
+                candidate = self._clean_markdown(await self._llm_draft_async(
+                    retry_instruction, sources, attachment_ctx, user_id, template=template))
+            except Exception:
+                break
+            quality = self._quality_result(
+                candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
+            reasons.append(f"QualityGate 检测到硬伤，已按具体问题自动修复第 {retries_used} 次。")
+        return candidate, ("".join(reasons) if reasons else None)
+
+    async def _section_plan_async(self, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self.assistant:
+            return self._fallback_plan(ctx)
+        total = int(ctx.get("word_count_target") or 2200)
+        prompt = (
+            "为一篇司法行政机关正式材料规划一级章节。只返回 JSON 数组，不要正文、Markdown 或解释。"
+            "数组 3-6 项，每项字段必须为 heading、focus、target_chars。heading 必须使用"
+            "‘一、…’‘二、…’格式；focus 用一句话说明本节只写什么；target_chars 为本节目标字数。"
+            "章节之间职责不能重叠，目标字数合计应接近全文目标。\n"
+            f"文种：{ctx.get('document_type') or '报告'}\n"
+            f"主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
+            f"用途：{ctx.get('purpose') or ''}\n"
+            f"时间范围：{ctx.get('time_range') or ''}\n全文目标字数：{total}"
+        )
+        import json
+        try:
+            raw = await self.assistant.acomplete(
+                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=900)
+            match = re.search(r"\[[\s\S]*\]", raw or "")
+            data = json.loads(match.group(0) if match else raw)
+            plan: List[Dict[str, Any]] = []
+            for item in data if isinstance(data, list) else []:
+                heading = str(item.get("heading") or "").strip()
+                focus = str(item.get("focus") or "").strip()
+                try:
+                    chars = int(item.get("target_chars") or 0)
+                except (TypeError, ValueError):
+                    chars = 0
+                if heading and focus and re.match(r"^[一二三四五六七八九十]+、", heading):
+                    plan.append({"heading": heading[:80], "focus": focus[:240],
+                                 "target_chars": max(300, min(chars or total // 4, 1200))})
+            if 3 <= len(plan) <= 6:
+                return plan
+        except Exception:
+            pass
+        return self._fallback_plan(ctx)
+
+    async def _generate_one_section_async(self, ctx: Dict[str, Any], section: Dict[str, Any],
+                                          index: int, plan: List[Dict[str, Any]], user_id: str,
+                                          attachment_ctx: str, template) -> Tuple[str, List[Dict]]:
+        previous = [x["heading"] for x in plan[:index]]
+        following = [x["heading"] for x in plan[index + 1:]]
+        instruction = self._section_instruction(ctx, section, previous, following)
+        sources = self._retrieve(ctx, user_id, extra_query=f"{section['heading']} {section['focus']}")
+        candidate = self._normalize_section(
+            self._clean_markdown(await self._llm_draft_async(
+                instruction, sources, attachment_ctx, user_id, template=template)),
+            section["heading"],
+        )
+        quality = QualityGate().evaluate(candidate, topic=section["heading"])
+        retry_no = 0
+        while quality.get("level") == "D" and retry_no < 2:
+            retry_no += 1
+            issues = [str(x.get("message") or x.get("type") or "")
+                      for x in quality.get("issues") or []
+                      if isinstance(x, dict) and x.get("severity") == "critical"]
+            repair = instruction + (
+                "\n\n上一版当前章节未通过质量检查，只重写这一节，不得生成其他章节。必须修复："
+                + "；".join(issues or ["章节正文质量不合格"])
+                + "\n上一版：\n" + candidate[:5000]
+            )
+            candidate = self._normalize_section(
+                self._clean_markdown(await self._llm_draft_async(
+                    repair, sources, attachment_ctx, user_id, template=template)),
+                section["heading"],
+            )
+            quality = QualityGate().evaluate(candidate, topic=section["heading"])
+        if quality.get("level") == "D":
+            raise HTTPException(status_code=422, detail={
+                "code": "WRITING_SECTION_QUALITY_D",
+                "message": f"{section['heading']} 连续两次修复后仍未通过质量门，全文未保存。",
+                "section": section["heading"], "issues": quality.get("issues") or [],
+            })
+        return candidate, sources
+
+    async def draft_async(self, task_id: str, user_id: str,
+                          outline_only: bool = False) -> Dict[str, Any]:
+        task = self._get_owned(task_id, user_id)
+        ctx = dict(task.context or {})
+        template = self._load_template(ctx.get("template_id"))
+        attachment_ctx = self._attachment_context(task, ctx)
+        if self._should_section(ctx, outline_only):
+            plan = await self._section_plan_async(ctx)
+            sections: List[str] = []
+            source_groups: List[List[Dict]] = []
+            for index, section in enumerate(plan):
+                text, sources = await self._generate_one_section_async(
+                    ctx, section, index, plan, user_id, attachment_ctx, template)
+                sections.append(text)
+                source_groups.append(sources)
+            assembled = "\n\n".join(sections).strip()
+            if not assembled:
+                raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
+            payload = self._finalize_draft(
+                task, ctx, assembled, self._merge_sources(source_groups), user_id)
+            payload["generation_mode"] = "sectioned"
+            payload["section_plan"] = plan
+            payload["reply"] = "长文已按章节分别检索、生成并组装。" + payload["reply"]
+            return payload
+
+        instruction = self._build_draft_instruction(ctx, outline_only, template)
+        sources = self._retrieve(ctx, user_id)
+        text = self._clean_markdown(await self._llm_draft_async(
+            instruction, sources, attachment_ctx, user_id, template=template))
+        if not text.strip():
+            raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
+        text, retry_reason = await self._regenerate_if_needed_async(
+            instruction, sources, attachment_ctx, user_id, template, text, ctx)
+        payload = self._finalize_draft(task, ctx, text, sources, user_id)
+        if retry_reason:
+            payload["reply"] = retry_reason + payload["reply"]
+        return payload
+
+    async def draft_stream_async(self, task_id: str, user_id: str,
+                                 outline_only: bool = False) -> AsyncIterator[str]:
+        try:
+            task = self._get_owned(task_id, user_id)
+            ctx = dict(task.context or {})
+            template = self._load_template(ctx.get("template_id"))
+            attachment_ctx = self._attachment_context(task, ctx)
+            if self._should_section(ctx, outline_only):
+                plan = await self._section_plan_async(ctx)
+                sections: List[str] = []
+                source_groups: List[List[Dict]] = []
+                for index, section in enumerate(plan):
+                    text, sources = await self._generate_one_section_async(
+                        ctx, section, index, plan, user_id, attachment_ctx, template)
+                    sections.append(text)
+                    source_groups.append(sources)
+                    yield _sse({"type": "delta", "text": text + "\n\n"})
+                payload = self._finalize_draft(
+                    task, ctx, "\n\n".join(sections).strip(),
+                    self._merge_sources(source_groups), user_id)
+                payload["generation_mode"] = "sectioned"
+                payload["section_plan"] = plan
+                payload["reply"] = "长文已按章节分别检索、生成并组装。" + payload["reply"]
+                yield _sse({"type": "done", "data": payload})
+                return
+
+            instruction = self._build_draft_instruction(ctx, outline_only, template)
+            sources = self._retrieve(ctx, user_id)
+            system = self._draft_system(user_id, template)
+            system += self._example_style_block(instruction, user_id)
+            parts: List[str] = []
+            async for delta in self.assistant.achat_stream(
+                message=instruction, history=[], sources=sources, user_role="user",
+                system_prompt=system, attachment_context=attachment_ctx):
+                if delta:
+                    parts.append(delta)
+                    yield _sse({"type": "delta", "text": delta})
+            text = self._clean_markdown("".join(parts))
+            if not text.strip():
+                yield _sse({"type": "error", "message": "模型未返回内容，请重试"})
+                return
+            text, retry_reason = await self._regenerate_if_needed_async(
+                instruction, sources, attachment_ctx, user_id, template, text, ctx)
+            payload = self._finalize_draft(task, ctx, text, sources, user_id)
+            if retry_reason:
+                payload["reply"] = retry_reason + payload["reply"]
+            yield _sse({"type": "done", "data": payload})
+        except HTTPException as exc:
+            yield _sse({"type": "error", "message": str(exc.detail)})
+        except Exception as exc:
+            yield _sse({"type": "error", "message": f"生成中断：{exc}"})
+
+    # ---------------------------------------------------------------- chat ops
+    async def chat_async(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
+        task = self._get_owned(task_id, user_id)
+        ctx = dict(task.context or {})
+        has_draft = bool((task.current_content or "").strip())
+        self._push_history(ctx, "user", message)
+        interpreted = await self._interpret_async(message, ctx, has_draft=has_draft)
+        if not interpreted:
+            reply = "这条指令暂时没有可靠理解，因此没有改动文档。请重新表述后再试。"
+            self._push_history(ctx, "assistant", reply)
+            task.context = ctx
+            self.db.commit()
+            return {**self._to_dict(task), "reply": reply, "content_changed": False}
+
+        before_ctx = dict(ctx)
+        changes = self._merge_interpretation(ctx, interpreted)
+        task_parser.compute_missing(ctx)
+        task.context = ctx
+        task.updated_at = now_local()
+        self.db.commit()
+        operation = interpreted.get("operation") or "answer"
+
+        if operation == "patch_section" and has_draft:
+            result = await self.patch_section_async(
+                task_id, user_id,
+                target=interpreted.get("patch_target") or "",
+                instruction=interpreted.get("revision_instruction") or message,
+                mode=interpreted.get("revision_mode") or "revise")
+        elif operation == "rewrite_document" and has_draft:
+            result = await self.revise_async(
+                task_id, user_id,
+                instruction=interpreted.get("revision_instruction") or message,
+                mode=interpreted.get("revision_mode") or "rewrite")
+        elif operation in ("draft_document", "outline"):
+            result = await self.draft_async(
+                task_id, user_id, outline_only=(operation == "outline"))
+        else:
+            content_changed = False
+            if has_draft and operation == "set_fields" and before_ctx != ctx:
+                note = self._sync_structured_fields(task, user_id)
+                content_changed = bool(note)
+                if note:
+                    changes = list(changes) + [note]
+            reply = interpreted.get("reply") or "已理解。"
+            if changes:
+                reply += "\n\n已应用：" + "；".join(changes) + "。"
+            self._push_history(ctx, "assistant", reply)
+            task.context = ctx
+            self.db.commit()
+            return {**self._to_dict(task), "reply": reply,
+                    "content_changed": content_changed, "context_changes": changes,
+                    "operation": operation, "routing": interpreted.get("routing") or "legacy"}
+
+        result["context_changes"] = changes
+        latest_ctx = dict(task.context or {})
+        self._push_history(latest_ctx, "assistant", result["reply"])
+        task.context = latest_ctx
+        self.db.commit()
+        return result
