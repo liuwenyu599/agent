@@ -1,6 +1,4 @@
-"""Multi-endpoint QwenGateway acceptance tests (item 8)."""
-from types import SimpleNamespace
-
+"""Multi-endpoint QwenGateway acceptance tests (items 8 and 11)."""
 import requests
 
 from app.infrastructure.ai.qwen import QwenGateway
@@ -23,6 +21,10 @@ class _Response:
             "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
             "usage": {},
         }
+
+    def iter_lines(self, decode_unicode=True):
+        yield 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}'
+        yield "data: [DONE]"
 
 
 def _gateway():
@@ -95,3 +97,33 @@ def test_health_probes_every_endpoint(monkeypatch):
     assert calls == ["http://model-a/v1/models", "http://model-b/v1/models"]
     assert result[0]["healthy"] is True
     assert result[1]["healthy"] is False
+
+
+def test_repetition_penalty_is_sent_for_normal_tool_and_stream_calls(monkeypatch):
+    payloads = []
+
+    def post(url, **kwargs):
+        payloads.append(kwargs["json"])
+        response = _Response()
+        if kwargs["json"].get("tools"):
+            response.json = lambda: {
+                "choices": [{"finish_reason": "tool_calls", "message": {
+                    "role": "assistant", "content": "", "tool_calls": []}}],
+                "usage": {},
+            }
+        return response
+
+    monkeypatch.setenv("MODEL_REPETITION_PENALTY", "1.12")
+    monkeypatch.setattr(requests, "post", post)
+    gateway = _gateway()
+    messages = [{"role": "user", "content": "hello"}]
+
+    gateway.complete(messages, max_tokens=32)
+    gateway.complete_with_tools(messages, tools=[{
+        "type": "function",
+        "function": {"name": "noop", "parameters": {"type": "object", "properties": {}}},
+    }], max_tokens=32)
+    assert "".join(gateway.complete_stream(messages, max_tokens=32)) == "ok"
+
+    assert len(payloads) == 3
+    assert all(p["repetition_penalty"] == 1.12 for p in payloads)
