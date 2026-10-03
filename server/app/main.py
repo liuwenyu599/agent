@@ -1,7 +1,7 @@
 """FastAPI 应用入口：装配全部模块、路由与生命周期钩子。"""
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -130,6 +130,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # 监控：低基数 HTTP 指标 + readiness；/metrics 不进入请求计数，避免自抓取反馈。
+    from app.core.monitoring import metrics_response, prometheus_middleware, readiness
+    app.middleware("http")(prometheus_middleware)
+
     # 核心路由：全部挂在 /api/v1。上传原件禁止 StaticFiles 匿名暴露，统一走 files.router 鉴权。
     from app.interfaces import (
         approvals,
@@ -178,14 +182,23 @@ def create_app() -> FastAPI:
 
     # 偏好路由的字段校验统一转 400 + 中文 detail（其余路由保持默认 422）
     from fastapi.exceptions import RequestValidationError
-
     from app.interfaces.preferences import validation_error_handler
-
     app.add_exception_handler(RequestValidationError, validation_error_handler)
 
     @app.get("/health")
     def health():
         return {"status": "ok", "version": "1.0.0"}
+
+    @app.get("/ready")
+    def ready():
+        ok, checks = readiness()
+        if not ok:
+            raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
+        return {"status": "ready", "checks": checks}
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics():
+        return metrics_response()
 
     @app.get("/")
     def root():
