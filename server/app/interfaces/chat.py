@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.chat.attachment_service import AttachmentService
@@ -13,9 +14,11 @@ from app.application.chat.dto import (
     ChatRequest,
     ChatResponse,
     ExportRequest,
+    FeedbackRequest,
     OfficialExportRequest,
     SessionRenameRequest,
 )
+from app.application.chat.feedback_service import FeedbackService
 from app.application.chat.service import ChatService
 from app.application.knowledge.rag_service import RagService
 from app.application.shared.writing_assistant import WritingAssistant
@@ -24,11 +27,13 @@ from app.core.exceptions import AppError, NotFoundError
 from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.infrastructure.database import get_db
+from app.infrastructure.database.models.chat import AIResponseFeedbackModel, ChatMessageModel
 from app.infrastructure.rag import get_embedder, get_vector_store
 from app.infrastructure.repositories.chat import (
     SqlAlchemyChatMessageRepository,
     SqlAlchemyChatSessionRepository,
 )
+from app.infrastructure.repositories.feedback import SqlAlchemyChatFeedbackRepository
 from app.interfaces.deps import get_current_user, require_admin_or_above
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -46,7 +51,6 @@ def get_chat_service(db: Session = Depends(get_db)) -> ChatService:
 
 @router.post("/export/docx")
 def export_docx(req: ExportRequest, user: User = Depends(get_current_user)):
-    """导出为 Word 文档（通用格式）。"""
     buf = markdown_to_docx(
         text=req.content, title=req.title, doc_number=req.doc_number,
         recipient=req.recipient, signature=req.signature,
@@ -60,7 +64,6 @@ def export_docx(req: ExportRequest, user: User = Depends(get_current_user)):
 
 @router.post("/export/official")
 def export_official(req: OfficialExportRequest, user: User = Depends(get_current_user)):
-    """导出为标准党政机关公文格式 Word 文档。"""
     buf = generate_official_document(
         content=req.content, title=req.title, doc_number=req.doc_number,
         recipient=req.recipient, signature=req.signature, date_text=req.date_text,
@@ -79,7 +82,6 @@ async def upload_attachments(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """上传对话附件（Word/PDF/TXT/图片），解析为文本后供对话引用。"""
     if len(files) > settings.CHAT_MAX_ATTACHMENTS:
         raise AppError(400, f"单次最多上传 {settings.CHAT_MAX_ATTACHMENTS} 个附件")
 
@@ -130,13 +132,37 @@ def delete_attachment(attachment_id: str, user: User = Depends(get_current_user)
 
 @router.post("/send", response_model=ChatResponse)
 def chat(req: ChatRequest, user: User = Depends(get_current_user),
+         db: Session = Depends(get_db),
          svc: ChatService = Depends(get_chat_service)):
-    return svc.send_message(
+    result = svc.send_message(
         user, message=req.message, session_id=req.session_id, use_rag=req.use_rag,
         system_prompt=req.system_prompt, template_category=req.template_category,
         source=req.source or "chat", attachment_ids=req.attachment_ids,
         reference_template_id=req.reference_template_id,
         task_reference_ids=req.task_reference_ids,
+    )
+    # ChatService 保持原返回契约；接口层补出本轮已持久化 assistant message id，
+    # 供桌面端 👍/👎 精确绑定，不依赖正文内容匹配。
+    assistant_row = db.scalar(
+        select(ChatMessageModel)
+        .where(
+            ChatMessageModel.session_id == result["session_id"],
+            ChatMessageModel.role == "assistant",
+        )
+        .order_by(ChatMessageModel.created_at.desc(), ChatMessageModel.id.desc())
+        .limit(1)
+    )
+    result["message_id"] = assistant_row.id if assistant_row else None
+    return result
+
+
+@router.post("/feedback")
+def submit_feedback(req: FeedbackRequest,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """对自己的 AI 回复或自己的文本版本提交/修改 👍(1) / 👎(-1)。"""
+    return FeedbackService(SqlAlchemyChatFeedbackRepository(db)).submit(
+        user.id, req.target_type, req.target_id, req.rating, req.detail
     )
 
 
@@ -154,9 +180,21 @@ def get_messages(session_id: str, user: User = Depends(get_current_user),
     if not sessions.get_for_user(session_id, user.id):
         raise NotFoundError("Session not found")
     messages = SqlAlchemyChatMessageRepository(db).list_by_session(session_id)
+    message_ids = [m.id for m in messages if m.id and m.role == "assistant"]
+    feedback_rows = db.scalars(select(AIResponseFeedbackModel).where(
+        AIResponseFeedbackModel.user_id == user.id,
+        AIResponseFeedbackModel.target_type == "chat_message",
+        AIResponseFeedbackModel.target_id.in_(message_ids),
+    )).all() if message_ids else []
+    feedback_by_target = {row.target_id: row for row in feedback_rows}
     return [{
         "id": m.id, "role": m.role, "content": m.content,
         "sources": m.sources, "attachments": m.attachments or [],
+        "feedback": (
+            {"rating": feedback_by_target[m.id].rating,
+             "detail": feedback_by_target[m.id].detail or ""}
+            if m.id in feedback_by_target else None
+        ),
         "created_at": m.created_at,
     } for m in messages]
 
@@ -165,7 +203,6 @@ def get_messages(session_id: str, user: User = Depends(get_current_user),
 def rename_session(session_id: str, req: SessionRenameRequest,
                    user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
-    """重命名自己的会话；他人的会话一律 404（不泄露存在性）。"""
     sessions = SqlAlchemyChatSessionRepository(db)
     if not sessions.get_for_user(session_id, user.id):
         raise NotFoundError("会话不存在")
@@ -183,7 +220,6 @@ def rename_session(session_id: str, req: SessionRenameRequest,
 @router.delete("/sessions/{session_id}")
 def delete_session(session_id: str, user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
-    """删除自己的会话（级联删除其消息与附件由 ORM 关系负责）。"""
     sessions = SqlAlchemyChatSessionRepository(db)
     session = sessions.get_for_user(session_id, user.id)
     if not session:
