@@ -18,11 +18,14 @@ from typing import Dict, Iterator, List, Optional, Tuple
 from jinja2 import Template
 
 from app.application.ports import LLMGateway
+from app.application.shared.prompt_budget import compact_style_examples
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
+_SOURCE_CHARS_PER_ITEM = 800
+_HISTORY_MESSAGES = 6  # 最近 3 轮 user/assistant；更早历史由 memory/摘要承担
 
 # 数字一致性硬规则：治"前面说 25 后面说 24""计算不对"类错误
 _NUMBER_RULES = (
@@ -81,7 +84,10 @@ class WritingAssistant:
             "信息足够时直接生成，不要反复提问。",
         ]
         if sources:
-            docs = "\n\n".join(f"[参考资料{i+1}]\n{s['content'][:1200]}" for i, s in enumerate(sources))
+            docs = "\n\n".join(
+                f"[参考资料{i+1}]\n{s['content'][:_SOURCE_CHARS_PER_ITEM]}"
+                for i, s in enumerate(sources)
+            )
             parts.append(
                 "以下是检索到的参考资料（语义候选）。相关性以语义判断："
                 "用户措辞与资料标题/类型用词不同不代表不相关；"
@@ -89,6 +95,18 @@ class WritingAssistant:
                 "确实全部不相关时才说未找到，再用你自己的知识回答：\n" + docs
             )
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _style_reference_block(examples: list) -> str:
+        """唯一的范文注入规则：结构化风格卡 + 明确事实隔离边界。"""
+        cards = compact_style_examples(examples or [], max_chars=1100)
+        if not cards:
+            return ""
+        return (
+            "以下为本单位历史范文提炼出的结构化风格卡。只学习一级结构、固定套语、"
+            "过渡方式、开头/结尾句式和正式程度；不得照搬其中单位名、人名、日期、数字或事实。\n\n"
+            + cards
+        )
 
     def _build_writing_prompt(self, topic: str, examples: list) -> str:
         base_rules = (
@@ -140,26 +158,16 @@ class WritingAssistant:
                 "7. 不得虚构单位、人名、时间地点和数据，用户没提供的用定性表述。"
                 + _NUMBER_RULES
             )
-        if not examples:
+        style_block = self._style_reference_block(examples)
+        if not style_block:
             return (
                 "你是司法局公文写作专家，请按规范的党政机关公文格式撰写，结构完整、行文严谨、内容详实。\n\n"
                 + base_rules
             )
-
-        refs = "\n\n".join(
-            f"【范文{i+1}：{e['title']}】\n{e['content']}" for i, e in enumerate(examples)
+        return (
+            "你是司法局公文写作专家。请按本单位结构化风格卡的写法生成完整新稿。\n\n"
+            + style_block + "\n\n" + base_rules
         )
-        return f"""你是司法局公文写作专家。请**严格模仿本单位范文**的风格来写作。
-
-        模仿要求：
-        1. 结构层次与范文一致（标题、主送机关、正文分条、落款、成文日期）；
-        2. 沿用范文的称谓、固定套语、过渡句和用词习惯；
-        3. 保持相同的行文口吻、正式程度和详实程度；
-        4. 只替换成与本次主题相关的内容，范文里具体的单位名、人名、数字、日期不要照搬。
-
-        {refs}
-
-        {base_rules}"""
 
     def _build_reference_template_context(self, reference_template: Dict) -> str:
         """把"参考模板"构建为写作参考约束（不是填空表单）。"""
@@ -258,7 +266,10 @@ class WritingAssistant:
 
         sources_block = ""
         if sources:
-            docs = "\n\n".join(f"[参考资料{i+1}]\n{s['content'][:1200]}" for i, s in enumerate(sources))
+            docs = "\n\n".join(
+                f"[参考资料{i+1}]\n{s['content'][:_SOURCE_CHARS_PER_ITEM]}"
+                for i, s in enumerate(sources)
+            )
             sources_block = (
                 "\n\n以下是从单位知识库检索到的资料（语义候选，按相关度排序）。"
                 "判断相关性时以语义为准：用户的口语化说法（如“推文”“材料”“文件”）"
@@ -268,11 +279,12 @@ class WritingAssistant:
             )
 
         if system_prompt:
-            if examples:
-                refs = "\n\n".join(
-                    f"【范文{i+1}：{e['title']}】\n{e['content']}" for i, e in enumerate(examples)
+            style_block = self._style_reference_block(examples or [])
+            if style_block:
+                system_prompt = (
+                    f"{system_prompt}\n\n{style_block}\n\n"
+                    "请据此撰写，不要输出解释性文字，直接给公文正文。"
                 )
-                system_prompt = f"{system_prompt}\n\n请严格模仿以下本单位范文的风格来写作：\n\n{refs}\n\n模仿要求：1. 结构层次与范文一致（标题、主送机关、正文分条、落款、成文日期）；2. 沿用范文的称谓、固定套语、过渡句和用词习惯；3. 保持相同的行文口吻和正式程度；4. 只替换成与本次主题相关的内容，范文里具体的单位名、人名、数字、日期不要照搬。\n\n请据此撰写，不要输出解释性文字，直接给公文正文。"
             system_prompt += sources_block
         elif intent == "writing" or reference_template:
             system_prompt = self._build_writing_prompt(message, examples or []) + sources_block
@@ -330,7 +342,7 @@ class WritingAssistant:
                             len(parts) - 1, gateway.model_name)
 
         messages = [{"role": "system", "content": system_prompt}]
-        for h in history[-20:]:
+        for h in history[-_HISTORY_MESSAGES:]:
             messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": user_content})
         return messages, gateway
