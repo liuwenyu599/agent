@@ -25,9 +25,8 @@ logger = get_logger(__name__)
 
 _PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 _SOURCE_CHARS_PER_ITEM = 800
-_HISTORY_MESSAGES = 6  # 最近 3 轮 user/assistant；更早历史由 memory/摘要承担
+_HISTORY_MESSAGES = 6
 
-# 数字一致性硬规则：治"前面说 25 后面说 24""计算不对"类错误
 _NUMBER_RULES = (
     "数字与事实纪律："
     "同一数据在全文必须前后一致；"
@@ -36,18 +35,18 @@ _NUMBER_RULES = (
     "没有出处的数字用××占位或标注待补，不得编造。"
 )
 
-# 【响应契约】：chat / chat_stream 共用提示词拼装的最后一层，
-# 治"分不清动作和询问、答非所问"。
 _RESPONSE_CONTRACT = (
     "\n\n【响应契约】\n"
     "- 咨询类（用户只是提问/咨询/查询，没有让你产出或修改内容）：直接回答问题本身，"
     "按 结论 → 依据（法条/文件出处）→ 可选处理路径 组织；"
     "不要答非所问，不要把问题当成写作指令去起草文档；"
-    "不得因信息不足而拒绝回答，无依据时明确写“未检索到依据，建议核实”。\n"
+    "涉及法条、政策、文号、程序期限、机构职责等可追责事实时，必须有本轮知识库或附件依据；"
+    "现有资料不足就明确写“现有知识库未检索到足够依据，暂不能给出可核验结论”，"
+    "可以给出下一步核实路径，但不得用模型记忆补充具体法条、文号或政策结论。\n"
     "- 操作类（用户要求起草/修改/导出/删除）：直接执行，不要先列计划求确认；"
     "写作任务直接给成文正文；完成后一句话说明改了什么、从哪撤销。\n"
-    "- 追问不得停工：缺信息就按最合理默认先做，"
-    "并在末尾说明“我按 X 处理了，如需调整告诉我”。\n"
+    "- 追问不得停工：工作计划、表达优化等非外部事实内容可按最合理默认先做；"
+    "但缺少可追责事实依据时不得自行补齐，必须留待核实。\n"
     "- " + _NUMBER_RULES + "\n"
     "- 法条、文号、人名、日期、数据无出处时必须留空或标注待补，不得自行填充。"
 )
@@ -80,8 +79,8 @@ class WritingAssistant:
         parts = [
             "你是司法局智能助手，擅长公文写作与法律法规问答。请优先结合对话历史理解用户意图，回答准确、简洁、有条理。",
             "重要规则：不得虚构真实单位、人名、时间、地点、政策依据和数据；"
-            "用户提供的信息不足时，只询问对结果影响最大的 2~3 个关键问题，"
-            "信息足够时直接生成，不要反复提问。",
+            "法律、政策、文号、期限、职责等可追责事实必须来自本轮参考资料或用户附件；"
+            "缺少依据时明确说明未检索到足够依据，并给出核实建议，不得用模型记忆补充具体结论。",
         ]
         if sources:
             docs = "\n\n".join(
@@ -92,13 +91,13 @@ class WritingAssistant:
                 "以下是检索到的参考资料（语义候选）。相关性以语义判断："
                 "用户措辞与资料标题/类型用词不同不代表不相关；"
                 "语义相关就明确告知找到的是哪一篇并据此作答；"
-                "确实全部不相关时才说未找到，再用你自己的知识回答：\n" + docs
+                "如果候选与问题确实全部不相关，必须说明未找到可靠依据，"
+                "不得转而使用模型记忆生成具体法条、文号、政策或事实：\n" + docs
             )
         return "\n\n".join(parts)
 
     @staticmethod
     def _style_reference_block(examples: list) -> str:
-        """唯一的范文注入规则：结构化风格卡 + 明确事实隔离边界。"""
         cards = compact_style_examples(examples or [], max_chars=1100)
         if not cards:
             return ""
@@ -170,7 +169,6 @@ class WritingAssistant:
         )
 
     def _build_reference_template_context(self, reference_template: Dict) -> str:
-        """把"参考模板"构建为写作参考约束（不是填空表单）。"""
         t = reference_template
         format_reqs = [f"字数约 {t.get('word_count', 1000)} 字"]
         format_reqs.append("需要落款单位" if t.get("need_signature", True) else "无需落款")
@@ -179,7 +177,6 @@ class WritingAssistant:
             format_reqs.append("需要发文字号（用户未提供时用××占位）")
         if t.get("need_red_header"):
             format_reqs.append("属红头文件，行文按正式发文规范")
-
         parts = [
             f"【参考模板：{t.get('name')}】",
             "用户选择了该参考模板。它是写作结构与风格的参考约束，不是填空表单；"
@@ -198,9 +195,6 @@ class WritingAssistant:
         return "\n".join(parts)
 
     def _detect_intent(self, message: str) -> str:
-        """粗意图路由（仅决定提示词模板，不决定是否改内容——
-        是否改内容以 side_effect / is_writing_request 为准）。
-        注意：按顺序匹配，咨询类问法优先于写作动词，避免"请示怎么写"被判成写作。"""
         msg = message.lower()
         if any(k in msg for k in ["查", "第几条", "是什么", "规定", "条款", "内容", "细则"]):
             return "search"
@@ -214,7 +208,6 @@ class WritingAssistant:
 
     def _detect_doc_type(self, message: str) -> str:
         msg = message.lower()
-        # 请示必须先于报告判断："请示"是文种意图，请示正文里常出现"报告"字样
         if "请示" in msg:
             return "request"
         if "报告" in msg:
@@ -231,11 +224,8 @@ class WritingAssistant:
             return "opinion"
         return "notification"
 
-    # ---- 视觉链路 ----
-
     @staticmethod
     def _image_part(path: str) -> Optional[Dict]:
-        """本地图片文件 → OpenAI 多模态 image_url（data-URL）消息部分。"""
         try:
             data = Path(path).read_bytes()
             mime = mimetypes.guess_type(path)[0] or "image/jpeg"
@@ -247,11 +237,7 @@ class WritingAssistant:
 
     def complete(self, messages: List[Dict], temperature: Optional[float] = None,
                  max_tokens: Optional[int] = None) -> str:
-        """裸调用网关（供 format_check / ppt / workflow 等模块使用）。
-        temperature / max_tokens 不传时取全局 MODEL_TEMPERATURE / MODEL_MAX_TOKENS。"""
         return self.gateway.complete(messages, temperature=temperature, max_tokens=max_tokens)
-
-    # ---- 提示词组装（chat 与 chat_stream 共用） ----
 
     def _build_system_prompt(self, message: str, sources: List[Dict],
                              examples: list = None,
@@ -261,9 +247,7 @@ class WritingAssistant:
                              template_reference_context: str = None,
                              user_preference: str = None,
                              attachment_context: str = None) -> str:
-        """按意图与上下文组装 system prompt（chat / chat_stream 唯一来源）。"""
         intent = self._detect_intent(message)
-
         sources_block = ""
         if sources:
             docs = "\n\n".join(
@@ -275,7 +259,8 @@ class WritingAssistant:
                 "判断相关性时以语义为准：用户的口语化说法（如“推文”“材料”“文件”）"
                 "与资料标题/类型用词不同不代表不相关；"
                 "只要语义相关，就应明确告诉用户找到的是哪一篇，并优先使用其中的事实和数据；"
-                "有多篇候选时可列出让用户选择；确实全部不相关时才说明未找到：\n" + docs
+                "有多篇候选时可列出让用户选择；确实全部不相关时明确说明未找到可靠依据，"
+                "不得用模型记忆补充具体政策事实：\n" + docs
             )
 
         if system_prompt:
@@ -297,36 +282,26 @@ class WritingAssistant:
         else:
             system_prompt = self._default_prompt(sources=sources)
 
-        # 第 5 层【用户个人偏好】：恒在基础规则（含写作硬规则与安全要求）之后、
-        # 参考模板 / 参考材料 / 附件等上下文之前，因此无法覆盖前四层。
         if user_preference:
             system_prompt = (system_prompt or "") + "\n\n" + user_preference
-
         if reference_template:
             system_prompt += "\n\n" + self._build_reference_template_context(reference_template)
-
         if task_reference_context:
             system_prompt += "\n\n" + task_reference_context
-
         if template_reference_context:
             system_prompt += "\n\n" + template_reference_context
-
         if attachment_context:
             system_prompt += (
                 "\n\n以下是用户上传的参考材料。用户接下来的要求（如整理、提炼、改写、模仿格式重写）"
                 "均应基于这些材料完成；回答中涉及的事实、数据、名称以材料为准，不要虚构：\n\n"
                 + attachment_context
             )
-
-        # 最后一层【响应契约】：约束"怎么答"——区分咨询与操作、追问不停工、
-        # 数字前后一致。恒在所有上下文之后，任何模板/偏好都不能覆盖它。
         system_prompt = (system_prompt or "") + _RESPONSE_CONTRACT
         return system_prompt
 
     def _assemble_messages(self, message: str, history: List[Dict],
                            system_prompt: str,
                            image_paths: List[str] = None) -> Tuple[List[Dict], LLMGateway]:
-        """组装最终消息列表并挑选网关（视觉路由）。返回 (messages, gateway)。"""
         gateway = self.gateway
         user_content = message
         if image_paths and self.vision_gateway is not None:
@@ -340,7 +315,6 @@ class WritingAssistant:
                 gateway = self.vision_gateway
                 logger.info("[写作助手] 视觉链路：%d 张图片 → %s",
                             len(parts) - 1, gateway.model_name)
-
         messages = [{"role": "system", "content": system_prompt}]
         for h in history[-_HISTORY_MESSAGES:]:
             messages.append({"role": h["role"], "content": h["content"]})
@@ -356,15 +330,6 @@ class WritingAssistant:
              template_reference_context: str = None,
              user_preference: str = None,
              image_paths: List[str] = None) -> str:
-        """主对话入口（在旧 LLMService.chat 签名基础上新增 user_preference / image_paths）。
-
-        ⚠️ `user_preference` 必须是**独立参数**：若把偏好块拼进 `system_prompt`
-        传入，会命中 `if system_prompt:` 分支，短路 `_build_writing_prompt()`
-        的 7 条写作硬规则，造成公文质量回归。
-
-        image_paths：本轮消息附带的图片本地路径。配置了视觉网关时，
-        本条消息转为多模态并路由到视觉模型；未配置时忽略（仍走 OCR 文本通道）。
-        """
         system_prompt = self._build_system_prompt(
             message, sources, examples=examples, system_prompt=system_prompt,
             reference_template=reference_template,
@@ -380,11 +345,6 @@ class WritingAssistant:
     def chat_stream(self, message: str, history: List[Dict], sources: List[Dict],
                     user_role: str, system_prompt: str = None,
                     attachment_context: str = None) -> Iterator[str]:
-        """流式对话：与 chat 同一套提示词编排，逐段产出增量文本。
-
-        供写作工作台「流式生成」使用；网关未实现 complete_stream（如 mock）时
-        降级为一次性产出，调用方无感。
-        """
         system_prompt = self._build_system_prompt(
             message, sources, system_prompt=system_prompt,
             attachment_context=attachment_context,
