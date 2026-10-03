@@ -1,14 +1,20 @@
 """AI Gateway：Qwen 适配器（OpenAI 兼容 chat/completions）。
 
 业务模块一律通过 application.ports.LLMGateway 调用，禁止直接 HTTP 调模型服务。
+生产请求优先使用 acomplete / acomplete_with_tools / acomplete_stream；同步方法仅保留给
+尚未迁移的离线脚本与兼容测试，并禁止在已有 event loop 内调用。
 """
+from __future__ import annotations
+
+import asyncio
 import json
 import os
 import threading
 import time
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+import weakref
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple
 
-import requests
+import httpx
 
 from app.core.config import settings
 from app.core.exceptions import AIServiceError
@@ -18,6 +24,7 @@ logger = get_logger(__name__)
 
 _IMAGE_TOKEN_ALLOWANCE = 1200
 _DEFAULT_REPETITION_PENALTY = 1.08
+_DEFAULT_MAX_CONCURRENCY = 4
 
 
 class QwenGateway:
@@ -27,7 +34,8 @@ class QwenGateway:
                  api_urls: Optional[List[str]] = None,
                  model: Optional[str] = None,
                  api_key: Optional[str] = None, timeout: Optional[int] = None,
-                 ctx_limit: Optional[int] = None) -> None:
+                 ctx_limit: Optional[int] = None,
+                 max_concurrency: Optional[int] = None) -> None:
         if api_urls is not None:
             raw_urls = api_urls
         elif api_url is not None:
@@ -50,6 +58,11 @@ class QwenGateway:
         self.ctx_limit = ctx_limit or settings.MODEL_CTX_LIMIT
         self.health_timeout = max(1, int(getattr(settings, "MODEL_HEALTH_TIMEOUT", 5)))
         self.failover_cooldown = max(1, int(getattr(settings, "MODEL_FAILOVER_COOLDOWN", 15)))
+        configured_concurrency = (
+            max_concurrency if max_concurrency is not None
+            else getattr(settings, "MODEL_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY)
+        )
+        self.max_concurrency = max(1, int(configured_concurrency))
         try:
             self.repetition_penalty = float(
                 os.getenv("MODEL_REPETITION_PENALTY", str(_DEFAULT_REPETITION_PENALTY)))
@@ -60,6 +73,11 @@ class QwenGateway:
         self._inflight = {url: 0 for url in self.api_urls}
         self._unhealthy_until = {url: 0.0 for url in self.api_urls}
         self._rr_cursor = 0
+        # AsyncClient 与 asyncio.Semaphore 都不应跨 event loop 复用。网关是进程级单例，
+        # 测试和脚本可能反复 asyncio.run，因此按 loop 懒建 limiter。
+        self._loop_limiters: "weakref.WeakKeyDictionary[Any, asyncio.Semaphore]" = (
+            weakref.WeakKeyDictionary()
+        )
 
     @property
     def model_name(self) -> str:
@@ -68,6 +86,30 @@ class QwenGateway:
     @property
     def endpoint_count(self) -> int:
         return len(self.api_urls)
+
+    def _limiter(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        with self._pool_lock:
+            limiter = self._loop_limiters.get(loop)
+            if limiter is None:
+                limiter = asyncio.Semaphore(self.max_concurrency)
+                self._loop_limiters[loop] = limiter
+            return limiter
+
+    @staticmethod
+    def _run_sync(coro):
+        """Compatibility bridge for non-async callers only.
+
+        Blocking an ASGI event loop while a model may take hundreds of seconds is forbidden. Any
+        async route must call the native async API instead of this bridge.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        if hasattr(coro, "close"):
+            coro.close()
+        raise RuntimeError("QwenGateway sync API cannot run inside an event loop; use acomplete()")
 
     def _prepare(self, messages: List[Dict[str, str]],
                  temperature: Optional[float],
@@ -141,63 +183,71 @@ class QwenGateway:
         logger.warning("[AI网关] endpoint 暂时熔断 %ss: %s (%s)",
                        self.failover_cooldown, url, reason)
 
-    def health(self) -> List[Dict[str, Any]]:
+    async def ahealth(self) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
-        for url in self.api_urls:
-            started = time.monotonic()
-            try:
-                response = requests.get(
-                    f"{url}/models", headers=self._headers(), timeout=self.health_timeout
-                )
-                ok = response.status_code < 500
-                if ok:
-                    with self._pool_lock:
-                        self._unhealthy_until[url] = 0.0
-                else:
-                    self._mark_failed(url, f"HTTP {response.status_code}")
-                result.append({
-                    "url": url, "healthy": ok, "status_code": response.status_code,
-                    "latency_ms": int((time.monotonic() - started) * 1000),
-                })
-            except requests.RequestException as exc:
-                self._mark_failed(url, type(exc).__name__)
-                result.append({
-                    "url": url, "healthy": False, "status_code": None,
-                    "latency_ms": int((time.monotonic() - started) * 1000),
-                })
+        timeout = httpx.Timeout(self.health_timeout)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for url in self.api_urls:
+                started = time.monotonic()
+                try:
+                    response = await client.get(f"{url}/models", headers=self._headers())
+                    ok = response.status_code < 500
+                    if ok:
+                        with self._pool_lock:
+                            self._unhealthy_until[url] = 0.0
+                    else:
+                        self._mark_failed(url, f"HTTP {response.status_code}")
+                    result.append({
+                        "url": url, "healthy": ok, "status_code": response.status_code,
+                        "latency_ms": int((time.monotonic() - started) * 1000),
+                    })
+                except httpx.HTTPError as exc:
+                    self._mark_failed(url, type(exc).__name__)
+                    result.append({
+                        "url": url, "healthy": False, "status_code": None,
+                        "latency_ms": int((time.monotonic() - started) * 1000),
+                    })
         return result
 
-    def _post(self, payload: Dict, stream: bool = False) -> requests.Response:
+    def health(self) -> List[Dict[str, Any]]:
+        return self._run_sync(self.ahealth())
+
+    async def _apost(self, payload: Dict[str, Any]) -> httpx.Response:
         failures: List[str] = []
-        for url in self._endpoint_order():
-            self._acquire(url)
-            try:
-                response = requests.post(
-                    f"{url}/chat/completions",
-                    headers=self._headers(),
-                    json=payload,
-                    timeout=self.timeout,
-                    stream=stream,
-                )
-                if response.status_code == 429 or response.status_code >= 500:
-                    detail = response.text[:200]
-                    self._mark_failed(url, f"HTTP {response.status_code}")
-                    failures.append(f"{url}: HTTP {response.status_code} {detail}")
-                    continue
-                response.raise_for_status()
-                if url != self.api_url:
-                    logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
-                return response
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-                self._mark_failed(url, type(exc).__name__)
-                failures.append(f"{url}: {type(exc).__name__}")
-                continue
-            except requests.exceptions.HTTPError as exc:
-                detail = exc.response.text[:500] if exc.response is not None else str(exc)
-                logger.error("[AI网关] HTTP 错误（不切换节点）: %s", detail)
-                raise AIServiceError("模型调用失败")
-            finally:
-                self._release(url)
+        timeout = httpx.Timeout(self.timeout)
+        async with self._limiter():
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for url in self._endpoint_order():
+                    self._acquire(url)
+                    try:
+                        response = await client.post(
+                            f"{url}/chat/completions",
+                            headers=self._headers(),
+                            json=payload,
+                        )
+                        if response.status_code == 429 or response.status_code >= 500:
+                            detail = response.text[:200]
+                            self._mark_failed(url, f"HTTP {response.status_code}")
+                            failures.append(f"{url}: HTTP {response.status_code} {detail}")
+                            continue
+                        response.raise_for_status()
+                        if url != self.api_url:
+                            logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
+                        return response
+                    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                        self._mark_failed(url, type(exc).__name__)
+                        failures.append(f"{url}: {type(exc).__name__}")
+                        continue
+                    except httpx.HTTPStatusError as exc:
+                        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+                        logger.error("[AI网关] HTTP 错误（不切换节点）: %s", detail)
+                        raise AIServiceError("模型调用失败") from exc
+                    except httpx.TransportError as exc:
+                        self._mark_failed(url, type(exc).__name__)
+                        failures.append(f"{url}: {type(exc).__name__}")
+                        continue
+                    finally:
+                        self._release(url)
 
         logger.error("[AI网关] 所有 endpoint 调用失败: %s", " | ".join(failures))
         if any("Timeout" in item for item in failures):
@@ -211,27 +261,32 @@ class QwenGateway:
         if choice.get("finish_reason") == "length":
             logger.warning("[AI网关] 输出被 max_tokens 截断")
 
-    def complete(self, messages: List[Dict[str, str]],
-                 temperature: Optional[float] = None,
-                 max_tokens: Optional[int] = None) -> str:
+    async def acomplete(self, messages: List[Dict[str, str]],
+                        temperature: Optional[float] = None,
+                        max_tokens: Optional[int] = None) -> str:
         messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
-        response = self._post(self._base_payload(messages, temperature, safe_max_tokens))
+        response = await self._apost(self._base_payload(messages, temperature, safe_max_tokens))
         result = response.json()
         choice = result["choices"][0]
         self._log_choice(result, choice)
         return choice["message"]["content"]
 
-    def complete_with_tools(self, messages: List[Dict[str, str]],
-                            tools: List[Dict[str, Any]],
-                            tool_choice: Optional[Dict[str, Any]] = None,
-                            temperature: Optional[float] = 0.0,
-                            max_tokens: Optional[int] = None) -> Dict[str, Any]:
+    def complete(self, messages: List[Dict[str, str]],
+                 temperature: Optional[float] = None,
+                 max_tokens: Optional[int] = None) -> str:
+        return self._run_sync(self.acomplete(messages, temperature, max_tokens))
+
+    async def acomplete_with_tools(self, messages: List[Dict[str, str]],
+                                   tools: List[Dict[str, Any]],
+                                   tool_choice: Optional[Dict[str, Any]] = None,
+                                   temperature: Optional[float] = 0.0,
+                                   max_tokens: Optional[int] = None) -> Dict[str, Any]:
         messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
         payload = self._base_payload(messages, temperature, safe_max_tokens)
         payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        response = self._post(payload)
+        response = await self._apost(payload)
         result = response.json()
         choice = result["choices"][0]
         self._log_choice(result, choice)
@@ -242,37 +297,101 @@ class QwenGateway:
             "tool_calls": message.get("tool_calls") or [],
         }
 
-    def complete_stream(self, messages: List[Dict[str, str]],
-                        temperature: Optional[float] = None,
-                        max_tokens: Optional[int] = None) -> Iterator[str]:
+    def complete_with_tools(self, messages: List[Dict[str, str]],
+                            tools: List[Dict[str, Any]],
+                            tool_choice: Optional[Dict[str, Any]] = None,
+                            temperature: Optional[float] = 0.0,
+                            max_tokens: Optional[int] = None) -> Dict[str, Any]:
+        return self._run_sync(self.acomplete_with_tools(
+            messages, tools, tool_choice, temperature, max_tokens
+        ))
+
+    async def acomplete_stream(self, messages: List[Dict[str, str]],
+                               temperature: Optional[float] = None,
+                               max_tokens: Optional[int] = None) -> AsyncIterator[str]:
         messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
         payload = self._base_payload(messages, temperature, safe_max_tokens)
         payload["stream"] = True
-        response = self._post(payload, stream=True)
-        response.encoding = "utf-8"
+        failures: List[str] = []
+        timeout = httpx.Timeout(self.timeout)
 
-        finish_reason = None
-        for raw in response.iter_lines(decode_unicode=True):
-            if not raw:
-                continue
-            line = raw.strip()
-            if not line.startswith("data:"):
-                continue
-            payload_text = line[5:].strip()
-            if payload_text == "[DONE]":
-                break
-            try:
-                data = json.loads(payload_text)
-            except ValueError:
-                continue
-            for choice in data.get("choices") or []:
-                if choice.get("finish_reason"):
-                    finish_reason = choice["finish_reason"]
-                delta = (choice.get("delta") or {}).get("content")
-                if delta:
-                    yield delta
-        if finish_reason == "length":
-            logger.warning("[AI网关] 流式输出被 max_tokens 截断")
+        async with self._limiter():
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for url in self._endpoint_order():
+                    self._acquire(url)
+                    try:
+                        async with client.stream(
+                            "POST",
+                            f"{url}/chat/completions",
+                            headers=self._headers(),
+                            json=payload,
+                        ) as response:
+                            if response.status_code == 429 or response.status_code >= 500:
+                                await response.aread()
+                                detail = response.text[:200]
+                                self._mark_failed(url, f"HTTP {response.status_code}")
+                                failures.append(f"{url}: HTTP {response.status_code} {detail}")
+                                continue
+                            response.raise_for_status()
+                            if url != self.api_url:
+                                logger.info("[AI网关] 流式请求由备用 endpoint 完成: %s", url)
+                            finish_reason = None
+                            async for raw in response.aiter_lines():
+                                if not raw:
+                                    continue
+                                line = raw.strip()
+                                if not line.startswith("data:"):
+                                    continue
+                                payload_text = line[5:].strip()
+                                if payload_text == "[DONE]":
+                                    break
+                                try:
+                                    data = json.loads(payload_text)
+                                except ValueError:
+                                    continue
+                                for choice in data.get("choices") or []:
+                                    if choice.get("finish_reason"):
+                                        finish_reason = choice["finish_reason"]
+                                    delta = (choice.get("delta") or {}).get("content")
+                                    if delta:
+                                        yield delta
+                            if finish_reason == "length":
+                                logger.warning("[AI网关] 流式输出被 max_tokens 截断")
+                            return
+                    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                        self._mark_failed(url, type(exc).__name__)
+                        failures.append(f"{url}: {type(exc).__name__}")
+                        continue
+                    except httpx.HTTPStatusError as exc:
+                        detail = exc.response.text[:500] if exc.response is not None else str(exc)
+                        logger.error("[AI网关] HTTP 错误（不切换节点）: %s", detail)
+                        raise AIServiceError("模型调用失败") from exc
+                    except httpx.TransportError as exc:
+                        self._mark_failed(url, type(exc).__name__)
+                        failures.append(f"{url}: {type(exc).__name__}")
+                        continue
+                    finally:
+                        self._release(url)
+
+        logger.error("[AI网关] 所有 endpoint 流式调用失败: %s", " | ".join(failures))
+        if any("Timeout" in item for item in failures):
+            raise AIServiceError("模型服务响应超时")
+        raise AIServiceError("模型服务暂时不可用")
+
+    async def _collect_stream(self, messages: List[Dict[str, str]],
+                              temperature: Optional[float],
+                              max_tokens: Optional[int]) -> List[str]:
+        out: List[str] = []
+        async for chunk in self.acomplete_stream(messages, temperature, max_tokens):
+            out.append(chunk)
+        return out
+
+    def complete_stream(self, messages: List[Dict[str, str]],
+                        temperature: Optional[float] = None,
+                        max_tokens: Optional[int] = None) -> Iterator[str]:
+        # Legacy compatibility only. Production SSE routes use acomplete_stream and stay streaming.
+        chunks = self._run_sync(self._collect_stream(messages, temperature, max_tokens))
+        yield from chunks
 
     @staticmethod
     def _estimate(msgs: List[Dict[str, str]]) -> int:
