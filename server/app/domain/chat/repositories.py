@@ -1,8 +1,8 @@
 """对话模块仓储接口。"""
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from app.domain.base import Repository
-from app.domain.chat.entities import ChatAttachment, ChatMessage, ChatSession
+from app.domain.chat.entities import AIResponseFeedback, ChatAttachment, ChatMessage, ChatSession
 
 
 class ChatSessionRepository(Repository[ChatSession]):
@@ -10,7 +10,6 @@ class ChatSessionRepository(Repository[ChatSession]):
         raise NotImplementedError
 
     def list_all_paged(self, page: int = 1, page_size: int = 20) -> tuple:
-        """返回 (total, items)。"""
         raise NotImplementedError
 
 
@@ -23,6 +22,16 @@ class ChatMessageRepository(Repository[ChatMessage]):
         raise NotImplementedError
 
     def delete_by_session(self, session_id: str) -> None:
+        raise NotImplementedError
+
+
+class ChatFeedbackRepository(Repository[AIResponseFeedback]):
+    def upsert_for_user(self, user_id: str, target_type: str, target_id: str,
+                        rating: int, detail: str = "") -> AIResponseFeedback:
+        raise NotImplementedError
+
+    def chunk_weights(self, user_id: str, chunk_ids: List[str]) -> Dict[str, float]:
+        """Return user-local rerank deltas for cited chunks."""
         raise NotImplementedError
 
 
