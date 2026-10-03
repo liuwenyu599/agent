@@ -49,8 +49,10 @@ def _task_with_version(db, *, note="V1 AI 初稿", content="AI版本正文。", 
     return task
 
 
-def test_public_service_binds_eval_capture_above_quality_retry():
-    assert WritingTaskService is EvalCaptureWritingTaskService
+def test_public_service_keeps_eval_capture_above_quality_retry():
+    # Production may add stricter structured-field / section-generation layers on top,
+    # but manual-save eval capture must remain in the inheritance chain.
+    assert issubclass(WritingTaskService, EvalCaptureWritingTaskService)
     assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
 
 
