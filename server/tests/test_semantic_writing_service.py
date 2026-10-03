@@ -4,6 +4,7 @@ from app.application.writing.eval_capture_service import EvalCaptureWritingTaskS
 from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
 from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_service import WritingTaskService
@@ -45,11 +46,12 @@ class ToolAssistant:
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
-def test_public_writing_service_routes_to_structured_field_service():
-    assert WritingTaskService is StructuredFieldWritingTaskService
+def test_public_writing_service_routes_to_sectioned_generation_service():
+    assert WritingTaskService is SectionedGenerationWritingTaskService
 
 
-def test_structured_field_service_preserves_eval_capture_quality_retry_and_ops_layers():
+def test_sectioned_service_preserves_structured_eval_quality_retry_and_ops_layers():
+    assert issubclass(SectionedGenerationWritingTaskService, StructuredFieldWritingTaskService)
     assert issubclass(StructuredFieldWritingTaskService, EvalCaptureWritingTaskService)
     assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
     assert issubclass(QualityRetryWritingTaskService, OpsWritingTaskService)
