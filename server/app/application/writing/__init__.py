@@ -8,6 +8,7 @@
 - quality_retry_service：D 级结果回灌具体 issues，最多重试两次，仍失败则禁止落库；
 - eval_capture_service：人工保存紧跟 AI 版本时自动沉淀 AI→人工终稿候选评测样本；
 - structured_field_service：标题/主送/文号/署名/日期彻底由结构化字段接管，正文只保存正文；
+- sectioned_generation_service：长文按一级章节分别检索、生成、质检后组装，避免整篇反复重写；
 - task_service：保留成熟的版本/RAG/导出/质量链路作为基类。
 
 兼容说明：现有路由历史上直接从 ``writing.task_service`` 导入 ``WritingTaskService``。
@@ -21,8 +22,9 @@ from .ops_task_service import OpsWritingTaskService
 from .quality_retry_service import QualityRetryWritingTaskService
 from .eval_capture_service import EvalCaptureWritingTaskService
 from .structured_field_service import StructuredFieldWritingTaskService
+from .sectioned_generation_service import SectionedGenerationWritingTaskService
 
-_task_service.WritingTaskService = StructuredFieldWritingTaskService
+_task_service.WritingTaskService = SectionedGenerationWritingTaskService
 
 __all__ = [
     "SemanticWritingTaskService",
@@ -31,4 +33,5 @@ __all__ = [
     "QualityRetryWritingTaskService",
     "EvalCaptureWritingTaskService",
     "StructuredFieldWritingTaskService",
+    "SectionedGenerationWritingTaskService",
 ]
