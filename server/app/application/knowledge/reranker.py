@@ -2,10 +2,12 @@
 
 The model is loaded lazily from a local offline path. In production, enabling rerank
 without the model present is a deployment error: silently skipping rerank would make
-the configured safety policy differ from the actual behavior.
+the configured safety policy differ from the actual behavior. Explicit mock mode is
+allowed to bypass the heavyweight model so unit tests remain hermetic.
 """
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 from typing import Dict, List
@@ -22,7 +24,8 @@ class Reranker:
         self._model = None
 
     def _load(self):
-        if not settings.RAG_RERANK_ENABLED:
+        provider = os.getenv("AI_PROVIDER", settings.AI_PROVIDER).strip().lower()
+        if provider == "mock" or not settings.RAG_RERANK_ENABLED:
             return None
         if self._model is not None:
             return self._model
@@ -33,7 +36,7 @@ class Reranker:
             if not model_path.exists():
                 raise RuntimeError(
                     f"RAG reranker 已启用但模型不存在：{model_path}。"
-                    "请部署 bge-reranker-v2-m3，或在非生产测试环境显式关闭 RAG_RERANK_ENABLED。"
+                    "请部署 bge-reranker-v2-m3；生产环境禁止静默跳过二阶段重排。"
                 )
             from sentence_transformers import CrossEncoder
             self._model = CrossEncoder(str(model_path), local_files_only=True)
