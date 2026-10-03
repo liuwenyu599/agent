@@ -37,13 +37,14 @@ class _Svc(GroundedWritingTaskService):
         self.rag = _FakeRag()
 
 
-def test_kb_examples_are_labeled_as_style_exemplars_not_plain_sources():
+def test_kb_examples_are_compacted_into_style_cards_not_plain_sources():
     block = _Svc()._example_style_block("社区矫正工作情况报告", "u1")
-    assert "知识库范文模仿契约" in block
-    assert "本单位范文1" in block
-    assert "结构层级" in block
-    assert "固定套语" in block
-    assert "不得只把范文当作事实引用" in block
+    assert "知识库范文风格卡" in block
+    assert "风格卡：白云区司法局工作情况报告" in block
+    assert "结构层级" in block or "一级结构骨架" in block
+    assert "固定用语" in block or "固定套语" in block
+    assert "禁止迁移" in block
+    assert "事实只能来自用户输入、附件和本轮 RAG" in block
 
 
 def test_production_service_keeps_grounded_behavior():
