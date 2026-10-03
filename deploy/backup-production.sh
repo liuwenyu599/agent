@@ -70,7 +70,6 @@ fi
 if [[ -d "$VECTOR_INDEX_DIR" ]]; then
   tar -C "$(dirname "$VECTOR_INDEX_DIR")" -czf "$TARGET/vector_index.tar.gz" "$(basename "$VECTOR_INDEX_DIR")"
 else
-  # Keep the artifact explicit even when the index has not been built yet.
   tar -czf "$TARGET/vector_index.tar.gz" --files-from /dev/null
 fi
 
@@ -87,8 +86,10 @@ EOF
 )
 
 # Only delete timestamp-shaped backup directories; never follow symlinks.
+# -mmin avoids find's whole-day rounding and makes 14 days exactly 14*24h.
+RETENTION_MINUTES=$((BACKUP_RETENTION_DAYS * 24 * 60))
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d \
-  -name '20????????-??????' -mtime "+$BACKUP_RETENTION_DAYS" -print -exec rm -rf -- {} +
+  -name '20??????-??????' -mmin "+$RETENTION_MINUTES" -print -exec rm -rf -- {} +
 
 trap - ERR
 printf 'backup_ok=%s\n' "$TARGET"
