@@ -10,11 +10,40 @@ curl -fsS --max-time 10 http://127.0.0.1:8000/health >/tmp/justice-health.json |
 cat /tmp/justice-health.json
 ok "API health"
 
-for p in 8002 8003 8004; do
-  curl -fsS --max-time 10 "http://127.0.0.1:$p/v1/models" >/dev/null ||
-    fail "模型端口 $p 不可用"
-done
-ok "三个模型"
+# ---------- 模型池：以 API 容器实际生效环境为准逐节点探活 ----------
+# URLS 未配置时回退单 endpoint 变量，保持老部署兼容。已声明的副本任何一个
+# /models 不可达都必须失败，避免“配置看起来有双实例，实际只有一个活着”的假完成。
+probe_pool() {
+  local pool_key="$1" single_key="$2" label="$3" values url
+  values="$(docker exec justice-api printenv "$pool_key" 2>/dev/null || true)"
+  if [ -z "$values" ]; then
+    values="$(docker exec justice-api printenv "$single_key" 2>/dev/null || true)"
+  fi
+  [ -n "$values" ] || fail "$label 未配置（$pool_key / $single_key 均为空）"
+
+  local count=0
+  IFS=',' read -ra urls <<< "$values"
+  for url in "${urls[@]}"; do
+    url="$(echo "$url" | xargs)"
+    [ -n "$url" ] || continue
+    count=$((count + 1))
+    curl -fsS --max-time 10 "${url%/}/models" >/dev/null ||
+      fail "$label endpoint 不可用: $url"
+    echo "[ OK ] $label endpoint $url"
+  done
+  [ "$count" -gt 0 ] || fail "$label endpoint 池为空"
+  ok "$label endpoint_count=$count"
+}
+
+# 视觉模型仍是单 endpoint；主文本与 PPT 模型按实际 URL 池逐个检查。
+vision_url="$(docker exec justice-api printenv VISION_MODEL_URL 2>/dev/null || true)"
+if [ -n "$vision_url" ]; then
+  curl -fsS --max-time 10 "${vision_url%/}/models" >/dev/null ||
+    fail "视觉模型不可用: $vision_url"
+  ok "视觉模型 $vision_url"
+fi
+probe_pool MODEL_SERVICE_URLS MODEL_SERVICE_URL "主文本模型池"
+probe_pool PPT_MODEL_URLS PPT_MODEL_URL "PPT 模型池"
 
 code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:7861/ || true)"
 [ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ] ||
@@ -75,23 +104,21 @@ fi
 
 # ---------- 8001 的 3B 容器必须停用 ----------
 if docker ps --format '{{.Names}}' | grep -qx justice-qwen; then
-  fail "8001 的 3B 容器仍在运行，请按文档 §二 停用"
+  fail "8001 的 3B 容器仍在运行，请按文档停用"
 fi
 if ss -tlnp 2>/dev/null | grep -q ':8001 '; then
   fail "端口 8001 仍被占用"
 fi
 ok "8001 旧 3B 服务已停用"
 
-# ---------- API 容器到宿主机模型真实连通 ----------
+# ---------- API 容器到 PPTAgent 真实连通 ----------
 docker exec justice-api sh -c '
-  for u in 8002 8003 8004 7861; do
-    curl -sf --max-time 5 -o /dev/null http://10.128.85.133:$u/v1/models \
-      || curl -sf --max-time 5 -o /dev/null http://10.128.85.133:$u/ \
-      || { echo "FAIL $u"; exit 1; }
-  done
-' || fail "API 容器连不到宿主机模型"
-ok "API 容器到宿主机模型/PPTAgent 连通"
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://10.128.85.133:7861/ || true)
+  [ -n "$code" ] && [ "$code" != "000" ] && [ "${code#5}" = "$code" ]
+' || fail "API 容器连不到 PPTAgent"
+ok "API 容器到 PPTAgent 连通"
 
 echo
 echo "POST-CHECK PASSED"
+echo "若启用了 MODEL_SERVICE_URLS/PPT_MODEL_URLS，仍需按 MODEL_POOL_DEPLOYMENT.md 做负载分散与单节点故障切换验收。"
 echo "仍必须由客户端完成 2 页 PPT + 10 页 PPT 两次端到端验收，才能签字。"
