@@ -28,6 +28,8 @@ class Settings:
         self.MODEL_NAME = os.getenv("MODEL_NAME", "Qwen2.5-14B-Instruct")
         self.MODEL_API_KEY = os.getenv("MODEL_API_KEY", "")
         self.MODEL_TIMEOUT = int(os.getenv("MODEL_TIMEOUT", "300"))
+        # 单个网关实例同时在途的模型请求上限。等待在 asyncio.Semaphore 上，不占 FastAPI worker thread。
+        self.MODEL_MAX_CONCURRENCY = max(1, int(os.getenv("MODEL_MAX_CONCURRENCY", "4")))
         self.MODEL_TEMPERATURE = float(os.getenv("MODEL_TEMPERATURE", "0.4"))
         self.MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4096"))
         self.MODEL_CTX_LIMIT = int(os.getenv("MODEL_CTX_LIMIT", "16384"))
