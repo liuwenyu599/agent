@@ -3,6 +3,8 @@
 业务模块一律通过 application.ports.LLMGateway 调用，禁止直接 HTTP 调模型服务。
 """
 import json
+import threading
+import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
@@ -23,23 +25,54 @@ class QwenGateway:
     默认读取全局 MODEL_* 配置；也可通过构造参数指向另一套服务
     （如独立的视觉模型服务 VISION_MODEL_URL，Qwen2.5-VL 等）。
 
+    多 endpoint 时使用“最少在途请求 + 轮转打散”分配；连接失败、超时、429、5xx
+    会把节点短暂熔断并自动尝试下一节点。4xx 参数错误不做无意义重试。
+
     包含上下文预算保护：估算输入 token，超限时依次砍历史、截断 system，
     保证 max_tokens >= 1（移植自旧 llm_service._call_vllm）。
     消息 content 支持多模态列表形态（text + image_url）。
     """
 
-    def __init__(self, api_url: Optional[str] = None, model: Optional[str] = None,
+    def __init__(self, api_url: Optional[str] = None,
+                 api_urls: Optional[List[str]] = None,
+                 model: Optional[str] = None,
                  api_key: Optional[str] = None, timeout: Optional[int] = None,
                  ctx_limit: Optional[int] = None) -> None:
-        self.api_url = (api_url or settings.MODEL_SERVICE_URL).rstrip("/")
+        if api_urls is not None:
+            raw_urls = api_urls
+        elif api_url is not None:
+            raw_urls = [api_url]
+        else:
+            raw_urls = getattr(settings, "MODEL_SERVICE_URLS", None) or [settings.MODEL_SERVICE_URL]
+        urls: List[str] = []
+        for value in raw_urls:
+            url = (value or "").strip().rstrip("/")
+            if url and url not in urls:
+                urls.append(url)
+        if not urls:
+            urls = [settings.MODEL_SERVICE_URL.rstrip("/")]
+
+        # api_url 保留兼容旧代码/日志；真正请求使用 api_urls 池。
+        self.api_urls = urls
+        self.api_url = urls[0]
         self.model = model or settings.MODEL_NAME
         self.api_key = api_key if api_key is not None else settings.MODEL_API_KEY
         self.timeout = timeout or settings.MODEL_TIMEOUT
         self.ctx_limit = ctx_limit or settings.MODEL_CTX_LIMIT
+        self.health_timeout = max(1, int(getattr(settings, "MODEL_HEALTH_TIMEOUT", 5)))
+        self.failover_cooldown = max(1, int(getattr(settings, "MODEL_FAILOVER_COOLDOWN", 15)))
+        self._pool_lock = threading.Lock()
+        self._inflight = {url: 0 for url in self.api_urls}
+        self._unhealthy_until = {url: 0.0 for url in self.api_urls}
+        self._rr_cursor = 0
 
     @property
     def model_name(self) -> str:
         return self.model
+
+    @property
+    def endpoint_count(self) -> int:
+        return len(self.api_urls)
 
     # ---- 请求准备（complete / tool call / complete_stream 共用） ----
 
@@ -83,25 +116,96 @@ class QwenGateway:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _endpoint_order(self) -> List[str]:
+        """返回本次尝试顺序：健康节点优先，按最少在途请求分配，同负载轮转。"""
+        now = time.monotonic()
+        with self._pool_lock:
+            healthy = [u for u in self.api_urls if self._unhealthy_until[u] <= now]
+            pool = healthy or list(self.api_urls)  # 全部熔断时允许探测恢复
+            start = self._rr_cursor % len(self.api_urls)
+            rank = {u: (self.api_urls.index(u) - start) % len(self.api_urls) for u in pool}
+            ordered = sorted(pool, key=lambda u: (self._inflight[u], rank[u]))
+            self._rr_cursor = (self._rr_cursor + 1) % len(self.api_urls)
+            return ordered
+
+    def _acquire(self, url: str) -> None:
+        with self._pool_lock:
+            self._inflight[url] += 1
+
+    def _release(self, url: str) -> None:
+        with self._pool_lock:
+            self._inflight[url] = max(0, self._inflight[url] - 1)
+
+    def _mark_failed(self, url: str, reason: str) -> None:
+        with self._pool_lock:
+            self._unhealthy_until[url] = time.monotonic() + self.failover_cooldown
+        logger.warning("[AI网关] endpoint 暂时熔断 %ss: %s (%s)",
+                       self.failover_cooldown, url, reason)
+
+    def health(self) -> List[Dict[str, Any]]:
+        """主动探测所有 endpoint 的 /models；用于部署验收/健康检查，不在每次生成前阻塞。"""
+        result: List[Dict[str, Any]] = []
+        for url in self.api_urls:
+            started = time.monotonic()
+            try:
+                response = requests.get(
+                    f"{url}/models", headers=self._headers(), timeout=self.health_timeout
+                )
+                ok = response.status_code < 500
+                if ok:
+                    with self._pool_lock:
+                        self._unhealthy_until[url] = 0.0
+                else:
+                    self._mark_failed(url, f"HTTP {response.status_code}")
+                result.append({
+                    "url": url, "healthy": ok, "status_code": response.status_code,
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                })
+            except requests.RequestException as exc:
+                self._mark_failed(url, type(exc).__name__)
+                result.append({
+                    "url": url, "healthy": False, "status_code": None,
+                    "latency_ms": int((time.monotonic() - started) * 1000),
+                })
+        return result
+
     def _post(self, payload: Dict, stream: bool = False) -> requests.Response:
-        try:
-            response = requests.post(
-                f"{self.api_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-                timeout=self.timeout,
-                stream=stream,
-            )
-            response.raise_for_status()
-            return response
-        except requests.exceptions.ConnectionError:
-            raise AIServiceError(f"模型服务不可用，请检查 {self.api_url}")
-        except requests.exceptions.Timeout:
+        failures: List[str] = []
+        for url in self._endpoint_order():
+            self._acquire(url)
+            try:
+                response = requests.post(
+                    f"{url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                    timeout=self.timeout,
+                    stream=stream,
+                )
+                # 429/5xx 通常是节点过载或实例故障，可安全切到同模型副本。
+                if response.status_code == 429 or response.status_code >= 500:
+                    detail = response.text[:200]
+                    self._mark_failed(url, f"HTTP {response.status_code}")
+                    failures.append(f"{url}: HTTP {response.status_code} {detail}")
+                    continue
+                response.raise_for_status()
+                if url != self.api_url:
+                    logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
+                return response
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                self._mark_failed(url, type(exc).__name__)
+                failures.append(f"{url}: {type(exc).__name__}")
+                continue
+            except requests.exceptions.HTTPError as exc:
+                detail = exc.response.text[:500] if exc.response is not None else str(exc)
+                logger.error("[AI网关] HTTP 错误（不切换节点）: %s", detail)
+                raise AIServiceError("模型调用失败")
+            finally:
+                self._release(url)
+
+        logger.error("[AI网关] 所有 endpoint 调用失败: %s", " | ".join(failures))
+        if any("Timeout" in item for item in failures):
             raise AIServiceError("模型服务响应超时")
-        except requests.exceptions.HTTPError as e:
-            detail = e.response.text[:500] if e.response is not None else str(e)
-            logger.error("[AI网关] HTTP 错误: %s", detail)
-            raise AIServiceError("模型调用失败")
+        raise AIServiceError("模型服务暂时不可用")
 
     @staticmethod
     def _log_choice(result: Dict[str, Any], choice: Dict[str, Any]) -> None:
@@ -142,13 +246,7 @@ class QwenGateway:
         temperature: Optional[float] = 0.0,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """一次 OpenAI-compatible function/tool completion，返回原始 assistant message。
-
-        业务层负责校验 tool name 与 arguments。这里不执行工具，也不偷偷把 tool call
-        转成普通文本，避免“看起来结构化、实际仍靠自然语言解析”的假工具调用。
-        若生产 vLLM 未启用相应 tool parser，HTTP 错误会按统一 AIServiceError 抛出，
-        上层可显式降级到旧 JSON schema，不影响现网写作。
-        """
+        """一次 OpenAI-compatible function/tool completion，返回原始 assistant message。"""
         messages, safe_max_tokens, temperature = self._prepare(
             messages, temperature, max_tokens)
         payload: Dict[str, Any] = {
@@ -179,11 +277,7 @@ class QwenGateway:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
-        """流式补全：逐段 yield 增量文本（OpenAI 兼容 SSE）。
-
-        供写作工作台「流式生成」使用：前端边收边显示，不再整段等待。
-        失败抛 app.core.exceptions.AIServiceError。
-        """
+        """流式补全：逐段 yield 增量文本（OpenAI 兼容 SSE）。"""
         messages, safe_max_tokens, temperature = self._prepare(
             messages, temperature, max_tokens)
 
