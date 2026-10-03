@@ -3,6 +3,7 @@
 业务模块一律通过 application.ports.LLMGateway 调用，禁止直接 HTTP 调模型服务。
 """
 import json
+import os
 import threading
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -15,23 +16,12 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 多模态消息中每张图片按固定额度计入上下文预算（无法本地精确计算 patch 数）
 _IMAGE_TOKEN_ALLOWANCE = 1200
+_DEFAULT_REPETITION_PENALTY = 1.08
 
 
 class QwenGateway:
-    """Qwen Model Service 适配器（vLLM / 任何 OpenAI 兼容端点）。
-
-    默认读取全局 MODEL_* 配置；也可通过构造参数指向另一套服务
-    （如独立的视觉模型服务 VISION_MODEL_URL，Qwen2.5-VL 等）。
-
-    多 endpoint 时使用“最少在途请求 + 轮转打散”分配；连接失败、超时、429、5xx
-    会把节点短暂熔断并自动尝试下一节点。4xx 参数错误不做无意义重试。
-
-    包含上下文预算保护：估算输入 token，超限时依次砍历史、截断 system，
-    保证 max_tokens >= 1（移植自旧 llm_service._call_vllm）。
-    消息 content 支持多模态列表形态（text + image_url）。
-    """
+    """Qwen Model Service 适配器（vLLM / 任何 OpenAI 兼容端点）。"""
 
     def __init__(self, api_url: Optional[str] = None,
                  api_urls: Optional[List[str]] = None,
@@ -52,7 +42,6 @@ class QwenGateway:
         if not urls:
             urls = [settings.MODEL_SERVICE_URL.rstrip("/")]
 
-        # api_url 保留兼容旧代码/日志；真正请求使用 api_urls 池。
         self.api_urls = urls
         self.api_url = urls[0]
         self.model = model or settings.MODEL_NAME
@@ -61,6 +50,12 @@ class QwenGateway:
         self.ctx_limit = ctx_limit or settings.MODEL_CTX_LIMIT
         self.health_timeout = max(1, int(getattr(settings, "MODEL_HEALTH_TIMEOUT", 5)))
         self.failover_cooldown = max(1, int(getattr(settings, "MODEL_FAILOVER_COOLDOWN", 15)))
+        try:
+            self.repetition_penalty = float(
+                os.getenv("MODEL_REPETITION_PENALTY", str(_DEFAULT_REPETITION_PENALTY)))
+        except ValueError:
+            self.repetition_penalty = _DEFAULT_REPETITION_PENALTY
+        self.repetition_penalty = min(2.0, max(1.0, self.repetition_penalty))
         self._pool_lock = threading.Lock()
         self._inflight = {url: 0 for url in self.api_urls}
         self._unhealthy_until = {url: 0.0 for url in self.api_urls}
@@ -74,12 +69,9 @@ class QwenGateway:
     def endpoint_count(self) -> int:
         return len(self.api_urls)
 
-    # ---- 请求准备（complete / tool call / complete_stream 共用） ----
-
     def _prepare(self, messages: List[Dict[str, str]],
                  temperature: Optional[float],
                  max_tokens: Optional[int]) -> Tuple[List[Dict[str, str]], int, float]:
-        """上下文预算保护：返回 (裁剪后消息, 安全 max_tokens, 温度)。"""
         if temperature is None:
             temperature = settings.MODEL_TEMPERATURE
         if max_tokens is None:
@@ -87,7 +79,6 @@ class QwenGateway:
 
         messages = [m for m in messages if m.get("content")]
         ctx_limit = self.ctx_limit
-
         estimated = self._estimate(messages)
         safe_max_tokens = min(max_tokens, ctx_limit - estimated - 50)
 
@@ -95,12 +86,10 @@ class QwenGateway:
             messages = self._trim_messages(messages)
             estimated = self._estimate(messages)
             safe_max_tokens = min(max_tokens, ctx_limit - estimated - 50)
-
         if safe_max_tokens < 256:
             messages = self._shrink_system(messages, ctx_limit)
             estimated = self._estimate(messages)
             safe_max_tokens = min(max_tokens, ctx_limit - estimated - 50)
-
         if safe_max_tokens < 1:
             messages = self._trim_messages(messages, keep_rounds=1)
             messages = self._shrink_system(messages, ctx_limit)
@@ -116,12 +105,22 @@ class QwenGateway:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _base_payload(self, messages: List[Dict[str, str]],
+                      temperature: float, max_tokens: int) -> Dict[str, Any]:
+        return {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": 0.9,
+            "repetition_penalty": self.repetition_penalty,
+        }
+
     def _endpoint_order(self) -> List[str]:
-        """返回本次尝试顺序：健康节点优先，按最少在途请求分配，同负载轮转。"""
         now = time.monotonic()
         with self._pool_lock:
             healthy = [u for u in self.api_urls if self._unhealthy_until[u] <= now]
-            pool = healthy or list(self.api_urls)  # 全部熔断时允许探测恢复
+            pool = healthy or list(self.api_urls)
             start = self._rr_cursor % len(self.api_urls)
             rank = {u: (self.api_urls.index(u) - start) % len(self.api_urls) for u in pool}
             ordered = sorted(pool, key=lambda u: (self._inflight[u], rank[u]))
@@ -143,7 +142,6 @@ class QwenGateway:
                        self.failover_cooldown, url, reason)
 
     def health(self) -> List[Dict[str, Any]]:
-        """主动探测所有 endpoint 的 /models；用于部署验收/健康检查，不在每次生成前阻塞。"""
         result: List[Dict[str, Any]] = []
         for url in self.api_urls:
             started = time.monotonic()
@@ -181,7 +179,6 @@ class QwenGateway:
                     timeout=self.timeout,
                     stream=stream,
                 )
-                # 429/5xx 通常是节点过载或实例故障，可安全切到同模型副本。
                 if response.status_code == 429 or response.status_code >= 500:
                     detail = response.text[:200]
                     self._mark_failed(url, f"HTTP {response.status_code}")
@@ -209,57 +206,31 @@ class QwenGateway:
 
     @staticmethod
     def _log_choice(result: Dict[str, Any], choice: Dict[str, Any]) -> None:
-        logger.info(
-            "[AI网关] finish_reason: %s, usage: %s",
-            choice.get("finish_reason"), result.get("usage"),
-        )
+        logger.info("[AI网关] finish_reason: %s, usage: %s",
+                    choice.get("finish_reason"), result.get("usage"))
         if choice.get("finish_reason") == "length":
             logger.warning("[AI网关] 输出被 max_tokens 截断")
 
-    def complete(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ) -> str:
-        messages, safe_max_tokens, temperature = self._prepare(
-            messages, temperature, max_tokens)
-
-        response = self._post({
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": safe_max_tokens,
-            "top_p": 0.9,
-        })
-
+    def complete(self, messages: List[Dict[str, str]],
+                 temperature: Optional[float] = None,
+                 max_tokens: Optional[int] = None) -> str:
+        messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
+        response = self._post(self._base_payload(messages, temperature, safe_max_tokens))
         result = response.json()
         choice = result["choices"][0]
         self._log_choice(result, choice)
         return choice["message"]["content"]
 
-    def complete_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        tools: List[Dict[str, Any]],
-        tool_choice: Optional[Dict[str, Any]] = None,
-        temperature: Optional[float] = 0.0,
-        max_tokens: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """一次 OpenAI-compatible function/tool completion，返回原始 assistant message。"""
-        messages, safe_max_tokens, temperature = self._prepare(
-            messages, temperature, max_tokens)
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": safe_max_tokens,
-            "top_p": 0.9,
-            "tools": tools,
-        }
+    def complete_with_tools(self, messages: List[Dict[str, str]],
+                            tools: List[Dict[str, Any]],
+                            tool_choice: Optional[Dict[str, Any]] = None,
+                            temperature: Optional[float] = 0.0,
+                            max_tokens: Optional[int] = None) -> Dict[str, Any]:
+        messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
+        payload = self._base_payload(messages, temperature, safe_max_tokens)
+        payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-
         response = self._post(payload)
         result = response.json()
         choice = result["choices"][0]
@@ -271,25 +242,13 @@ class QwenGateway:
             "tool_calls": message.get("tool_calls") or [],
         }
 
-    def complete_stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ) -> Iterator[str]:
-        """流式补全：逐段 yield 增量文本（OpenAI 兼容 SSE）。"""
-        messages, safe_max_tokens, temperature = self._prepare(
-            messages, temperature, max_tokens)
-
-        response = self._post({
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": safe_max_tokens,
-            "top_p": 0.9,
-            "stream": True,
-        }, stream=True)
-
+    def complete_stream(self, messages: List[Dict[str, str]],
+                        temperature: Optional[float] = None,
+                        max_tokens: Optional[int] = None) -> Iterator[str]:
+        messages, safe_max_tokens, temperature = self._prepare(messages, temperature, max_tokens)
+        payload = self._base_payload(messages, temperature, safe_max_tokens)
+        payload["stream"] = True
+        response = self._post(payload, stream=True)
         response.encoding = "utf-8"
 
         finish_reason = None
@@ -299,11 +258,11 @@ class QwenGateway:
             line = raw.strip()
             if not line.startswith("data:"):
                 continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
+            payload_text = line[5:].strip()
+            if payload_text == "[DONE]":
                 break
             try:
-                data = json.loads(payload)
+                data = json.loads(payload_text)
             except ValueError:
                 continue
             for choice in data.get("choices") or []:
@@ -315,7 +274,6 @@ class QwenGateway:
         if finish_reason == "length":
             logger.warning("[AI网关] 流式输出被 max_tokens 截断")
 
-    # ---- 上下文预算（移植自旧 llm_service）----
     @staticmethod
     def _estimate(msgs: List[Dict[str, str]]) -> int:
         chars = 0
