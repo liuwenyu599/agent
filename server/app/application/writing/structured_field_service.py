@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+from app.application.writing.eval_capture_service import EvalCaptureWritingTaskService
 
 _DATE_ONLY_RE = re.compile(
     r"^(?:20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日|"
@@ -24,7 +24,7 @@ _DOCNUM_ONLY_RE = re.compile(
 )
 
 
-class StructuredFieldWritingTaskService(QualityRetryWritingTaskService):
+class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
     """Keep ``current_content`` body-only; render chrome from structured context exactly once."""
 
     @staticmethod
@@ -57,7 +57,6 @@ class StructuredFieldWritingTaskService(QualityRetryWritingTaskService):
         while cleaned and not cleaned[-1].strip():
             cleaned.pop()
 
-        # Structural tail values are removed, never reconstructed into body.
         tail_start = max(0, len(cleaned) - 12)
         body = cleaned[:tail_start]
         tail: List[str] = []
@@ -88,9 +87,6 @@ class StructuredFieldWritingTaskService(QualityRetryWritingTaskService):
         return "\n".join(out).strip()
 
     def _postprocess(self, text: str, ctx: Dict[str, Any]):
-        # Parent still performs program-owned doc-number/date generation and all mature cleanup.
-        # It may temporarily append authority/date through the legacy semantic layer; strip all
-        # chrome again before any quality gate / snapshot sees the authoritative current_content.
         processed, events, doc_number, doc_date = super()._postprocess(text, ctx)
         canonical_ctx = dict(ctx)
         if doc_number:
