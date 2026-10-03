@@ -1,0 +1,37 @@
+groups:
+  - name: judicial-ai-api
+    rules:
+      - alert: JudicialAIAPIDown
+        expr: up{job="judicial-ai-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Judicial AI API unreachable"
+          description: "Prometheus has failed to scrape the API for more than 2 minutes."
+
+      - alert: JudicialAIHigh5xxRate
+        expr: |
+          sum(rate(judicial_ai_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(judicial_ai_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Judicial AI API 5xx rate above 5%"
+          description: "More than 5% of API requests returned 5xx during the last 5 minutes."
+
+      - alert: JudicialAIHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(judicial_ai_http_request_duration_seconds_bucket[5m]))
+          ) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Judicial AI API p95 latency above 10 seconds"
+          description: "The API p95 request latency has stayed above 10 seconds for 10 minutes."
