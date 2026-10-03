@@ -10,9 +10,46 @@ curl -fsS --max-time 10 http://127.0.0.1:8000/health >/tmp/justice-health.json |
 cat /tmp/justice-health.json
 ok "API health"
 
+curl -fsS --max-time 10 http://127.0.0.1:8000/ready >/tmp/justice-ready.json ||
+  fail "API /ready 失败（数据库或向量索引状态异常）"
+cat /tmp/justice-ready.json
+ok "API readiness"
+
+curl -fsS --max-time 10 http://127.0.0.1:8000/metrics >/tmp/justice-metrics.txt ||
+  fail "API /metrics 失败"
+grep -q 'judicial_ai_http_requests_total' /tmp/justice-metrics.txt ||
+  fail "Prometheus 指标缺少 judicial_ai_http_requests_total"
+ok "Prometheus metrics"
+
+# ---------- 备份/恢复交付闸门 ----------
+# 从 API 容器 /data 挂载反查宿主机真实数据目录，避免依赖 shell source .env。
+host_data_dir="$(docker inspect justice-api --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+[ -n "$host_data_dir" ] || fail "无法确定 justice-api 的 /data 宿主机挂载目录"
+backup_dir="$host_data_dir/backups"
+[ -d "$backup_dir" ] || fail "备份目录不存在: $backup_dir"
+
+systemctl is-enabled judicial-ai-backup.timer >/dev/null 2>&1 ||
+  fail "judicial-ai-backup.timer 未启用"
+systemctl is-active judicial-ai-backup.timer >/dev/null 2>&1 ||
+  fail "judicial-ai-backup.timer 未运行"
+ok "每日备份 timer 已启用"
+
+latest_backup="$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d -name '20??????-??????' -mmin -2160 | sort | tail -n 1)"
+[ -n "$latest_backup" ] || fail "36 小时内没有数据库+向量索引备份"
+(
+  cd "$latest_backup"
+  sha256sum -c SHA256SUMS >/dev/null
+) || fail "最新备份 SHA256 校验失败: $latest_backup"
+[ -f "$latest_backup/vector_index.tar.gz" ] || fail "最新备份缺少 vector_index.tar.gz"
+ok "最新备份完整: $latest_backup"
+
+restore_marker="$backup_dir/.last-restore-drill"
+[ -f "$restore_marker" ] || fail "尚未完成真实恢复演练（缺少 .last-restore-drill）"
+find "$restore_marker" -mmin -43200 -print -quit | grep -q . ||
+  fail "最近一次恢复演练已超过 30 天，请重新执行 deploy/restore-drill.sh"
+ok "恢复演练记录有效: $(cat "$restore_marker")"
+
 # ---------- 模型池：以 API 容器实际生效环境为准逐节点探活 ----------
-# URLS 未配置时回退单 endpoint 变量，保持老部署兼容。已声明的副本任何一个
-# /models 不可达都必须失败，避免“配置看起来有双实例，实际只有一个活着”的假完成。
 probe_pool() {
   local pool_key="$1" single_key="$2" label="$3" values url
   values="$(docker exec justice-api printenv "$pool_key" 2>/dev/null || true)"
@@ -35,7 +72,6 @@ probe_pool() {
   ok "$label endpoint_count=$count"
 }
 
-# 视觉模型仍是单 endpoint；主文本与 PPT 模型按实际 URL 池逐个检查。
 vision_url="$(docker exec justice-api printenv VISION_MODEL_URL 2>/dev/null || true)"
 if [ -n "$vision_url" ]; then
   curl -fsS --max-time 10 "${vision_url%/}/models" >/dev/null ||
@@ -120,5 +156,6 @@ ok "API 容器到 PPTAgent 连通"
 
 echo
 echo "POST-CHECK PASSED"
+echo "已验证 readiness、Prometheus、36h 内备份、30 天内恢复演练记录。"
 echo "若启用了 MODEL_SERVICE_URLS/PPT_MODEL_URLS，仍需按 MODEL_POOL_DEPLOYMENT.md 做负载分散与单节点故障切换验收。"
 echo "仍必须由客户端完成 2 页 PPT + 10 页 PPT 两次端到端验收，才能签字。"
