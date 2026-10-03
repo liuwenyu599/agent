@@ -55,25 +55,19 @@ class RagService:
         code = getattr(user, "department_code", "") or ""
         if code:
             return code
-        # 历史数据：按部门名称反查，不做猜测
         from app.domain.organization.departments import resolve_code
         return resolve_code(getattr(user, "department", "") or "")
 
     def _is_admin(self, user_id: str) -> bool:
-        """系统管理员判定（developer 正式角色 + admin 历史兼容）。"""
         user = self._user_row(user_id)
         return is_system_admin(getattr(user, "role", "") or "")
 
     @staticmethod
     def resolve_scopes(dept_code: str, is_admin: bool = False,
                        user_id: str = "") -> List[str]:
-        """用户可见作用域：GLOBAL + 本人个人 + 本人所属科室。
-
-        系统管理员返回 None 表示不限制。该作用域下传到 FAISS 召回阶段，
-        越权向量不参与 Top-K 竞争。
-        """
+        """用户可见作用域：GLOBAL + 本人个人 + 本人所属科室。"""
         if is_admin:
-            return None  # None 表示不限制（仅系统管理员）
+            return None
         scopes = [SCOPE_GLOBAL]
         if user_id:
             scopes.append(user_scope(user_id))
@@ -104,32 +98,36 @@ class RagService:
         ).all()
         return [kb.id for kb in kbs]
 
+    @staticmethod
+    def _document_is_accessible(document, accessible_kb_ids: List[str]) -> bool:
+        """向量命中后的 DB 二次鉴权。
+
+        向量库的 kb_id/scope 过滤是第一道边界；这里不信任索引元数据，重新以数据库
+        文档归属和发布状态校验，防止脏索引、旧索引或 VectorStore 实现缺陷导致跨科室泄漏。
+        """
+        if document is None:
+            return False
+        return (
+            getattr(document, "status", None) == "published"
+            and getattr(document, "kb_id", None) in set(accessible_kb_ids or [])
+        )
+
     # ---------------- 混合检索 ----------------
 
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
                top_k: int = None, min_score: float = None,
                kb_ids: List[str] = None, dept_code: str = None,
                scopes: List[str] = None) -> List[Dict]:
-        """向量 + 关键词双路召回，RRF 融合；权限范围一律由服务端解析。
-
-        :param kb_ids: 限定检索的知识库（写作任务关联知识库）；与可访问库取交集，
-                       传 None 表示全部可访问库。
-        :param dept_code: **忽略**——用户所属科室一律由服务端从 users 表解析，
-                       客户端传值无法扩大检索范围。
-        :param scopes: 允许的作用域（GLOBAL / DEPT:x / USER:id）；
-                       与服务端解析出的作用域取交集，系统管理员恒为全部。
-        """
+        """向量 + 关键词双路召回，RRF 融合；权限范围一律由服务端解析。"""
         top_k = top_k or settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
 
-        # 服务端解析，不信任入参
         dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
 
-        # 客户端 scopes 只能收窄，不能放大
         server_scopes = self.resolve_scopes(dept_code, admin, user_id)
         if server_scopes is None:
-            scopes = None  # 系统管理员：不限制
+            scopes = None
         elif scopes:
             allowed = set(server_scopes)
             scopes = [s for s in scopes if s in allowed]
@@ -145,10 +143,8 @@ class RagService:
             return []
 
         logger.info("[RAG] 查询: %s（scope=%s）", query, scopes or "ALL")
-
         candidates = settings.RAG_VECTOR_CANDIDATES
 
-        # 1) 向量召回（阈值门控；向量库不可用时为空，纯关键词兜底）
         vector_hits = []
         if self.vector_store is not None:
             try:
@@ -162,10 +158,8 @@ class RagService:
                 logger.warning("[RAG] 向量检索失败，仅关键词召回: %s", e)
                 vector_hits = []
 
-        # 2) 关键词召回（始终执行，与向量互补：专有名词/文号/人名靠它兜底）
         keyword_hits = self._keyword_search(query, kb_ids, candidates)
 
-        # 3) RRF 融合
         rrf_k = settings.RAG_RRF_K
         fused: Dict[str, Dict] = {}
         for rank, h in enumerate(vector_hits):
@@ -181,7 +175,6 @@ class RagService:
             e["rrf"] += 1.0 / (rrf_k + rank + 1)
         ranked = sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)
 
-        # 4) 文档级多样性上限 + 邻块上下文扩展
         results: List[Dict] = []
         per_doc: Dict[str, int] = {}
         doc_cap = settings.RAG_PER_DOC_CAP
@@ -196,6 +189,14 @@ class RagService:
                 continue
             chunk = self.db.get(ChunkModel, chunk_id)
             if not chunk:
+                continue
+            # 第二道权限边界：不能只相信 VectorStore 返回的 kb_id/doc_id/scope。
+            if not self._document_is_accessible(chunk.document, kb_ids):
+                logger.warning("[RAG] 丢弃越权/失效索引命中: chunk=%s doc=%s", chunk_id, doc_id)
+                continue
+            # 索引里的 doc_id 也必须与数据库真实归属一致，避免伪造元数据影响去重/引用。
+            if chunk.doc_id != doc_id:
+                logger.warning("[RAG] 丢弃 doc_id 不一致索引命中: chunk=%s", chunk_id)
                 continue
             per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
 
@@ -212,7 +213,6 @@ class RagService:
                 "source": f"{chunk.document.title}（第{chunk.chunk_index}段）",
                 "chunk_id": chunk_id,
                 "chunk_index": chunk.chunk_index,
-                # 带出文档 id：调用方（写作规划的材料清单）要按文档去重并给出「查看」入口
                 "doc_id": doc_id,
                 "doc_title": chunk.document.title if chunk.document else "",
                 "kb_id": kb.id if kb else "",
@@ -233,11 +233,7 @@ class RagService:
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
                         max_chars: int = 2500, dept_code: str = None) -> list:
-        """检索最相近的完整范文，用于写作模仿（按文档聚合，取整篇）。
-
-        向量库不可用时回退关键词检索。检索范围同样受科室作用域约束。
-        """
-        # 服务端解析，不信任入参
+        """检索最相近的完整范文，用于写作模仿（按文档聚合，取整篇）。"""
         dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
         scopes = self.resolve_scopes(dept_code, admin, user_id)
@@ -255,10 +251,9 @@ class RagService:
                     doc_id = hit["doc_id"]
                     if doc_id in seen:
                         continue
-                    doc = self.db.scalar(select(DocumentModel).where(
-                        DocumentModel.id == doc_id, DocumentModel.status == "published"
-                    ))
-                    if not doc or not doc.content:
+                    doc = self.db.get(DocumentModel, doc_id)
+                    if not self._document_is_accessible(doc, kb_ids) or not getattr(doc, "content", None):
+                        logger.warning("[RAG] 丢弃越权/失效范文索引命中: doc=%s", doc_id)
                         continue
                     seen.add(doc_id)
                     examples.append({"title": doc.title, "content": doc.content[:max_chars]})
@@ -275,7 +270,6 @@ class RagService:
 
     @staticmethod
     def _expand_neighbors(chunk: ChunkModel) -> str:
-        """把同一文档前后各一块拼入命中内容，总长不超 RAG_EXPAND_BUDGET 才扩展。"""
         content = chunk.content
         budget = settings.RAG_EXPAND_BUDGET
         if len(content) >= budget:
@@ -296,7 +290,6 @@ class RagService:
 
     @staticmethod
     def _tokenize(query: str) -> List[str]:
-        """CJK 二元分词 + ASCII 词（>=2 字符）。"""
         tokens: List[str] = []
         for w in re.findall(r"[a-zA-Z0-9]+", query.lower()):
             if len(w) >= 2:
