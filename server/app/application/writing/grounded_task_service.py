@@ -1,12 +1,9 @@
 """Grounded writing service: exemplar imitation + deterministic calculation checks.
 
-This is the production-facing layer above SemanticWritingTaskService.
 - RAG facts remain evidence sources.
-- Full published knowledge-base documents are separately retrieved as style exemplars.
-- Arithmetic is verified by Python after generation/revision; the LLM is not trusted as a calculator.
-- Explicit literal values (date/doc-number) are protected deterministically after semantic routing.
-- /plan keeps a narrow, non-mutating fast path for unambiguous create instructions to avoid an
-  unnecessary 14B round-trip; chat/revision intent routing remains model-driven.
+- Style exemplars are compact structured cards (top_k=1), never full historical articles.
+- Arithmetic is verified by Python after generation/revision.
+- Explicit literal values are protected deterministically after semantic routing.
 """
 from __future__ import annotations
 
@@ -17,20 +14,14 @@ from fastapi import HTTPException
 from app.application.writing import task_parser
 from app.application.writing.calculation_guard import verify_and_fix_calculations
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
+from app.application.shared.prompt_budget import compact_style_examples
 
 
 class GroundedWritingTaskService(SemanticWritingTaskService):
-    """Production writing service with style exemplars and arithmetic guardrails."""
+    """Production writing service with grounded style cards and arithmetic guardrails."""
 
-    # ---------------------------------------------------------- literal guards
     @staticmethod
     def _literal_overrides(message: str) -> Dict[str, Any]:
-        """Protect explicit user-written values without using regex to choose an action.
-
-        The semantic model still decides intent. This helper only preserves values whose exact
-        spelling must not be changed by the model: sign-off date and document-number controls.
-        A word-count target is also literal/numeric and safe to preserve.
-        """
         parsed = task_parser.parse_message(message or "")
         allowed = (
             "document_date",
@@ -44,18 +35,10 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         result = super()._interpret(message, ctx, has_draft=has_draft)
         if not result:
             return None
-        # User literal wins over model omission/mis-copy. This does not change intent.
         result.update(self._literal_overrides(message))
         return result
 
-    # -------------------------------------------------------- planning fast path
     def plan_task(self, user_id: str, message: str) -> Dict[str, Any]:
-        """Use a narrow deterministic shortcut only for clear, non-mutating planning.
-
-        If document type + core topic/title are both explicit, planning does not need a 14B call
-        and does not search materials. Ambiguous requests continue through the semantic model.
-        This shortcut never handles chat edits or document mutations.
-        """
         ctx = task_parser.empty_context()
         literal_plan = task_parser.parse_message(message)
         task_parser.merge_context(ctx, literal_plan)
@@ -88,7 +71,6 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             if value:
                 fields.append({"label": label, "value": str(value)})
 
-        # Fast path intentionally skips material retrieval; real drafting still performs scoped RAG.
         knowledge = self._plan_knowledge(user_id, org_ctx)
         template = self._plan_template(doc_type, org_ctx)
         return {
@@ -112,36 +94,27 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             "ai_actions": self._plan_actions(doc_type),
         }
 
-    # ------------------------------------------------------------- exemplars
     def _example_style_block(self, query: str, user_id: str) -> str:
-        """Retrieve full published examples and turn them into an explicit imitation contract."""
+        """Retrieve one doc-type-near exemplar and inject only a structured style card."""
         if not self.rag:
             return ""
         try:
             examples = self.rag.search_examples(
                 query=query,
                 user_id=user_id,
-                top_k=2,
-                max_chars=2600,
+                top_k=1,
+                max_chars=1200,
             ) or []
         except Exception:
             examples = []
-        if not examples:
+        cards = compact_style_examples(examples, max_chars=1100)
+        if not cards:
             return ""
-
-        refs = "\n\n".join(
-            f"【本单位范文{i + 1}：{e.get('title') or '未命名'}】\n{e.get('content') or ''}"
-            for i, e in enumerate(examples)
-        )
         return (
-            "\n\n【知识库范文模仿契约】\n"
-            "下面不是普通事实资料，而是本单位已经发布的写作范文。写作时必须先抽取其"
-            "篇章结构、段落长度、层级数量、常用称谓、固定套语、过渡方式、结尾方式和正式程度，"
-            "再用本次任务事实重写；不得只把范文当作事实引用。\n"
-            "优先模仿：1）结构层级；2）段落节奏；3）固定套语和过渡句；4）同文种的结尾方式；"
-            "5）本单位常用措辞。\n"
-            "禁止照搬范文中的具体人名、单位名、数字、日期、文号和个案事实。若范文与用户明确要求冲突，"
-            "以用户要求为准。\n\n" + refs
+            "\n\n【知识库范文风格卡】\n"
+            "只学习以下范文提炼出的结构层级、段落节奏、固定套语、过渡方式和结尾方式；"
+            "禁止迁移范文中的具体单位、人名、数字、日期、文号和个案事实。"
+            "本次事实只能来自用户输入、附件和本轮 RAG 资料。\n\n" + cards
         )
 
     def _draft_system(self, user_id: str, template: Optional[Dict[str, Any]] = None) -> str:
@@ -192,8 +165,8 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         system = (agent + "\n" if agent else "") + REVISION_RULES
         system += self._example_style_block(prompt, user_id)
         system += (
-            "\n\n若用户要求规范化、仿写、按单位口径调整，应以以上知识库范文的结构和措辞习惯作为风格依据；"
-            "不要只修改事实词语而保持原有外部风格。"
+            "\n\n若用户要求规范化、仿写、按单位口径调整，应以以上知识库风格卡的结构和措辞习惯作为风格依据；"
+            "不要迁移历史稿的事实。"
         )
         return self.assistant.chat(
             message=prompt,
@@ -204,12 +177,8 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             attachment_context=attachment_ctx,
         ) or ""
 
-    # --------------------------------------------------------------- revisions
     def revise(self, task_id: str, user_id: str, instruction: str,
                mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
-        # Direct /revise calls bypass the intent interpreter, so preserve exact literal values
-        # before the model rewrites the body. The model still decides prose; it cannot override
-        # a date/doc-number the user explicitly typed in this instruction.
         literal = self._literal_overrides(instruction)
         if literal:
             task = self._get_owned(task_id, user_id)
@@ -220,7 +189,6 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             self.db.commit()
         return super().revise(task_id, user_id, instruction, mode, selection)
 
-    # -------------------------------------------------------------- postprocess
     def _postprocess(self, text: str, ctx: Dict[str, Any]):
         processed, events, doc_number, doc_date = super()._postprocess(text, ctx)
         processed, calc_events = verify_and_fix_calculations(processed)
