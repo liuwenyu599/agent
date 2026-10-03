@@ -7,6 +7,7 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
+from app.application.shared.prompt_budget import compact_style_examples
 from app.infrastructure.repositories.references import (
     SqlAlchemyTaskReferenceRepository,
     SqlAlchemyTemplateReferenceRepository,
@@ -15,21 +16,29 @@ from app.infrastructure.repositories.references import (
 
 def build_template_reference_context(template_id: str, db: Session,
                                      max_refs: int = 3, per_ref_chars: int = 1500) -> str:
+    """固定范文只注入结构化风格卡，不再把多篇历史正文直接塞进上下文。
+
+    ``per_ref_chars`` 保留既有签名兼容调用方；它只限制读取每篇范文的扫描窗口。
+    最终注入统一受约 1.5K token（1100 字符保守预算）控制。
+    """
     refs = SqlAlchemyTemplateReferenceRepository(db).list_active_by_template(
         template_id, limit=max_refs
     )
     refs = [r for r in refs if (r.text_content or "").strip()]
     if not refs:
         return ""
-    blocks = []
-    for i, r in enumerate(refs):
-        blocks.append(f"【风格范例{i + 1}：{r.name}】\n{r.text_content[:per_ref_chars]}")
+    examples = [
+        {"title": r.name, "content": (r.text_content or "")[:per_ref_chars]}
+        for r in refs
+    ]
+    cards = compact_style_examples(examples, max_chars=1100)
+    if not cards:
+        return ""
     return (
-        "以下是本模板配置的固定参考材料（本单位历史优秀稿件）。"
-        "它们只用于学习：标题风格、行文方式、常用表达、文章长度、叙事结构；"
-        "严禁把范例中的具体事实（单位名、人名、时间、地点、数据、事件经过）写进新文章，"
-        "新文章的事实只能来自用户本次提供的材料和知识库检索结果：\n\n"
-        + "\n\n".join(blocks)
+        "以下是本模板历史优秀稿件提炼出的结构化风格范式。"
+        "只学习一级结构、固定用语、开头/结尾句式和正式程度；"
+        "不得迁移其中任何具体事实，新文章事实只能来自本次任务材料和知识库：\n\n"
+        + cards
     )
 
 
