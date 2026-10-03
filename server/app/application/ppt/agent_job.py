@@ -39,7 +39,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.timeutil import CN_TZ, now_local
 from app.domain.ppt.entities import PPTDocument
-from app.infrastructure.database import SessionLocal
+import app.infrastructure.database as _db  # 动态访问，隔离换库后仍能命中新引擎
 from app.infrastructure.database.models.ppt import PPTDocumentModel
 from app.infrastructure.repositories.ppt import _doc
 
@@ -58,7 +58,7 @@ _TERMINAL = ("succeeded", "failed", "cancelled")
 
 def _open(doc_id: str) -> Optional[PPTDocument]:
     """读取文档（短事务）。"""
-    db: Session = SessionLocal()
+    db: Session = _db.SessionLocal()
     try:
         m = db.get(PPTDocumentModel, doc_id)
         return _doc(m) if m else None
@@ -68,7 +68,7 @@ def _open(doc_id: str) -> Optional[PPTDocument]:
 
 def _update_job(doc_id: str, **fields: Any) -> Optional[PPTDocument]:
     """更新 job 字段（短事务：开→写→提交→关，绝不长时间持锁）。"""
-    db: Session = SessionLocal()
+    db: Session = _db.SessionLocal()
     try:
         m = db.get(PPTDocumentModel, doc_id)
         if not m:
@@ -457,7 +457,7 @@ class PPTAgentJobRunner:
 
     def _fallback_local(self, reason: str) -> None:
         """严格套模板兜底：AI 智能设计失败/低质时自动切换，用户无感。"""
-        db: Session = SessionLocal()
+        db: Session = _db.SessionLocal()
         try:
             svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
             doc = svc.documents.get(self.doc_id)
@@ -502,7 +502,7 @@ class PPTAgentJobRunner:
 
     def _design_guidance(self, doc: PPTDocument) -> str:
         """服务端统一设计约束；客户端无需再拼任何风格提示词。"""
-        db: Session = SessionLocal()
+        db: Session = _db.SessionLocal()
         try:
             svc = PPTService(db, None)
             return svc.design_prompt_for_document(doc)
@@ -552,7 +552,7 @@ class PPTAgentJobRunner:
         backend_dir, agent_dir = backend_dir.strip(), agent_dir.strip().rstrip("/")
         if not backend_dir or not agent_dir:
             return []
-        db: Session = SessionLocal()
+        db: Session = _db.SessionLocal()
         try:
             svc = PPTService(db, None)
             mats = svc.materials.list_by_user(self.user_id)

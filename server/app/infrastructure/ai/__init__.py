@@ -39,7 +39,7 @@ def get_llm_gateway() -> LLMGateway:
     global _gateway
     if _gateway is not None:
         return _gateway
-    if settings.AI_PROVIDER == "mock":
+    if os.getenv("AI_PROVIDER", "auto") == "mock":
         from app.infrastructure.ai.mock import MockLLMGateway
         _gateway = MockLLMGateway()
     else:
@@ -61,7 +61,7 @@ def get_vision_gateway() -> LLMGateway:
     _vision_loaded = True
     if not settings.VISION_MODEL_URL:
         return None
-    if settings.AI_PROVIDER == "mock":
+    if os.getenv("AI_PROVIDER", "auto") == "mock":
         from app.infrastructure.ai.mock import MockLLMGateway
         _vision_gateway = MockLLMGateway()
     else:
@@ -90,7 +90,7 @@ def get_ppt_gateway() -> LLMGateway:
     urls = _endpoint_urls("PPT_MODEL_URLS", settings.PPT_MODEL_URL)
     if not urls:
         return None
-    if settings.AI_PROVIDER == "mock":
+    if os.getenv("AI_PROVIDER", "auto") == "mock":
         from app.infrastructure.ai.mock import MockLLMGateway
         _ppt_gateway = MockLLMGateway()
     else:
