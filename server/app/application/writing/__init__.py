@@ -7,8 +7,8 @@
 - ops_task_service：执行 set_fields / patch_section / rewrite_document 等操作，局部修改由程序 splice；
 - quality_retry_service：D 级结果回灌具体 issues，最多重试两次，仍失败则禁止落库；
 - eval_capture_service：人工保存紧跟 AI 版本时自动沉淀 AI→人工终稿候选评测样本；
-- task_service：保留成熟的版本/RAG/导出/质量链路作为基类；
-- postprocessor / quality_gate / content_check：只做确定性文档约束，不负责猜用户意图。
+- structured_field_service：标题/主送/文号/署名/日期彻底由结构化字段接管，正文只保存正文；
+- task_service：保留成熟的版本/RAG/导出/质量链路作为基类。
 
 兼容说明：现有路由历史上直接从 ``writing.task_service`` 导入 ``WritingTaskService``。
 包初始化阶段把该公开类绑定到最新生产实现，路由无需重写。
@@ -20,8 +20,9 @@ from .grounded_task_service import GroundedWritingTaskService
 from .ops_task_service import OpsWritingTaskService
 from .quality_retry_service import QualityRetryWritingTaskService
 from .eval_capture_service import EvalCaptureWritingTaskService
+from .structured_field_service import StructuredFieldWritingTaskService
 
-_task_service.WritingTaskService = EvalCaptureWritingTaskService
+_task_service.WritingTaskService = StructuredFieldWritingTaskService
 
 __all__ = [
     "SemanticWritingTaskService",
@@ -29,4 +30,5 @@ __all__ = [
     "OpsWritingTaskService",
     "QualityRetryWritingTaskService",
     "EvalCaptureWritingTaskService",
+    "StructuredFieldWritingTaskService",
 ]
