@@ -44,7 +44,6 @@ if [[ -f "$TARGET/database.sqlite3" ]]; then
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
 check = conn.execute("PRAGMA integrity_check").fetchone()[0]
-# Require at least one schema object; an empty file is not a meaningful restore drill.
 objects = conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]
 conn.close()
 if check != "ok":
@@ -57,6 +56,7 @@ elif [[ -f "$TARGET/database.dump" ]]; then
   command -v pg_restore >/dev/null 2>&1 || { echo "pg_restore is required" >&2; exit 4; }
   command -v createdb >/dev/null 2>&1 || { echo "createdb is required" >&2; exit 4; }
   command -v dropdb >/dev/null 2>&1 || { echo "dropdb is required" >&2; exit 4; }
+  command -v psql >/dev/null 2>&1 || { echo "psql is required" >&2; exit 4; }
   PG_URL="$(normalize_pg_url "$DATABASE_URL")"
   DRILL_DB="justice_restore_drill_$(date +%s)_$$"
   MAINT_URL="$(python3 - "$PG_URL" <<'PY'
@@ -86,4 +86,5 @@ else
 fi
 
 echo "vector_archive_ok"
+date -Iseconds > "$BACKUP_DIR/.last-restore-drill"
 echo "restore_drill_ok=$TARGET"
