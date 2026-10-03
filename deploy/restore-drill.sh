@@ -18,7 +18,7 @@ DATABASE_URL="${DATABASE_URL:-sqlite:///$HOST_DATA_DIR/judicial_app.db}"
 TARGET="${1:-}"
 
 if [[ -z "$TARGET" ]]; then
-  TARGET="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20????????-??????' | sort | tail -n 1)"
+  TARGET="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20??????-??????' | sort | tail -n 1)"
 fi
 [[ -n "$TARGET" && -d "$TARGET" ]] || { echo "backup not found" >&2; exit 2; }
 
