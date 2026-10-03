@@ -14,12 +14,21 @@ from app.infrastructure.repositories.references import (
 )
 
 
+def _style_scan_window(text: str, limit: int) -> str:
+    """Bound local scanning cost while retaining both opening and real closing patterns."""
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    head = max(1, int(limit * 0.75))
+    return text[:head] + "\n" + text[-(limit - head):]
+
+
 def build_template_reference_context(template_id: str, db: Session,
                                      max_refs: int = 3, per_ref_chars: int = 1500) -> str:
     """固定范文只注入结构化风格卡，不再把多篇历史正文直接塞进上下文。
 
-    ``per_ref_chars`` 保留既有签名兼容调用方；它只限制读取每篇范文的扫描窗口。
-    最终注入统一受约 1.5K token（1100 字符保守预算）控制。
+    ``per_ref_chars`` 保留既有签名兼容调用方；它限制本地结构抽取的扫描窗口，
+    且窗口同时保留文章开头与真实结尾。最终注入统一受约 1.5K token 控制。
     """
     refs = SqlAlchemyTemplateReferenceRepository(db).list_active_by_template(
         template_id, limit=max_refs
@@ -28,7 +37,7 @@ def build_template_reference_context(template_id: str, db: Session,
     if not refs:
         return ""
     examples = [
-        {"title": r.name, "content": (r.text_content or "")[:per_ref_chars]}
+        {"title": r.name, "content": _style_scan_window(r.text_content or "", per_ref_chars)}
         for r in refs
     ]
     cards = compact_style_examples(examples, max_chars=1100)
