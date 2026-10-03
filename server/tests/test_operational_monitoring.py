@@ -35,3 +35,14 @@ def test_daily_timer_is_persistent_and_backup_retention_is_14_days():
     assert "OnCalendar=*-*-* 02:30:00" in installer
     assert "Persistent=true" in installer
     assert 'BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"' in backup
+
+
+def test_prometheus_assets_cover_down_errors_and_latency():
+    config = (REPO_ROOT / "deploy" / "prometheus.yml.example").read_text(encoding="utf-8")
+    alerts = (REPO_ROOT / "deploy" / "judicial-ai-alerts.yml").read_text(encoding="utf-8")
+    assert "metrics_path: /metrics" in config
+    assert "JudicialAIAPIDown" in alerts
+    assert "JudicialAIHigh5xxRate" in alerts
+    assert "JudicialAIHighP95Latency" in alerts
+    assert "judicial_ai_http_requests_total" in alerts
+    assert "judicial_ai_http_request_duration_seconds_bucket" in alerts
