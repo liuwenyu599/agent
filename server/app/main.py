@@ -1,10 +1,8 @@
-"""FastAPI 应用入口：装配全部模块、路由、静态资源与生命周期钩子。"""
+"""FastAPI 应用入口：装配全部模块、路由与生命周期钩子。"""
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
@@ -81,7 +79,7 @@ async def lifespan(app: FastAPI):
     _ensure_directories()
     _init_database()
     _init_facilities()
-    # 预置内置模板（幂等）：存在系统管理员则用之，否则初始化时跳过，由首次注册后调用
+    # 预置内置模板（幂等）：存在系统管理员则用之；全新部署由本机 create_admin 命令初始化账号
     try:
         db = SessionLocal()
         from app.application.identity.service import AuthService
@@ -90,7 +88,7 @@ async def lifespan(app: FastAPI):
         user_repo = SqlAlchemyUserRepository(db)
         auth = AuthService(user_repo)
         if auth.is_first_user():
-            logger.info("系统尚无用户，内置模板待首次注册后自动初始化")
+            logger.warning("系统尚无用户，请在部署主机执行：python -m scripts.create_admin")
         else:
             admin = user_repo.get_by_username("admin")
             if admin:
@@ -132,18 +130,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # 静态资源：上传文件/图片
-    uploads_dir = Path(settings.uploads_dir)
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
-
-    # 核心路由：全部挂在 /api/v1
+    # 核心路由：全部挂在 /api/v1。上传原件禁止 StaticFiles 匿名暴露，统一走 files.router 鉴权。
     from app.interfaces import (
         approvals,
         auth,
         chat,
         dashboard,
         documents,
+        files,
         format_check,
         knowledge,
         organization,
@@ -162,6 +156,7 @@ def create_app() -> FastAPI:
         users.router,
         chat.router,
         documents.router,
+        files.router,
         format_check.router,
         knowledge.router,
         references.router,
