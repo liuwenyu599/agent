@@ -1,5 +1,6 @@
 import json
 
+from app.application.writing.async_task_service import AsyncWritingTaskService
 from app.application.writing.eval_capture_service import EvalCaptureWritingTaskService
 from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
@@ -46,8 +47,9 @@ class ToolAssistant:
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
-def test_public_writing_service_routes_to_sectioned_generation_service():
-    assert WritingTaskService is SectionedGenerationWritingTaskService
+def test_public_writing_service_routes_to_async_sectioned_generation_service():
+    assert WritingTaskService is AsyncWritingTaskService
+    assert issubclass(AsyncWritingTaskService, SectionedGenerationWritingTaskService)
 
 
 def test_sectioned_service_preserves_structured_eval_quality_retry_and_ops_layers():
