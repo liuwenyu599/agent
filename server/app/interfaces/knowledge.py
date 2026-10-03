@@ -1,4 +1,5 @@
 """知识库路由。路径与响应结构与旧系统一致（desktop 依赖该契约）。"""
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -6,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.application.chat.service import ChatService
-from app.application.knowledge.document_service import DocumentService
+from app.application.knowledge.hardened_document_service import HardenedDocumentService
 from app.application.knowledge.dto import (
     DocUpdateRequest,
     KBCreateRequest,
@@ -22,6 +23,7 @@ from app.application.knowledge.task_queue import (
     get_queue_status,
     submit_task,
 )
+from app.application.knowledge.upload_security import safe_client_filename, stream_upload_to_file
 from app.application.knowledge.web_fetcher import extract_urls_from_text
 from app.application.knowledge.web_import_service import (
     WebImportService,
@@ -32,6 +34,7 @@ from app.application.knowledge.rag_service import RagService
 from app.application.shared.writing_assistant import WritingAssistant
 from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.core.exceptions import AppError
+from app.core.logging import get_logger
 from app.domain.identity.entities import ROLE_KNOWLEDGE_ADMIN, User
 from app.infrastructure.database import get_db
 from app.infrastructure.database.models.identity import UserModel
@@ -44,6 +47,7 @@ from app.interfaces.deps import (
     require_knowledge_admin,
 )
 
+logger = get_logger(__name__)
 router = APIRouter(prefix="/knowledge", tags=["知识库"])
 
 
@@ -51,8 +55,21 @@ def get_knowledge_service(db: Session = Depends(get_db)) -> KnowledgeService:
     return KnowledgeService(db)
 
 
-def get_document_service() -> DocumentService:
-    return DocumentService(embedder=get_embedder(), vector_store=get_vector_store())
+def get_document_service() -> HardenedDocumentService:
+    return HardenedDocumentService(embedder=get_embedder(), vector_store=get_vector_store())
+
+
+def _archive_with_index_cleanup(doc_id: str, user: User, svc: KnowledgeService) -> dict:
+    result = svc.archive_document(doc_id, user)
+    try:
+        removed = get_vector_store().delete_by_document(doc_id)
+        result["indexing_status"] = "removed"
+        result["removed_vectors"] = removed
+    except Exception as exc:
+        logger.exception("[RAG] 归档后物理删除向量失败: doc=%s", doc_id)
+        result["indexing_status"] = "cleanup_failed"
+        result["indexing_error"] = str(exc)[:500]
+    return result
 
 
 @router.get("/list")
@@ -79,7 +96,6 @@ async def upload_document(
     db: Session = Depends(get_db),
     svc: KnowledgeService = Depends(get_knowledge_service),
 ):
-    # 写权限由服务端按科室解析，客户端只能指定目标库，不能扩大范围
     svc.check_kb_write(kb_id, user)
     return await get_document_service().process_upload(
         file, kb_id, user.id, user.role, db,
@@ -99,7 +115,6 @@ def update_document(doc_id: str, req: DocUpdateRequest,
                     db: Session = Depends(get_db),
                     svc: KnowledgeService = Depends(get_knowledge_service)):
     """更新文档元数据；传 content 时同步重新分块并重建该文档的向量索引。"""
-    # 先做权限校验与元数据更新（无权限直接 403，不会走到内容更新）
     result = svc.update_document(doc_id, user, req.title, req.doc_type, req.status,
                                  req.department, req.doc_number)
     if req.content is not None:
@@ -111,7 +126,23 @@ def update_document(doc_id: str, req: DocUpdateRequest,
 @router.delete("/documents/{doc_id}")
 def delete_document(doc_id: str, user: User = Depends(get_current_user),
                     svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.archive_document(doc_id, user)
+    return _archive_with_index_cleanup(doc_id, user, svc)
+
+
+@router.post("/documents/{doc_id}/reindex")
+def retry_document_index(
+    doc_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    svc: KnowledgeService = Depends(get_knowledge_service),
+):
+    """Retry a failed vectorization without re-uploading the source document."""
+    doc = svc.docs.get_model(doc_id)
+    if not doc:
+        raise AppError(404, "文档不存在")
+    if not (svc.access.can_manage_doc(doc, user) or doc.uploaded_by == user.id):
+        raise AppError(403, "无权重建该文档索引")
+    return get_document_service().retry_index(db, doc_id)
 
 
 @router.get("/pending")
@@ -152,7 +183,7 @@ def list_all_documents(status: str = Query("all"),
 @router.post("/documents/{doc_id}/archive")
 def archive_document(doc_id: str, user: User = Depends(require_admin_or_above),
                      svc: KnowledgeService = Depends(get_knowledge_service)):
-    return svc.archive_document(doc_id, user)
+    return _archive_with_index_cleanup(doc_id, user, svc)
 
 
 @router.get("/batch-tasks")
@@ -231,7 +262,6 @@ def ask_knowledge(
             "回答正文保持简洁清楚，不要伪造引用编号；引用由系统在答案下方结构化展示。"
         ),
     )
-    # 对外只暴露知识问答需要的稳定字段；sources 已含库、文档、段落、chunk 与命中内容。
     return {
         "reply": result.get("reply", ""),
         "sources": result.get("sources", []),
@@ -274,10 +304,7 @@ def list_documents(kb_id: str, status: str = Query("published"),
 def search_documents(kb_id: str, q: str = Query(""), limit: int = Query(50),
                      user: User = Depends(get_current_user),
                      svc: KnowledgeService = Depends(get_knowledge_service)):
-    """库内文档搜索：标题命中排前、内容命中排后，一次请求返回全部结果。
-
-    前端即输即搜：不需要等「多轮查询全部完成」才显示列表。
-    """
+    """库内文档搜索：标题命中排前、内容命中排后，一次请求返回全部结果。"""
     return svc.search_kb_documents(kb_id, user, q, limit)
 
 
@@ -286,18 +313,31 @@ async def batch_upload(kb_id: str = Query(...), files: List[UploadFile] = File(.
                        user: User = Depends(get_current_user),
                        svc: KnowledgeService = Depends(get_knowledge_service)):
     svc.check_kb_write(kb_id, user)
-    task = BatchImportTask(kb_id=kb_id, user_id=user.id, total_files=len(files))
+    if not files:
+        raise AppError(400, "未选择文件")
     tmp_dir = settings.DATA_DIR / "tmp" / "batch"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    for file in files:
-        tmp_path = tmp_dir / f"{task.id}_{file.filename}"
-        content_data = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(content_data)
+    staged = []
+    try:
+        for file in files:
+            original_name, suffix = safe_client_filename(
+                file.filename or "", settings.SUPPORTED_DOC_TYPES
+            )
+            tmp_path = tmp_dir / f"{uuid.uuid4().hex}{suffix}"
+            await stream_upload_to_file(file, tmp_path, settings.UPLOAD_MAX_SIZE)
+            staged.append((tmp_path, original_name))
+    except Exception:
+        for path, _ in staged:
+            path.unlink(missing_ok=True)
+        raise
+
+    task = BatchImportTask(kb_id=kb_id, user_id=user.id, total_files=len(staged))
+    for tmp_path, original_name in staged:
         submit_task(task_id=task.id, file_path=str(tmp_path), kb_id=kb_id,
-                    user_id=user.id, user_role=user.role, original_name=file.filename)
-    return {"task_id": task.id, "total_files": len(files), "status": "pending",
-            "message": f"已提交 {len(files)} 个文件到处理队列"}
+                    user_id=user.id, user_role=user.role, original_name=original_name)
+    return {"task_id": task.id, "total_files": len(staged), "status": "pending",
+            "message": f"已提交 {len(staged)} 个文件到处理队列"}
+
 
 # ========== 网页链接导入知识库 ==========
 
@@ -334,12 +374,15 @@ def import_urls_text(req: UrlTextImportRequest, user: User = Depends(get_current
 @router.post("/import-urls-excel")
 async def import_urls_excel(kb_id: str = Query(...), file: UploadFile = File(...),
                             user: User = Depends(get_current_user),
+                            db: Session = Depends(get_db),
                             svc: KnowledgeService = Depends(get_knowledge_service)):
     kb = svc.check_kb_write(kb_id, user)
     filename = file.filename or ""
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xltx", ".xltm")):
         raise AppError(400, "请上传 .xlsx 格式的 Excel 文件")
-    data = await file.read()
+    data = await file.read(settings.UPLOAD_MAX_SIZE + 1)
+    if len(data) > settings.UPLOAD_MAX_SIZE:
+        raise AppError(413, "Excel 文件超过上传大小限制")
     try:
         items = parse_urls_from_excel(data, filename)
     except ValueError as e:
