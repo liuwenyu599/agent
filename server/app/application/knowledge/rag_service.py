@@ -3,6 +3,7 @@
 召回：向量检索 + 关键词检索双路并行，RRF（Reciprocal Rank Fusion）融合排序；
 过滤：向量侧按阈值门控，文档级多样性上限（默认每篇最多 2 块）；
 扩展：命中块自动拼接前后相邻块作为上下文（总长受 RAG_EXPAND_BUDGET 约束）。
+显式反馈：只使用当前用户自己的 👍/👎 对曾引用 chunk 做小幅、有界 rerank。
 范文检索 search_examples 按文档聚合取整篇。
 """
 import re
@@ -37,11 +38,8 @@ class RagService:
         self.embedder = embedder
         self.vector_store = vector_store
 
-    # ---------------- 组织隔离：作用域解析 ----------------
-
     @property
     def access(self):
-        """知识访问策略（唯一权限判定入口）。"""
         if getattr(self, "_access", None) is None:
             from app.application.knowledge.access import KnowledgeAccessPolicy
             self._access = KnowledgeAccessPolicy(self.db)
@@ -65,7 +63,6 @@ class RagService:
     @staticmethod
     def resolve_scopes(dept_code: str, is_admin: bool = False,
                        user_id: str = "") -> List[str]:
-        """用户可见作用域：GLOBAL + 本人个人 + 本人所属科室。"""
         if is_admin:
             return None
         scopes = [SCOPE_GLOBAL]
@@ -77,7 +74,6 @@ class RagService:
 
     def _get_accessible_kb_ids(self, user_id: str, dept_code: str = "",
                                is_admin: bool = False) -> List[str]:
-        """可访问知识库：全局公共 + 个人 + 本人科室（系统管理员全部）。"""
         if is_admin:
             kbs = self.db.scalars(
                 select(KnowledgeBaseModel).where(KnowledgeBaseModel.is_active.is_(True))
@@ -100,11 +96,6 @@ class RagService:
 
     @staticmethod
     def _document_is_accessible(document, accessible_kb_ids: List[str]) -> bool:
-        """向量命中后的 DB 二次鉴权。
-
-        向量库的 kb_id/scope 过滤是第一道边界；这里不信任索引元数据，重新以数据库
-        文档归属和发布状态校验，防止脏索引、旧索引或 VectorStore 实现缺陷导致跨科室泄漏。
-        """
         if document is None:
             return False
         return (
@@ -112,13 +103,21 @@ class RagService:
             and getattr(document, "kb_id", None) in set(accessible_kb_ids or [])
         )
 
-    # ---------------- 混合检索 ----------------
+    def _feedback_weights(self, user_id: str, chunk_ids: List[str]) -> Dict[str, float]:
+        """读取当前用户自己的反馈。失败时只跳过学习信号，绝不影响正常检索。"""
+        if not chunk_ids:
+            return {}
+        try:
+            from app.infrastructure.repositories.feedback import SqlAlchemyChatFeedbackRepository
+            return SqlAlchemyChatFeedbackRepository(self.db).chunk_weights(user_id, chunk_ids)
+        except Exception as exc:  # migration rolling upgrade / damaged optional feedback must not break RAG
+            logger.warning("[RAG] 反馈 rerank 不可用，已跳过: %s", exc)
+            return {}
 
     def search(self, query: str, user_id: str, kb_types: List[str] = None,
                top_k: int = None, min_score: float = None,
                kb_ids: List[str] = None, dept_code: str = None,
                scopes: List[str] = None) -> List[Dict]:
-        """向量 + 关键词双路召回，RRF 融合；权限范围一律由服务端解析。"""
         top_k = top_k or settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
 
@@ -173,6 +172,12 @@ class RagService:
             e = fused.setdefault(cid, {"rrf": 0.0, "v": None, "k": None})
             e["k"] = r
             e["rrf"] += 1.0 / (rrf_k + rank + 1)
+
+        # 反馈只做轻量乘法微调，不覆盖本轮语义相关度：赞最多 +9%，踩最多 -15%。
+        feedback_weights = self._feedback_weights(user_id, list(fused.keys()))
+        for chunk_id, entry in fused.items():
+            entry["feedback_delta"] = feedback_weights.get(chunk_id, 0.0)
+            entry["rrf"] *= 1.0 + entry["feedback_delta"]
         ranked = sorted(fused.values(), key=lambda x: x["rrf"], reverse=True)
 
         results: List[Dict] = []
@@ -190,11 +195,9 @@ class RagService:
             chunk = self.db.get(ChunkModel, chunk_id)
             if not chunk:
                 continue
-            # 第二道权限边界：不能只相信 VectorStore 返回的 kb_id/doc_id/scope。
             if not self._document_is_accessible(chunk.document, kb_ids):
                 logger.warning("[RAG] 丢弃越权/失效索引命中: chunk=%s doc=%s", chunk_id, doc_id)
                 continue
-            # 索引里的 doc_id 也必须与数据库真实归属一致，避免伪造元数据影响去重/引用。
             if chunk.doc_id != doc_id:
                 logger.warning("[RAG] 丢弃 doc_id 不一致索引命中: chunk=%s", chunk_id)
                 continue
@@ -220,6 +223,7 @@ class RagService:
                 "kb_type": kb.kb_type if kb else "",
                 "score": score,
                 "match_type": "hybrid" if (hit and kw) else ("vector" if hit else "keyword"),
+                "feedback_delta": e.get("feedback_delta", 0.0),
                 "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
                 "source_url": meta.get("source_url"),
                 "source_name": meta.get("source_name"),
@@ -233,7 +237,6 @@ class RagService:
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
                         max_chars: int = 2500, dept_code: str = None) -> list:
-        """检索最相近的完整范文，用于写作模仿（按文档聚合，取整篇）。"""
         dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
         scopes = self.resolve_scopes(dept_code, admin, user_id)
@@ -266,8 +269,6 @@ class RagService:
 
         return self._keyword_examples(query, kb_ids, top_k, max_chars)
 
-    # ---------------- 邻块上下文扩展 ----------------
-
     @staticmethod
     def _expand_neighbors(chunk: ChunkModel) -> str:
         content = chunk.content
@@ -285,8 +286,6 @@ class RagService:
             parts.append(next_c.content)
         merged = "\n".join(parts)
         return merged if len(merged) <= budget else content
-
-    # ---------------- 关键词召回（与向量路并行） ----------------
 
     @staticmethod
     def _tokenize(query: str) -> List[str]:
