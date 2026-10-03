@@ -33,6 +33,13 @@ expect PPT_AGENT_URL "http://10.128.85.133:7861"
 expect PPT_AGENT_SUBMIT_PATH "/gradio_api/call/send_message"
 expect PPT_AGENT_WORKSPACE_DIR "/data/pptagent"
 
+# ---------- SECRET_KEY 生产强校验（2026-10-03 排障基线） ----------
+secret_key="$(getenvv SECRET_KEY)"
+[ -n "$secret_key" ] || fail "SECRET_KEY 未配置（不能为空，否则 JWT 用弱占位密钥签发）"
+[ "$secret_key" != "dev-only-insecure-secret-change-me" ] ||
+  fail "SECRET_KEY 仍使用默认弱密钥，必须在生产 .env 中替换为强随机值"
+ok "SECRET_KEY 已配置且非默认"
+
 [ -d /opt/justice-ppt/workspace ] || fail "缺少 PPTAgent workspace"
 [ -f /opt/justice-ppt/deeppresenter/config.yaml ] || fail "缺少 DeepPresenter config.yaml"
 [ -f /opt/justice-ppt/deeppresenter/mcp.json ] || fail "缺少 DeepPresenter mcp.json"
