@@ -194,7 +194,6 @@ def test_official_export_keeps_red_header_separate_from_document_title():
     assert all(not p.text.strip() for s in doc.sections for p in s.header.paragraphs)
 
 
-
 def test_postprocessor_corrects_explicit_multiplication_amount():
     raw = "经测算，1336 × 150 × 12 = 239.85 万元。"
     out, events, _number, _date = PostProcessor().process(
@@ -367,13 +366,8 @@ class _StubTask:
         self.updated_at = None
 
 
-def test_revise_applies_user_date_before_postprocess():
-    """回归：对话里改落款日期，必须真的落到正文上。
-
-    历史 bug：revise() 先 _postprocess 再 merge_context，后处理拿到的还是旧日期；
-    紧接着的 `ctx["document_date"] = doc_date` 又把用户刚给的新日期覆盖回去。
-    表现为「助手回复说已把落款日期更新为 X，正文里的日期却纹丝不动」。
-    """
+def test_revise_applies_user_date_to_context_and_keeps_body_chrome_free():
+    """结构字段接管后，日期写入 context；正文只保留正文主体。"""
     svc = WritingTaskService.__new__(WritingTaskService)
     svc.db = _StubDB()
 
@@ -402,49 +396,36 @@ def test_revise_applies_user_date_before_postprocess():
     out = svc.revise("t-test", "u1", "落款日期改成2026年10月10日")
 
     assert task.context["document_date"] == "2026年10月10日"
-    assert "2026年10月10日" in task.current_content
+    assert task.current_content == "为提升业务能力，拟于十月举办专题讲座。"
+    assert "2026年10月10日" not in task.current_content
     assert "2026年1月1日" not in task.current_content
+    assert "广州市白云区司法局" not in task.current_content
     assert out["content_changed"] is True
 
 
 def test_parser_understands_everyday_phrasings_for_context_updates():
-    """回归：用户口语化的改要素说法必须能被解析，否则「我让改的都没改」。
-
-    历史 bug：正则只认「落款是/发文机关是/单位是」这类"是"字结构和
-    「日期是/日期为/日期：」，用户说「落款改成 X」「日期再填 X」「落款是今天」
-    时 parse_message 返回空（或把年份误判成 time_range），
-    于是助手回复"已更新"，实际一个字段都没动。
-    """
+    """回归：用户口语化的改要素说法必须能被解析，否则「我让改的都没改」。"""
     from datetime import date
 
-    # 日期：动词覆盖「填/再填/改成/改为/换成/设为」
     assert parse_message("日期再填2026年10月10日") == {"document_date": "2026年10月10日"}
     assert parse_message("落款日期改成2026年10月10日") == {"document_date": "2026年10月10日"}
     assert parse_message("成文日期设为2026年10月10日") == {"document_date": "2026年10月10日"}
-
-    # 「日期再填X」里的年份不能再被当成时间范围
     assert "time_range" not in parse_message("日期再填2026年10月10日")
 
-    # 今天：口语说法
     today = date.today()
     expected_today = f"{today.year}年{today.month}月{today.day}日"
     assert parse_message("落款是今天") == {"document_date": expected_today}
     assert parse_message("日期用今天") == {"document_date": expected_today}
 
-    # 发文机关：动词覆盖「改成/改为/换成/填」
     assert parse_message("落款改成广州市白云区司法局").get("authority") == "广州市白云区司法局"
     assert parse_message("落款是广州市白云区司法局").get("authority") == "广州市白云区司法局"
-
-    # 标题是结构化字段，必须写进 ctx 才会变
     assert parse_message("标题改成关于邀请张教授作专题讲座的函").get("title") == \
         "关于邀请张教授作专题讲座的函"
-
-    # 「标题换一个」没给具体内容，不能瞎猜成标题
     assert "title" not in parse_message("标题换一个")
 
 
-def test_sync_structured_fields_rewrites_signoff_date_in_body():
-    """回归：只改 ctx（不走 AI 改写）时，落款日期必须同步进正文。"""
+def test_sync_structured_fields_strips_legacy_signoff_date_from_body():
+    """历史正文仍带落款时，结构同步应迁出正文并形成一次真实版本。"""
     svc = WritingTaskService.__new__(WritingTaskService)
     svc.db = _StubDB()
 
@@ -462,16 +443,19 @@ def test_sync_structured_fields_rewrites_signoff_date_in_body():
     note = svc._sync_structured_fields(task, "u1")
 
     assert note
+    assert task.current_content == "请予支持为盼。"
     assert "2026年1月1日" not in task.current_content
-    assert "2026年10月10日" in task.current_content
+    assert "2026年10月10日" not in task.current_content
+    assert "广州市白云区司法局" not in task.current_content
+    assert task.context["document_date"] == "2026年10月10日"
     assert task.version_no == 2
 
 
-def test_sync_structured_fields_is_noop_when_nothing_to_change():
+def test_sync_structured_fields_is_noop_for_already_body_only_content():
     svc = WritingTaskService.__new__(WritingTaskService)
     svc.db = _StubDB()
 
-    body = "请予支持为盼。\n\n广州市白云区司法局\n2026年10月10日"
+    body = "请予支持为盼。"
     ctx = {
         "document_type": "函",
         "authority": "广州市白云区司法局",
