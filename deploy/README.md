@@ -31,6 +31,11 @@ vim .env
 - `HOST_MODEL_DIR`：宿主机模型目录（只读挂到容器 /models）
 - `EMBED_MODEL_PATH=/models/<模型目录名>`（容器内路径）
 
+多模型副本部署不要自行拼配置：参见 `MODEL_POOL_DEPLOYMENT.md` 和
+`model-pool.env.example`。后端支持 `MODEL_SERVICE_URLS` / `PPT_MODEL_URLS`
+同模型 endpoint 池；目标机备用 Ascend 卡的安全启动模板见 `ascend-model-pool.sh`。
+未通过 `/v1/models` 探活的副本禁止写入生产 URL 池。
+
 ## 三、构建并启动
 
 ```bash
@@ -56,6 +61,16 @@ curl http://127.0.0.1:8000/health
 docker logs -f judicial-ai-api
 ```
 
+生产交付还必须执行：
+
+```bash
+bash deploy/postcheck-production.sh
+```
+
+当配置了 `MODEL_SERVICE_URLS` / `PPT_MODEL_URLS` 时，postcheck 会逐个探测池内
+endpoint；任意已声明副本不可达都会失败。负载分散与单节点故障切换的人工验收步骤
+见 `MODEL_POOL_DEPLOYMENT.md`。
+
 ## 五、更新代码
 
 ```bash
@@ -73,7 +88,6 @@ docker exec -it judicial-ai-api python -m scripts.reindex_vectors         # 重�
 
 ## 备注
 
-- 镜像内装的是 CPU 版 torch（避免几 GB 的 CUDA 依赖）；embedding 在 CPU 上跑
-  Qwen3-Embedding-0.6B 完全够，4B 建议只在有 NPU/GPU 的宿主机上用。
-- 大语言模型推理不在本镜像内，由 `MODEL_SERVICE_URL` 指向的 vLLM/MindIE 服务承担。
+- 镜像内装的是 CPU 版 torch（避免几 GB 的 CUDA 依赖）；embedding 在 CPU 上跑。
+- 大语言模型推理不在本镜像内，由 `MODEL_SERVICE_URL(S)` 指向的 vLLM/MindIE 服务承担。
 - PostgreSQL 默认不启用（SQLite 已够用）；要启用见 docker-compose.yml 注释。
