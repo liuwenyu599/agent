@@ -10,17 +10,28 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/deploy/.env}"
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
 
+# Read only named values; never `source` a production .env file. Some values contain spaces,
+# and executing arbitrary .env text in a privileged backup job is unnecessary risk.
+read_env_value() {
+  local key="$1" raw=""
+  [[ -f "$ENV_FILE" ]] || return 0
+  raw="$(grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+  raw="${raw%$'\r'}"
+  if [[ "$raw" == \"*\" && "$raw" == *\" ]]; then raw="${raw:1:${#raw}-2}"; fi
+  if [[ "$raw" == \'*\' && "$raw" == *\' ]]; then raw="${raw:1:${#raw}-2}"; fi
+  printf '%s' "$raw"
+}
+
+HOST_DATA_DIR="${HOST_DATA_DIR:-$(read_env_value HOST_DATA_DIR)}"
 HOST_DATA_DIR="${HOST_DATA_DIR:-$ROOT_DIR/data}"
+BACKUP_DIR="${BACKUP_DIR:-$(read_env_value BACKUP_DIR)}"
 BACKUP_DIR="${BACKUP_DIR:-$HOST_DATA_DIR/backups}"
+BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-$(read_env_value BACKUP_RETENTION_DAYS)}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
+VECTOR_INDEX_DIR="${VECTOR_INDEX_DIR:-$(read_env_value VECTOR_INDEX_DIR)}"
 VECTOR_INDEX_DIR="${VECTOR_INDEX_DIR:-$HOST_DATA_DIR/vector_index}"
+DATABASE_URL="${DATABASE_URL:-$(read_env_value DATABASE_URL)}"
 DATABASE_URL="${DATABASE_URL:-sqlite:///$HOST_DATA_DIR/judicial_app.db}"
 
 mkdir -p "$BACKUP_DIR"
@@ -85,8 +96,6 @@ EOF
   sha256sum database.* vector_index.tar.gz manifest.env > SHA256SUMS
 )
 
-# Only delete timestamp-shaped backup directories; never follow symlinks.
-# -mmin avoids find's whole-day rounding and makes 14 days exactly 14*24h.
 RETENTION_MINUTES=$((BACKUP_RETENTION_DAYS * 24 * 60))
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d \
   -name '20??????-??????' -mmin "+$RETENTION_MINUTES" -print -exec rm -rf -- {} +
