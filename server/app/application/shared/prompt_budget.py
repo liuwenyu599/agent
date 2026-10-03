@@ -11,6 +11,7 @@ import re
 from typing import Dict, Iterable, List
 
 _STYLE_TOTAL_CHAR_BUDGET = 1100  # <= 1.5K tokens under the gateway's conservative estimator
+_EXAMPLE_SCAN_BUDGET = 1200
 _HEADING_RE = re.compile(
     r"^(?:[一二三四五六七八九十]+[、.]|（[一二三四五六七八九十]+）|\d+[、.．])\s*(.+)$"
 )
@@ -38,6 +39,14 @@ def _clean(text: str, limit: int) -> str:
 def _paragraphs(content: str) -> List[str]:
     return [re.sub(r"\s+", " ", p).strip()
             for p in re.split(r"[\r\n]+", content or "") if p.strip()]
+
+
+def _bounded_scan(content: str) -> str:
+    """Keep a 1200-char scan window while preserving the real opening and closing."""
+    content = content or ""
+    if len(content) <= _EXAMPLE_SCAN_BUDGET:
+        return content
+    return content[:900] + "\n" + content[-300:]
 
 
 def compact_style_example(title: str, content: str, max_chars: int = _STYLE_TOTAL_CHAR_BUDGET) -> str:
@@ -92,6 +101,6 @@ def compact_style_examples(examples: Iterable[Dict],
     example = example_list[0]
     return compact_style_example(
         str(example.get("title") or "范文"),
-        str(example.get("content") or "")[:1200],
+        _bounded_scan(str(example.get("content") or "")),
         max_chars=max_chars,
     )[:max_chars]
