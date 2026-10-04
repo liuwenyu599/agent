@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>云法智办 · 首页（2×2 极简）</title>
+<style>
+  :root{
+    --bg:#F4F6F9; --bar:#FFFFFF; --ink:#1F2733; --muted:#6B7685;
+    --line:#E6EAF0; --bar-h:58px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+    background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---- 顶部栏（含修复后的搜索框） ---- */
+  .topbar{
+    height:var(--bar-h); display:flex; align-items:center; gap:18px;
+    padding:0 22px; background:var(--bar); border-bottom:1px solid var(--line);
+    position:sticky; top:0; z-index:10;
+  }
+  .brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:16px; letter-spacing:.5px}
+  .brand .dot{width:14px; height:14px; border-radius:4px;
+    background:linear-gradient(135deg,#1F3A5F,#3B5BDB)}
+  .spacer{flex:1}
+
+  /* 搜索框：icon flex:none + 容器 border-box + input 高度100% —— 不再过高/显示不全 */
+  .search{
+    display:flex; align-items:center; gap:8px; width:300px; height:38px;
+    padding:0 14px; border-radius:999px;
+    background:#F1F4F8; border:1px solid var(--line);
+    transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
+  }
+  .search:hover{border-color:#C7D0DC; background:#EEF2F7}
+  .search:focus-within{border-color:#3B5BDB; background:#fff; box-shadow:0 0 0 3px rgba(59,91,219,.12)}
+  .search svg{width:16px; height:16px; flex:none; color:var(--muted)}
+  .search input{
+    flex:1 1 auto; min-width:0; height:100%; border:0; outline:0; background:transparent;
+    font:13px/1 inherit; color:var(--ink);
+  }
+  .search input::placeholder{color:#9AA4B2}
+  .kbd{font-size:11px; color:#9AA4B2; border:1px solid var(--line); border-radius:5px;
+    padding:1px 6px; background:#fff; flex:none}
+  .avatar{width:34px; height:34px; border-radius:50%; flex:none;
+    background:linear-gradient(135deg,#1F3A5F,#3B5BDB); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600}
+
+  /* ---- 首页主体：2×2 极简格子 ---- */
+  .stage{flex:1; display:flex; align-items:center; justify-content:center; padding:28px}
+  .grid{
+    width:100%; max-width:880px; aspect-ratio:2/1; min-height:420px;
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:18px;
+  }
+  .cell{
+    position:relative; border-radius:18px; padding:30px; cursor:pointer; overflow:hidden;
+    display:flex; flex-direction:column; justify-content:space-between;
+    color:#fff; text-decoration:none; isolation:isolate;
+    box-shadow:0 10px 26px -14px rgba(20,30,50,.5);
+    transition:transform .22s cubic-bezier(.2,.7,.3,1), box-shadow .22s ease;
+    opacity:0; transform:translateY(10px) scale(.98);
+    animation:rise .5s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .cell:nth-child(1){animation-delay:.04s}
+  .cell:nth-child(2){animation-delay:.12s}
+  .cell:nth-child(3){animation-delay:.20s}
+  .cell:nth-child(4){animation-delay:.28s}
+  @keyframes rise{to{opacity:1; transform:none}}
+  .cell:hover{transform:translateY(-4px); box-shadow:0 18px 38px -16px rgba(20,30,50,.55)}
+  .cell::after{ /* 细微纹理，增加质感但不喧宾夺主 */
+    content:""; position:absolute; inset:0; z-index:-1; opacity:.16;
+    background-image:radial-gradient(circle at 88% 14%, rgba(255,255,255,.9) 0, transparent 38%);
+  }
+  .cell .ico{width:46px; height:46px; flex:none}
+  .cell .ico svg{width:46px; height:46px; display:block}
+  .cell .name{font-size:23px; font-weight:700; letter-spacing:1px; margin-top:auto}
+  .cell .sub{font-size:13px; opacity:.92; margin-top:6px; font-weight:400}
+  .cell .go{position:absolute; top:24px; right:26px; font-size:22px; opacity:.85}
+
+  /* 四个模块：各自不同色相，强区分 */
+  .c-write {background:linear-gradient(140deg,#3B5BDB,#2742A8)}
+  .c-ppt   {background:linear-gradient(140deg,#E03131,#A61B1B)}
+  .c-kb    {background:linear-gradient(140deg,#2F9E44,#1B7A30)}
+  .c-graph {background:linear-gradient(140deg,#7048E8,#5230B8)}
+
+  @media (max-width:680px){
+    .grid{grid-template-columns:1fr; grid-template-rows:repeat(4,1fr); aspect-ratio:auto; min-height:0}
+    .search{width:160px}
+    .search .kbd{display:none}
+  }
+</style>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand"><span class="dot"></span>云法智办</div>
+    <div class="spacer"></div>
+    <label class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+      </svg>
+      <input type="text" placeholder="搜索功能、文档、知识…" aria-label="搜索">
+      <span class="kbd">⌘K</span>
+    </label>
+    <div class="avatar">司</div>
+  </header>
+
+  <main class="stage">
+    <div class="grid">
+      <a class="cell c-write" href="#">
+        <span class="go">→</span>
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 4h11l3 3v13H5z"/><path d="M9 9h6M9 13h6M9 17h4"/>
+          </svg>
+        </span>
+        <div>
+          <div class="name">智能写作</div>
+          <div class="sub">公文 / 报告 / 通知 一键生成</div>
+        </div>
+      </a>
+
+      <a class="cell c-ppt" href="#">
+        <span class="go">→</span>
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v3M8 21h8"/>
+          </svg>
+        </span>
+        <div>
+          <div class="name">PPT 生成</div>
+          <div class="sub">主题模板 → 演示文稿</div>
+        </div>
+      </a>
+
+      <a class="cell c-kb" href="#">
+        <span class="go">→</span>
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2"/>
+          </svg>
+        </span>
+        <div>
+          <div class="name">知识库问答</div>
+          <div class="sub">法规 / 案例 智能检索</div>
+        </div>
+      </a>
+
+      <a class="cell c-graph" href="#">
+        <span class="go">→</span>
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="7" r="2.4"/><circle cx="12" cy="18" r="2.4"/>
+            <path d="M7.8 7.2l3 9M16.4 8.6l-3.2 8M8 6.6l8 .4"/>
+          </svg>
+        </span>
+        <div>
+          <div class="name">知识网络</div>
+          <div class="sub">图谱化关联与导出</div>
+        </div>
+      </a>
+    </div>
+  </main>
+
+</body>
+</html>
