@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKUP = REPO_ROOT / "deploy" / "backup-production.sh"
 RESTORE = REPO_ROOT / "deploy" / "restore-drill.sh"
+POSTCHECK = REPO_ROOT / "deploy" / "postcheck-production.sh"
 
 
 def test_sqlite_backup_includes_vector_index_and_restores(tmp_path: Path):
@@ -107,3 +108,29 @@ def test_ops_scripts_normalize_relative_host_data_dir():
         assert '[[ -d "$HOST_DATA_DIR" ]]' in text, (
             f"{script.name} 未校验归一化后的 HOST_DATA_DIR 是否存在"
         )
+
+
+def test_postcheck_resolves_backup_dir_from_data_justice_mount():
+    """postcheck 必须从容器的 /data/justice 挂载反查备份目录。
+
+    回归 2026-10-04 部署后测试反馈（待修正清单 #12）：postcheck 原来按容器
+    ``/data`` 挂载反查宿主目录，生产实际把数据挂在 ``/data/justice``
+    （compose: ``${HOST_DATA_DIR}:/data/justice``），于是取到空目录、
+    备份闸门误报「备份目录不存在」。commit 1f08563 已改为 /data/justice，
+    这里锁死防止再退回 /data。
+    """
+    text = POSTCHECK.read_text(encoding="utf-8")
+    assert 'eq .Destination "/data/justice"' in text, (
+        "postcheck 未从容器 /data/justice 挂载反查宿主数据目录"
+    )
+    # 不能再出现只按 /data 反查的旧写法
+    assert 'eq .Destination "/data"' not in text, (
+        "postcheck 又退回按 /data 反查了，生产挂载点是 /data/justice"
+    )
+    # 反查宿主目录后拼 /backups，且目录不存在要硬失败
+    assert 'backup_dir="$host_data_dir/backups"' in text, (
+        "postcheck 的备份目录应基于反查到的宿主目录拼 /backups"
+    )
+    assert '[ -d "$backup_dir" ] || fail "备份目录不存在' in text, (
+        "postcheck 未对备份目录做存在性校验"
+    )
