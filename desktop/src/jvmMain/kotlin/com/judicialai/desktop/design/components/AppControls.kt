@@ -49,6 +49,7 @@ import com.judicialai.desktop.design.theme.AiSoft
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.DangerSoft
+import com.judicialai.desktop.design.theme.GoldLight
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
@@ -291,7 +292,7 @@ fun AppTextField(
     }
 }
 
-/** 全局搜索：胶囊形、弱底，不抢主操作权重 */
+/** 全局搜索：胶囊形、弱底，不抢主操作权重；dark=true 时适配深色顶栏 */
 @Composable
 fun AppSearchField(
     value: String,
@@ -299,18 +300,24 @@ fun AppSearchField(
     modifier: Modifier = Modifier,
     placeholder: String = "搜索",
     onFocusOpen: (() -> Unit)? = null,
+    dark: Boolean = false,
 ) {
     val shape = RoundedCornerShape(Dimens.radiusPill)
+    val bg = if (dark) Color.White.copy(alpha = 0.10f) else SurfaceDeep
+    val borderColor = if (dark) Color.White.copy(alpha = 0.20f) else Line
+    val iconTint = if (dark) Color.White.copy(alpha = 0.65f) else Muted
+    val placeholderTint = if (dark) Color.White.copy(alpha = 0.45f) else Muted2
+    val textColor = if (dark) Color.White else Ink
     Row(
         modifier.heightIn(min = Dimens.hControl)
             .clip(shape)
-            .background(SurfaceDeep)
-            .border(1.dp, Line, shape)
+            .background(bg)
+            .border(1.dp, borderColor, shape)
             .clickable { onFocusOpen?.invoke() }
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Search, contentDescription = null, tint = Muted,
+        Icon(Icons.Default.Search, contentDescription = null, tint = iconTint,
             modifier = Modifier.size(Dimens.iconMd))
         Spacer(Modifier.width(Dimens.space2))
         androidx.compose.material.TextField(
@@ -319,13 +326,13 @@ fun AppSearchField(
                 onValueChange(it)
                 onFocusOpen?.invoke()
             },
-            placeholder = { Text(placeholder, fontSize = 12.5.sp, color = Muted2) },
+            placeholder = { Text(placeholder, fontSize = 12.5.sp, color = placeholderTint) },
             singleLine = true,
             modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = textColor),
             colors = TextFieldDefaults.textFieldColors(
                 backgroundColor = Color.Transparent,
-                cursorColor = Primary,
+                cursorColor = if (dark) GoldLight else Primary,
                 focusedIndicatorColor = Color.Transparent,
                 disabledIndicatorColor = Color.Transparent,
                 unfocusedIndicatorColor = Color.Transparent,

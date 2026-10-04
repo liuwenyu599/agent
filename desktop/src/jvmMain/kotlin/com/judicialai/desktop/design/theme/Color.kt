@@ -30,6 +30,9 @@ val BrandStart = Color(0xFF0F2138)
 val BrandMid = Color(0xFF1B3B62)
 val BrandEnd = Color(0xFF2E5C8A)
 
+/** 顶栏与导航抽屉头条共用的藏青（保证二者颜色一致） */
+val HeaderNavy = Color(0xFF16263F)
+
 // ---- 表面层级（由深到浅，桌面办公的四层 surface）----
 val AppBg = Color(0xFFF3F6FA)        // 应用底色
 val SurfaceDeep = Color(0xFFEDF1F7)  // 凹陷层：Header / 抽屉底 / 分区底

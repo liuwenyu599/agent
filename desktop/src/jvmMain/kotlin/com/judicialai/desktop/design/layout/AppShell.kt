@@ -63,14 +63,11 @@ import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.Gold
 import com.judicialai.desktop.design.theme.GoldLight
+import com.judicialai.desktop.design.theme.HeaderNavy
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
-import com.judicialai.desktop.design.theme.Line
-import com.judicialai.desktop.design.theme.LineStrong
 import com.judicialai.desktop.design.theme.Primary
 import com.judicialai.desktop.design.theme.Surface as SurfaceColor
-import com.judicialai.desktop.design.theme.SurfaceDeep
-import com.judicialai.desktop.design.theme.SurfaceTonal
 import com.judicialai.desktop.features.personal.PersonalViewModel
 
 /**
@@ -128,8 +125,7 @@ fun AppShell(
     }
 }
 
-/** 顶栏底色：藏青（比 BrandStart 略浅，呼应「深夜蓝稍微浅一点」） */
-private val HEADER_NAVY = Color(0xFF16263F)
+/** 顶栏底色：与导航抽屉头条共用同一藏青（theme/Color.kt 的 HeaderNavy） */
 
 @Composable
 private fun AppHeader(
@@ -146,7 +142,7 @@ private fun AppHeader(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = HEADER_NAVY,
+        color = HeaderNavy,
         elevation = Dimens.elevCard,
     ) {
         Column {
@@ -216,13 +212,14 @@ private fun AppHeader(
                     .dragWindow(chrome?.window)
             )
 
-            // ---- 全局搜索 ----
+            // ---- 全局搜索（深色适配：半透明白底，不再是一块白） ----
             AppSearchField(
                 value = AppState.navQuery,
                 onValueChange = { AppState.navQuery = it },
                 placeholder = "搜索功能，例如：模板、知识库、PPT",
                 modifier = Modifier.width(260.dp),
                 onFocusOpen = { session.navDrawerOpen = true },
+                dark = true,
             )
 
             Spacer(Modifier.width(Dimens.space4))
@@ -242,7 +239,7 @@ private fun AppHeader(
                             .background(Gold),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(username.take(1).uppercase(), color = HEADER_NAVY,
+                        Text(username.take(1).uppercase(), color = HeaderNavy,
                             fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.width(Dimens.space2))
@@ -325,9 +322,9 @@ fun WindowControlGroup(actions: WindowChromeActions) {
 /**
  * 单个窗口控制按钮：32dp 方形。
  *
- * 与 Windows 原生标题栏一致——三个按钮**常态可见**，hover 只是「高亮」而非「显形」：
- * 静息态即有淡底 + 浅描边 + 深色图标（与同文件 [HeaderIconButton] 同一套视觉语言），
- * 避免浅灰图标落在白色 Header 上因对比度不足而被认为「按钮没了」。
+ * 深色底适配（顶栏藏青 / 登录页深蓝渐变两处共用）——三个按钮**常态可见**，
+ * hover 只是「高亮」而非「显形」：静息态即有半透明白底 + 白描边 + 白图标，
+ * 避免「深底上浮一块浅灰方块」的割裂感。
  *
  * @param restBg 静息态底色（比 hover 更浅，保证 hover 仍有加深反馈）
  * @param restTint 静息态图标色
@@ -341,12 +338,12 @@ fun WindowControlButton(
     icon: ImageVector,
     description: String,
     onClick: () -> Unit,
-    restBg: Color = SurfaceTonal,
-    restTint: Color = Ink2,
-    restBorder: Color = Line,
-    hoverBg: Color = SurfaceDeep,
-    hoverTint: Color = Ink2,
-    hoverBorder: Color = LineStrong,
+    restBg: Color = Color.White.copy(alpha = 0.08f),
+    restTint: Color = Color.White.copy(alpha = 0.82f),
+    restBorder: Color = Color.White.copy(alpha = 0.16f),
+    hoverBg: Color = Color.White.copy(alpha = 0.16f),
+    hoverTint: Color = Color.White,
+    hoverBorder: Color = Color.White.copy(alpha = 0.34f),
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -373,15 +370,18 @@ private fun HeaderIconButton(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    // 深色顶栏适配：半透明白底 + 白描边 + 白图标（不再是浅色块）
+    val bg = if (hovered) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.08f)
+    val border = if (hovered) Color.White.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.18f)
     Box(
         Modifier.size(size).clip(RoundedCornerShape(Dimens.radiusControl))
-            .background(if (hovered) SurfaceDeep else SurfaceTonal)
-            .border(1.dp, if (hovered) LineStrong else Line,
-                RoundedCornerShape(Dimens.radiusControl))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(Dimens.radiusControl))
             .clickable(interactionSource = interaction, indication = null) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, tint = Ink2,
+        Icon(icon, contentDescription = description,
+            tint = Color.White.copy(alpha = 0.88f),
             modifier = Modifier.size(Dimens.iconMd))
     }
 }

@@ -59,6 +59,7 @@ import com.judicialai.desktop.design.theme.FeatureTemplateEnd
 import com.judicialai.desktop.design.theme.FeatureTemplateStart
 import com.judicialai.desktop.design.theme.FeatureWriteEnd
 import com.judicialai.desktop.design.theme.FeatureWriteStart
+import com.judicialai.desktop.design.theme.HeaderNavy
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
@@ -154,7 +155,8 @@ private fun DrawerHeader(onDismiss: () -> Unit) {
     val decor = OnPrimaryText
     Box(
         Modifier.fillMaxWidth()
-            .background(Brush.linearGradient(listOf(BrandStart, BrandEnd)))
+            // 与顶栏同一藏青，保证「侧边栏头条 = 顶栏」颜色一致
+            .background(HeaderNavy)
             // 低饱和几何装饰用 drawBehind 绘制：不参与测量，避免撑高抽屉头部
             .drawBehind {
                 drawCircle(

@@ -239,11 +239,14 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
             Text("→", fontSize = 22.sp, color = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.offset(x = arrowX))
         }
-        // 底部细描边：静息弱白，hover 转金
+        // 底部金色短线：唯一装饰线（hover 提亮），不再画通栏白线
+        val lineAlpha by androidx.compose.animation.core.animateFloatAsState(
+            if (hovered) 1f else 0.65f)
         Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .padding(horizontal = Dimens.space4).height(2.dp)
-                .background(if (hovered) ACCENT_GOLD else Color.White.copy(alpha = 0.16f)),
+            Modifier.align(Alignment.BottomStart)
+                .padding(start = Dimens.space4, bottom = Dimens.space3)
+                .width(48.dp).height(2.dp)
+                .background(ACCENT_GOLD.copy(alpha = lineAlpha)),
         )
     }
 }
