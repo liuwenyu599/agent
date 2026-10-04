@@ -23,7 +23,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=$ROOT_DIR
-Environment=ENV_FILE=$ROOT_DIR/deploy/.env
+Environment=ENV_FILE=/opt/justice-office/deploy/.env
 ExecStart=$BACKUP_SCRIPT
 Nice=10
 IOSchedulingClass=best-effort
