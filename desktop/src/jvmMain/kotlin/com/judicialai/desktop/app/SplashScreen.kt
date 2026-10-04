@@ -31,7 +31,7 @@ import com.judicialai.desktop.design.theme.rememberAppLogo
 
 /**
  * 启动页（类似豆包开屏）：应用 Logo + 名称，主窗口内容初始化期间展示。
- * 蓝色渐变背景，与登录页主色系一致。
+ * 深藏青渐变背景，与登录页主色系一致；红色徽标在深色背景上更突出。
  * 由 Main.kt 控制展示时长，到期自动切换到 App()。
  */
 @Composable
@@ -44,7 +44,8 @@ fun SplashScreen() {
     )
     Box(
         Modifier.fillMaxSize().background(
-            Brush.verticalGradient(listOf(Color(0xFF1A5FB4), Color(0xFF0B3D91)))
+            // 深藏青渐变：与登录页/顶栏品牌色一致；红色徽标在深色背景上更突出
+            Brush.verticalGradient(listOf(Color(0xFF0E1F38), Color(0xFF16263F)))
         ),
         contentAlignment = Alignment.Center,
     ) {
