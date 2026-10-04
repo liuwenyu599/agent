@@ -23,7 +23,7 @@ ok "Prometheus metrics"
 
 # ---------- 备份/恢复交付闸门 ----------
 # 从 API 容器 /data 挂载反查宿主机真实数据目录，避免依赖 shell source .env。
-host_data_dir="$(docker inspect justice-api --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+host_data_dir="$(docker inspect justice-api --format '{{range .Mounts}}{{if eq .Destination "/data/justice"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
 [ -n "$host_data_dir" ] || fail "无法确定 justice-api 的 /data 宿主机挂载目录"
 backup_dir="$host_data_dir/backups"
 [ -d "$backup_dir" ] || fail "备份目录不存在: $backup_dir"
