@@ -1,6 +1,6 @@
 """Regression contract for the retired approval module.
 
-Approval was intentionally removed from the product.  These tests prevent a stale
+Approval was intentionally removed from the product. These tests prevent a stale
 router, permission or ORM import from quietly re-introducing the feature.
 """
 from pathlib import Path
@@ -21,7 +21,13 @@ RETIRED_PERMISSIONS = {
 
 
 def test_approval_api_is_not_mounted():
-    paths = {route.path for route in create_app().routes}
+    # FastAPI/Starlette may expose internal router wrapper objects without a
+    # ``path`` attribute. Only concrete path-bearing routes matter here.
+    paths = {
+        path
+        for route in create_app().routes
+        if (path := getattr(route, "path", None)) is not None
+    }
     assert not any(path.startswith("/api/v1/approvals") for path in paths)
 
 
