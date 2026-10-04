@@ -41,6 +41,8 @@ class TemplateCreateRequest(BaseModel):
     scene: Optional[str] = ""
     writing_guide: Optional[str] = ""
     structure: Optional[List[StructureItem]] = []
+    body_skeleton: Optional[List[StructureItem]] = []
+    format_profile: Optional[str] = "GBT_RULES"
     kb_ids: Optional[List[str]] = []
     visibility: Optional[str] = "official"
     share_scope: Optional[str] = "all"
@@ -64,6 +66,8 @@ class TemplateUpdateRequest(BaseModel):
     scene: Optional[str] = None
     writing_guide: Optional[str] = None
     structure: Optional[List[StructureItem]] = None
+    body_skeleton: Optional[List[StructureItem]] = None
+    format_profile: Optional[str] = None
     kb_ids: Optional[List[str]] = None
     visibility: Optional[str] = None
     share_scope: Optional[str] = None

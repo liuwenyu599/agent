@@ -544,6 +544,10 @@ private fun PreviewPane(
             t["writing_style"].str().takeIf { it.isNotBlank() }?.let {
                 TagChip(it, fg = Muted, bg = SurfaceTonal)
             }
+            t["format_profile"].str().takeIf { it.isNotBlank() }?.let {
+                TagChip(if (it == "GBT_RULES") "GB/T 公文格式" else it,
+                    fg = EmeraldInk, bg = EmeraldSoft)
+            }
             val wc = t["word_count"].int()
             if (wc > 0) TagChip("约 $wc 字", fg = Muted, bg = SurfaceTonal)
         }
@@ -551,7 +555,10 @@ private fun PreviewPane(
         Spacer(Modifier.height(Dimens.space4))
 
         // 章节结构
-        val structure = t["structure"].arr().map { it.str() }.filter { it.isNotBlank() }
+        val structure = t["structure"].arr().mapNotNull { node ->
+            val item = node.obj()
+            (item?.get("name").str().ifBlank { node.str() }).takeIf { it.isNotBlank() }
+        }
         if (structure.isNotEmpty()) {
             ContextBlock(title = "章节结构") {
                 structure.forEachIndexed { i, s ->
@@ -568,6 +575,19 @@ private fun PreviewPane(
                         Spacer(Modifier.width(Dimens.space2))
                         Text(s, fontSize = 12.5.sp, color = Ink, lineHeight = 19.sp)
                     }
+                }
+            }
+            Spacer(Modifier.height(Dimens.space3))
+        }
+
+        val skeleton = t["body_skeleton"].arr().mapNotNull { node ->
+            node.obj()?.get("name").str().takeIf { it.isNotBlank() }
+        }
+        if (skeleton.isNotEmpty()) {
+            ContextBlock(title = "正文段落顺序") {
+                skeleton.forEachIndexed { i, name ->
+                    Text("${i + 1}. $name", fontSize = 12.5.sp, color = Ink,
+                        lineHeight = 19.sp, modifier = Modifier.padding(vertical = 2.dp))
                 }
             }
             Spacer(Modifier.height(Dimens.space3))

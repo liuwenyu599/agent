@@ -6,7 +6,7 @@ and periodic conversation summaries.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from app.application.chat.async_intent_service import AsyncIntentService
 from app.application.chat.service import ChatService
@@ -124,7 +124,8 @@ class AsyncChatService(ChatService):
                                  source: str = "chat",
                                  attachment_ids: Optional[List[str]] = None,
                                  reference_template_id: Optional[str] = None,
-                                 task_reference_ids: Optional[List[str]] = None) -> dict:
+                                 task_reference_ids: Optional[List[str]] = None,
+                                 on_delta: Optional[Callable[[str], None]] = None) -> dict:
         session = self.sessions.get_for_user(session_id, user.id) if session_id else None
         if not session:
             session = self.sessions.add(ChatSession(user_id=user.id, title=message[:30]))
@@ -149,6 +150,7 @@ class AsyncChatService(ChatService):
             build_template_reference_context(reference_template_id, self.db)
             if reference_template_id else None)
         history_messages = self.memory.get_session_context(session.id, self.db)
+        memories = self.memory.get_user_memory(user.id, self.db, query=message)
         user_preference = self._user_preference_block(user.id)
         knowledge_qa = source == "knowledge_qa"
         writing_request = False if knowledge_qa else self.intent.is_writing_request(message)
@@ -176,16 +178,32 @@ class AsyncChatService(ChatService):
                             kb_types=["public", "personal"])
             examples = self.rag.search_examples(message, user.id, top_k=2) \
                 if writing_request else []
-            reply = await self.assistant.achat(
-                message=message, history=history_messages, sources=sources,
-                user_role=user.role, memories=None, examples=examples,
-                system_prompt=system_prompt, template_category=template_category,
-                attachment_context=attachment_context or None,
-                reference_template=reference_template,
-                task_reference_context=task_reference_context,
-                template_reference_context=template_reference_context,
-                user_preference=user_preference, image_paths=image_paths,
-            )
+            if on_delta:
+                chunks = []
+                async for chunk in self.assistant.achat_stream(
+                    message=message, history=history_messages, sources=sources,
+                    user_role=user.role, memories=memories, examples=examples,
+                    system_prompt=system_prompt, template_category=template_category,
+                    attachment_context=attachment_context or None,
+                    reference_template=reference_template,
+                    task_reference_context=task_reference_context,
+                    template_reference_context=template_reference_context,
+                    user_preference=user_preference, image_paths=image_paths,
+                ):
+                    chunks.append(chunk)
+                    on_delta(chunk)
+                reply = "".join(chunks)
+            else:
+                reply = await self.assistant.achat(
+                    message=message, history=history_messages, sources=sources,
+                    user_role=user.role, memories=memories, examples=examples,
+                    system_prompt=system_prompt, template_category=template_category,
+                    attachment_context=attachment_context or None,
+                    reference_template=reference_template,
+                    task_reference_context=task_reference_context,
+                    template_reference_context=template_reference_context,
+                    user_preference=user_preference, image_paths=image_paths,
+                )
 
         doc_number = doc_date = None
         quality_info = content_check_info = None
@@ -230,7 +248,7 @@ class AsyncChatService(ChatService):
                         self.db.commit()
             except Exception as exc:
                 logger.warning("[对话] AI 会话命名失败: %s", exc)
-        if msg_count > 0 and msg_count % 20 == 0:
+        if msg_count > 0 and msg_count % 12 == 0:
             try:
                 await self._summarize_session_async(session.id)
             except Exception as exc:

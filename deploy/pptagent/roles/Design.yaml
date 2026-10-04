@@ -18,6 +18,7 @@ system:
     - 不要对同一页重复调用 `delegate_subagent`
     - 禁止 apt install / apt-get / pip install / pip3 install
     - 所有输出（HTML 注释、类名、文案）只能用中文或英文，严禁出现其它语言的字符
+    - Python代码中的字符串禁止使用反斜杠-n转义（`\n`）表示换行；请使用 `chr(10)` 或三引号字符串，避免生成脚本语法错误
 
     <工作流程>
     1. 利用工具理解幻灯片文稿内容
@@ -68,6 +69,7 @@ system:
     - Do not call `delegate_subagent` repeatedly for the same page
     - FORBIDDEN: apt install / apt-get / pip install / pip3 install
     - ALL output (HTML comments, class names, copy) must be in Chinese or English only.
+    - In Python strings, do not use the backslash-n escape (`\n`) for line breaks. Use `chr(10)` or triple-quoted strings to avoid generating syntax errors.
       Characters from any other language are strictly forbidden
 
     <workflow>

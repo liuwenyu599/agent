@@ -309,7 +309,7 @@ fun AppSearchField(
     val placeholderTint = if (dark) Color.White.copy(alpha = 0.45f) else Muted2
     val textColor = if (dark) Color.White else Ink
     Row(
-        modifier.heightIn(min = Dimens.hControl)
+        modifier.height(36.dp)
             .clip(shape)
             .background(bg)
             .border(1.dp, borderColor, shape)
@@ -320,23 +320,22 @@ fun AppSearchField(
         Icon(Icons.Default.Search, contentDescription = null, tint = iconTint,
             modifier = Modifier.size(Dimens.iconMd))
         Spacer(Modifier.width(Dimens.space2))
-        androidx.compose.material.TextField(
+        androidx.compose.foundation.text.BasicTextField(
             value = value,
             onValueChange = {
                 onValueChange(it)
                 onFocusOpen?.invoke()
             },
-            placeholder = { Text(placeholder, fontSize = 12.5.sp, color = placeholderTint) },
             singleLine = true,
-            modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl),
+            modifier = Modifier.weight(1f).height(20.dp),
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = textColor),
-            colors = TextFieldDefaults.textFieldColors(
-                backgroundColor = Color.Transparent,
-                cursorColor = if (dark) GoldLight else Primary,
-                focusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-            ),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(if (dark) GoldLight else Primary),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text(placeholder, fontSize = 12.5.sp, color = placeholderTint)
+                    inner()
+                }
+            },
         )
     }
 }

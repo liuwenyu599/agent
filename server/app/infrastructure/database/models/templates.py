@@ -42,6 +42,8 @@ class WritingTemplateModel(Base, IdMixin):
     scene: Mapped[Optional[str]] = mapped_column(String(300))
     writing_guide: Mapped[Optional[str]] = mapped_column(Text)
     structure: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    body_skeleton: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    format_profile: Mapped[str] = mapped_column(String(40), default="GBT_RULES")
     kb_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     visibility: Mapped[str] = mapped_column(String(20), default="official")
     share_scope: Mapped[str] = mapped_column(String(20), default="all")

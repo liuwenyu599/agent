@@ -43,10 +43,12 @@ _RESPONSE_CONTRACT = (
     "涉及法条、政策、文号、程序期限、机构职责等可追责事实时，必须有本轮知识库或附件依据；"
     "现有资料不足就明确写“现有知识库未检索到足够依据，暂不能给出可核验结论”，"
     "可以给出下一步核实路径，但不得用模型记忆补充具体法条、文号或政策结论。\n"
-    "- 操作类（用户要求起草/修改/导出/删除）：直接执行，不要先列计划求确认；"
+    "- 操作类（用户要求起草/修改/导出/删除）：先用一句话复述你理解的目标；"
+    "如果缺少会实质影响结果的关键信息，只问一个最关键的问题；信息足够时立即执行，不要重复确认。"
     "写作任务直接给成文正文；完成后一句话说明改了什么、从哪撤销。\n"
-    "- 追问不得停工：工作计划、表达优化等非外部事实内容可按最合理默认先做；"
-    "但缺少可追责事实依据时不得自行补齐，必须留待核实。\n"
+    "- 追问不得停工：对可按合理默认完成的部分，简述采用的理解后继续处理；"
+    "遇到会改变文种、对象、核心请求或外部事实结论的歧义时，先问一个聚焦问题。"
+    "不得为了追问而停止处理已经明确的部分；缺少可追责事实依据时不得自行补齐，必须留待核实。\n"
     "- " + _NUMBER_RULES + "\n"
     "- 法条、文号、人名、日期、数据无出处时必须留空或标注待补，不得自行填充。"
 )
@@ -186,6 +188,12 @@ class WritingAssistant:
             parts.append(f"写作指导：{t['system_prompt']}")
         if t.get("content_template"):
             parts.append(f"结构要求：{t['content_template']}")
+        skeleton = t.get("body_skeleton") or []
+        names = [str(item.get("name", "")).strip() for item in skeleton if isinstance(item, dict)]
+        if names:
+            parts.append("正文段落顺序：" + " → ".join(name for name in names if name))
+        if t.get("format_profile") == "GBT_RULES":
+            parts.append("格式规则集：GBT_RULES。按 GB/T 9704-2012 党政机关公文格式处理标题、正文层级、落款和日期。")
         if t.get("category") == "宣传材料" or t.get("writing_style") in ("公众号推文", "媒体通讯"):
             parts.append("重要：以上结构只是参考范式，请根据本次任务内容灵活组织文章结构"
                          "（活动报道、机制宣传、案例宣传的结构各不相同），不要生搬硬套固定框架。")
@@ -195,11 +203,12 @@ class WritingAssistant:
         return "\n".join(parts)
 
     def _detect_intent(self, message: str) -> str:
-        msg = message.lower()
+        from app.application.chat.intent_service import IntentService
+        if IntentService.is_writing_request(message):
+            return "writing"
+        msg = (message or "").lower()
         if any(k in msg for k in ["查", "第几条", "是什么", "规定", "条款", "内容", "细则"]):
             return "search"
-        if any(k in msg for k in ["写", "起草", "生成", "撰写"]):
-            return "writing"
         if any(k in msg for k in ["总结", "概括", "摘要"]):
             return "summary"
         if any(k in msg for k in ["润色", "修改", "改写"]):
@@ -241,6 +250,7 @@ class WritingAssistant:
 
     def _build_system_prompt(self, message: str, sources: List[Dict],
                              examples: list = None,
+                             memories: List[Dict] = None,
                              system_prompt: str = None,
                              reference_template: Dict = None,
                              task_reference_context: str = None,
@@ -284,6 +294,14 @@ class WritingAssistant:
 
         if user_preference:
             system_prompt = (system_prompt or "") + "\n\n" + user_preference
+        if memories:
+            memory_lines = [f"- {m.get('content', '')}" for m in memories[:5]
+                            if m.get("content")]
+            if memory_lines:
+                system_prompt += (
+                    "\n\n【当前用户的长期记忆】以下仅用于称呼、身份和表达偏好个性化；"
+                    "不得将其当作政策、法律或本轮事实依据：\n" + "\n".join(memory_lines)
+                )
         if reference_template:
             system_prompt += "\n\n" + self._build_reference_template_context(reference_template)
         if task_reference_context:
@@ -332,6 +350,7 @@ class WritingAssistant:
              image_paths: List[str] = None) -> str:
         system_prompt = self._build_system_prompt(
             message, sources, examples=examples, system_prompt=system_prompt,
+            memories=memories,
             reference_template=reference_template,
             task_reference_context=task_reference_context,
             template_reference_context=template_reference_context,

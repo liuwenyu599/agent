@@ -316,12 +316,20 @@ class ChatViewModel(
     fun send(text: String) {
         if (text.isBlank() || sending) return
         messages = messages + ChatMessage("user", text, attachments = attachments)
+        messages = messages + ChatMessage("assistant", "")
         sending = true
         status = null
         scope.launch {
-            when (val r = repo.send(text, currentSessionId, useRag,
-                attachments.map { it.id }, referenceTemplate?.first)) {
+            when (val r = repo.sendStream(text, currentSessionId, useRag,
+                attachments.map { it.id }, referenceTemplate?.first) { delta ->
+                    val last = messages.lastOrNull()
+                    if (last?.role == "assistant") {
+                        messages = messages.dropLast(1) + last.copy(content = last.content + delta)
+                    }
+                }) {
                 is ApiResult.Ok -> {
+                    val placeholder = messages.lastOrNull()?.takeIf { it.role == "assistant" }
+                    if (placeholder != null) messages = messages.dropLast(1)
                     messages = messages + ChatMessage(
                         "assistant", r.data.reply, sources = r.data.sources,
                         documentId = r.data.documentId,
@@ -337,7 +345,12 @@ class ChatViewModel(
                     }
                     attachments = emptyList()
                 }
-                is ApiResult.Err -> status = r.message
+                is ApiResult.Err -> {
+                    if (messages.lastOrNull()?.let { it.role == "assistant" && it.content.isBlank() } == true) {
+                        messages = messages.dropLast(1)
+                    }
+                    status = r.message
+                }
             }
             sending = false
         }

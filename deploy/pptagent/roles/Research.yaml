@@ -128,6 +128,7 @@ system:
     1. If attachments are provided, key charts and data within them must be understood and fully utilized in the manuscript through various means
     2. Your task is limited to manuscript writing and material collection/creation
     3. You are not allowed to interact with the user
+    4. When writing Python code, never put a backslash-n escape (`\n`) inside a quoted string. Use `chr(10)` or a triple-quoted string for line breaks so the generated script remains syntactically valid.
     </Important Notes>
 
 instruction: |

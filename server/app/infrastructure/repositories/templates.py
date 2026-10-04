@@ -19,7 +19,7 @@ _ENTITY_FIELDS = [
     "content_template", "system_prompt", "writing_style", "word_count",
     "need_red_header", "need_signature", "need_date", "need_doc_number",
     "keywords", "is_active", "is_builtin", "created_by", "sort_order", "use_count",
-    "template_kind", "tags", "scene", "writing_guide", "structure", "kb_ids",
+    "template_kind", "tags", "scene", "writing_guide", "structure", "body_skeleton", "format_profile", "kb_ids",
     "visibility", "share_scope", "share_departments", "share_roles", "is_draft",
     "department_code", "created_at", "updated_at",
 ]
@@ -27,7 +27,7 @@ _ENTITY_FIELDS = [
 
 def _to_entity(m: WritingTemplateModel) -> WritingTemplate:
     data = {f: getattr(m, f) for f in _ENTITY_FIELDS}
-    for json_list in ("params_schema", "tags", "structure", "kb_ids",
+    for json_list in ("params_schema", "tags", "structure", "body_skeleton", "kb_ids",
                       "share_departments", "share_roles"):
         if data[json_list] is None:
             data[json_list] = []

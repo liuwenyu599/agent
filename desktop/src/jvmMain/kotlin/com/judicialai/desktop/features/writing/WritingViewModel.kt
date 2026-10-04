@@ -193,6 +193,14 @@ class WritingViewModel(
             documentDate = ctx["document_date"].str(),
             missingFields = ctx["missing_fields"].arr().map { it.str() }.filter { it.isNotBlank() },
         )
+        if (messages.isEmpty()) {
+            messages = ctx["history"].arr().mapNotNull { item ->
+                val entry = item.obj() ?: return@mapNotNull null
+                val role = entry["role"].str()
+                val text = entry["content"].str()
+                if (role.isBlank() || text.isBlank()) null else TaskChatMessage(role, text)
+            }
+        }
         d["current_content"].str().takeIf { it.isNotBlank() }?.let {
             content = it
             serverContent = it

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import java.awt.Window
+import com.judicialai.desktop.design.components.ToastState
 
 /**
  * 窗口会话：每个独立窗口一份。
@@ -19,6 +20,7 @@ import java.awt.Window
  *   因为用户交互必然发生在焦点窗口。
  */
 class WindowSession(val id: String) {
+    val toastState = ToastState()
     /** 本窗口当前页面 */
     var screen by mutableStateOf(AppScreen.HOME)
 

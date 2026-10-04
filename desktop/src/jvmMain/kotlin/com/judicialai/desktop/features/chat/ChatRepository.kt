@@ -187,6 +187,55 @@ class ChatRepository(private val api: ApiClient) {
         }
     }
 
+    suspend fun sendStream(
+        message: String, sessionId: String?, useRag: Boolean,
+        attachmentIds: List<String>, referenceTemplateId: String?,
+        onDelta: (String) -> Unit,
+    ): ApiResult<SendOutcome> {
+        val body = buildMap<String, Any?> {
+            put("message", message)
+            put("session_id", sessionId)
+            put("use_rag", useRag)
+            if (attachmentIds.isNotEmpty()) put("attachment_ids", attachmentIds)
+            if (!referenceTemplateId.isNullOrBlank()) put("reference_template_id", referenceTemplateId)
+        }
+        var outcome: SendOutcome? = null
+        var failure: String? = null
+        val stream = api.postStream(Endpoints.Chat.SEND_STREAM, body, timeoutMs = 180_000) { event ->
+            when (event["type"].str()) {
+                "delta" -> event["text"].str().takeIf { it.isNotEmpty() }?.let(onDelta)
+                "error" -> failure = event["message"].str().ifBlank { "生成失败，请稍后重试" }
+                "done" -> {
+                    val d = event["result"].obj()
+                    val quality = d?.get("quality")?.obj()
+                    outcome = SendOutcome(
+                        reply = d?.get("reply").str(),
+                        sources = d?.get("sources").arr().map(::sourceLabelOf).filter { it.isNotBlank() },
+                        sessionId = d?.get("session_id").str().ifBlank { null },
+                        documentId = d?.get("document_id").str().ifBlank { null },
+                        documentNumber = d?.get("document_number").str().ifBlank { null },
+                        documentDate = d?.get("document_date").str().ifBlank { null },
+                        qualityLevel = quality?.get("level").str().ifBlank { null },
+                        qualityIssues = quality?.get("issues").arr()
+                            .mapNotNull { it.obj()?.get("message")?.str() }
+                            .filter { it.isNotBlank() },
+                        unverifiedCitations = d?.get("content_check")?.obj()?.get("unverified")
+                            .arr().map { it.str() }.filter { it.isNotBlank() },
+                    )
+                }
+            }
+        }
+        if (stream is ApiResult.Err) {
+            if (stream.status == 404) {
+                return send(message, sessionId, useRag, attachmentIds, referenceTemplateId)
+            }
+            return stream
+        }
+        if (failure != null) return ApiResult.Err(null, failure!!)
+        return outcome?.let { ApiResult.Ok(it) }
+            ?: ApiResult.Err(null, "流式响应未完成，请重试")
+    }
+
     /** POST /chat/attachments/upload → {"attachments": [...]} */
     suspend fun uploadAttachments(files: List<File>): ApiResult<List<ChatAttachment>> =
         when (val r = api.upload(Endpoints.Chat.ATTACHMENTS_UPLOAD, "files", files)) {
@@ -213,4 +262,3 @@ class ChatRepository(private val api: ApiClient) {
         return api.downloadPost(path, payload, target)
     }
 }
-

@@ -22,6 +22,18 @@ from app.infrastructure.repositories.templates import (
 logger = get_logger(__name__)
 
 
+def _body_skeleton_from_content(content: str) -> list:
+    """Convert the existing built-in body outline into ordered preview entries."""
+    lines = [line.strip() for line in (content or "").splitlines() if line.strip()]
+    result = []
+    for line in lines:
+        if line.startswith("正文骨架："):
+            line = line.removeprefix("正文骨架：").strip()
+        if line:
+            result.append({"name": line[:120], "guide": ""})
+    return result
+
+
 class TemplateService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -54,6 +66,10 @@ class TemplateService:
                 existing.params_schema = t["params_schema"]
                 existing.content_template = t["content_template"]
                 existing.system_prompt = t.get("system_prompt", "")
+                existing.structure = t.get("structure", [])
+                existing.body_skeleton = (t.get("body_skeleton") or t.get("structure")
+                                          or _body_skeleton_from_content(t.get("content_template", "")))
+                existing.format_profile = t.get("format_profile", "GBT_RULES")
                 existing.writing_style = t.get("writing_style", "正式公文")
                 existing.word_count = t.get("word_count", 1000)
                 existing.need_red_header = t.get("need_red_header", False)
@@ -72,6 +88,10 @@ class TemplateService:
                 params_schema=t["params_schema"],
                 content_template=t["content_template"],
                 system_prompt=t.get("system_prompt", ""),
+                structure=t.get("structure", []),
+                body_skeleton=(t.get("body_skeleton") or t.get("structure")
+                               or _body_skeleton_from_content(t.get("content_template", ""))),
+                format_profile=t.get("format_profile", "GBT_RULES"),
                 writing_style=t.get("writing_style", "正式公文"),
                 word_count=t.get("word_count", 1000),
                 need_red_header=t.get("need_red_header", False),
@@ -151,6 +171,7 @@ class TemplateService:
             "template_kind": t.template_kind, "tags": t.tags or [],
             "scene": t.scene or "", "writing_guide": t.writing_guide or "",
             "structure": t.structure or [], "kb_ids": t.kb_ids or [],
+            "body_skeleton": t.body_skeleton or [], "format_profile": t.format_profile or "GBT_RULES",
             "visibility": t.visibility, "share_scope": t.share_scope,
             "share_departments": t.share_departments or [],
             "share_roles": t.share_roles or [],
@@ -173,6 +194,7 @@ class TemplateService:
             "template_kind": t.template_kind, "tags": t.tags or [],
             "scene": t.scene or "", "writing_guide": t.writing_guide or "",
             "structure": t.structure or [], "kb_ids": t.kb_ids or [],
+            "body_skeleton": t.body_skeleton or [], "format_profile": t.format_profile or "GBT_RULES",
             "visibility": t.visibility, "share_scope": t.share_scope,
             "share_departments": t.share_departments or [],
             "share_roles": t.share_roles or [],
@@ -206,6 +228,9 @@ class TemplateService:
             scene=req.scene or "",
             writing_guide=req.writing_guide or "",
             structure=[s.model_dump() for s in (req.structure or [])],
+            body_skeleton=[s.model_dump() for s in (req.body_skeleton or [])]
+            or [s.model_dump() for s in (req.structure or [])],
+            format_profile=req.format_profile or "GBT_RULES",
             kb_ids=req.kb_ids or [],
             visibility=visibility,
             share_scope=req.share_scope or "all",
@@ -247,6 +272,10 @@ class TemplateService:
             tmpl.params_schema = [p.model_dump() for p in req.params_schema]
         if req.structure is not None:
             tmpl.structure = [s.model_dump() for s in req.structure]
+        if req.body_skeleton is not None:
+            tmpl.body_skeleton = [s.model_dump() for s in req.body_skeleton]
+        if req.format_profile is not None:
+            tmpl.format_profile = req.format_profile
         if req.writing_guide is not None:
             tmpl.writing_guide = req.writing_guide
             if tmpl.template_kind == "writing_ref" \
@@ -356,6 +385,8 @@ class TemplateService:
             "need_doc_number": src.need_doc_number,
             "params_schema": src.params_schema or [],
             "structure": src.structure or [],
+            "body_skeleton": src.body_skeleton or [],
+            "format_profile": src.format_profile or "GBT_RULES",
             "system_prompt": src.system_prompt or "",
             "template_kind": src.template_kind,
             "tags": src.tags or [],
@@ -406,6 +437,8 @@ class TemplateService:
         merged.update({
             "params_schema": getattr(src, "params_schema", None) or [],
             "structure": getattr(src, "structure", None) or [],
+            "body_skeleton": getattr(src, "body_skeleton", None) or [],
+            "format_profile": getattr(src, "format_profile", None) or "GBT_RULES",
             "system_prompt": getattr(src, "system_prompt", None) or "",
             "writing_guide": getattr(src, "writing_guide", None) or "",
             "writing_style": getattr(src, "writing_style", None) or "正式公文",
@@ -459,6 +492,8 @@ class TemplateService:
             scene=str(body.get("scene") or ""),
             writing_guide=str(body.get("writing_guide") or ""),
             structure=body.get("structure") or [],
+            body_skeleton=body.get("body_skeleton") or body.get("structure") or [],
+            format_profile=body.get("format_profile") or "GBT_RULES",
             visibility="department",
         )
         tmpl = self.templates.add(tmpl)

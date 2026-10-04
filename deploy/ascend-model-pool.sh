@@ -82,6 +82,10 @@ launch() {
     --tensor-parallel-size "$tp"
     --max-model-len "$max_len")
 
+  if [[ "$label" == "second-14b" ]]; then
+    cmd+=(--enable-prefix-caching)
+  fi
+
   echo "[$label] devices=$devices port=$port tp=$tp model=$model_path"
   printf 'ASCEND_RT_VISIBLE_DEVICES=%q ' "$devices"
   printf '%q ' "${cmd[@]}"

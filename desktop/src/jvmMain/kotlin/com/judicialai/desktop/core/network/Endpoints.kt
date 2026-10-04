@@ -26,6 +26,7 @@ object Endpoints {
 
     object Chat {
         const val SEND = "/chat/send"
+        const val SEND_STREAM = "/chat/send/stream"
         const val SESSIONS = "/chat/sessions"
         fun session(id: String) = "/chat/sessions/$id"
         fun sessionMessages(id: String) = "/chat/sessions/$id/messages"

@@ -75,7 +75,8 @@ class IntentService:
 
     # ---- 路由判定 ----
 
-    def is_writing_request(self, message: str) -> bool:
+    @staticmethod
+    def is_writing_request(message: str) -> bool:
         """主判据：这条消息是否"要在工作台产出/修改内容"。
 
         - 没有强动作动词 → 兜底看弱线索+指令口吻；
@@ -85,15 +86,15 @@ class IntentService:
         m = (message or "").strip()
         if not m:
             return False
-        has_action = any(k in m for k in self.ACTION_HINTS)
-        has_imperative = any(k in m for k in self._IMPERATIVE_WORDS)
+        has_action = any(k in m for k in IntentService.ACTION_HINTS)
+        has_imperative = any(k in m for k in IntentService._IMPERATIVE_WORDS)
         if not has_action:
             # 兜底：弱线索（文种词/拟）必须配指令口吻才算 workspace
-            if not (has_imperative and any(k in m for k in self.WRITING_HINTS)):
+            if not (has_imperative and any(k in m for k in IntentService.WRITING_HINTS)):
                 return False
         is_question = (
             "？" in m or "?" in m
-            or any(w in m for w in self._QUESTION_WORDS)
+            or any(w in m for w in IntentService._QUESTION_WORDS)
         )
         if is_question and not has_imperative:
             return False

@@ -1,5 +1,7 @@
 """对话路由。路径与响应结构与旧系统一致。"""
 import os
+import json
+import asyncio
 from typing import List
 from urllib.parse import quote
 
@@ -24,6 +26,7 @@ from app.application.knowledge.rag_service import RagService
 from app.application.shared.async_writing_assistant import AsyncWritingAssistant
 from app.core.config import settings
 from app.core.exceptions import AppError, NotFoundError
+from app.core.logging import get_logger
 from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.infrastructure.database import get_db
@@ -37,6 +40,7 @@ from app.infrastructure.repositories.feedback import SqlAlchemyChatFeedbackRepos
 from app.interfaces.deps import get_current_user, require_admin_or_above
 
 router = APIRouter(prefix="/chat", tags=["对话"])
+logger = get_logger(__name__)
 
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -149,6 +153,62 @@ async def chat(req: ChatRequest, user: User = Depends(get_current_user),
     )
     result["message_id"] = assistant_row.id if assistant_row else None
     return result
+
+
+@router.post("/send/stream")
+async def chat_stream(req: ChatRequest, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db),
+                      svc: AsyncChatService = Depends(get_chat_service)):
+    """SSE 端点：分段发送最终回复文本，并附带完整、已落库的权威响应。"""
+    async def events():
+        queue = asyncio.Queue()
+
+        async def generate():
+            try:
+                result = await svc.send_message_async(
+                    user, message=req.message, session_id=req.session_id, use_rag=req.use_rag,
+                    system_prompt=req.system_prompt, template_category=req.template_category,
+                    source=req.source or "chat", attachment_ids=req.attachment_ids,
+                    reference_template_id=req.reference_template_id,
+                    task_reference_ids=req.task_reference_ids,
+                    on_delta=lambda text: queue.put_nowait(("delta", text)),
+                )
+                await queue.put(("done", result))
+            except Exception:
+                logger.exception("/chat/send/stream failed")
+                await queue.put(("error", "对话生成失败，请稍后重试"))
+            finally:
+                await queue.put(("end", None))
+
+        task = asyncio.create_task(generate())
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "delta":
+                    event = {"type": "delta", "text": payload}
+                elif kind == "done":
+                    result = payload
+                    assistant_row = db.scalar(
+                        select(ChatMessageModel)
+                        .where(ChatMessageModel.session_id == result["session_id"],
+                               ChatMessageModel.role == "assistant")
+                        .order_by(ChatMessageModel.created_at.desc(), ChatMessageModel.id.desc())
+                        .limit(1)
+                    )
+                    result["message_id"] = assistant_row.id if assistant_row else None
+                    event = {"type": "done", "result": result}
+                elif kind == "error":
+                    event = {"type": "error", "message": payload}
+                else:
+                    break
+                yield "data: " + json.dumps(event, ensure_ascii=False, default=str) + "\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+    })
 
 
 @router.post("/feedback")

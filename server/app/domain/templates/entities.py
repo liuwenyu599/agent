@@ -33,6 +33,8 @@ class WritingTemplate:
     scene: str = ""
     writing_guide: str = ""
     structure: List[Dict[str, Any]] = field(default_factory=list)
+    body_skeleton: List[Dict[str, Any]] = field(default_factory=list)
+    format_profile: str = "GBT_RULES"
     kb_ids: List[str] = field(default_factory=list)
     visibility: str = "official"  # official=官方 / personal=个人
     share_scope: str = "all"      # all / department / role

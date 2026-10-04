@@ -55,6 +55,7 @@ class AsyncWritingAssistant(WritingAssistant):
                     image_paths: List[str] = None) -> str:
         system_prompt = self._build_system_prompt(
             message, sources, examples=examples, system_prompt=system_prompt,
+            memories=memories,
             reference_template=reference_template,
             task_reference_context=task_reference_context,
             template_reference_context=template_reference_context,
@@ -66,13 +67,24 @@ class AsyncWritingAssistant(WritingAssistant):
         return await self._acomplete_gateway(gateway, messages)
 
     async def achat_stream(self, message: str, history: List[Dict], sources: List[Dict],
-                           user_role: str, system_prompt: str = None,
-                           attachment_context: str = None) -> AsyncIterator[str]:
+                           user_role: str, memories: List[Dict] = None,
+                           examples: list = None, system_prompt: str = None,
+                           template_category: str = None,
+                           attachment_context: str = None,
+                           reference_template: Dict = None,
+                           task_reference_context: str = None,
+                           template_reference_context: str = None,
+                           user_preference: str = None,
+                           image_paths: List[str] = None) -> AsyncIterator[str]:
         system_prompt = self._build_system_prompt(
-            message, sources, system_prompt=system_prompt,
-            attachment_context=attachment_context,
+            message, sources, examples=examples, memories=memories,
+            system_prompt=system_prompt, reference_template=reference_template,
+            task_reference_context=task_reference_context,
+            template_reference_context=template_reference_context,
+            user_preference=user_preference, attachment_context=attachment_context,
         )
-        messages, gateway = self._assemble_messages(message, history, system_prompt)
+        messages, gateway = self._assemble_messages(
+            message, history, system_prompt, image_paths=image_paths)
         stream = getattr(gateway, "acomplete_stream", None)
         if callable(stream):
             async for chunk in stream(messages):

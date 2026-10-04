@@ -76,6 +76,8 @@ class ChatService:
             "need_date": tmpl.need_date,
             "need_doc_number": tmpl.need_doc_number,
             "keywords": tmpl.keywords,
+            "format_profile": tmpl.format_profile or "GBT_RULES",
+            "body_skeleton": tmpl.body_skeleton or [],
         }
 
     @staticmethod
@@ -144,6 +146,7 @@ class ChatService:
             ) or None
 
         history_messages = self.memory.get_session_context(session.id, self.db)
+        memories = self.memory.get_user_memory(user.id, self.db, query=message)
 
         # 第 5 层【用户个人偏好】：服务端按登录用户读取，不接受客户端传值。
         # 对话链路只在此注入一次；写作工作台链路经 agent_system_prompt() 注入，
@@ -193,7 +196,7 @@ class ChatService:
                 history=history_messages,
                 sources=sources,
                 user_role=user.role,
-                memories=None,  # 关闭长期记忆注入（与旧系统一致）
+                memories=memories,
                 examples=examples,
                 system_prompt=system_prompt,
                 template_category=template_category,
@@ -267,7 +270,7 @@ class ChatService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("[对话] AI 会话命名失败: %s", e)
 
-        if msg_count > 0 and msg_count % 20 == 0:
+        if msg_count > 0 and msg_count % 12 == 0:
             try:
                 self.memory.summarize_session(session.id, self.db)
             except Exception as e:
