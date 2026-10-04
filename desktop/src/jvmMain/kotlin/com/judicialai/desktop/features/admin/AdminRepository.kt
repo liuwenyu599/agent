@@ -52,8 +52,17 @@ class AdminRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
-    suspend fun createKb(name: String, description: String) =
-        api.post(Endpoints.Knowledge.CREATE, mapOf("name" to name, "description" to description))
+    /**
+     * 新建知识库。kbType 必须显式传：服务端缺省是 personal（仅创建者可见），
+     * 管理后台不指定类型会建出一个谁都看不见的私人库。
+     */
+    suspend fun createKb(name: String, description: String, kbType: String) =
+        api.post(Endpoints.Knowledge.CREATE,
+            mapOf("name" to name, "description" to description, "kb_type" to kbType))
+
+    /** 恢复归档文档（重新发布 + 重建向量索引） */
+    suspend fun unarchive(docId: String) =
+        api.post(Endpoints.Knowledge.documentUnarchive(docId), emptyMap<String, String>())
 
     suspend fun deleteKb(id: String) = api.del(Endpoints.Knowledge.kb(id))
 

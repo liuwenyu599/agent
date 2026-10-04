@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.platform.rememberServerImage
+import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog

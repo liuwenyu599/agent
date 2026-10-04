@@ -195,6 +195,24 @@ def archive_document(doc_id: str, user: User = Depends(require_admin_or_above),
     return _archive_with_index_cleanup(doc_id, user, svc)
 
 
+@router.post("/documents/{doc_id}/unarchive")
+def unarchive_document(doc_id: str, user: User = Depends(require_admin_or_above),
+                       db: Session = Depends(get_db),
+                       svc: KnowledgeService = Depends(get_knowledge_service)):
+    """恢复归档文档：退出归档状态并重新发布，随后重建向量索引。
+
+    归档会物理删除向量，恢复必须补回索引，否则文档虽显示「已发布」却检索不到。
+    """
+    result = svc.unarchive_document(doc_id, user)
+    try:
+        result.update(get_document_service().retry_index(db, doc_id))
+    except Exception as exc:  # 索引失败不影响状态恢复，用户可另行「重建索引」
+        logger.exception("[RAG] 恢复归档后重建向量失败: doc=%s", doc_id)
+        result["indexing_status"] = "failed"
+        result["indexing_error"] = str(exc)[:500]
+    return result
+
+
 @router.get("/batch-tasks")
 def list_batch_tasks(user: User = Depends(get_current_user)):
     return {"tasks": BatchImportTask.list_by_user(user.id)}

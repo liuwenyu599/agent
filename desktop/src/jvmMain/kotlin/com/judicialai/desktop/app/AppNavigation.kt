@@ -95,6 +95,12 @@ object AppNav {
     val knowledgeAdminItems: List<NavItem> = listOf(
         NavItem(AppScreen.DEPARTMENT, "智能助手配置", Icons.Default.Tune,
             "业务口径、工作要求、推荐任务与知识模板关联"),
+        // 文档审核：服务端 /knowledge/pending 与 /knowledge/review 都是
+        // require_knowledge_admin / assert_can_review，明确授权给科室管理员。
+        // 但导航里只有 developer 才有管理后台入口 —— 科室管理员点不到，本科室
+        // 上传的文档会永远卡在「待审核」。adminTab=3 直达「文档审核」子页。
+        NavItem(AppScreen.ADMIN, "文档审核", Icons.Default.CheckCircle,
+            "本科室待审文档的通过 / 驳回 / 归档", adminTab = 3),
     )
 
     /** 全局导航抽屉分组 */

@@ -267,6 +267,26 @@ class KnowledgeService:
         self.db.commit()
         return {"message": "Document archived"}
 
+    def unarchive_document(self, doc_id: str, user=None) -> dict:
+        """恢复归档文档：状态回到 published，**向量索引由调用方重建**。
+
+        归档是「退出检索范围」而不是「删除」：只进不出会让归档变成一条单行道，
+        用户误归档后文档在管理后台彻底消失、无从找回。
+        """
+        doc = self.docs.get_model(doc_id)
+        if not doc:
+            raise NotFoundError("Document not found")
+        if user is not None:
+            if not (self.access.can_manage_doc(doc, user)
+                    or doc.uploaded_by == getattr(user, "id", "")):
+                raise PermissionDeniedError("No permission")
+        if doc.status != "archived":
+            raise AppError(409, "仅已归档文档可以恢复")
+        doc.status = "published"
+        self.db.commit()
+        self.db.refresh(doc)
+        return {"id": doc.id, "status": doc.status, "message": "已恢复发布"}
+
     def list_kb_documents(self, kb_id: str, user, status: str = "published",
                           page: int = 1, page_size: int = 20,
                           sort: str = "newest") -> dict:
@@ -370,12 +390,13 @@ class KnowledgeService:
             if not self.access.can_manage_kb(
                     self.db.get(KnowledgeBaseModel, d.kb_id), user):
                 continue
-            result.append({
-                "id": d.id, "title": d.title, "doc_type": d.doc_type,
-                "uploaded_by": m.uploader.real_name if m and m.uploader else None,
-                "uploaded_at": d.created_at,
-                "kb_name": m.knowledge_base.name if m and m.knowledge_base else None,
-            })
+            # 与 /knowledge/documents 共用同一套展示字段：管理后台三个子页是同一张
+            # 表、读的是同一批列名。这里若只下发 uploaded_by / uploaded_at，
+            # 「待审核」页的「上传者」「时间」两列会恒为空白，另外两页却正常。
+            row = self.docs._display_dict(m)
+            row["uploaded_by"] = row.get("uploader_name")
+            row["uploaded_at"] = row.get("created_at")
+            result.append(row)
         return result
 
     def assert_can_review(self, doc_id: str, user):

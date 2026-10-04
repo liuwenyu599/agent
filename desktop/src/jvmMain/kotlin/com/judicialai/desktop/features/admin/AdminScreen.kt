@@ -84,6 +84,7 @@ fun AdminScreen() {
     var tab by remember(systemAdmin) { mutableStateOf(initialTab()) }
 
     LaunchedEffect(Unit, systemAdmin) {
+        vm.systemAdmin = systemAdmin
         if (systemAdmin) vm.loadAll()
         else {
             // 科室管理员只加载其职责范围内的数据，不触发系统级用户/全局统计接口。
@@ -104,6 +105,17 @@ fun AdminScreen() {
                 Text(if (systemAdmin) "管理后台" else "知识管理",
                     fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             }
+            // 手动刷新：列表只在进入与操作成功后刷新，没有入口的话用户改了数据看不到
+            AppButton(
+                if (vm.busy) "刷新中…" else "刷新",
+                onClick = {
+                    if (systemAdmin) vm.loadAll()
+                    else { vm.loadKbs(); vm.loadDocs() }
+                },
+                enabled = !vm.busy,
+                kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY,
+                size = com.judicialai.desktop.design.components.AppButtonSize.SM,
+            )
         }
         val tabs = if (systemAdmin)
             listOf("数据概览", "用户管理", "知识库管理", "文档审核")
@@ -191,6 +203,7 @@ private fun UsersTab(vm: AdminViewModel) {
     var editUser by remember { mutableStateOf<JsonObject?>(null) }
     var resetUser by remember { mutableStateOf<JsonObject?>(null) }
     var disableUser by remember { mutableStateOf<JsonObject?>(null) }
+    var deleteUser by remember { mutableStateOf<JsonObject?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -227,12 +240,13 @@ private fun UsersTab(vm: AdminViewModel) {
             },
         ) { idx, _ ->
             val u = vm.users[idx]
+            val isSelf = u["username"].str() == AppState.username
             Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space1)) {
                 com.judicialai.desktop.design.components.AppLinkButton("编辑",
-                    onClick = { editUser = u })
+                    onClick = { editUser = u }, enabled = !vm.busy)
                 com.judicialai.desktop.design.components.AppLinkButton("重置密码",
-                    onClick = { resetUser = u })
-                if (u["username"].str() == AppState.username) {
+                    onClick = { resetUser = u }, enabled = !vm.busy)
+                if (isSelf) {
                     Text("当前账号", fontSize = 11.5.sp, color = Muted2)
                 } else {
                     com.judicialai.desktop.design.components.AppLinkButton(
@@ -241,8 +255,12 @@ private fun UsersTab(vm: AdminViewModel) {
                             if (u["is_active"].bool()) disableUser = u
                             else vm.toggleUser(u["id"].str(), true)
                         },
+                        enabled = !vm.busy,
                         color = if (u["is_active"].bool()) Danger else Ok,
                     )
+                    // 删除账号：仓库早已接好 DELETE /users/{id}，此前界面没有入口
+                    com.judicialai.desktop.design.components.AppLinkButton("删除",
+                        onClick = { deleteUser = u }, enabled = !vm.busy, color = Danger)
                 }
             }
         }
@@ -283,8 +301,34 @@ private fun UsersTab(vm: AdminViewModel) {
         }
     }
 
+    deleteUser?.let { u ->
+        AppDialog(
+            onDismissRequest = { deleteUser = null },
+            title = "删除用户",
+            subtitle = "删除后该账号及其个人知识库将无法恢复；若只是停用，请改用「禁用」。",
+            width = 480.dp,
+            actions = {
+                AppButton("取消", onClick = { deleteUser = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认删除", onClick = {
+                    vm.deleteUser(u["id"].str())
+                    deleteUser = null
+                }, kind = com.judicialai.desktop.design.components.AppButtonKind.DANGER)
+            },
+        ) {
+            Text("用户：${u["username"].str()} · ${u["real_name"].str().ifBlank { "未填写姓名" }}",
+                fontSize = 13.sp, color = Ink2)
+            Spacer(Modifier.height(Dimens.space2))
+            Text("所属科室：${vm.deptLabel(u["department_code"].str()).ifBlank { "未归口" }} · " +
+                "角色：${vm.roleLabel(u["role"].str())}",
+                fontSize = 12.sp, color = Muted)
+        }
+    }
+
     resetUser?.let { u ->
         var pwd by remember { mutableStateOf("") }
+        var pwdError by remember { mutableStateOf<String?>(null) }
         AppDialog(
             onDismissRequest = { resetUser = null },
             title = "重置密码",
@@ -294,16 +338,18 @@ private fun UsersTab(vm: AdminViewModel) {
                 AppButton("取消", onClick = { resetUser = null },
                     kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
                 Spacer(Modifier.width(Dimens.space2))
+                // 不用 enabled 静默禁用：按钮点不动又不给原因，就是典型的「点了没反应」
                 AppButton("确定重置", onClick = {
-                    if (pwd.length >= 6) {
-                        vm.resetPassword(u["id"].str(), pwd); resetUser = null
-                    }
-                }, enabled = pwd.length >= 6)
+                    if (pwd.length < 6) pwdError = "密码至少 6 位"
+                    else { vm.resetPassword(u["id"].str(), pwd); resetUser = null }
+                })
             },
         ) {
-            AppTextField(pwd, { pwd = it }, label = "新密码", placeholder = "初始密码可用 123456",
-                hint = if (pwd.isNotBlank() && pwd.length < 6) "密码至少 6 位" else null,
-                error = pwd.isNotBlank() && pwd.length < 6)
+            AppTextField(pwd, { pwd = it; pwdError = null }, label = "新密码",
+                placeholder = "初始密码可用 123456",
+                hint = if (pwd.isBlank()) null else "已输入 ${pwd.length} 位",
+                error = pwdError != null)
+            pwdError?.let { FieldError(it) }
         }
     }
 
@@ -456,21 +502,82 @@ private fun roleRoleDesc(role: String): String = when (role) {
 @Composable
 private fun KbTab(vm: AdminViewModel) {
     var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
-    AdminTable(
-        headers = listOf("#" to 46, "知识库名称" to 320, "类型" to 90,
-            "文档数" to 90, "创建时间" to 140, "操作" to 120),
-        rows = vm.kbs.mapIndexed { i, kb ->
-            listOf("${i + 1}", kb["name"].str(),
-                when {
-                    kb["department_code"].str().isNotBlank() -> "科室"
-                    kb["type"].str() == "public" -> "公共"
-                    else -> "个人"
-                },
-                "${kb["doc_count"].int()}", kb["created_at"].str().take(10), "ops")
-        },
-    ) { idx, _ ->
-        com.judicialai.desktop.design.components.AppLinkButton("删除",
-            onClick = { pendingDelete = vm.kbs[idx] }, color = Danger)
+    var showCreate by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Eyebrow("知识库归属与文档规模", Modifier.weight(1f))
+            AppButton("＋ 新建知识库", onClick = { showCreate = true },
+                icon = Icons.Default.Add,
+                size = com.judicialai.desktop.design.components.AppButtonSize.SM)
+        }
+        AdminTable(
+            headers = listOf("#" to 46, "知识库名称" to 300, "类型" to 90,
+                "文档数" to 90, "创建时间" to 140, "操作" to 120),
+            rows = vm.kbs.mapIndexed { i, kb ->
+                listOf("${i + 1}", kb["name"].str(),
+                    when {
+                        kb["department_code"].str().isNotBlank() -> "科室"
+                        kb["type"].str() == "public" -> "公共"
+                        else -> "个人"
+                    },
+                    "${kb["doc_count"].int()}", kb["created_at"].str().take(10), "ops")
+            },
+        ) { idx, _ ->
+            com.judicialai.desktop.design.components.AppLinkButton("删除",
+                onClick = { pendingDelete = vm.kbs[idx] }, color = Danger,
+                enabled = !vm.busy)
+        }
+    }
+
+    // 新建知识库：此前只有「删除」，管理后台删完就建不回来
+    if (showCreate) {
+        var name by remember { mutableStateOf("") }
+        var desc by remember { mutableStateOf("") }
+        var type by remember {
+            mutableStateOf(if (vm.systemAdmin) "public" else "department")
+        }
+        var err by remember { mutableStateOf<String?>(null) }
+        val typeOptions = buildList {
+            if (vm.systemAdmin) add(SelectOption("public", "公共知识库",
+                "全局可见，仅系统管理员可创建"))
+            add(SelectOption("department", "科室知识库", "归属当前账号所在科室"))
+        }
+        AppDialog(
+            onDismissRequest = { showCreate = false },
+            title = "新建知识库",
+            subtitle = "可见范围决定谁能检索到库内文档；创建后可在知识库页上传文档。",
+            icon = Icons.Default.AutoAwesome,
+            width = 520.dp,
+            actions = {
+                AppButton("取消", onClick = { showCreate = false },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("创建", onClick = {
+                    err = when {
+                        name.isBlank() -> "请填写知识库名称"
+                        type.isBlank() -> "请选择可见范围"
+                        else -> { vm.createKb(name.trim(), desc.trim(), type); null }
+                    }
+                    if (err == null) showCreate = false
+                })
+            },
+        ) {
+            AppTextField(name, { name = it; err = null }, label = "知识库名称",
+                placeholder = "如：行政复议业务知识库", error = err == "请填写知识库名称")
+            AppTextField(desc, { desc = it }, label = "说明", placeholder = "选填",
+                singleLine = false, minLines = 2)
+            AppSelect(
+                label = "可见范围",
+                value = type,
+                options = typeOptions,
+                onSelect = { type = it; err = null },
+                placeholder = "请选择可见范围",
+                hint = "不指定时服务端默认建「个人知识库」（仅本人可见）",
+                error = err == "请选择可见范围",
+            )
+            err?.let { FieldError(it) }
+        }
     }
 
     pendingDelete?.let { kb ->
@@ -500,15 +607,21 @@ private fun DocsTab(vm: AdminViewModel) {
     var sub by remember { mutableStateOf(0) }
     var pendingReview by remember { mutableStateOf<Pair<JsonObject, String>?>(null) }
     var pendingArchive by remember { mutableStateOf<JsonObject?>(null) }
+    var pendingUnarchive by remember { mutableStateOf<JsonObject?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(Dimens.space4)) {
         AppSegmentedTabs(
             tabs = listOf("待审核 (${vm.pendingDocs.size})", "已发布 (${vm.publishedDocs.size})",
-                "已驳回 (${vm.rejectedDocs.size})"),
+                "已驳回 (${vm.rejectedDocs.size})", "已归档 (${vm.archivedDocs.size})"),
             selectedIndex = sub,
             onSelect = { sub = it },
         )
-        val docs = when (sub) { 0 -> vm.pendingDocs; 1 -> vm.publishedDocs; else -> vm.rejectedDocs }
+        val docs = when (sub) {
+            0 -> vm.pendingDocs
+            1 -> vm.publishedDocs
+            2 -> vm.rejectedDocs
+            else -> vm.archivedDocs
+        }
         AdminTable(
             headers = listOf("#" to 46, "文档标题" to 320, "类型" to 80,
                 "所属知识库" to 150, "上传者" to 110, "时间" to 140, "操作" to 170),
@@ -520,15 +633,25 @@ private fun DocsTab(vm: AdminViewModel) {
             },
         ) { idx, _ ->
             val d = docs[idx]
-            Row {
-                if (sub == 0) {
-                    com.judicialai.desktop.design.components.AppLinkButton("通过",
-                        onClick = { pendingReview = d to "approved" }, color = Ok)
-                    com.judicialai.desktop.design.components.AppLinkButton("驳回",
-                        onClick = { pendingReview = d to "rejected" }, color = Danger)
-                } else if (sub == 1) {
-                    com.judicialai.desktop.design.components.AppLinkButton("归档",
-                        onClick = { pendingArchive = d }, color = Danger)
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space1)) {
+                when (sub) {
+                    0 -> {
+                        com.judicialai.desktop.design.components.AppLinkButton("通过",
+                            onClick = { pendingReview = d to "approved" }, color = Ok,
+                            enabled = !vm.busy)
+                        com.judicialai.desktop.design.components.AppLinkButton("驳回",
+                            onClick = { pendingReview = d to "rejected" }, color = Danger,
+                            enabled = !vm.busy)
+                    }
+                    1 -> com.judicialai.desktop.design.components.AppLinkButton("归档",
+                        onClick = { pendingArchive = d }, color = Danger, enabled = !vm.busy)
+                    // 驳回不是终态：误驳回必须能复核回已发布
+                    2 -> com.judicialai.desktop.design.components.AppLinkButton("重新通过",
+                        onClick = { pendingReview = d to "approved" }, color = Ok,
+                        enabled = !vm.busy)
+                    // 归档也不是终态：只进不出等于数据消失
+                    else -> com.judicialai.desktop.design.components.AppLinkButton("恢复发布",
+                        onClick = { pendingUnarchive = d }, color = Ok, enabled = !vm.busy)
                 }
             }
         }
@@ -538,6 +661,7 @@ private fun DocsTab(vm: AdminViewModel) {
         var comment by remember(pendingReview) {
             mutableStateOf(if (action == "approved") "审核通过" else "")
         }
+        var commentError by remember { mutableStateOf<String?>(null) }
         val rejected = action == "rejected"
         AppDialog(
             onDismissRequest = { pendingReview = null },
@@ -550,11 +674,17 @@ private fun DocsTab(vm: AdminViewModel) {
                 AppButton("取消", onClick = { pendingReview = null },
                     kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
                 Spacer(Modifier.width(Dimens.space2))
+                // 旧实现把「确认驳回」做成 enabled=false：意见一空按钮就点不动，
+                // 且没有任何提示 —— 这正是用户说的「点击无反应」。改为点击时校验。
                 AppButton(if (rejected) "确认驳回" else "确认通过", onClick = {
-                    vm.review(doc["id"].str(), action,
-                        comment.ifBlank { if (rejected) "" else "审核通过" })
-                    pendingReview = null
-                }, enabled = !rejected || comment.isNotBlank(),
+                    if (rejected && comment.isBlank()) {
+                        commentError = "请写明驳回原因，否则无法提交"
+                    } else {
+                        vm.review(doc["id"].str(), action,
+                            comment.ifBlank { "审核通过" })
+                        pendingReview = null
+                    }
+                },
                     kind = if (rejected)
                         com.judicialai.desktop.design.components.AppButtonKind.DANGER
                     else com.judicialai.desktop.design.components.AppButtonKind.PRIMARY)
@@ -563,12 +693,34 @@ private fun DocsTab(vm: AdminViewModel) {
             Text(doc["title"].str().ifBlank { "未命名文档" }, fontSize = 13.sp, color = Ink)
             AppTextField(
                 value = comment,
-                onValueChange = { comment = it },
+                onValueChange = { comment = it; commentError = null },
                 label = "审核意见",
                 placeholder = if (rejected) "请写明不符合要求的具体原因" else "可补充审核意见",
                 singleLine = false,
                 minLines = 3,
+                error = commentError != null,
             )
+            commentError?.let { FieldError(it) }
+        }
+    }
+
+    pendingUnarchive?.let { doc ->
+        AppDialog(
+            onDismissRequest = { pendingUnarchive = null },
+            title = "恢复已归档文档",
+            subtitle = "恢复后文档重新进入发布列表与检索范围，并会重建向量索引。",
+            width = 480.dp,
+            actions = {
+                AppButton("取消", onClick = { pendingUnarchive = null },
+                    kind = com.judicialai.desktop.design.components.AppButtonKind.SECONDARY)
+                Spacer(Modifier.width(Dimens.space2))
+                AppButton("确认恢复", onClick = {
+                    vm.unarchive(doc["id"].str())
+                    pendingUnarchive = null
+                })
+            },
+        ) {
+            Text(doc["title"].str().ifBlank { "未命名文档" }, fontSize = 13.sp, color = Ink2)
         }
     }
 

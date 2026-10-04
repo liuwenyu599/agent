@@ -55,6 +55,7 @@ object Endpoints {
         const val ASK_SESSIONS = "/knowledge/ask/sessions"
         fun document(docId: String) = "/knowledge/documents/$docId"
         fun documentArchive(docId: String) = "/knowledge/documents/$docId/archive"
+        fun documentUnarchive(docId: String) = "/knowledge/documents/$docId/unarchive"
     }
 
     object WritingTasks {
