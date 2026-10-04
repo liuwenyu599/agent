@@ -97,11 +97,16 @@ class SqlAlchemyFormatRuleRepository(FormatRuleRepository):
         return [_rule_to_entity(m) for m in self.db.scalars(q).all()]
 
     def list_for_check(self, rule_ids: Optional[List[str]]) -> List[FormatRule]:
+        """取参与本次校验的规则。
+
+        不指定规则时用**全部启用规则**：``is_default`` 只表示「国标预置 / 新建表单里
+        默认勾选」，不再作为「是否参与校验」的开关。否则桌面端新建规则时「默认规则」
+        复选框默认未勾选（is_default=false），用户保存后规则静默不生效——表现为
+        「明明配了规则，校验却查不出问题」。
+        """
         q = select(FormatRuleModel).where(FormatRuleModel.is_active == True)  # noqa: E712
         if rule_ids:
             q = q.where(FormatRuleModel.id.in_(rule_ids))
-        else:
-            q = q.where(FormatRuleModel.is_default == True)  # noqa: E712
         return [_rule_to_entity(m) for m in self.db.scalars(q).all()]
 
     def add(self, rule: FormatRule) -> FormatRule:

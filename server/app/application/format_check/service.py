@@ -673,14 +673,20 @@ class FormatCheckService:
         return self._workbench_payload(record)
 
     def undo_issue(self, record_id: str, issue_id: int, user: User) -> dict:
-        """撤销单条修正。未知 issue_id → 200 空操作（移除不存在元素本就是 no-op）。"""
+        """撤销单条修正。未知 issue_id → 200 空操作（移除不存在元素本就是 no-op）。
+
+        撤销 = 回到「未处理」：同时从 resolved_ids 里摘掉，否则会出现
+        「界面显示已修正 ✓，但文档里修正已被撤掉」的自相矛盾状态。
+        """
         try:
             issue_id = int(issue_id)
         except (TypeError, ValueError):
             issue_id = -1
         record = self._load_record(record_id, user)
         applied = [i for i in load_id_list(record.applied_ids) if i != issue_id]
+        resolved = [i for i in load_id_list(record.resolved_ids) if i != issue_id]
         record.applied_ids = applied
+        record.resolved_ids = resolved
         self.records.update(record)
         return self._workbench_payload(record)
 
@@ -693,7 +699,13 @@ class FormatCheckService:
           「已修正」由 resolved_ids 表达。
         - 段落位移补偿：应用过 ``delete_paragraph`` 后后续段落下标会前移，
           匹配键用 ``paragraph_index - offset(p)``。
-        - 复检后 applied_ids 重置为 []，resolved_ids 保留。
+        - 复检后 applied_ids **保留**已写入当前稿的修正（含本次确认已解决的），
+          resolved_ids 累计保留。
+
+        applied_ids 不能重置为 []：当前稿是由「原始文件 + applied_ids」实时重放
+        出来的，一旦清空，已应用的修正会全部消失——表现为「点了重新校验，刚才改的
+        全没了，导出修正稿也是原文」。因此语义固定为：
+        ``applied_ids`` = 已写入当前稿的修正；``resolved_ids`` = 复检确认已生效的修正。
         """
         record = self._load_record(record_id, user)
         issues: List[Dict] = list(record.issues or [])
@@ -777,22 +789,25 @@ class FormatCheckService:
             [i for i in issues if isinstance(i, dict) and i.get("source") == "rule"])
         record.ai_issue_count = len(
             [i for i in issues if isinstance(i, dict) and i.get("source") == "ai"])
-        record.applied_ids = []           # 复检后重置
+        # 已应用的修正必须留在 applied_ids 里：当前稿靠它从原始文件重放，
+        # 清空会让「复检确认过的修改」连同「导出修正稿」一起退回原文。
+        record.applied_ids = sorted(set(applied) | resolved)
         record.resolved_ids = sorted(resolved)
         self.records.update(record)
 
         logger.info(
-            "记录 %s 复检完成：新增 %d 条，累计已解决 %d 条，applied_ids 已重置",
-            record.id, len(added), len(record.resolved_ids),
+            "记录 %s 复检完成：新增 %d 条，累计已解决 %d 条，保留已应用修正 %d 条",
+            record.id, len(added), len(record.resolved_ids), len(record.applied_ids),
         )
         return {
             "id": record.id, "record_id": record.id,
             "filename": record.filename, "file_type": record.file_type,
-            "check_mode": "hybrid" if result.get("ai_used") else "rule",
+            "check_mode": ("ai_only" if not rules
+                           else ("hybrid" if result.get("ai_used") else "rule")),
             "ai_used": result.get("ai_used", False),
             "issue_count": len(issues),
             "open_issue_count": _open_issue_count(record),
-            "applied_ids": [],
+            "applied_ids": record.applied_ids,
             "resolved_ids": record.resolved_ids,
             "added_count": len(added),
             "issues": issues,
@@ -902,8 +917,13 @@ class FormatCheckService:
     def create_rule(self, req, admin: User) -> dict:
         if req.target not in VALID_RULE_TARGETS:
             raise AppError(400, f"target 必须是: {', '.join(VALID_RULE_TARGETS)}")
+        checks = _sanitize_checks(req.target, req.checks)
+        if not checks:
+            # 与 AI 编译路径同一道闸：存进去一条空规则，界面上会显示「规则已保存」
+            # 但校验永远查不出问题，用户无从判断是规则没生效还是文档本来就合规。
+            raise AppError(400, "没有可执行的校验项，请先用「AI 生成校验项」生成后再保存")
         rule = self.rules.add(FormatRule(
-            name=req.name, target=req.target, checks=req.checks,
+            name=req.name, target=req.target, checks=checks,
             severity=req.severity, is_default=req.is_default,
             is_active=req.is_active, remark=req.remark, created_by=admin.id,
         ))
@@ -915,9 +935,12 @@ class FormatCheckService:
         rule = self.rules.get(rule_id)
         if not rule:
             raise NotFoundError("Rule not found")
+        checks = _sanitize_checks(req.target, req.checks)
+        if not checks:
+            raise AppError(400, "没有可执行的校验项，请先用「AI 生成校验项」生成后再保存")
         rule.name = req.name
         rule.target = req.target
-        rule.checks = req.checks
+        rule.checks = checks
         rule.severity = req.severity
         rule.is_default = req.is_default
         rule.is_active = req.is_active

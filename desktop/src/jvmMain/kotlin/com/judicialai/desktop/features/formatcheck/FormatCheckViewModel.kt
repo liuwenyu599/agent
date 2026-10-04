@@ -162,7 +162,8 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     fun saveEditorEdits() {
         val id = currentRecordId
         if (id.isNullOrBlank()) { error = "请先打开一条校验记录"; return }
-        if (!editorDirty || busy) return
+        if (busy) return
+        if (!editorDirty) { status = "没有待保存的修改"; return }
         val texts = editorText.text.split('\n')
         if (texts.all { it.isBlank() }) { error = "正文不能为空"; return }
         busy = true
@@ -371,12 +372,12 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                     else if (pc is ApiResult.Err) fail("读取「当前版本」段落失败", pc.message)
                     // 复检后段落已刷新，编辑器跟随当前选中版本重载
                     loadEditor(if (version == DocVersion.ORIGINAL) paragraphsOriginal else paragraphsCurrent)
-                    // 纯 AI 校验记录（check_mode == ai_only，无规则）不支持规则复检：
-                    // 后端会返回 skipped_reason=ai_only_record。这不是错误，给一条中性说明，
-                    // 否则用户点「重新校验」会觉得什么都没发生。
-                    val skipped = o["skipped_reason"].str()
-                    notice = if (skipped == "ai_only_record") {
-                        "该记录为纯 AI 校验模式，规则复检不适用，本次未产生复检结果。"
+                    // 纯 AI 校验记录（无格式规则）：复检只重跑 AI 内容审校，
+                    // 给一条中性说明，否则用户点「重新校验」会觉得什么都没发生。
+                    // 服务端不下发 skipped_reason，判据是 check_mode=ai_only。
+                    val aiOnly = o["check_mode"].str() == "ai_only"
+                    notice = if (aiOnly) {
+                        "该记录为纯 AI 校验模式（未配置格式规则），本次只重跑了 AI 内容审校。"
                     } else {
                         null
                     }
@@ -564,7 +565,9 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             "target" to rule["target"].str().ifBlank { "body" },
             "checks" to (rule["checks"] ?: kotlinx.serialization.json.JsonObject(emptyMap())),
             "severity" to rule["severity"].str().ifBlank { "error" },
-            "is_default" to false,
+            // 复制＝同配置副本：原规则是默认规则时副本也应是，否则复制出来的规则
+            // 在列表里看着一样、行为却不同。
+            "is_default" to rule["is_default"].bool(false),
             "is_active" to rule["is_active"].bool(true),
             "remark" to rule["remark"].str(),
         )
@@ -750,7 +753,9 @@ data class RuleForm(
     val severity: String = "error",
     val checksJson: String = "{}",
     val description: String = "",
-    val isDefault: Boolean = false,
+    // 校验是否启用与 is_default 无关（服务端按 is_active 取全部启用规则），
+    // 这里只作为「新建时默认勾选」的展示默认值，与服务端 DTO 默认保持一致。
+    val isDefault: Boolean = true,
     val isActive: Boolean = true,
 )
 

@@ -156,6 +156,26 @@ def _fmt_value(kind: str, value) -> str:
     return str(value)
 
 
+def _numbered_with_real_index(paragraphs, budget: int) -> str:
+    """按**真实段落下标**给正文编号（1 起），超预算即停。
+
+    AI 只能看到文本，段号必须显式标注；用 enumerate(paragraphs) 的真实下标，
+    才能与 issue.paragraph_index（界面「定位第 N 段」使用）严格对齐。
+    """
+    lines: List[str] = []
+    used = 0
+    for idx, p in enumerate(paragraphs):
+        raw = (p.text or "").strip()
+        if not raw:
+            continue
+        line = f"[第{idx + 1}段] {raw}"
+        if used + len(line) > budget:
+            break
+        lines.append(line)
+        used += len(line)
+    return "\n".join(lines)
+
+
 class FormatCheckEngine:
     """格式校验引擎：规则校验 + AI 辅助 + 自动修正。"""
 
@@ -259,7 +279,13 @@ class FormatCheckEngine:
         # ---- AI 辅助：与确定性规则同时执行，不互相替代 ----
         ai_used = False
         if use_ai and self.assistant is not None:
-            ai_issues = self._ai_check(full_text[:settings.FORMAT_CHECK_AI_BUDGET], rules)
+            # 段号必须与 UI 定位用的真实下标一致：文档里夹空段时，按「非空段」重新
+            # 编号会让 AI 报的段落整体前移，界面上「定位第 N 段」就会高亮错段。
+            ai_issues = self._ai_check(
+                full_text[:settings.FORMAT_CHECK_AI_BUDGET], rules,
+                numbered_text=_numbered_with_real_index(paragraphs,
+                                                        settings.FORMAT_CHECK_AI_BUDGET),
+            )
             if ai_issues is not None:
                 issues.extend(ai_issues)
                 ai_used = True
@@ -526,16 +552,23 @@ class FormatCheckEngine:
         return issues
 
     # ================= AI 辅助判断 =================
-    def _ai_check(self, text: str, rules: List[Dict]) -> Optional[List[Dict]]:
-        """让 AI 判断规则难以表达的格式/规范问题。返回 None 表示 AI 不可用。"""
+    def _ai_check(self, text: str, rules: List[Dict],
+                  numbered_text: Optional[str] = None) -> Optional[List[Dict]]:
+        """让 AI 判断规则难以表达的格式/规范问题。返回 None 表示 AI 不可用。
+
+        :param numbered_text: 已按**真实段落下标**编号的正文；不给时退化为按非空
+            行编号（纯文本场景没有下标可言）。
+        """
         if not text.strip():
             return []
         rule_brief = "；".join(
             f"{r['name']}（{r['target']}）" for r in rules[:15]
         ) or "（暂无已配置规则）"
-        numbered_text = "\n".join(
-            f"[第{i + 1}段] {line}" for i, line in enumerate(text.splitlines()) if line.strip()
-        )
+        if not numbered_text:
+            numbered_text = "\n".join(
+                f"[第{i + 1}段] {line}"
+                for i, line in enumerate(text.splitlines()) if line.strip()
+            )
         scope = """在程序已经完成字体、字号、缩进、行距、页边距等确定性排版校验的基础上，
 请继续做内容规范审校，重点检查：
 1. 敏感词、禁用词、明显不宜用于正式公文的表述；
