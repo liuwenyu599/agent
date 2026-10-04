@@ -120,4 +120,10 @@ def test_batch_import_uses_same_ocr_extractor_contract():
     ).read_text(encoding="utf-8")
     assert "doc_service.extractor.extract(" in source
     assert '"extraction_method": extraction_method' in source
-    assert "DocumentService()" not in source
+    # 批量导入必须复用统一的强化服务，而不是自己 new 一个基础 DocumentService。
+    # 用正则精确匹配构造调用，避免 "DocumentService()" 作为子串命中
+    # "HardenedDocumentService()" —— 后者恰恰是这里期望的实现。
+    import re
+
+    assert re.search(r"(?<![\w.])DocumentService\(", source) is None
+    assert "HardenedDocumentService()" in source
