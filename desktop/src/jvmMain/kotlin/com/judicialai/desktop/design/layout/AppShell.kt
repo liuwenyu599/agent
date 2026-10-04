@@ -40,9 +40,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -58,20 +58,15 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppSearchField
 import com.judicialai.desktop.design.components.GlobalNavDrawer
 import com.judicialai.desktop.design.components.PersonalCenterDrawer
-import com.judicialai.desktop.design.theme.AiIndigo
 import com.judicialai.desktop.design.theme.AppBg
-import com.judicialai.desktop.design.theme.BrandEnd
-import com.judicialai.desktop.design.theme.BrandStart
 import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.Dimens
-import com.judicialai.desktop.design.theme.FeatureWriteInk
+import com.judicialai.desktop.design.theme.Gold
+import com.judicialai.desktop.design.theme.GoldLight
 import com.judicialai.desktop.design.theme.Ink
 import com.judicialai.desktop.design.theme.Ink2
 import com.judicialai.desktop.design.theme.Line
 import com.judicialai.desktop.design.theme.LineStrong
-import com.judicialai.desktop.design.theme.Muted
-import com.judicialai.desktop.design.theme.Muted2
-import com.judicialai.desktop.design.theme.OnPrimaryText
 import com.judicialai.desktop.design.theme.Primary
 import com.judicialai.desktop.design.theme.Surface as SurfaceColor
 import com.judicialai.desktop.design.theme.SurfaceDeep
@@ -133,6 +128,9 @@ fun AppShell(
     }
 }
 
+/** 顶栏底色：藏青（比 BrandStart 略浅，呼应「深夜蓝稍微浅一点」） */
+private val HEADER_NAVY = Color(0xFF16263F)
+
 @Composable
 private fun AppHeader(
     current: AppScreen,
@@ -148,7 +146,7 @@ private fun AppHeader(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = SurfaceColor,
+        color = HEADER_NAVY,
         elevation = Dimens.elevCard,
     ) {
         Column {
@@ -165,40 +163,42 @@ private fun AppHeader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(36.dp).clip(RoundedCornerShape(Dimens.radiusControl))
-                        .background(Brush.linearGradient(listOf(BrandStart, BrandEnd))),
+                    Modifier.size(36.dp).clip(CircleShape)
+                        .border(1.dp, Gold, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Default.AccountBalance, contentDescription = null,
-                        tint = OnPrimaryText, modifier = Modifier.size(Dimens.iconMd))
+                        tint = Gold, modifier = Modifier.size(Dimens.iconMd))
                 }
                 Spacer(Modifier.width(Dimens.space3))
                 Column {
                     Text("白云司法局智慧办公平台", fontSize = 14.5.sp,
-                        fontWeight = FontWeight.SemiBold, color = Ink, letterSpacing = 0.1.sp)
+                        fontWeight = FontWeight.SemiBold, color = Color.White,
+                        fontFamily = FontFamily.Serif, letterSpacing = 1.5.sp)
                     Spacer(Modifier.height(1.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             if (current == AppScreen.HOME) "工作台"
                             else "${group?.title ?: "业务"} · ${current.title}",
-                            fontSize = 11.5.sp, color = Muted,
+                            fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.62f),
                         )
                         val dept = AppState.departmentName
                         if (dept.isNotBlank()) {
                             Spacer(Modifier.width(Dimens.space2))
-                            Box(Modifier.size(3.dp).clip(CircleShape).background(LineStrong))
+                            Box(Modifier.size(3.dp).clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.3f)))
                             Spacer(Modifier.width(Dimens.space2))
                             Icon(Icons.Default.Groups, contentDescription = null,
-                                tint = FeatureWriteInk, modifier = Modifier.size(12.dp))
+                                tint = GoldLight, modifier = Modifier.size(12.dp))
                             Spacer(Modifier.width(3.dp))
-                            Text(dept, fontSize = 11.5.sp, color = FeatureWriteInk,
+                            Text(dept, fontSize = 11.5.sp, color = GoldLight,
                                 fontWeight = FontWeight.Medium)
                         }
                     }
                 }
                 Spacer(Modifier.width(Dimens.space2))
                 Icon(Icons.Default.ArrowDropDown, contentDescription = "打开全局导航",
-                    tint = Muted, modifier = Modifier.size(Dimens.iconLg))
+                    tint = Color.White.copy(alpha = 0.6f), modifier = Modifier.size(Dimens.iconLg))
             }
 
             Spacer(Modifier.width(Dimens.space2))
@@ -226,7 +226,7 @@ private fun AppHeader(
             )
 
             Spacer(Modifier.width(Dimens.space4))
-            Box(Modifier.width(1.dp).height(24.dp).background(Line))
+            Box(Modifier.width(1.dp).height(24.dp).background(Color.White.copy(alpha = 0.16f)))
             Spacer(Modifier.width(Dimens.space4))
 
             // ---- 用户身份 ----
@@ -239,21 +239,21 @@ private fun AppHeader(
                 ) {
                     Box(
                         Modifier.size(32.dp).clip(CircleShape)
-                            .background(Brush.linearGradient(listOf(AiIndigo, Primary))),
+                            .background(Gold),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(username.take(1).uppercase(), color = OnPrimaryText,
+                        Text(username.take(1).uppercase(), color = HEADER_NAVY,
                             fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.width(Dimens.space2))
                     Column {
-                        Text(username, fontSize = 13.sp, color = Ink,
+                        Text(username, fontSize = 13.sp, color = Color.White,
                             fontWeight = FontWeight.Medium)
-                        Text(userRole, fontSize = 11.sp, color = Muted)
+                        Text(userRole, fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f))
                     }
                     Spacer(Modifier.width(Dimens.space1))
                     Icon(Icons.Default.ArrowDropDown, contentDescription = null,
-                        tint = Muted2, modifier = Modifier.size(Dimens.iconMd))
+                        tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(Dimens.iconMd))
                 }
                 DropdownMenu(expanded = userMenuOpen,
                     onDismissRequest = { userMenuOpen = false }) {
@@ -287,7 +287,7 @@ private fun AppHeader(
                 WindowControlGroup(chrome)
             }
         }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.12f)))
         }
     }
 }

@@ -302,7 +302,7 @@ fun AppSearchField(
 ) {
     val shape = RoundedCornerShape(Dimens.radiusPill)
     Row(
-        modifier.heightIn(min = maxOf(Dimens.hControl, 56.dp))
+        modifier.heightIn(min = Dimens.hControl)
             .clip(shape)
             .background(SurfaceDeep)
             .border(1.dp, Line, shape)
@@ -321,7 +321,7 @@ fun AppSearchField(
             },
             placeholder = { Text(placeholder, fontSize = 12.5.sp, color = Muted2) },
             singleLine = true,
-            modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+            modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl),
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
             colors = TextFieldDefaults.textFieldColors(
                 backgroundColor = Color.Transparent,
