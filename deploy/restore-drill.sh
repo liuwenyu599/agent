@@ -5,7 +5,9 @@ set -euo pipefail
 # Never writes into the production database or production vector_index directory.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ENV_FILE:-$ROOT_DIR/deploy/.env}"
+# 与 backup-production.sh 保持一致：生产 .env 在 /opt/justice-office/deploy/，
+# 不在代码目录 /opt/judicial_app/deploy/。详见 backup-production.sh 里的说明。
+ENV_FILE="${ENV_FILE:-/opt/justice-office/deploy/.env}"
 read_env_value() {
   local key="$1" raw=""
   [[ -f "$ENV_FILE" ]] || return 0
@@ -15,7 +17,19 @@ read_env_value() {
   if [[ "$raw" == \'*\' && "$raw" == *\' ]]; then raw="${raw:1:${#raw}-2}"; fi
   printf '%s' "$raw"
 }
+# 演练必须针对真实备份；配置读不到就立刻失败，不要拿空目录走一遍"成功"流程。
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "生产 .env 不存在: $ENV_FILE" >&2
+  echo "生产配置固定在 /opt/justice-office/deploy/.env；请确认磁盘已挂载，或用 ENV_FILE=... 指定。" >&2
+  exit 2
+fi
 HOST_DATA_DIR="${HOST_DATA_DIR:-$(read_env_value HOST_DATA_DIR)}"; HOST_DATA_DIR="${HOST_DATA_DIR:-$ROOT_DIR/data}"
+# 相对路径按 .env 所在目录归一化（与 backup-production.sh / docker compose 一致）。
+# systemd 单元的 WorkingDirectory 是代码目录，不归一化会让 ../data 变成 /opt/data。
+if [[ "$HOST_DATA_DIR" != /* ]]; then
+  HOST_DATA_DIR="$(cd "$(dirname "$ENV_FILE")" && cd "$HOST_DATA_DIR" && pwd)"
+fi
+[[ -d "$HOST_DATA_DIR" ]] || { echo "HOST_DATA_DIR 不存在: $HOST_DATA_DIR" >&2; exit 2; }
 BACKUP_DIR="${BACKUP_DIR:-$(read_env_value BACKUP_DIR)}"; BACKUP_DIR="${BACKUP_DIR:-$HOST_DATA_DIR/backups}"
 DATABASE_URL="${DATABASE_URL:-$(read_env_value DATABASE_URL)}"; DATABASE_URL="${DATABASE_URL:-sqlite:///$HOST_DATA_DIR/judicial_app.db}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-$(read_env_value POSTGRES_CONTAINER)}"; POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-justice-db}"
