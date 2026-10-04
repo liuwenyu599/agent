@@ -122,17 +122,23 @@ class Settings:
         self.RAG_NEIGHBOR_EXPAND = _bool(os.getenv("RAG_NEIGHBOR_EXPAND", "true"), True)
         self.RAG_EXPAND_BUDGET = int(os.getenv("RAG_EXPAND_BUDGET", "800"))
 
-        # 上传。OFD 当前没有解析实现，禁止继续对外宣称支持；后续实现解析后再加入。
+        # 上传与 OCR。知识库支持文本型 OFD；PDF/图片以及扫描型 OFD 在视觉模型可用时走 OCR。
         self.UPLOAD_MAX_SIZE = int(os.getenv("UPLOAD_MAX_SIZE", str(50 * 1024 * 1024)))
         self.MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(2 * 1024 * 1024 * 1024)))
-        self.SUPPORTED_DOC_TYPES = [".pdf", ".doc", ".docx", ".txt", ".md", ".wps", ".xlsx"]
+        self.SUPPORTED_DOC_TYPES = [
+            ".pdf", ".doc", ".docx", ".txt", ".md", ".wps", ".xlsx", ".ofd",
+            ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff",
+        ]
         self.CHAT_DOC_TYPES = [".docx", ".doc", ".pdf", ".txt", ".md", ".xlsx"]
         self.CHAT_IMAGE_TYPES = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"]
         self.CHAT_SUPPORTED_TYPES = self.CHAT_DOC_TYPES + self.CHAT_IMAGE_TYPES
         self.CHAT_MAX_ATTACHMENTS = int(os.getenv("CHAT_MAX_ATTACHMENTS", "5"))
         self.ATTACH_CONTEXT_BUDGET = int(os.getenv("ATTACH_CONTEXT_BUDGET", "4000"))
-        self.OCR_ENABLED = _bool(os.getenv("OCR_ENABLED", "false"))
-        self.OCR_LANG = os.getenv("OCR_LANG", "chi_sim+eng")
+        self.OCR_ENABLED = _bool(os.getenv("OCR_ENABLED", "true"), True)
+        self.OCR_LANG = os.getenv("OCR_LANG", "chi_sim+eng")  # legacy/local OCR compatibility knob
+        self.OCR_MAX_PAGES = max(1, int(os.getenv("OCR_MAX_PAGES", "20")))
+        self.OCR_MIN_TEXT_CHARS = max(1, int(os.getenv("OCR_MIN_TEXT_CHARS", "80")))
+        self.OCR_MAX_TOKENS = max(256, int(os.getenv("OCR_MAX_TOKENS", "4096")))
         self.FORMAT_CHECK_MAX_SIZE = int(os.getenv("FORMAT_CHECK_MAX_SIZE", str(20 * 1024 * 1024)))
         self.FORMAT_CHECK_AI_BUDGET = int(os.getenv("FORMAT_CHECK_AI_BUDGET", "1500"))
         self.FORMAT_CHECK_SENSITIVE_WORDS = [
