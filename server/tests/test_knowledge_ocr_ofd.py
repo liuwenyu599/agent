@@ -111,3 +111,13 @@ def test_text_native_pdf_does_not_call_vision(monkeypatch, tmp_path):
     assert method == "pdf_text"
     assert text == "这是可复制的 PDF 正文"
     assert gateway.calls == []
+
+
+def test_batch_import_uses_same_ocr_extractor_contract():
+    source = (
+        Path(__file__).parents[1]
+        / "app" / "application" / "knowledge" / "task_queue.py"
+    ).read_text(encoding="utf-8")
+    assert "doc_service.extractor.extract(" in source
+    assert '"extraction_method": extraction_method' in source
+    assert "DocumentService()" not in source
