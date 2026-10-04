@@ -11,11 +11,10 @@ Design goals:
 from __future__ import annotations
 
 import base64
-import io
 import mimetypes
 import zipfile
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree as ET
 
 from app.application.ports import LLMGateway
@@ -45,6 +44,11 @@ def _data_url(data: bytes, mime: str) -> str:
 
 class KnowledgeDocumentExtractor:
     def __init__(self, vision_gateway: Optional[LLMGateway] = None) -> None:
+        if vision_gateway is None:
+            # Lazy import avoids coupling the deterministic parser to AI bootstrap
+            # and lets production automatically reuse the configured Qwen-VL gateway.
+            from app.infrastructure.ai import get_vision_gateway
+            vision_gateway = get_vision_gateway()
         self.vision_gateway = vision_gateway
 
     async def extract(
@@ -214,9 +218,8 @@ class KnowledgeDocumentExtractor:
         for start in range(0, min(len(images), settings.OCR_MAX_PAGES), batch_size):
             batch = images[start:start + batch_size]
             content = [{"type": "text", "text": _OCR_PROMPT}]
-            for _, _, label in batch:
+            for data, mime, label in batch:
                 content.append({"type": "text", "text": f"【{label}】"})
-            for data, mime, _ in batch:
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": _data_url(data, mime)},
