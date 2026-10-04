@@ -283,7 +283,17 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         ChatViewDialog(item = item, messages = vm.messages, onClose = { viewingChat = null })
     }
     if (vm.openedDoc != null || vm.openedDocLoading) {
-        DocPreviewDialog(vm)
+        DocPreviewDialog(
+            vm,
+            onOpenSourceChat = { sessionId, docTitle ->
+                viewingChat = HistoryItem(
+                    id = sessionId,
+                    title = if (docTitle.isBlank()) "生成该文档的对话"
+                    else "生成《$docTitle》的对话",
+                    category = HistoryCategory.CHAT,
+                )
+            },
+        )
     }
     renameTarget?.let { item ->
         RenameDialog(
@@ -488,9 +498,25 @@ private fun ChatViewDialog(
     }
 }
 
+/**
+ * 文档内嵌预览。
+ *
+ * 「继续编辑」优先回**写作台**而不是「我的文档」页：文档绝大多数是写作台起草时
+ * 快照下来的，写作台会连同当时的对话一起恢复（正文 + 对话 + 版本链），而文档页
+ * 只能改正文、看不到当初那轮对话。服务端在文档上回带了 `task_id`（来源写作任务）
+ * 与 `session_id`（来源对话），据此分三档：
+ * - 有 task_id → 回写作台继续（正文和对话一起回来）；
+ * - 只有 session_id（对话里生成的）→ 就地打开生成它的那轮对话；
+ * - 都没有（手工新建等）→ 才退回文档页。
+ */
 @Composable
-private fun DocPreviewDialog(vm: ChatViewModel) {
+private fun DocPreviewDialog(
+    vm: ChatViewModel,
+    onOpenSourceChat: (String, String) -> Unit,
+) {
     val doc = vm.openedDoc
+    val taskId = doc?.get("task_id")?.str()?.trim().orEmpty()
+    val sessionId = doc?.get("session_id")?.str()?.trim().orEmpty()
     AppDialog(
         onDismissRequest = { vm.closeInlineDoc() },
         title = doc?.get("title")?.str()?.ifBlank { "（未命名文档）" } ?: "文档预览",
@@ -503,11 +529,37 @@ private fun DocPreviewDialog(vm: ChatViewModel) {
             AppButton("关闭", onClick = { vm.closeInlineDoc() },
                 kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
-            AppButton("前往文档页编辑 →", enabled = doc != null, onClick = {
-                doc?.get("id")?.str()?.let { AppState.pendingDocumentId = it }
-                vm.closeInlineDoc()
-                AppState.navigate(AppScreen.DOCUMENTS)
-            })
+            AppButton(
+                when {
+                    taskId.isNotBlank() -> "回到写作台继续 →"
+                    sessionId.isNotBlank() -> "查看生成它的对话 →"
+                    else -> "前往文档页编辑 →"
+                },
+                enabled = doc != null,
+                onClick = {
+                    when {
+                        taskId.isNotBlank() -> {
+                            // 模板中心「使用模板」的一次性参数会让写作台跳过任务恢复，
+                            // 从历史记录进来时必须先清掉，否则打开的是空的入口页。
+                            AppState.pendingWritingTemplate = null
+                            AppState.pendingWritingIntent = null
+                            AppState.pendingWritingTaskId = taskId
+                            vm.closeInlineDoc()
+                            AppState.navigate(AppScreen.WRITING)
+                        }
+                        sessionId.isNotBlank() -> {
+                            val title = doc?.get("title")?.str().orEmpty()
+                            vm.closeInlineDoc()
+                            onOpenSourceChat(sessionId, title)
+                        }
+                        else -> {
+                            doc?.get("id")?.str()?.let { AppState.pendingDocumentId = it }
+                            vm.closeInlineDoc()
+                            AppState.navigate(AppScreen.DOCUMENTS)
+                        }
+                    }
+                },
+            )
         },
     ) {
         when {

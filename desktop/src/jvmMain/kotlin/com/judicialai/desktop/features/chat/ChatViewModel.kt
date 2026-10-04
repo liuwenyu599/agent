@@ -266,10 +266,16 @@ class ChatViewModel(
     fun openSession(id: String) {
         closeInlineDoc()
         currentSessionId = id
+        // 先清空：取不到（已删除 / 换账号）时若不清，界面会残留上一条对话，
+        // 看起来像「这篇文档对应的对话」其实是别人那轮。
+        messages = emptyList()
         scope.launch {
             when (val r = repo.listMessages(id)) {
                 is ApiResult.Ok -> messages = r.data
-                is ApiResult.Err -> status = r.message
+                is ApiResult.Err -> {
+                    messages = emptyList()
+                    status = r.message
+                }
             }
         }
     }

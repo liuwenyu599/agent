@@ -33,19 +33,44 @@ class DocumentService:
             raise HTTPException(status_code=404, detail="文档不存在")
         return doc
 
+    def _task_ids_by_document(self, doc_ids: List[str]) -> dict:
+        """文档 id → 来源写作任务 id。
+
+        历史记录里点一篇文档，用户期望回到**当初生成它的写作台**并看到当时的对话，
+        而不是去一个只能改正文的文档页。写作任务在起草 / 保存版本时会把生成的
+        my_documents 行记在 writing_tasks.document_id 上，这里据此反查。
+        一个文档可能被多个任务快照过，取最近一次更新的任务。
+        """
+        ids = [i for i in doc_ids if i]
+        if not ids:
+            return {}
+        from app.infrastructure.database.models.writing_task import WritingTaskModel
+
+        rows = self.db.execute(
+            select(WritingTaskModel.document_id, WritingTaskModel.id)
+            .where(WritingTaskModel.document_id.in_(ids))
+            .order_by(desc(WritingTaskModel.updated_at))
+        ).all()
+        mapping: dict = {}
+        for doc_id, task_id in rows:
+            mapping.setdefault(doc_id, task_id)
+        return mapping
+
     def list_documents(self, user_id: str) -> List[dict]:
         rows = self.db.scalars(
             select(MyDocumentModel)
             .where(MyDocumentModel.user_id == user_id)
             .order_by(desc(MyDocumentModel.updated_at))
         ).all()
-        return [self._summary(d) for d in rows]
+        task_ids = self._task_ids_by_document([d.id for d in rows])
+        return [{**self._summary(d), "task_id": task_ids.get(d.id)} for d in rows]
 
     def get_document(self, doc_id: str, user_id: str) -> dict:
         doc = self._get_owned(doc_id, user_id)
         latest = self._latest_version(doc)
         return {
             **self._summary(doc),
+            "task_id": self._task_ids_by_document([doc.id]).get(doc.id),
             "content": latest.content if latest else "",
             "quality": latest.quality if latest else None,
             "content_check": latest.content_check if latest else None,
@@ -152,6 +177,8 @@ class DocumentService:
             "document_date": d.document_date,
             "current_version": d.current_version, "status": d.status,
             "created_at": _iso(d.created_at), "updated_at": _iso(d.updated_at),
+            # 来源对话：对话里生成的文档会记下 session_id，历史记录据此能带回原对话
+            "session_id": d.session_id,
         }
 
     @staticmethod
