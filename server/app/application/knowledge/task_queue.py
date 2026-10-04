@@ -1,15 +1,16 @@
 """批量导入任务队列（移植自旧 services/task_queue.py）。
 
 任务状态持久化为 DATA_DIR/tasks/<id>.json，后台线程逐个处理。
+批量导入与单文件上传共用 OCR/OFD 抽取策略，避免不同入口能力不一致。
 """
 from app.core.timeutil import now_local
+import asyncio
 import json
 import os
 import queue
 import threading
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -116,12 +117,16 @@ _worker_thread = None
 def _process_worker():
     from pathlib import Path as _Path
 
-    from app.application.knowledge.document_service import DocumentService, new_doc_id
+    from app.application.knowledge.hardened_document_service import HardenedDocumentService
+    from app.application.knowledge.document_service import new_doc_id
     from app.infrastructure.database import SessionLocal
     from app.infrastructure.database.models.knowledge import ChunkModel, DocumentModel
-    from app.infrastructure.rag import get_embedder, get_vector_store
 
-    doc_service = DocumentService()
+    doc_service = HardenedDocumentService()
+    # The worker is a dedicated thread. Reuse one event loop so the async HTTP
+    # client's semaphore/connection pool is never bounced across short-lived loops.
+    ocr_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(ocr_loop)
 
     while True:
         try:
@@ -129,6 +134,7 @@ def _process_worker():
 
             task = BatchImportTask.get(task_id)
             if not task:
+                _task_queue.task_done()
                 continue
 
             task_obj = BatchImportTask.__new__(BatchImportTask)
@@ -137,7 +143,11 @@ def _process_worker():
             task_obj.update(current_file=original_name)
 
             try:
-                text = doc_service.extract_text(_Path(file_path), original_name)
+                text, extraction_method = ocr_loop.run_until_complete(
+                    doc_service.extractor.extract(
+                        _Path(file_path), original_name, doc_service.extract_text
+                    )
+                )
 
                 if "办法" in text or "规定" in text or "条" in text[:1000]:
                     chunks = doc_service.legal_chunker.chunk(text, task_id)
@@ -150,16 +160,20 @@ def _process_worker():
                     doc = DocumentModel(
                         id=doc_id,
                         kb_id=kb_id,
-                        title=original_name.replace(".docx", "").replace(".pdf", "").replace(".txt", ""),
+                        title=_Path(original_name).stem or "未命名文档",
                         doc_type="法规" if "办法" in text else "公文",
                         content=text[:500000],
                         status="pending",
                         uploaded_by=user_id,
                         created_by=user_id,
+                        doc_metadata={
+                            "source_type": "file",
+                            "original_filename": original_name,
+                            "extraction_method": extraction_method,
+                        },
                     )
                     db.add(doc)
 
-                    chunk_records = []
                     for i, chunk_data in enumerate(chunks):
                         chunk_id = f"{doc_id}_{i}"
                         chunk = ChunkModel(
@@ -174,10 +188,6 @@ def _process_worker():
                             chunk_metadata=chunk_data["metadata"],
                         )
                         db.add(chunk)
-                        chunk_records.append({
-                            "chunk_id": chunk_id, "doc_id": doc_id, "kb_id": kb_id,
-                            "content": chunk_data["content"], "title": chunk_data.get("title", ""),
-                        })
 
                     db.commit()
                     task_obj.update(current_file=original_name, increment=True, success=True)
@@ -195,7 +205,7 @@ def _process_worker():
                     os.remove(file_path)
 
             task = BatchImportTask.get(task_id)
-            if task["processed"] >= task["total_files"]:
+            if task and task["processed"] >= task["total_files"]:
                 if task["failed"] == 0:
                     task_obj.set_status(TaskStatus.COMPLETED)
                 elif task["success"] == 0:
