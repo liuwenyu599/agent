@@ -1,7 +1,8 @@
 """Hardened production wrapper for knowledge document ingestion.
 
-Adds three delivery guarantees without rewriting the legacy parser/chunker stack:
+Adds delivery guarantees without rewriting the legacy parser/chunker stack:
 - streamed, size-bounded uploads with trusted server-side paths;
+- OCR/OFD extraction for scan-style knowledge material;
 - visible vector-indexing status stored in document metadata;
 - explicit reindex retry for already-persisted published documents.
 """
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.knowledge.access import scope_of_doc
+from app.application.knowledge.document_ocr import KnowledgeDocumentExtractor
 from app.application.knowledge.document_service import DocumentService, new_doc_id
 from app.application.knowledge.upload_security import safe_client_filename, stream_upload_to_file
 from app.core.config import settings
@@ -26,8 +28,9 @@ logger = get_logger(__name__)
 
 
 class HardenedDocumentService(DocumentService):
-    def __init__(self, embedder=None, vector_store=None) -> None:
+    def __init__(self, embedder=None, vector_store=None, vision_gateway=None) -> None:
         super().__init__(embedder=embedder, vector_store=vector_store)
+        self.extractor = KnowledgeDocumentExtractor(vision_gateway=vision_gateway)
         self._last_vector_error = ""
         self._last_vector_count = 0
 
@@ -119,18 +122,25 @@ class HardenedDocumentService(DocumentService):
         stored_path = upload_dir / f"{doc_id}{suffix}"
         file_size = await stream_upload_to_file(file, stored_path, settings.UPLOAD_MAX_SIZE)
         try:
-            text = self.extract_text(stored_path, original_name)
+            text, extraction_method = await self.extractor.extract(
+                stored_path, original_name, self.extract_text
+            )
             if not text.strip():
-                raise AppError(400, "未能从文件中解析出文字内容（扫描件 PDF 请先做 OCR 再上传）")
+                raise AppError(400, "未能从文件中解析或识别出文字内容")
             stem = Path(original_name).stem.strip() or "未命名文档"
             result = self._persist_document(
                 db=db, kb_id=kb_id,
                 title=title if title else stem,
                 text=text, user_id=user_id, user_role=user_role,
                 doc_type=doc_type, file_path=str(stored_path), file_size=file_size,
-                doc_metadata={"source_type": "file", "original_filename": original_name},
+                doc_metadata={
+                    "source_type": "file",
+                    "original_filename": original_name,
+                    "extraction_method": extraction_method,
+                },
                 department=department, doc_number=doc_number,
             )
+            result["extraction_method"] = extraction_method
             return result
         except Exception:
             # Parsing/persistence failure must not leave an orphaned uploaded file.
