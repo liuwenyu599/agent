@@ -33,11 +33,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Stroke
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -191,19 +193,19 @@ private fun FeatureGrid() {
 @Composable
 private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
     val palette = paletteOf(item.screen)
-    // 渐变三停：起点深一档 → 终点亮一档，形成对角「深→亮」的光感层次
+    // 渐变三停：起点明显压暗、终点提亮，形成强光向与纵深（深→亮）
     val gradient = listOf(
-        lerp(palette.start, Color.Black, 0.10f),
+        lerp(palette.start, Color.Black, 0.18f),
         palette.end,
-        lerp(palette.end, Color.White, 0.12f),
+        lerp(palette.end, Color.White, 0.14f),
     )
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val lift by animateDpAsState(if (hovered) (-4).dp else 0.dp)
-    val elevation by animateDpAsState(if (hovered) 11.dp else Dimens.elevRaised)
+    val elevation by animateDpAsState(if (hovered) 12.dp else Dimens.elevRaised)
     val arrow by animateDpAsState(if (hovered) 6.dp else 0.dp)
     val ctaAlpha by androidx.compose.animation.core.animateFloatAsState(
-        if (hovered) 0.26f else 0.16f)
+        if (hovered) 0.30f else 0.18f)
     val shape = RoundedCornerShape(Dimens.radiusXl)
 
     Box(
@@ -211,48 +213,49 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
             // 同色投影：阴影带卡片主色，浮起时更明显
             .shadow(elevation, shape, ambientColor = palette.end, spotColor = palette.end)
             .clip(shape)
+            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
             .background(Brush.linearGradient(gradient))
+            // 装饰（克制、机构感、不抢内容）：
+            // 右上角同心细弧（刻度/印章式）+ 左下角纵深暗角（增强对比）
+            .drawBehind {
+                val stroke = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
+                val cx = size.width
+                val cy = 0f
+                repeat(4) { i ->
+                    val r = (26 + i * 20).dp.toPx()
+                    drawArc(
+                        color = Color.White.copy(alpha = 0.13f),
+                        startAngle = 180f, sweepAngle = 90f, useCenter = false,
+                        topLeft = Offset(cx - r, cy - r), size = Size(r * 2, r * 2),
+                        style = stroke,
+                    )
+                }
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.22f)),
+                        center = Offset(0f, size.height), radius = size.width * 0.78f,
+                    ),
+                    radius = size.width * 0.78f, center = Offset(0f, size.height),
+                )
+            }
             .clickable(interactionSource = interaction, indication = null) {
                 AppState.navigate(item.screen, item.adminTab)
             }
             .padding(Dimens.space5),
     ) {
-        // —— 装饰层（全部低透明度白，不抢内容） ——
-        // 右上大圆弧（出血）
+        // 右上角一枚精细实心小光点：校准视觉重心，刻度感
         Box(
-            Modifier.size(132.dp).align(Alignment.TopEnd)
-                .offset(x = 44.dp, y = (-52).dp)
-                .clip(CircleShape).background(Color.White.copy(alpha = 0.10f)),
-        )
-        // 右上同心光环
-        Box(
-            Modifier.size(84.dp).align(Alignment.TopEnd)
-                .offset(x = (-14).dp, y = (-10).dp)
-                .clip(CircleShape).border(1.5.dp, Color.White.copy(alpha = 0.18f), CircleShape),
-        )
-        // 对角光带：右上方一条斜向渐隐的高光
-        Box(
-            Modifier.size(width = 88.dp, height = 340.dp)
-                .align(Alignment.TopEnd).offset(x = 22.dp, y = (-64).dp)
-                .rotate(32f)
-                .background(Brush.verticalGradient(listOf(
-                    Color.White.copy(alpha = 0.10f), Color.Transparent,
-                ))),
-        )
-        // 右下巨型幽灵图标（微旋转）
-        Icon(
-            item.icon, contentDescription = null,
-            tint = Color.White.copy(alpha = 0.14f),
-            modifier = Modifier.size(Dimens.iconDeco).align(Alignment.BottomEnd)
-                .offset(x = 14.dp, y = 20.dp).rotate(10f),
+            Modifier.size(7.dp).clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.55f))
+                .align(Alignment.TopEnd).offset(x = (-10).dp, y = 10.dp),
         )
 
         // —— 内容层 ——
         Column(Modifier.fillMaxSize()) {
             Box(
                 Modifier.size(Dimens.iconFeature).clip(RoundedCornerShape(Dimens.radiusLg))
-                    .background(Color.White.copy(alpha = 0.18f))
-                    .border(1.dp, Color.White.copy(alpha = 0.26f),
+                    .background(Color.White.copy(alpha = 0.20f))
+                    .border(1.dp, Color.White.copy(alpha = 0.28f),
                         RoundedCornerShape(Dimens.radiusLg)),
                 contentAlignment = Alignment.Center,
             ) {
