@@ -25,6 +25,7 @@ _PARAGRAPH_TARGET_RE = re.compile(
 _TOP_HEADING_RE = re.compile(r"^\s*[一二三四五六七八九十百]+、")
 _SUB_HEADING_RE = re.compile(r"^\s*[（(][一二三四五六七八九十百]+[）)]")
 _NUM_HEADING_RE = re.compile(r"^\s*\d+[\.、．]")
+LOCAL_OPERATIONS = ("patch_section", "append_to_section", "insert_paragraph", "delete_range")
 
 _CN_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
@@ -97,7 +98,11 @@ class OpsWritingTaskService(GroundedWritingTaskService):
     def _section_span(cls, text: str, target: str) -> Optional[Tuple[int, int]]:
         target = target.strip()
         records = cls._line_records(text)
-        matches = [i for i, (_, _, line) in enumerate(records) if line.strip() == target]
+        def heading_name(line):
+            return re.sub(r"^(?:[一二三四五六七八九十百]+、|[（(][一二三四五六七八九十百]+[）)]|\d+[\.、．])\s*", "", line.strip()).strip()
+        matches = [i for i, (_, _, line) in enumerate(records)
+                   if (_TOP_HEADING_RE.match(line) or _SUB_HEADING_RE.match(line) or _NUM_HEADING_RE.match(line))
+                   and (line.strip() == target or heading_name(line) == target)]
         if len(matches) != 1:
             return None
         idx = matches[0]
@@ -113,12 +118,52 @@ class OpsWritingTaskService(GroundedWritingTaskService):
         start = records[idx][0]
         end = len(text)
         for j in range(idx + 1, len(records)):
-            if heading_re.match(records[j][2]):
+            candidate = records[j][2]
+            # Nested sections end at the next sibling or any parent heading.
+            if (heading_re.match(candidate)
+                    or (heading_re is not _TOP_HEADING_RE and _TOP_HEADING_RE.match(candidate))
+                    or (heading_re is _NUM_HEADING_RE and _SUB_HEADING_RE.match(candidate))):
                 end = records[j][0]
                 while end > start and text[end - 1].isspace():
                     end -= 1
                 break
         return (start, end) if start < end else None
+
+    @classmethod
+    def _local_span(cls, text, target, operation, position="after", end_target=None):
+        if operation == "append_to_section":
+            section = cls._section_span(text, target.strip().strip("“”\"'《》"))
+            return (section[1], section[1], text[section[0]:section[1]]) if section else None
+        resolved = cls._resolve_patch_target(text, target)
+        if not resolved:
+            return None
+        start, end, fragment = resolved
+        if operation == "insert_paragraph":
+            anchor = start if position == "before" else end
+            return anchor, anchor, fragment
+        if operation == "delete_range" and end_target:
+            last = cls._resolve_patch_target(text, end_target)
+            if not last or last[0] < start:
+                return None
+            end = last[1]
+            fragment = text[start:end]
+        return start, end, fragment
+
+    @staticmethod
+    def _splice_local(current, start, end, replacement, operation):
+        if operation in ("append_to_section", "insert_paragraph"):
+            left, right = current[:start], current[end:]
+            prefix = "\n\n" if left and not left.endswith("\n\n") else ""
+            suffix = "\n\n" if right and not right.startswith("\n\n") else ""
+            return left + prefix + replacement + suffix + right
+        return current[:start] + replacement + current[end:]
+
+    @classmethod
+    def _local_prompt(cls, fragment, instruction, mode_desc, operation):
+        if operation in ("append_to_section", "insert_paragraph"):
+            return (f"请根据用户要求：{instruction}\n参考定位片段：\n{fragment}\n"
+                    "只返回要新增的文字，不要重复参考片段，不要改写原文，不要解释或 Markdown 包裹。")
+        return cls._build_patch_prompt(fragment, instruction, mode_desc)
 
     @classmethod
     def _resolve_patch_target(cls, text: str, target: str) -> Optional[Tuple[int, int, str]]:
@@ -176,7 +221,7 @@ class OpsWritingTaskService(GroundedWritingTaskService):
 
         it = self._interpret(message, ctx, has_draft=has_draft)
         if not it:
-            reply = "这条指令暂时没有可靠理解，因此没有改动文档。请重新表述后再试。"
+            reply = self._answer_only(message, ctx, task.current_content or "")
             self._push_history(ctx, "assistant", reply)
             task.context = ctx
             self.db.commit()
@@ -198,13 +243,15 @@ class OpsWritingTaskService(GroundedWritingTaskService):
             "clarify": "clarify",
         }.get(it.get("intent") or "answer", "answer")
 
-        if operation == "patch_section" and has_draft:
+        if operation in LOCAL_OPERATIONS and has_draft:
             result = self.patch_section(
                 task_id,
                 user_id,
                 target=it.get("patch_target") or "",
                 instruction=it.get("revision_instruction") or message,
                 mode=it.get("revision_mode") or "revise",
+                operation=operation, position=it.get("position") or "after",
+                end_target=it.get("end_target"),
             )
             result["context_changes"] = changes
             latest_ctx = dict(task.context or {})
@@ -244,7 +291,7 @@ class OpsWritingTaskService(GroundedWritingTaskService):
             if note:
                 changes = list(changes) + [note]
 
-        reply = it.get("reply") or "已理解。"
+        reply = it.get("reply") or self._answer_only(message, ctx, task.current_content or "")
         if changes:
             reply += "\n\n已应用：" + "；".join(changes) + "。"
         self._push_history(ctx, "assistant", reply)
@@ -261,14 +308,15 @@ class OpsWritingTaskService(GroundedWritingTaskService):
 
     # ---------------------------------------------------------- local mutation
     def patch_section(self, task_id: str, user_id: str, target: str,
-                      instruction: str, mode: str = "revise") -> Dict[str, Any]:
+                      instruction: str, mode: str = "revise", operation: str = "patch_section",
+                      position: str = "after", end_target: Optional[str] = None) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
         ctx = dict(task.context or {})
         current = self._canonicalize_body((task.current_content or "").strip(), ctx)
         if not current:
             raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
 
-        resolved = self._resolve_patch_target(current, target)
+        resolved = self._local_span(current, target, operation, position, end_target)
         if not resolved:
             reply = (
                 f"没有安全执行修改：无法把“{target or '未指定目标'}”唯一定位到当前正文。"
@@ -279,22 +327,22 @@ class OpsWritingTaskService(GroundedWritingTaskService):
                 "reply": reply,
                 "content_changed": False,
                 "context_changes": [],
-                "operation": "patch_section",
+                "operation": operation,
                 "patch_target": target,
             }
 
         start, end, fragment = resolved
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
-        prompt = self._build_patch_prompt(fragment, instruction, mode_desc)
+        prompt = self._local_prompt(fragment, instruction, mode_desc, operation)
         sources = self._retrieve(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
-        replacement = self._llm_revise(prompt, sources, attachment_ctx, user_id).strip()
-        if not replacement:
+        replacement = "" if operation == "delete_range" else self._llm_revise(prompt, sources, attachment_ctx, user_id).strip()
+        if not replacement and operation != "delete_range":
             raise HTTPException(status_code=502, detail="模型未返回局部修改内容，请重试")
 
         # A local operation is allowed to generate only the selected span. The backend owns the
         # splice; the model never receives or reconstructs the untouched remainder of the document.
-        if replacement == fragment:
+        if operation == "patch_section" and replacement == fragment:
             return {
                 **self._to_dict(task),
                 "reply": "目标片段核对后没有产生实际文字变化，因此未创建新版本。",
@@ -304,7 +352,7 @@ class OpsWritingTaskService(GroundedWritingTaskService):
                 "patch_target": target,
             }
 
-        revised = current[:start] + replacement + current[end:]
+        revised = self._splice_local(current, start, end, replacement, operation)
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         revised = self._canonicalize_body(revised, {
             **ctx,
@@ -343,9 +391,8 @@ class OpsWritingTaskService(GroundedWritingTaskService):
         self.db.commit()
 
         summary = self._revision_diff(current, revised)
-        reply = f"已只修改定位到的目标片段并保存为 v{version}，未让模型重生成其余正文。"
-        if summary:
-            reply += "\n\n本次实际变化：\n" + summary
+        verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
+        reply = f"已在“{target}”完成{verb}，保存为 v{version}。"
         return {
             **self._to_dict(task),
             "reply": reply,
@@ -356,7 +403,7 @@ class OpsWritingTaskService(GroundedWritingTaskService):
             "context_changes": [],
             "references": references,
             "revision_summary": summary,
-            "operation": "patch_section",
+            "operation": operation,
             "patch_target": target,
         }
 

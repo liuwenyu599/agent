@@ -60,7 +60,7 @@ services:
 
   # ---------- PPTAgent Host：编排 + WebUI/API ----------
   ppt-host:
-    image: ${PPT_HOST_IMAGE:-forceless/deeppresenter-host:latest}
+    image: ${PPT_HOST_IMAGE:-deeppresenter-host:python-guard-v1}
     container_name: justice-ppt-host
     environment:
       PPTAGENT_OFFLINE: "${PPTAGENT_OFFLINE:-true}"

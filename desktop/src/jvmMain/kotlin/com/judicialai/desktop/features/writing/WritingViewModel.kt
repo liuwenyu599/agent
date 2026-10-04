@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /** 工作台对话消息 */
-data class TaskChatMessage(val role: String, val content: String)
+data class TaskChatMessage(val role: String, val content: String, val revisionSummary: String = "")
 
 /** 图片识别结果（写作台「上传图片识别」，服务端视觉模型 Qwen2.5-VL 识别） */
 data class RecognizedImage(
@@ -364,7 +364,7 @@ class WritingViewModel(
                     r.data?.let { d ->
                         applyResponse(d)
                         d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     entryInput = ""
                 }
@@ -410,7 +410,7 @@ class WritingViewModel(
                     r.data?.let { d ->
                         applyResponse(d)
                         d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     entryInput = ""
                 }
@@ -453,7 +453,7 @@ class WritingViewModel(
                     r.data?.let { d ->
                         applyResponse(d)
                         d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     busy = false
                     status = null
@@ -569,7 +569,7 @@ class WritingViewModel(
                     r.data?.let { d ->
                         applyResponse(d)
                         d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                 }
                 is ApiResult.Err -> fail(r.message)
@@ -611,7 +611,7 @@ class WritingViewModel(
                 r is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
                     d["reply"].str().takeIf { it.isNotBlank() }
-                        ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                        ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                 }
                 r is ApiResult.Err && r.status == 404 && !streamed -> {
                     // 服务端尚未升级流式接口：回退非流式起草
@@ -619,7 +619,7 @@ class WritingViewModel(
                         is ApiResult.Ok -> r2.data?.let { d ->
                             applyResponse(d)
                             d["reply"].str().takeIf { it.isNotBlank() }
-                                ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                                ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                         }
                         is ApiResult.Err -> fail(r2.message)
                     }
@@ -646,7 +646,7 @@ class WritingViewModel(
                 is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
                     d["reply"].str().takeIf { it.isNotBlank() }
-                        ?.let { messages = messages + TaskChatMessage("assistant", it) }
+                        ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                 }
                 is ApiResult.Err -> fail(r.message)
             }

@@ -7,7 +7,7 @@ from app.application.writing.intent_interpreter import (
     WRITING_OPS_TOOL,
     WritingIntentInterpreter,
     _extract_json,
-    _sanitize,
+    _sanitize_legacy_args,
     _sanitize_tool_args,
     _tool_args_from_message,
 )
@@ -68,4 +68,4 @@ class AsyncWritingIntentInterpreter(WritingIntentInterpreter):
 
         if obj is None or obj.get("_schema") not in ("writing_intent_v2", "writing_intent_v1"):
             return self._safe_failure("模型连续两次未返回合法意图 JSON")
-        return _sanitize(obj)
+        return _sanitize_legacy_args(obj)

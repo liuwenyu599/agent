@@ -1,0 +1,5 @@
+ARG BASE_IMAGE=deeppresenter-host:latest
+FROM ${BASE_IMAGE}
+COPY python_guard.py install_python_guard.py /tmp/judicial-python-guard/
+RUN python /tmp/judicial-python-guard/install_python_guard.py /usr/src/pptagent/deeppresenter/agents/env.py \
+    && python -m compileall -q /usr/src/pptagent/deeppresenter/agents/env.py /usr/src/pptagent/deeppresenter/agents/judicial_python_guard.py

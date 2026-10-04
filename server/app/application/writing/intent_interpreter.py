@@ -28,6 +28,9 @@ SIDE_EFFECTS = ("none", "workspace")
 OPERATIONS = (
     "set_fields",
     "patch_section",
+    "append_to_section",
+    "insert_paragraph",
+    "delete_range",
     "rewrite_document",
     "draft_document",
     "outline",
@@ -58,6 +61,10 @@ LEGACY_JSON_SCHEMA = """
   "_schema":"writing_intent_v2",
   "side_effect":"none|workspace",
   "intent":"update_context|revise_content|draft|outline|answer|clarify",
+  "operation":"set_fields|patch_section|append_to_section|insert_paragraph|delete_range|rewrite_document|draft_document|outline|answer|clarify",
+  "target":null,
+  "position":"before|after",
+  "end_target":null,
   "document_type":null,
   "title":null,
   "topic":null,
@@ -79,8 +86,8 @@ LEGACY_JSON_SCHEMA = """
   "reply":""
 }
 revision_mode 仅可为 expand/polish/condense/normalize/complete/rewrite/revise。
-JSON 兼容模式无法可靠表达唯一局部目标，因此 revise_content 会由后端按全文修改旧语义处理；
-只有真实 tool call 的 patch_section 才允许走程序级局部 splice。
+JSON 兼容模式与工具调用采用相同操作边界。局部修改必须输出 operation 和 target，
+revision_instruction 填该局部要求；不要把补一句、改某节升级成 rewrite_document。
 """
 
 SYSTEM_PROMPT = """你是司法行政公文写作工作台的“指令理解器”。
@@ -90,6 +97,9 @@ SYSTEM_PROMPT = """你是司法行政公文写作工作台的“指令理解器�
 【操作边界】
 - set_fields：只修改标题、主送、落款、日期、文号、文种、字数等结构字段，不重写正文。
 - patch_section：用户只要求修改某一段、某一节或明确局部。target 必须描述唯一目标，优先保留用户给出的原文；instruction 只写该局部怎么改。
+- append_to_section：在指定章节末尾补充文字，target 可只写章节名称，instruction 描述新增内容。
+- insert_paragraph：在唯一段落或章节之前/之后插入新段落，用 position 指定 before/after。
+- delete_range：删除唯一目标段落、章节或原文；跨段删除时 end_target 指定结束目标，包含两端。
 - rewrite_document：只有用户明确要求“全文重写/重新写一版/整体改写”时使用。普通润色、补一句、改某段不得升级成全文重写。
 - draft_document：生成完整初稿。
 - outline：只生成提纲。
@@ -139,12 +149,14 @@ WRITING_OPS_TOOL: Dict[str, Any] = {
                 },
                 "target": {
                     "type": "string",
-                    "description": "patch_section 的唯一目标，如‘第二段’、‘三、工作措施’或用户引用的原文。",
+                    "description": "局部操作的唯一目标，如‘第二段’、‘工作措施’、‘三、工作措施’或用户引用的原文。",
                 },
                 "instruction": {
                     "type": "string",
-                    "description": "patch_section/rewrite_document 的正文修改要求，不含结构字段修改。",
+                    "description": "局部修改、追加、插入或全文改写的要求，不含结构字段修改；删除可省略。",
                 },
+                "position": {"type": "string", "enum": ["before", "after"]},
+                "end_target": {"type": "string", "description": "delete_range 可选的结束目标，包含该目标。"},
                 "revision_mode": {
                     "type": "string",
                     "enum": ["expand", "polish", "condense", "normalize", "complete", "rewrite", "revise"],
@@ -279,8 +291,6 @@ def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
             out["reply"] = "已理解，先生成提纲。"
         elif out["intent"] == "clarify":
             out["reply"] = out["clarification_question"] or "还缺一个关键信息，请补充后我再继续。"
-        else:
-            out["reply"] = "我会直接回答这个问题，不修改当前文档。"
     return out
 
 
@@ -301,6 +311,9 @@ def _sanitize_tool_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     intent_map = {
         "set_fields": "update_context",
         "patch_section": "revise_content",
+        "append_to_section": "revise_content",
+        "insert_paragraph": "revise_content",
+        "delete_range": "revise_content",
         "rewrite_document": "revise_content",
         "draft_document": "draft",
         "outline": "outline",
@@ -316,7 +329,7 @@ def _sanitize_tool_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     instruction = raw.get("instruction")
     target = raw.get("target")
     mode = raw.get("revision_mode")
-    if operation in ("patch_section", "rewrite_document"):
+    if operation in ("patch_section", "append_to_section", "insert_paragraph", "rewrite_document"):
         if not isinstance(instruction, str) or not instruction.strip():
             return None
         legacy["revision_instruction"] = instruction.strip()
@@ -324,15 +337,39 @@ def _sanitize_tool_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             mode if mode in ("expand", "polish", "condense", "normalize", "complete", "rewrite", "revise")
             else ("rewrite" if operation == "rewrite_document" else "revise")
         )
-    if operation == "patch_section":
+    if operation in ("patch_section", "append_to_section", "insert_paragraph", "delete_range"):
         if not isinstance(target, str) or not target.strip():
             return None
 
     out = _sanitize(legacy)
     out["operation"] = operation
     out["patch_target"] = target.strip() if isinstance(target, str) and target.strip() else None
+    out["position"] = raw.get("position") if raw.get("position") in ("before", "after") else "after"
+    end_target = raw.get("end_target")
+    out["end_target"] = end_target.strip() if isinstance(end_target, str) and end_target.strip() else None
     out["routing"] = "tool_call"
     return out
+
+
+def _sanitize_legacy_args(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Use the same validated operations on endpoints without tool calling."""
+    if raw.get("operation"):
+        result = _sanitize_tool_args({
+            **raw,
+            "field_updates": raw.get("field_updates") if isinstance(raw.get("field_updates"), dict)
+            else {key: raw.get(key) for key in SEMANTIC_FIELDS},
+            "instruction": raw.get("instruction") or raw.get("revision_instruction"),
+            "target": raw.get("target") or raw.get("patch_target"),
+        })
+        if result:
+            result["routing"] = "json_fallback"
+        return result
+    result = _sanitize(raw)
+    if result["intent"] == "revise_content" and result.get("revision_mode") != "rewrite":
+        result = _blank_result("")
+        result.update(intent="clarify", operation="clarify", side_effect="none",
+                      reply="请指出需要修改的段落或章节；如果要调整全文，也请说明。")
+    return result
 
 
 def _tool_args_from_message(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -446,7 +483,9 @@ class WritingIntentInterpreter:
         if obj is None or obj.get("_schema") not in ("writing_intent_v2", "writing_intent_v1"):
             return self._safe_failure("模型连续两次未返回合法意图 JSON")
 
-        result = _sanitize(obj)
+        result = _sanitize_legacy_args(obj)
+        if not result:
+            return self._safe_failure("JSON 操作参数不完整")
         logger.info(
             "[意图解释] json-fallback side_effect=%s intent=%s topic=%s dtype=%s",
             result["side_effect"], result["intent"], result.get("topic"), result.get("document_type"),

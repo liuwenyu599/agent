@@ -1,4 +1,5 @@
 import re
+from app.domain.official_document_format import format_checks
 from io import BytesIO
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor, Inches
@@ -49,6 +50,24 @@ def _set_paragraph_format(p, alignment=None, first_line_indent=None,
         p.paragraph_format.space_before = space_before
     if space_after is not None:
         p.paragraph_format.space_after = space_after
+
+
+def _apply_official_format(p, target):
+    checks = format_checks(target)
+    size = checks.get("font_size_pt", 16)
+    fmt = p.paragraph_format
+    for key in ("line_spacing_pt", "space_before_pt", "space_after_pt"):
+        if key in checks:
+            setattr(fmt, key.removesuffix("_pt"), Pt(checks[key]))
+    fmt.first_line_indent = Pt(size * checks.get("first_line_indent_chars", 0))
+    if "right_indent_chars" in checks:
+        fmt.right_indent = Pt(size * checks["right_indent_chars"])
+    if "alignment" in checks:
+        p.alignment = {"center": WD_ALIGN_PARAGRAPH.CENTER, "right": WD_ALIGN_PARAGRAPH.RIGHT}[checks["alignment"]]
+    for run in p.runs:
+        _set_font(run, checks.get("font_name", FONT_BODY), Pt(size))
+        if "bold" in checks:
+            run.bold = checks["bold"]
 
 
 def _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12)):
@@ -218,6 +237,7 @@ def _add_list_item(doc, line, level=0):
     _set_font(run, FONT_BODY, Pt(16))
     _parse_inline_formatting(p, content)
 
+    _apply_official_format(p, "body")
     return p
 
 
@@ -285,13 +305,14 @@ def _add_horizontal_rule(doc):
 
 def _add_page_setup(doc):
     """设置页面格式（A4，标准页边距）"""
+    page_checks = format_checks("page")
     for section in doc.sections:
         section.page_width = Cm(21.0)   # A4 宽度
         section.page_height = Cm(29.7)  # A4 高度
-        section.top_margin = Cm(3.7)    # 上 37mm
-        section.bottom_margin = Cm(3.5)  # 下 35mm
-        section.left_margin = Cm(2.8)   # 左 28mm
-        section.right_margin = Cm(2.6)  # 右 26mm
+        section.top_margin = Cm(page_checks["top_margin_cm"])    # 上 37mm
+        section.bottom_margin = Cm(page_checks["bottom_margin_cm"])  # 下 35mm
+        section.left_margin = Cm(page_checks["left_margin_cm"])   # 左 28mm
+        section.right_margin = Cm(page_checks["right_margin_cm"])  # 右 26mm
 
 
 def _add_header_footer(doc, title=""):
@@ -338,6 +359,7 @@ def _add_signature(doc, signature_text=""):
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.RIGHT, space_before=Pt(24), space_after=Pt(6))
     run = p.add_run(signature_text)
     _set_font(run, FONT_BODY, Pt(16))
+    _apply_official_format(p, "signature")
 
 
 def _add_date(doc, date_text=""):
@@ -349,6 +371,7 @@ def _add_date(doc, date_text=""):
     _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.RIGHT, space_after=Pt(12))
     run = p.add_run(date_text)
     _set_font(run, FONT_BODY, Pt(16))
+    _apply_official_format(p, "date")
 
 
 def markdown_to_docx(text: str, title: str = "公文", 
@@ -386,6 +409,9 @@ def markdown_to_docx(text: str, title: str = "公文",
         _add_doc_number(doc, doc_number)
         _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12))
 
+    if not use_red_header:
+        _add_doc_number(doc, doc_number)
+
     # 正文标题：红头/普通导出都必须单独存在。
     if title and title != "公文":
         p = doc.add_paragraph()
@@ -394,6 +420,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             space_before=Pt(6), space_after=Pt(12))
         run = p.add_run(title)
         _set_font(run, FONT_TITLE, Pt(22))
+        _apply_official_format(p, "title")
 
     # 主送机关
     if recipient:
@@ -449,7 +476,8 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=Pt(12))
             run = p.add_run(stripped[2:].strip())
-            _set_font(run, FONT_TITLE, Pt(22), bold=True)
+            _set_font(run, FONT_TITLE, Pt(22))
+            _apply_official_format(p, "title")
             i += 1
             continue
 
@@ -457,7 +485,8 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, space_before=Pt(12), space_after=Pt(6))
             run = p.add_run(stripped[3:].strip())
-            _set_font(run, FONT_H1, Pt(16), bold=True)
+            _set_font(run, FONT_H1, Pt(16))
+            _apply_official_format(p, "heading1")
             i += 1
             continue
 
@@ -465,7 +494,8 @@ def markdown_to_docx(text: str, title: str = "公文",
             p = doc.add_paragraph()
             _set_paragraph_format(p, space_before=Pt(6), space_after=Pt(3))
             run = p.add_run(stripped[4:].strip())
-            _set_font(run, FONT_H2, Pt(15), bold=True)
+            _set_font(run, FONT_H2, Pt(16))
+            _apply_official_format(p, "heading2")
             i += 1
             continue
 
@@ -475,7 +505,8 @@ def markdown_to_docx(text: str, title: str = "公文",
             _set_paragraph_format(
                 p, space_before=Pt(6), space_after=Pt(3), line_spacing=Pt(28))
             run = p.add_run(stripped)
-            _set_font(run, FONT_H1, Pt(16), bold=True)
+            _set_font(run, FONT_H1, Pt(16))
+            _apply_official_format(p, "heading1")
             i += 1
             continue
 
@@ -485,6 +516,7 @@ def markdown_to_docx(text: str, title: str = "公文",
                 p, space_before=Pt(3), space_after=Pt(3), line_spacing=Pt(28))
             run = p.add_run(stripped)
             _set_font(run, FONT_H2, Pt(16))
+            _apply_official_format(p, "heading2")
             i += 1
             continue
 
@@ -506,6 +538,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             space_after=Pt(3)
         )
         _parse_inline_formatting(p, stripped)
+        _apply_official_format(p, "body")
         i += 1
 
     # 落款

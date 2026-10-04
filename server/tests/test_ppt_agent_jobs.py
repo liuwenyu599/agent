@@ -624,6 +624,27 @@ def test_generate_deck_handles_process_failed(monkeypatch):
     assert "失败" in str(e.value)
 
 
+@pytest.mark.parametrize("body, message", [
+    ('event: error\ndata: PPT_PYTHON_GUARD_ABORT: repeated syntax\n\n', "已中止"),
+    ('event: error\ndata: raw syntax failure\n\n', "失败"),
+    ('event: error\ndata: "PPT_PYTHON_GUARD_ABORT: repeated syntax"\n\n', "已中止"),
+    ('event: error\ndata: "syntax failure"\n\n', "失败"),
+    ('data: {"msg":"process_completed","success":false}\n\n', "失败"),
+])
+def test_generate_deck_propagates_terminal_guard_failure(monkeypatch, body, message):
+    def handler(request):
+        if request.url.path.rstrip("/") in ("/", "/docs"):
+            return httpx.Response(200, text="ok")
+        if request.url.path.rstrip("/") == settings.PPT_AGENT_SUBMIT_PATH.rstrip("/"):
+            return httpx.Response(200, json={"event_id": "evt-guard"})
+        return httpx.Response(200, text=body,
+                              headers={"content-type": "text/event-stream"})
+
+    _install(monkeypatch, handler, total_timeout=30)
+    with pytest.raises(PPTAgentError, match=message):
+        PPTAgentClient.from_settings().generate_deck("生成汇报")
+
+
 def test_scan_progress_degrades_when_structure_unknown(tmp_path):
     """R3：目录结构与预期不符时返回零值、不抛异常（降级为无逐页预览）。"""
     (tmp_path / "whatever.txt").write_text("x")

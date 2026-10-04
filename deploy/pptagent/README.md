@@ -1,5 +1,28 @@
 # PPT 助手独立部署（PPTAgent + DeepPresenter-9B）
 
+## Python 执行预检与重复错误闸门（2026-10-04）
+
+`python_guard.py` 安装在真实的 `AgentEnv.tool_execute` 边界：写 `.py`
+之前及 sandbox 执行命令之前做 `ast.parse`；非法脚本不会进入执行工具。
+同一执行错误在同一 AgentEnv/job 内出现两次后抛出确定性终止异常，取消
+已登记的后台工具任务。后端 SSE 识别终止标记并把 job 标为失败。
+守卫在 Host 的 MCP→sandbox 边界执行，覆盖共享工作区脚本，而非仅靠角色提示词。
+
+在拥有已验证冻结镜像的 PPT 宿主机执行：
+
+```bash
+bash deploy/pptagent/build-python-guard.sh
+```
+
+脚本以冻结的 `deeppresenter-host:latest` 增量构建
+`deeppresenter-host:python-guard-v1`，保留原有字体、离线与工具兼容补丁，
+并验证守卫已真实接入。把生产 Host 所用镜像改为该 tag 后重启 Host，
+同时更新司法应用后端以接收错误标记。compose 部署可设置
+`PPT_HOST_IMAGE=deeppresenter-host:python-guard-v1` 后重新创建 `ppt-host`。
+此补丁无需重建 sandbox 或模型容器；回滚时恢复原 Host tag。
+安装器遇到执行接口变化会失败，不能绕过检查继续交付。仅 push 源码不会让
+运行中的第三方 Host 镜像自动获得守卫，现场必须完成以上安装与重启。
+
 ## 架构
 
 ```
@@ -65,7 +88,8 @@ cp .env.example .env && cp config.yaml.example config.yaml
 # 2. 拉取模型权重到 ${HOST_MODEL_DIR}/DeepPresenter-9B
 #    （内网环境：在有网机器 modelscope/huggingface 下载后离线拷贝）
 
-# 3. 启动
+# 3. 在已导入并验证冻结镜像的宿主机安装执行守卫，再启动
+bash build-python-guard.sh
 docker compose up -d
 
 # 4. 让司法局后端能访问 PPTAgent Host（不改动后端容器本身）

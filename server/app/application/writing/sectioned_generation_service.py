@@ -123,7 +123,8 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             f"前文章节（禁止重复）：{'、'.join(previous_headings) or '无'}\n"
             f"后续章节（内容留给后文，不要提前展开）：{'、'.join(next_headings) or '无'}\n"
             f"已确认关键事实：{key_facts or '以本节检索材料为准'}\n"
-            "输出必须从当前章节标题开始，随后写完整正式段落。不得输出全文标题、主送机关、文号、"
+            "输出必须从当前章节标题开始，随后写完整正式段落。涉及多个事项时用“（一）”“1．”“（1）”"
+            "组织本节层级，事项超过 3 条不得写成连续叙述段落。不得输出全文标题、主送机关、文号、"
             "发文机关署名或成文日期；不得用‘略’‘待补充’等占位文字；不得重复前文。"
         )
 

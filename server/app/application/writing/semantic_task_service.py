@@ -40,6 +40,31 @@ _DOCNUM_ONLY_RE = re.compile(
 class SemanticWritingTaskService(WritingTaskService):
     """WritingTaskService with model-only semantic routing and canonical structure."""
 
+    @staticmethod
+    def _answer_messages(message, ctx, content):
+        messages = [{"role": "system", "content": (
+            "你是司法行政写作助手。请直接回答用户问题，或解释你理解的修改要求并询问必要信息。"
+            "本轮仅回答，不执行任何文档修改，不声称已保存、已更新或已生成版本。"
+            "结合当前正文与最近对话，用自然简洁的中文回答。\n当前正文：\n" + content
+        )}]
+        messages.extend({"role": h["role"], "content": h["content"]}
+                        for h in (ctx.get("history") or [])[-6:]
+                        if h.get("role") in ("user", "assistant") and h.get("content"))
+        if not messages or messages[-1].get("content") != message:
+            messages.append({"role": "user", "content": message})
+        return messages
+
+    def _answer_only(self, message, ctx, content):
+        if self.assistant:
+            try:
+                reply = self.assistant.complete(self._answer_messages(message, ctx, content),
+                                                temperature=0.3, max_tokens=1000)
+                if reply and reply.strip():
+                    return reply.strip()
+            except Exception:
+                pass
+        return "暂时无法回答。请补充要讨论的问题或需要修改的具体内容。"
+
     # ------------------------------------------------------------------ context
     @staticmethod
     def _merge_interpretation(ctx: Dict[str, Any], it: Dict[str, Any]) -> List[str]:
@@ -278,7 +303,7 @@ class SemanticWritingTaskService(WritingTaskService):
         it = self._interpret(message, ctx, has_draft=has_draft)
         if not it:
             # Normally unreachable with the new interpreter, but keep fail-closed semantics.
-            reply = "这条指令暂时没有可靠理解，因此没有改动文档。请重新表述后再试。"
+            reply = self._answer_only(message, ctx, task.current_content or "")
             self._push_history(ctx, "assistant", reply)
             task.context = ctx
             self.db.commit()
@@ -321,7 +346,7 @@ class SemanticWritingTaskService(WritingTaskService):
             if note:
                 changes = list(changes) + [note]
 
-        reply = it.get("reply") or "已理解。"
+        reply = it.get("reply") or self._answer_only(message, ctx, task.current_content or "")
         if changes:
             reply += "\n\n已应用：" + "；".join(changes) + "。"
         self._push_history(ctx, "assistant", reply)
@@ -433,8 +458,6 @@ class SemanticWritingTaskService(WritingTaskService):
 
         summary = self._revision_diff(current, revised)
         reply = f"已按你的指令修改正文并保存为 v{version}。"
-        if summary:
-            reply += "\n\n本次实际变化：\n" + summary
         if citation_warnings:
             reply += f"\n\n另移除了 {len(citation_warnings)} 处无法核实的具体文号。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,

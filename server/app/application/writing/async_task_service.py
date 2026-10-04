@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.application.writing import task_parser
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
+from app.application.writing.ops_task_service import LOCAL_OPERATIONS
 from app.application.writing.quality_gate import QualityGate
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
 from app.application.writing.task_service import REVISE_MODES, _sse
@@ -42,6 +43,17 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         return result
 
     # ----------------------------------------------------------- model helpers
+    async def _answer_only_async(self, message, ctx, content):
+        if self.assistant:
+            try:
+                reply = await self.assistant.acomplete(
+                    self._answer_messages(message, ctx, content), temperature=0.3, max_tokens=1000)
+                if reply and reply.strip():
+                    return reply.strip()
+            except Exception:
+                pass
+        return "暂时无法回答。请补充要讨论的问题或需要修改的具体内容。"
+
     async def _llm_draft_async(self, instruction: str, sources, attachment_ctx, user_id,
                                template: Optional[Dict[str, Any]] = None) -> str:
         if not self.assistant:
@@ -210,13 +222,14 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
 
     # --------------------------------------------------------------- revisions
     async def patch_section_async(self, task_id: str, user_id: str, target: str,
-                                  instruction: str, mode: str = "revise") -> Dict[str, Any]:
+                                  instruction: str, mode: str = "revise", operation: str = "patch_section",
+                                  position: str = "after", end_target: Optional[str] = None) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
         ctx = dict(task.context or {})
         current = self._canonicalize_body((task.current_content or "").strip(), ctx)
         if not current:
             raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
-        resolved = self._resolve_patch_target(current, target)
+        resolved = self._local_span(current, target, operation, position, end_target)
         if not resolved:
             return {
                 **self._to_dict(task),
@@ -224,25 +237,25 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                           "请选中具体原文，或明确到某一段/某一节后再修改；系统没有退化成整篇重写。"),
                 "content_changed": False,
                 "context_changes": [],
-                "operation": "patch_section",
+                "operation": operation,
                 "patch_target": target,
             }
         start, end, fragment = resolved
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
-        prompt = self._build_patch_prompt(fragment, instruction, mode_desc)
+        prompt = self._local_prompt(fragment, instruction, mode_desc, operation)
         sources = self._retrieve(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
-        replacement = (await self._llm_revise_async(
+        replacement = "" if operation == "delete_range" else (await self._llm_revise_async(
             prompt, sources, attachment_ctx, user_id)).strip()
-        if not replacement:
+        if not replacement and operation != "delete_range":
             raise HTTPException(status_code=502, detail="模型未返回局部修改内容，请重试")
-        if replacement == fragment:
+        if operation == "patch_section" and replacement == fragment:
             return {**self._to_dict(task),
                     "reply": "目标片段核对后没有产生实际文字变化，因此未创建新版本。",
                     "content_changed": False, "context_changes": [],
                     "operation": "patch_section", "patch_target": target}
 
-        revised = current[:start] + replacement + current[end:]
+        revised = self._splice_local(current, start, end, replacement, operation)
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         revised = self._canonicalize_body(revised, {
             **ctx,
@@ -275,14 +288,13 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         task.updated_at = now_local()
         self.db.commit()
         summary = self._revision_diff(current, revised)
-        reply = f"已只修改定位到的目标片段并保存为 v{version}，未让模型重生成其余正文。"
-        if summary:
-            reply += "\n\n本次实际变化：\n" + summary
+        verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
+        reply = f"已在“{target}”完成{verb}，保存为 v{version}。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
                 "postprocess_events": events, "context_changes": [],
                 "references": references, "revision_summary": summary,
-                "operation": "patch_section", "patch_target": target}
+                "operation": operation, "patch_target": target}
 
     async def revise_async(self, task_id: str, user_id: str, instruction: str,
                            mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
@@ -587,7 +599,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         self._push_history(ctx, "user", message)
         interpreted = await self._interpret_async(message, ctx, has_draft=has_draft)
         if not interpreted:
-            reply = "这条指令暂时没有可靠理解，因此没有改动文档。请重新表述后再试。"
+            reply = await self._answer_only_async(message, ctx, task.current_content or "")
             self._push_history(ctx, "assistant", reply)
             task.context = ctx
             self.db.commit()
@@ -601,12 +613,13 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         self.db.commit()
         operation = interpreted.get("operation") or "answer"
 
-        if operation == "patch_section" and has_draft:
+        if operation in LOCAL_OPERATIONS and has_draft:
             result = await self.patch_section_async(
                 task_id, user_id,
                 target=interpreted.get("patch_target") or "",
                 instruction=interpreted.get("revision_instruction") or message,
-                mode=interpreted.get("revision_mode") or "revise")
+                mode=interpreted.get("revision_mode") or "revise", operation=operation,
+                position=interpreted.get("position") or "after", end_target=interpreted.get("end_target"))
         elif operation == "rewrite_document" and has_draft:
             result = await self.revise_async(
                 task_id, user_id,
@@ -622,7 +635,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                 content_changed = bool(note)
                 if note:
                     changes = list(changes) + [note]
-            reply = interpreted.get("reply") or "已理解。"
+            reply = interpreted.get("reply") or await self._answer_only_async(message, ctx, task.current_content or "")
             if changes:
                 reply += "\n\n已应用：" + "；".join(changes) + "。"
             self._push_history(ctx, "assistant", reply)

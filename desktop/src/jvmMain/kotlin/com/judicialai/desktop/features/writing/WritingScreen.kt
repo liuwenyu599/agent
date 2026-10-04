@@ -360,6 +360,8 @@ private val OrderedListRegex = Regex("^\\d+\\.\\s+.*")
  */
 private val GwHeading1Regex = Regex("^[一二三四五六七八九十百]+、[^。；，]{2,60}$")
 private val GwHeading2Regex = Regex("^（[一二三四五六七八九十]+）[^。；，]{2,60}$")
+private val SignoffDateRegex = Regex("20\\d{2}\\s*年\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日")
+private val SignoffAuthorityRegex = Regex("[\\u4e00-\\u9fa5（）()]{2,25}(政府|办公厅|办公室|委员会|局|厅|部|署|所|处|院|中心)")
 
 /** 正文段首缩进两字符（14.5sp 正文 ≈ 29sp），即「段前空格」的视觉效果 */
 private val BodyParagraphStyle = ParagraphStyle(
@@ -381,11 +383,11 @@ private fun FormattedLine(raw: String) {
         s.startsWith("### ") -> Text(
             inlineMd(s.removePrefix("### ")), fontSize = 16.sp,
             fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
-            color = Ink, lineHeight = 28.sp)
+            color = Ink, lineHeight = 28.8.sp)
         s.startsWith("## ") -> Text(
             inlineMd(s.removePrefix("## ")), fontSize = 16.sp,
             fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = 28.sp)
+            color = Ink, lineHeight = 28.8.sp)
         s.startsWith("# ") -> Text(
             inlineMd(s.removePrefix("# ")), fontSize = 22.sp,
             fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
@@ -393,14 +395,14 @@ private fun FormattedLine(raw: String) {
             modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         GwHeading1Regex.matches(s) -> Text(
             inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.sp)
+            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.8.sp)
         GwHeading2Regex.matches(s) -> Text(
             inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Normal, color = Ink, lineHeight = 28.sp)
+            fontWeight = FontWeight.Normal, color = Ink, lineHeight = 28.8.sp)
         s.startsWith("- ") || s.startsWith("* ") -> Row {
             Text("•  ", fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink)
             Text(inlineMd(s.substring(2)), fontSize = 16.sp,
-                fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.sp)
+                fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.8.sp)
         }
         OrderedListRegex.matches(s) -> {
             val idx = s.indexOf('.')
@@ -408,7 +410,7 @@ private fun FormattedLine(raw: String) {
                 Text(s.substring(0, idx + 1) + "  ", fontSize = 16.sp,
                     fontFamily = FontFamily.Serif, color = Ink)
                 Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 16.sp,
-                    fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.sp)
+                    fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.8.sp)
             }
         }
         s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
@@ -417,7 +419,7 @@ private fun FormattedLine(raw: String) {
             inlineMd(s),
             style = androidx.compose.ui.text.TextStyle(
                 fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                color = Ink, lineHeight = 28.sp,
+                color = Ink, lineHeight = 28.8.sp,
                 textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
             ),
         )
@@ -451,6 +453,28 @@ private fun FormattedBodyEditor(
     var editIdx by remember { mutableStateOf<Int?>(null) }
     var editText by remember { mutableStateOf("") }
     val lines = remember(vm.content) { vm.content.split('\n') }
+    // 尾部独立落款按结构排版；正文内的同名引用仍保留原段落。
+    val (signatureIndex, dateIndex) = remember(lines, vm.task.authority) {
+        val nonBlankIndices = lines.indices.filter { lines[it].isNotBlank() }
+        var signatureIndex: Int? = null
+        var dateIndex: Int? = null
+        var tailPosition = nonBlankIndices.lastIndex
+        if (tailPosition >= 0 && SignoffDateRegex
+                .matches(lines[nonBlankIndices[tailPosition]].trim())) {
+            dateIndex = nonBlankIndices[tailPosition--]
+        }
+        if (tailPosition >= 0) {
+            val tail = lines[nonBlankIndices[tailPosition]].trim()
+            if ((vm.task.authority.isNotBlank() && tail == vm.task.authority.trim()) ||
+                SignoffAuthorityRegex.matches(tail)) {
+                signatureIndex = nonBlankIndices[tailPosition]
+            }
+        }
+        signatureIndex to dateIndex
+    }
+    val displaySignature = signatureIndex?.let { lines[it].trim() } ?: vm.task.authority
+    val displayDate = dateIndex?.let { lines[it].trim() } ?: vm.task.documentDate
+
 
     fun commit() {
         val i = editIdx ?: return
@@ -470,6 +494,7 @@ private fun FormattedBodyEditor(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         itemsIndexed(lines, key = { index, _ -> index }) { i, raw ->
+            if (i == signatureIndex || i == dateIndex) return@itemsIndexed
             if (editIdx == i) {
                 Column(
                     Modifier.fillMaxWidth()
@@ -483,7 +508,7 @@ private fun FormattedBodyEditor(
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                        color = Ink, lineHeight = 28.sp),
+                        color = Ink, lineHeight = 28.8.sp),
                         shape = RoundedCornerShape(Dimens.radiusXs),
                         colors = TextFieldDefaults.outlinedTextFieldColors(
                             backgroundColor = SurfaceTonal,
@@ -514,6 +539,19 @@ private fun FormattedBodyEditor(
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 ) {
                     FormattedLine(raw)
+                }
+            }
+        }
+        if (displaySignature.isNotBlank() || displayDate.isNotBlank()) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(top = 24.dp, end = 64.dp),
+                    horizontalAlignment = Alignment.End) {
+                    if (displaySignature.isNotBlank()) Text(displaySignature,
+                        fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink,
+                        lineHeight = 28.8.sp, textAlign = TextAlign.Right)
+                    if (displayDate.isNotBlank()) Text(displayDate,
+                        fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink,
+                        lineHeight = 28.8.sp, textAlign = TextAlign.Right)
                 }
             }
         }
@@ -1162,7 +1200,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     Text("排版视图", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
                         color = Primary)
                     Spacer(Modifier.width(Dimens.space3))
-                    Text("标题 22pt · 主送/正文 16pt · 固定行距 28pt · 首行缩进 2 字符",
+                    Text("标题 22pt · 主送/正文 16pt · 固定行距 28.8pt · 首行缩进 2 字符",
                         fontSize = 11.sp, color = Muted)
                 }
                 Spacer(Modifier.height(Dimens.space5))
@@ -1184,7 +1222,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 Text(
                     vm.task.recipient.trimEnd('：', ':') + "：",
                     fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                    color = Ink, lineHeight = 28.sp,
+                    color = Ink, lineHeight = 28.8.sp,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(Dimens.space3))
@@ -1196,7 +1234,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                        color = Ink, lineHeight = 28.sp),
+                        color = Ink, lineHeight = 28.8.sp),
                     shape = RoundedCornerShape(Dimens.radiusMd),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         backgroundColor = Surface,
@@ -1285,6 +1323,12 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
                     items(vm.messages) { m ->
                         AiBubble(text = m.content, isUser = m.role == "user",
                             label = vm.spec?.agent?.ifBlank { "助手" } ?: "助手")
+                        if (m.revisionSummary.isNotBlank()) {
+                            var expanded by remember(m) { mutableStateOf(false) }
+                            AppLinkButton(if (expanded) "收起修改详情" else "查看修改详情",
+                                onClick = { expanded = !expanded })
+                            if (expanded) Text(m.revisionSummary, fontSize = 12.sp, color = Muted)
+                        }
                     }
                 }
             }

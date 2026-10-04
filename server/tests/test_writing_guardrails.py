@@ -131,7 +131,7 @@ def test_docx_export_recognizes_plain_text_official_headings_and_indent():
     assert body.runs[0].font.name == FONT_BODY
     assert body.runs[0].font.size == Pt(16)
     assert body.paragraph_format.first_line_indent == Pt(32)
-    assert body.paragraph_format.line_spacing == Pt(28)
+    assert body.paragraph_format.line_spacing == Pt(28.8)
 
 
 def test_body_structure_strips_duplicate_title_and_recipient():
@@ -469,3 +469,49 @@ def test_sync_structured_fields_is_noop_for_already_body_only_content():
     assert svc._sync_structured_fields(task, "u1") == ""
     assert task.current_content == body
     assert task.version_no == 1
+
+
+def test_official_export_uses_shared_format_for_structural_paragraphs():
+    from app.domain.official_document_format import GBT_RULES
+    from app.application.system.seed_v3 import GBT_RULES as seeded_rules
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    assert seeded_rules is GBT_RULES
+    doc = Document(markdown_to_docx(
+        "一、总体安排\n落实工作要求。\n（二）办理流程\n按流程办理。",
+        title="工作通知", signature="广州市白云区司法局", date_text="2026年10月4日"))
+    for text in ("落实工作要求。", "一、总体安排", "（二）办理流程"):
+        p = next(p for p in doc.paragraphs if p.text == text)
+        assert p.paragraph_format.line_spacing == Pt(28.8)
+        assert p.paragraph_format.space_after == Pt(0)
+    title = next(p for p in doc.paragraphs if p.text == "工作通知")
+    assert title.runs[0].bold is False
+    assert title.paragraph_format.space_after == Pt(0)
+    for text in ("广州市白云区司法局", "2026年10月4日"):
+        p = next(p for p in doc.paragraphs if p.text == text)
+        assert p.alignment == WD_ALIGN_PARAGRAPH.RIGHT
+        assert p.paragraph_format.right_indent == Pt(64)
+        assert p.paragraph_format.first_line_indent == Pt(0)
+
+
+def test_render_docx_extracts_only_standalone_trailing_signoff():
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from app.application.writing.task_service import WritingTaskService
+    svc = WritingTaskService.__new__(WritingTaskService)
+    ctx = {"authority": "广州市白云区司法局", "document_date": "2026年10月4日", "title": "工作通知"}
+    for red_header in (False, True):
+        text = "请广州市白云区司法局于2026年10月4日审核。\n\n广州市白云区司法局\n2026年10月4日"
+        buf, _ = svc._render_docx(text, ctx, red_header)
+        doc = Document(buf)
+        signatures = [p for p in doc.paragraphs if p.text == ctx["authority"]]
+        assert len(signatures) == 1
+        assert signatures[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+        assert signatures[0].paragraph_format.right_indent == Pt(64)
+        dates = [p for p in doc.paragraphs if p.text == ctx["document_date"]]
+        assert len(dates) == 1
+        assert dates[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+        buf, _ = svc._render_docx("请广州市白云区司法局于2026年10月4日审核。", ctx, red_header)
+        doc = Document(buf)
+        assert any(p.text == ctx["authority"] for p in doc.paragraphs)
+        assert any(p.text == ctx["document_date"] for p in doc.paragraphs)
+        if red_header:
+            assert doc.paragraphs[0].text == ctx["authority"] + "文件"

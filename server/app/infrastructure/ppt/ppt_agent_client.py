@@ -893,12 +893,20 @@ class PPTAgentClient:
                         payload = line[len("data:"):].strip()
                         if not payload:
                             continue
+                        if "PPT_PYTHON_GUARD_ABORT" in payload:
+                            raise PPTAgentError(
+                                "PPT 生成脚本出现相同执行错误两次，任务已中止。"
+                                "请检查字符串字面量中的转义后重新生成。")
+                        if event_name == "error":
+                            raise PPTAgentError(f"PPTAgent 处理失败：{payload[:300]}")
                         try:
                             obj = _json.loads(payload)
                         except Exception:  # noqa: BLE001 - 非 JSON 行（心跳等）直接跳过
                             continue
                         if on_event:
                             on_event(obj)
+                        if isinstance(obj, dict) and obj.get("success") is False:
+                            raise PPTAgentError(f"PPTAgent 处理失败：{str(obj)[:300]}")
                         if isinstance(obj, dict) and obj.get("msg") in (
                                 "process_failed", "queue_full"):
                             raise PPTAgentError(

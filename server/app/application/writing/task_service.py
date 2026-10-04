@@ -1099,15 +1099,20 @@ class WritingTaskService:
             doc_number = ctx["document_number"]
         title = ctx.get("title") or "公文"
 
-        tail = self._tail_lines(content)
-        tail_text = "\n".join(tail)
+        # 只抽取连续尾部的独立署名/日期行，正文提及机关或日期不算落款。
+        lines = content.rstrip().split("\n")
         signature = ctx.get("authority") or ""
-        if signature and any(
-                signature in l or SIGNOFF_TAIL_RE.match(l) for l in tail):
-            signature = ""  # 正文已自带落款，不重复追加
         date_text = ctx.get("document_date") or ""
-        if date_text and DATE_TAIL_RE.search(tail_text):
-            date_text = ""  # 正文已自带成文日期
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines and DATE_TAIL_RE.fullmatch(lines[-1].strip()):
+            date_text = lines.pop().strip()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines and ((signature and lines[-1].strip() == signature)
+                      or SIGNOFF_TAIL_RE.fullmatch(lines[-1].strip())):
+            signature = lines.pop().strip()
+        content = "\n".join(lines).rstrip()
 
         renderer = generate_official_document if red_header else markdown_to_docx
         buf = renderer(
@@ -1279,11 +1284,14 @@ class WritingTaskService:
                 ending_rule = ""
             parts.append(
                 "\n严格要求：\n"
-                "1) 必须输出完整公文，禁止提纲、片段、列表；\n"
+                "1) 必须输出完整公文正文，禁止只输出提纲或片段；\n"
                 "2) 标题、主送机关由系统结构化字段单独排版；你的输出正文不要重复标题或主送机关，从正文第一段直接开始；\n"
                 + length_rule +
                 "4) 禁止使用任何 Markdown 标记：不要 ###、####、**、---、-、* 等；\n"
                 "5) 直接以纯文本输出，段落之间用一个空行分隔；\n"
+                "正文按事项分条组织，层级依次采用“一、”“（一）”“1．”“（1）”，"
+                "按实际需要使用层级，不必凑齐四级；事项超过 3 条时不得写成连续叙述段落。"
+                "通知围绕具体事项和工作要求分条，不能套用工作报告的成效总结结构；\n"
                 "6) 语言规范、正式、符合党政机关公文写作惯例；同文种知识库范文命中时优先参考其体例和固定用语；\n"
                 "7) 严禁编造具体信息：不得虚构联系人姓名、联系电话、邮箱地址、网址；"
                 "材料未提供这类可选字段时直接省略，不得输出 XX/xx/XXXX 等占位符；\n"
