@@ -3,33 +3,47 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>云法智办 · 首页（2×2 极简）</title>
+<title>白云司法局智慧办公平台 · 首页 2×2（美化版）</title>
 <style>
   :root{
-    --bg:#F4F6F9; --bar:#FFFFFF; --ink:#1F2733; --muted:#6B7685;
-    --line:#E6EAF0; --bar-h:58px;
+    --bg:#F3F5F9; --ink:#1F2733; --muted:#6B7685; --line:#E6EAF0; --bar-h:60px;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
   body{
     font-family:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
     background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
+    min-height:100vh; display:flex; flex-direction:column; position:relative; overflow-x:hidden;
   }
+  /* 页面氛围：四色极淡回声 */
+  body::before,body::after{
+    content:""; position:fixed; z-index:0; border-radius:50%; pointer-events:none;
+  }
+  body::before{width:520px;height:520px;left:-160px;top:-180px;
+    background:radial-gradient(circle,rgba(67,97,238,.07),transparent 70%)}
+  body::after{width:560px;height:560px;right:-180px;bottom:-200px;
+    background:radial-gradient(circle,rgba(217,123,22,.06),transparent 70%)}
 
-  /* ---- 顶部栏（含修复后的搜索框） ---- */
+  /* ---- 标题栏 ---- */
   .topbar{
-    height:var(--bar-h); display:flex; align-items:center; gap:18px;
-    padding:0 22px; background:var(--bar); border-bottom:1px solid var(--line);
-    position:sticky; top:0; z-index:10;
+    height:var(--bar-h); display:flex; align-items:center; gap:16px;
+    padding:0 20px; background:rgba(255,255,255,.86); backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:10;
   }
-  .brand{display:flex; align-items:center; gap:10px; font-weight:700; font-size:16px; letter-spacing:.5px}
-  .brand .dot{width:14px; height:14px; border-radius:4px;
-    background:linear-gradient(135deg,#1F3A5F,#3B5BDB)}
+  .logo{width:38px;height:38px;border-radius:11px;flex:none;
+    background:linear-gradient(135deg,#1F3A5F,#3B5BDB); color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 4px 12px -4px rgba(31,58,95,.5)}
+  .logo svg{width:20px;height:20px}
+  .brand{line-height:1.25}
+  .brand .t{font-weight:700;font-size:15px;letter-spacing:.3px}
+  .brand .b{font-size:11.5px;color:var(--muted)}
+  .brand .b i{font-style:normal;margin:0 6px;color:#C3CBD6}
   .spacer{flex:1}
 
-  /* 搜索框：icon flex:none + 容器 border-box + input 高度100% —— 不再过高/显示不全 */
+  /* 搜索框：icon flex:none + 容器 border-box + input 高度100% */
   .search{
-    display:flex; align-items:center; gap:8px; width:300px; height:38px;
+    display:flex; align-items:center; gap:8px; width:320px; height:38px;
     padding:0 14px; border-radius:999px;
     background:#F1F4F8; border:1px solid var(--line);
     transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
@@ -44,125 +58,187 @@
   .search input::placeholder{color:#9AA4B2}
   .kbd{font-size:11px; color:#9AA4B2; border:1px solid var(--line); border-radius:5px;
     padding:1px 6px; background:#fff; flex:none}
-  .avatar{width:34px; height:34px; border-radius:50%; flex:none;
-    background:linear-gradient(135deg,#1F3A5F,#3B5BDB); color:#fff;
-    display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600}
+  .user{display:flex;align-items:center;gap:9px;flex:none;
+    padding:5px 12px 5px 6px;border-radius:999px;border:1px solid var(--line);background:#fff}
+  .user .av{width:30px;height:30px;border-radius:50%;flex:none;
+    background:linear-gradient(135deg,#1F3A5F,#3B5BDB);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:600}
+  .user .n{font-size:13px;font-weight:700;line-height:1.2}
+  .user .r{font-size:10.5px;color:var(--muted);line-height:1.2}
 
-  /* ---- 首页主体：2×2 极简格子 ---- */
-  .stage{flex:1; display:flex; align-items:center; justify-content:center; padding:28px}
+  /* ---- 问候区 ---- */
+  .wrap{width:100%;max-width:980px;margin:0 auto;padding:0 26px;position:relative;z-index:1}
+  .hello{padding:34px 0 4px}
+  .hello h1{font-size:26px;font-weight:800;letter-spacing:.5px}
+  .hello .pills{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);
+    background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:#2F9E44;flex:none;
+    box-shadow:0 0 0 3px rgba(47,158,68,.15)}
+
+  /* ---- 2×2 网格 ---- */
+  .stage{flex:1;display:flex;align-items:center;padding:22px 0 44px}
   .grid{
-    width:100%; max-width:880px; aspect-ratio:2/1; min-height:420px;
-    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:18px;
+    width:100%; min-height:clamp(380px,56vh,540px);
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:22px;
   }
   .cell{
-    position:relative; border-radius:18px; padding:30px; cursor:pointer; overflow:hidden;
-    display:flex; flex-direction:column; justify-content:space-between;
-    color:#fff; text-decoration:none; isolation:isolate;
-    box-shadow:0 10px 26px -14px rgba(20,30,50,.5);
-    transition:transform .22s cubic-bezier(.2,.7,.3,1), box-shadow .22s ease;
-    opacity:0; transform:translateY(10px) scale(.98);
-    animation:rise .5s cubic-bezier(.2,.7,.3,1) forwards;
+    position:relative; border-radius:20px; padding:30px 32px; cursor:pointer; overflow:hidden;
+    display:flex; flex-direction:column; color:#fff; text-decoration:none; isolation:isolate;
+    box-shadow:0 16px 34px -16px var(--glow);
+    transition:transform .24s cubic-bezier(.2,.7,.3,1), box-shadow .24s ease;
+    opacity:0; transform:translateY(12px) scale(.98);
+    animation:rise .55s cubic-bezier(.2,.7,.3,1) forwards;
   }
   .cell:nth-child(1){animation-delay:.04s}
   .cell:nth-child(2){animation-delay:.12s}
   .cell:nth-child(3){animation-delay:.20s}
   .cell:nth-child(4){animation-delay:.28s}
-  @keyframes rise{to{opacity:1; transform:none}}
-  .cell:hover{transform:translateY(-4px); box-shadow:0 18px 38px -16px rgba(20,30,50,.55)}
-  .cell::after{ /* 细微纹理，增加质感但不喧宾夺主 */
-    content:""; position:absolute; inset:0; z-index:-1; opacity:.16;
-    background-image:radial-gradient(circle at 88% 14%, rgba(255,255,255,.9) 0, transparent 38%);
-  }
-  .cell .ico{width:46px; height:46px; flex:none}
-  .cell .ico svg{width:46px; height:46px; display:block}
-  .cell .name{font-size:23px; font-weight:700; letter-spacing:1px; margin-top:auto}
-  .cell .sub{font-size:13px; opacity:.92; margin-top:6px; font-weight:400}
-  .cell .go{position:absolute; top:24px; right:26px; font-size:22px; opacity:.85}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .cell:hover{transform:translateY(-5px); box-shadow:0 24px 44px -16px var(--glow)}
 
-  /* 四个模块：各自不同色相，强区分 */
-  .c-write {background:linear-gradient(140deg,#3B5BDB,#2742A8)}
-  .c-ppt   {background:linear-gradient(140deg,#E03131,#A61B1B)}
-  .c-kb    {background:linear-gradient(140deg,#2F9E44,#1B7A30)}
-  .c-graph {background:linear-gradient(140deg,#7048E8,#5230B8)}
+  /* 卡内装饰：左上高光 + 右下巨型幽灵图标 */
+  .cell .glow{position:absolute; z-index:-1; top:-45%; left:-12%; width:75%; height:90%;
+    background:radial-gradient(circle,rgba(255,255,255,.28),transparent 68%)}
+  .cell .ghost{position:absolute; z-index:-1; right:-16px; bottom:-22px;
+    width:150px; height:150px; opacity:.14; transform:rotate(-12deg); pointer-events:none}
+  .cell .ghost svg{width:100%; height:100%}
+  .cell .ring{position:absolute; z-index:-1; right:120px; top:-40px; width:110px; height:110px;
+    border:22px solid rgba(255,255,255,.07); border-radius:50%}
+
+  .cell .chip{width:48px;height:48px;border-radius:14px;flex:none;
+    background:rgba(255,255,255,.17); border:1px solid rgba(255,255,255,.28);
+    backdrop-filter:blur(6px); display:flex;align-items:center;justify-content:center}
+  .cell .chip svg{width:24px;height:24px}
+  .cell .name{font-size:24px;font-weight:800;letter-spacing:1px;margin-top:auto}
+  .cell .sub{font-size:13px;opacity:.92;margin-top:7px}
+  .cell .go{position:absolute;top:26px;right:26px;font-size:13px;font-weight:700;
+    display:inline-flex;align-items:center;gap:5px;
+    opacity:0;transform:translateX(-6px);transition:.22s ease}
+  .cell:hover .go{opacity:.95;transform:none}
+
+  /* 四色（位置与原版一致） */
+  .c-write {background:linear-gradient(135deg,#4C6FE8,#2B4ACB 58%,#1E3AA8);--glow:rgba(43,74,203,.5)}
+  .c-tpl   {background:linear-gradient(135deg,#12B886,#0B8A66 58%,#087557);--glow:rgba(11,138,102,.5)}
+  .c-ppt   {background:linear-gradient(135deg,#9775FA,#6C4BD8 58%,#5433B4);--glow:rgba(108,75,216,.5)}
+  .c-check {background:linear-gradient(135deg,#F2A03D,#D97B16 58%,#B4610A);--glow:rgba(217,123,22,.5)}
 
   @media (max-width:680px){
-    .grid{grid-template-columns:1fr; grid-template-rows:repeat(4,1fr); aspect-ratio:auto; min-height:0}
-    .search{width:160px}
-    .search .kbd{display:none}
+    .grid{grid-template-columns:1fr; grid-template-rows:repeat(4,1fr); min-height:0}
+    .search{width:150px} .search .kbd{display:none}
+    .brand .b{display:none}
+    .user .r{display:none}
   }
 </style>
 </head>
 <body>
 
   <header class="topbar">
-    <div class="brand"><span class="dot"></span>云法智办</div>
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 21h18M4 21V10l8-6 8 6v11M9 21v-6h6v6"/>
+      </svg>
+    </div>
+    <div class="brand">
+      <div class="t">白云司法局智慧办公平台</div>
+      <div class="b">工作台<i>/</i>信息中心</div>
+    </div>
     <div class="spacer"></div>
     <label class="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
       </svg>
-      <input type="text" placeholder="搜索功能、文档、知识…" aria-label="搜索">
+      <input type="text" placeholder="搜索功能，例如：模板、知识…" aria-label="搜索">
       <span class="kbd">⌘K</span>
     </label>
-    <div class="avatar">司</div>
+    <div class="user">
+      <span class="av">管</span>
+      <span><span class="n">管理员</span><br><span class="r">系统管理员</span></span>
+    </div>
   </header>
 
+  <div class="wrap">
+    <div class="hello">
+      <h1 id="greet">中午好，管理员</h1>
+      <div class="pills">
+        <span class="pill" id="datePill">2026年10月4日 星期日</span>
+        <span class="pill">信息中心</span>
+        <span class="pill">系统管理员</span>
+        <span class="pill"><span class="dot"></span>AI 助手在线</span>
+      </div>
+    </div>
+  </div>
+
   <main class="stage">
-    <div class="grid">
-      <a class="cell c-write" href="#">
-        <span class="go">→</span>
-        <span class="ico">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 4h11l3 3v13H5z"/><path d="M9 9h6M9 13h6M9 17h4"/>
-          </svg>
-        </span>
-        <div>
-          <div class="name">智能写作</div>
-          <div class="sub">公文 / 报告 / 通知 一键生成</div>
-        </div>
-      </a>
+    <div class="wrap">
+      <div class="grid">
 
-      <a class="cell c-ppt" href="#">
-        <span class="go">→</span>
-        <span class="ico">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v3M8 21h8"/>
-          </svg>
-        </span>
-        <div>
-          <div class="name">PPT 生成</div>
-          <div class="sub">主题模板 → 演示文稿</div>
-        </div>
-      </a>
+        <a class="cell c-write" href="#">
+          <span class="glow"></span><span class="ring"></span>
+          <span class="ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L8 20l-5 1 1-5z"/><path d="M14.5 5.5l4 4"/></svg></span>
+          <span class="go">进入 →</span>
+          <span class="chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L8 20l-5 1 1-5z"/><path d="M14.5 5.5l4 4"/></svg>
+          </span>
+          <div>
+            <div class="name">智能写作</div>
+            <div class="sub">描述工作，助手按本科室口径成稿</div>
+          </div>
+        </a>
 
-      <a class="cell c-kb" href="#">
-        <span class="go">→</span>
-        <span class="ico">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M6.5 9h2M6.5 13h2M15.5 9h2M15.5 13h2"/>
-          </svg>
-        </span>
-        <div>
-          <div class="name">知识库问答</div>
-          <div class="sub">法规 / 案例 智能检索</div>
-        </div>
-      </a>
+        <a class="cell c-tpl" href="#">
+          <span class="glow"></span><span class="ring"></span>
+          <span class="ghost"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.6l2.8 5.9 6.4.8-4.7 4.4 1.2 6.3L12 17l-5.7 3 1.2-6.3L2.8 9.3l6.4-.8z"/></svg></span>
+          <span class="go">进入 →</span>
+          <span class="chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 16.8 6.6 19.7l1.1-6.1L3.2 9.4l6.1-.8z"/></svg>
+          </span>
+          <div>
+            <div class="name">模板中心</div>
+            <div class="sub">系统模板 · 科室模板 · 我的模板</div>
+          </div>
+        </a>
 
-      <a class="cell c-graph" href="#">
-        <span class="go">→</span>
-        <span class="ico">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="7" r="2.4"/><circle cx="12" cy="18" r="2.4"/>
-            <path d="M7.8 7.2l3 9M16.4 8.6l-3.2 8M8 6.6l8 .4"/>
-          </svg>
-        </span>
-        <div>
-          <div class="name">知识网络</div>
-          <div class="sub">图谱化关联与导出</div>
-        </div>
-      </a>
+        <a class="cell c-ppt" href="#">
+          <span class="glow"></span><span class="ring"></span>
+          <span class="ghost"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M7 4.8v14.4c0 .8.9 1.3 1.6.9l11-7.2c.6-.4.6-1.4 0-1.8l-11-7.2c-.7-.4-1.6.1-1.6.9z"/></svg></span>
+          <span class="go">进入 →</span>
+          <span class="chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M10 8.5l4 2-4 2z"/><path d="M12 17v3M8 21h8"/></svg>
+          </span>
+          <div>
+            <div class="name">PPT 助手</div>
+            <div class="sub">从材料生成汇报演示文稿</div>
+          </div>
+        </a>
+
+        <a class="cell c-check" href="#">
+          <span class="glow"></span><span class="ring"></span>
+          <span class="ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/></svg></span>
+          <span class="go">进入 →</span>
+          <span class="chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.5"/></svg>
+          </span>
+          <div>
+            <div class="name">格式校验</div>
+            <div class="sub">公文规范逐条检查</div>
+          </div>
+        </a>
+
+      </div>
     </div>
   </main>
 
+<script>
+  // 问候语与日期随系统时间
+  (function(){
+    var h=new Date().getHours();
+    var g = h<6?'凌晨好':h<9?'早上好':h<12?'上午好':h<14?'中午好':h<18?'下午好':'晚上好';
+    document.getElementById('greet').textContent = g+'，管理员';
+    var d=new Date(), w='日一二三四五六'.charAt(d.getDay());
+    document.getElementById('datePill').textContent =
+      d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日 星期'+w;
+  })();
+</script>
 </body>
 </html>
