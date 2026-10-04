@@ -83,7 +83,7 @@ body::before{
 
 .search{
   display:flex; align-items:center; gap:8px; width:280px; height:36px;
-  padding:0 14px; border-radius:var(--r-pill);
+  padding:0 14px; border-radius:var(--r-pill); box-sizing:border-box;
   background:var(--surface-tonal); border:1px solid var(--line);
   transition:border-color .18s, background .18s, box-shadow .18s;
 }
@@ -94,7 +94,7 @@ body::before{
 }
 .search svg{width:16px;height:16px;fill:var(--muted);flex:none;}
 .search input{
-  flex:1; min-width:0; border:0; outline:0; background:transparent;
+  flex:1; min-width:0; height:100%; box-sizing:border-box; border:0; outline:0; background:transparent;
   font:12.5px/1 inherit; color:var(--ink);
 }
 .search input::placeholder{color:var(--muted2);}

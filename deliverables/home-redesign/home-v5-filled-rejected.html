@@ -225,14 +225,16 @@ body{
 /* 全局搜索 —— AppControls.kt / AppSearchField */
 .search{
   width:260px;height:var(--h-control);display:flex;align-items:center;gap:var(--sp-2);
-  padding:0 var(--sp-3);border-radius:var(--r-pill);
+  padding:0 var(--sp-3);border-radius:var(--r-pill);box-sizing:border-box;
   background:var(--surface-deep);border:1px solid var(--line);
   color:var(--muted);transition:border-color .16s ease,background .16s ease;
 }
 .search:hover{border-color:var(--line-strong);background:var(--surface-sunken);}
+/* 修复：搜索图标必须有显式尺寸 + flex:none，否则内联 <svg> 回退到默认 300x150 把搜索框撑高 */
+.search .ico,.search svg{width:16px;height:16px;flex:none;fill:var(--muted)}
 .search-input{
-  flex:1 1 auto;min-width:0;border:0;outline:none;background:transparent;
-  font-family:inherit;font-size:13px;color:var(--ink);
+  flex:1 1 auto;min-width:0;height:100%;box-sizing:border-box;border:0;outline:none;background:transparent;
+  font-family:inherit;font-size:13px;line-height:1;color:var(--ink);
 }
 .search-input::placeholder{color:var(--muted2);font-size:12.5px;}
 

@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>司法行政智能办公平台 · UI 重设计 v4（首页 + PPT 模块）</title>
+<style>
+/* ===== 设计令牌：沿用品牌色，细化层级 ===== */
+:root{
+  --app-bg:#EEF1F6; --surface:#FFFFFF; --surface-soft:#F6F8FC; --surface-sunken:#EFF3F9;
+  --line:#E6EAF1; --line-strong:#D7DEE9;
+  --navy:#16263D; --primary:#1F3A5F; --primary-deep:#2A4F7D; --primary-soft:#EAF0F7;
+  --accent:#B4231A; --accent-light:#D8543F; --accent-soft:#FBECEB;
+  --blue:#2F6FD0; --blue-soft:#E9F1FB;
+  --ok:#2F7D5B; --ok-soft:#E8F2EC;
+  --warn:#C98A14; --warn-soft:#FBF3E0;
+  --purple:#5A3A8A; --purple-soft:#F1EBF8;
+  --ink:#16223A; --ink2:#4A5567; --muted:#8B95A6; --muted2:#A6AEBd;
+  --rail-bg:#F7F9FC; --rail-border:#E6EAF1; --rail-text:#566077; --rail-hover:#EBF1F8;
+  --r:12px; --r-sm:10px; --r-pill:999px;
+  --shadow-1:0 1px 2px rgba(16,24,40,.06);
+  --shadow-2:0 2px 8px rgba(16,24,40,.08);
+  --shadow-3:0 8px 24px rgba(16,24,40,.12);
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+  background:linear-gradient(180deg,#E9EDF4 0%,#EEF1F6 240px);
+  color:var(--ink); padding:26px; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1440px;margin:0 auto}
+
+/* 顶部说明 */
+.note{
+  background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+  padding:12px 16px; margin-bottom:18px; font-size:13px; color:var(--ink2);
+  box-shadow:var(--shadow-1); display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+}
+.note b{color:var(--primary)}
+.note .tag{background:var(--primary-soft); color:var(--primary); border-radius:var(--r-pill);
+  padding:3px 11px; font-size:12px; font-weight:700; flex:none}
+.note .fix{background:var(--ok-soft); color:var(--ok)}
+
+/* 应用窗口 */
+.window{background:var(--surface); border:1px solid var(--line); border-radius:16px;
+  overflow:hidden; box-shadow:var(--shadow-3)}
+.titlebar{height:40px; background:var(--surface); border-bottom:1px solid var(--line);
+  display:flex; align-items:center; padding:0 16px; gap:8px}
+.dot{width:11px;height:11px;border-radius:50%}
+.dot.r{background:#F56C6C}.dot.y{background:#E6A23C}.dot.g{background:#67C23A}
+.titlebar .t{font-size:12px;color:var(--muted);margin-left:8px}
+
+.body{display:flex; min-height:780px}
+
+/* ===== 侧栏 ===== */
+.rail{width:228px; flex:none; background:var(--rail-bg); border-right:1px solid var(--rail-border);
+  padding:14px 0; overflow-y:auto}
+.brand{display:flex; align-items:center; gap:10px; padding:4px 18px 16px;
+  border-bottom:1px solid var(--rail-border); margin-bottom:12px}
+.brand .logo{width:34px;height:34px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,var(--accent-light),var(--accent));
+  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;
+  box-shadow:0 4px 10px rgba(180,35,26,.28)}
+.brand .name{font-size:13.5px;font-weight:800;color:var(--primary);line-height:1.25}
+.brand .sub{font-size:11px;color:var(--muted)}
+.group{margin-bottom:8px}
+.group-title{font-size:11px;color:var(--muted);padding:8px 20px 5px;letter-spacing:.6px;font-weight:600}
+.nav{position:relative;display:flex;align-items:center;gap:10px;padding:9px 16px;margin:2px 10px;
+  border-radius:9px;font-size:13px;color:var(--rail-text);cursor:pointer;
+  transition:background .15s,color .15s}
+.nav:hover{background:var(--rail-hover)}
+.nav.active{background:#fff;color:var(--primary);font-weight:700;box-shadow:var(--shadow-1)}
+.nav.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);
+  width:3px;height:18px;border-radius:0 3px 3px 0;background:var(--primary)}
+.nav .ic{width:16px;height:16px;flex:none;border-radius:5px}
+.nav .badge{margin-left:auto;background:var(--accent);color:#fff;font-size:10px;
+  border-radius:var(--r-pill);padding:1px 6px;font-weight:700}
+
+/* ===== 主区 ===== */
+.main{flex:1;background:var(--app-bg);display:flex;flex-direction:column;min-width:0}
+.topbar{height:56px;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;padding:0 22px;gap:14px}
+.crumb{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.crumb b{color:var(--ink);font-size:14.5px;font-weight:700}
+.sp{flex:1}
+
+/* 全局搜索（已修复：固定高度 + box-sizing + input 高度100% + icon flex:none） */
+.search{display:inline-flex;align-items:center;gap:8px;height:40px;width:280px;max-width:40vw;
+  padding:0 13px;border-radius:10px;border:1px solid var(--line);background:#fff;
+  box-sizing:border-box;color:var(--muted);
+  transition:border-color .16s var(--ease),box-shadow .16s var(--ease),background .16s var(--ease)}
+.search:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft);background:#fff}
+.search .ic{flex:none;width:16px;height:16px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.search input{flex:1 1 auto;min-width:0;height:100%;border:0;outline:none;background:transparent;
+  font-family:inherit;font-size:13px;line-height:1;color:var(--ink);box-sizing:border-box}
+.search input::placeholder{color:var(--muted2)}
+.search .kbd{font-size:10px;color:var(--muted2);border:1px solid var(--line);border-radius:5px;
+  padding:1px 5px;flex:none}
+
+.user{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink2)}
+.user .av{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--primary),var(--primary-deep));
+  color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+
+.screen{flex:1;padding:22px;overflow-y:auto;display:none}
+.screen.show{display:block}
+
+/* 卡片通用 */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-2)}
+.sec-title{font-size:14px;font-weight:800;color:var(--ink);margin:0 0 12px;letter-spacing:.2px}
+.sec-bar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+  border-bottom:1px solid var(--line)}
+.sec-bar .sec-title{margin:0}
+
+/* ================= 首页 ================= */
+.hero{position:relative;border-radius:var(--r);padding:26px 30px;color:#fff;overflow:hidden;
+  background:radial-gradient(120% 140% at 100% 0%,var(--primary-deep) 0%,var(--primary) 46%,#16293f 100%);
+  box-shadow:var(--shadow-2)}
+.hero .grid-tex{position:absolute;inset:0;opacity:.5;
+  background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);
+  background-size:26px 26px;mask:radial-gradient(120% 120% at 90% 10%,#000,transparent 70%)}
+.hero .orb{position:absolute;right:-30px;top:-50px;width:240px;height:240px;border-radius:50%;
+  background:radial-gradient(circle,rgba(216,84,63,.5),transparent 68%)}
+.hero h1{font-size:clamp(22px,2.4vw,30px);font-weight:800;letter-spacing:.4px;position:relative;line-height:1.2}
+.hero p{font-size:13.5px;opacity:.86;margin-top:8px;position:relative;max-width:620px}
+.hero .pills{display:flex;gap:10px;margin-top:18px;position:relative;flex-wrap:wrap}
+.hero .pill{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.22);color:#fff;font-size:12.5px;font-weight:600;
+  padding:7px 14px;border-radius:var(--r-pill);backdrop-filter:blur(2px)}
+.hero .pill.acc{background:var(--accent);border-color:transparent;box-shadow:0 3px 10px rgba(180,35,26,.4)}
+.hero .pill b{font-weight:800}
+
+.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+.qcard{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);padding:16px 16px 18px;box-shadow:var(--shadow-2);cursor:pointer;
+  transition:box-shadow .2s var(--ease),transform .2s var(--ease),border-color .2s}
+.qcard:hover{box-shadow:var(--shadow-3);transform:translateY(-3px);border-color:var(--line-strong)}
+.qcard .corner{position:absolute;right:0;top:0;width:96px;height:96px;
+  background:linear-gradient(135deg,var(--c) 0%,transparent 46%);opacity:.14;transition:opacity .2s}
+.qcard:hover .corner{opacity:.22}
+.qcard .ic{width:40px;height:40px;border-radius:11px;background:var(--cbg);color:var(--c);
+  display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;
+  box-shadow:var(--shadow-1)}
+.qcard .tt{font-size:14.5px;font-weight:800;margin-top:12px;color:var(--ink)}
+.qcard .ds{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+.qcard .go{margin-top:12px;font-size:12px;font-weight:700;color:var(--c);display:inline-flex;gap:4px;align-items:center;
+  opacity:0;transform:translateX(-4px);transition:.2s var(--ease)}
+.qcard:hover .go{opacity:1;transform:none}
+
+.two{display:grid;grid-template-columns:1.65fr 1fr;gap:16px;margin-top:18px;align-items:start}
+.list{display:flex;flex-direction:column}
+.row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none;padding-bottom:14px}
+.row .nm{flex:1;font-size:13.5px;color:var(--ink);min-width:0;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .meta{font-size:12px;color:var(--muted);flex:none}
+.chip{font-size:11.5px;padding:3px 9px;border-radius:7px;font-weight:700;flex:none}
+.chip.ok{background:var(--ok-soft);color:var(--ok)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.pri{background:var(--primary-soft);color:var(--primary)}
+.chip.acc{background:var(--accent-soft);color:var(--accent)}
+.row .avt{width:26px;height:26px;border-radius:7px;background:var(--primary-soft);color:var(--primary);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none}
+
+.stats{display:flex;flex-direction:column;gap:2px;padding:6px 4px}
+.stat{display:flex;align-items:baseline;gap:10px;padding:11px 14px}
+.stat .n{font-size:24px;font-weight:800;color:var(--primary);min-width:46px;font-variant-numeric:tabular-nums}
+.stat .l{font-size:12.5px;color:var(--ink2)}
+.stat + .stat{border-top:1px solid var(--line-soft)}
+
+/* ================= PPT 模块 ================= */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tab{padding:11px 18px;font-size:13.5px;color:var(--ink2);cursor:pointer;
+  border-bottom:2px solid transparent;font-weight:600;transition:color .15s}
+.tab:hover{color:var(--primary)}
+.tab.active{color:var(--primary);font-weight:800;border-bottom-color:var(--primary)}
+.pane{display:none}.pane.show{display:block;animation:fade .25s var(--ease)}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* 创建 PPT：左侧主题 + 右侧大纲缩略 */
+.ppt-build{display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start}
+.compose{display:flex;flex-direction:column;gap:14px}
+.field label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:6px;font-weight:600}
+.field textarea,.field input[type=text]{width:100%;border:1px solid var(--line);border-radius:9px;
+  padding:10px 12px;font-size:13px;color:var(--ink);font-family:inherit;resize:vertical;
+  background:var(--surface-soft);transition:border-color .15s,box-shadow .15s,background .15s}
+.field textarea:focus,.field input:focus{outline:none;border-color:var(--blue);
+  box-shadow:0 0 0 3px var(--blue-soft);background:#fff}
+.opts{display:flex;gap:8px;flex-wrap:wrap}
+.opt{font-size:12px;padding:6px 12px;border-radius:var(--r-pill);border:1px solid var(--line);
+  color:var(--ink2);cursor:pointer;background:#fff;transition:.15s}
+.opt.on{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:700}
+.btn{border:none;border-radius:9px;padding:10px 18px;font-size:13px;font-weight:800;cursor:pointer;
+  transition:filter .15s,transform .1s,box-shadow .15s}
+.btn:active{transform:translateY(1px)}
+.btn.pri{background:var(--primary);color:#fff;box-shadow:0 3px 10px rgba(31,58,95,.28)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.acc{background:var(--accent);color:#fff;box-shadow:0 3px 10px rgba(180,35,26,.28)}
+.btn.acc:hover{filter:brightness(1.06)}
+.btn.ghost{background:#fff;color:var(--ink2);border:1px solid var(--line)}
+.btn.ghost:hover{background:var(--surface-soft)}
+.btn.block{width:100%}
+
+.slides{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.slide{aspect-ratio:16/9;border-radius:10px;border:1px solid var(--line);overflow:hidden;
+  background:#fff;display:flex;flex-direction:column;box-shadow:var(--shadow-1);
+  transition:box-shadow .2s var(--ease),transform .2s var(--ease)}
+.slide:hover{box-shadow:var(--shadow-3);transform:translateY(-2px)}
+.slide .hd{padding:9px 12px;color:#fff;font-size:12px;font-weight:800;
+  display:flex;align-items:center;justify-content:space-between}
+.slide .hd .no{background:rgba(255,255,255,.25);border-radius:6px;padding:1px 7px;font-size:10.5px}
+.slide .bd{padding:10px 13px;flex:1;background:
+  linear-gradient(180deg,#fff,#fbfcfe)}
+.slide .bd .t{font-size:12.5px;font-weight:800;color:var(--ink);line-height:1.35}
+.slide .bd ul{margin:6px 0 0;padding-left:15px}
+.slide .bd li{font-size:10.5px;color:var(--ink2);line-height:1.7}
+.s1{background:linear-gradient(135deg,var(--primary),var(--primary-deep))}
+.s2{background:linear-gradient(135deg,#fff,var(--surface-soft));color:var(--ink);border-color:var(--line)}
+.s3{background:linear-gradient(135deg,var(--accent-light),var(--accent))}
+.s4{background:linear-gradient(135deg,var(--ok),#3f9c75)}
+
+/* 我的 PPT 列表 */
+.decks{display:flex;flex-direction:column;gap:12px}
+.deck{display:flex;gap:14px;align-items:center;padding:12px;border:1px solid var(--line);
+  border-radius:var(--r);background:#fff;box-shadow:var(--shadow-1);transition:.18s var(--ease)}
+.deck:hover{box-shadow:var(--shadow-2);border-color:var(--line-strong)}
+.deck .thumb{width:120px;aspect-ratio:16/9;border-radius:8px;flex:none;overflow:hidden;
+  background:linear-gradient(135deg,var(--primary),var(--primary-deep));position:relative}
+.deck .thumb .n{position:absolute;left:7px;bottom:6px;font-size:10px;color:#fff;
+  background:rgba(0,0,0,.38);padding:1px 6px;border-radius:4px}
+.deck .info{flex:1;min-width:0}
+.deck .info .t{font-size:14px;font-weight:800;color:var(--ink)}
+.deck .info .m{font-size:12px;color:var(--muted);margin-top:4px}
+.deck .acts{display:flex;gap:8px;flex:none}
+
+/* 模板库 */
+.tpls{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.tpl{position:relative;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;cursor:pointer;
+  background:#fff;transition:.18s var(--ease);box-shadow:var(--shadow-1)}
+.tpl:hover{box-shadow:var(--shadow-3);transform:translateY(-2px)}
+.tpl.sel{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-soft),var(--shadow-2)}
+.tpl .prev{aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center;padding:14px;gap:6px}
+.tpl .prev .bar{height:7px;border-radius:4px;opacity:.9}
+.tpl .prev .bar.s{width:62%}
+.tpl .prev .ln{height:4px;border-radius:3px;background:rgba(255,255,255,.5)}
+.tpl .prev .ln.s{width:70%}
+.tpl .cap{padding:10px 12px;font-size:13px;font-weight:700;color:var(--ink);
+  display:flex;align-items:center;justify-content:space-between}
+.tpl .cap .tick{color:var(--primary);font-weight:800;opacity:0}
+.tpl.sel .cap .tick{opacity:1}
+.tpl-b{background:linear-gradient(135deg,var(--primary),var(--primary-deep))}
+.tpl-r{background:linear-gradient(135deg,var(--accent-light),var(--accent))}
+.tpl-g{background:linear-gradient(135deg,#3f9c75,var(--ok))}
+.tpl-w{background:linear-gradient(135deg,#fff,#eef1f6);border:1px solid var(--line)}
+
+/* 空态 */
+.empty{padding:40px;text-align:center;color:var(--muted);font-size:13px}
+
+@media (max-width:1080px){
+  .quick{grid-template-columns:repeat(2,1fr)}
+  .two{grid-template-columns:1fr}
+  .ppt-build{grid-template-columns:1fr}
+  .tpls{grid-template-columns:repeat(2,1fr)}
+  .slides{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="note">
+    <span class="tag">UI 重设计 · v4</span>
+    <span><b>搜索框已修复</b>：固定高度 40px + <code>box-sizing:border-box</code> + <code>input{height:100%}</code> + 图标 <code>flex:none</code>，不再"过高"或"显示不全"。首页与 PPT 模块按 impeccable 原则重设计。</span>
+    <span class="tag fix">可点击演示</span>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="t">司法行政智能办公平台 · 桌面端</span>
+    </div>
+
+    <div class="body">
+      <!-- 侧栏 -->
+      <aside class="rail">
+        <div class="brand">
+          <div class="logo">司</div>
+          <div>
+            <div class="name">司法行政智能办公</div>
+            <div class="sub">白云区司法局</div>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="group-title">工作台</div>
+          <div class="nav active" data-go="home"><span class="ic" style="background:var(--primary)"></span>首页</div>
+        </div>
+        <div class="group">
+          <div class="group-title">智能写作</div>
+          <div class="nav" data-go="write"><span class="ic" style="background:var(--purple)"></span>智能写作</div>
+        </div>
+        <div class="group">
+          <div class="group-title">公文办理</div>
+          <div class="nav" data-go="approval"><span class="ic" style="background:var(--accent)"></span>待办审批<span class="badge">3</span></div>
+          <div class="nav" data-go="format"><span class="ic" style="background:var(--blue)"></span>格式校验</div>
+          <div class="nav" data-go="ppt"><span class="ic" style="background:var(--warn)"></span>PPT 助手</div>
+          <div class="nav"><span class="ic" style="background:var(--muted)"></span>我的文档</div>
+          <div class="nav"><span class="ic" style="background:var(--muted)"></span>模板中心</div>
+        </div>
+        <div class="group">
+          <div class="group-title">知识库</div>
+          <div class="nav" data-go="kb"><span class="ic" style="background:var(--purple)"></span>知识库</div>
+        </div>
+        <div class="group">
+          <div class="group-title">系统管理</div>
+          <div class="nav" data-go="admin"><span class="ic" style="background:var(--primary-deep)"></span>管理后台</div>
+        </div>
+      </aside>
+
+      <!-- 主区 -->
+      <main class="main">
+        <div class="topbar">
+          <div class="crumb">工作台 <span style="color:var(--muted2)">/</span> <b id="pageTitle">首页</b></div>
+          <span class="sp"></span>
+          <!-- 修复后的全局搜索框 -->
+          <div class="search" role="search">
+            <span class="ic" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            </span>
+            <input id="globalSearch" type="text" placeholder="搜索功能、文档、模板…" aria-label="全局搜索">
+            <span class="kbd">⌘K</span>
+          </div>
+          <span class="user"><span class="av">齐</span>齐活林 · 管理员</span>
+        </div>
+
+        <!-- ============ 首页 ============ -->
+        <section class="screen show" id="home">
+          <div class="hero">
+            <div class="grid-tex"></div>
+            <div class="orb"></div>
+            <h1>下午好，齐活林</h1>
+            <p>今天有 <b style="color:#fff">3</b> 项待办审批等待处理，AI 辅助写作与格式校验已就绪。先把最紧急的核稿环节收掉？</p>
+            <div class="pills">
+              <span class="pill acc">⚠ 待办审批 <b>3</b> 项 · 立即处理</span>
+              <span class="pill">✓ 本月已签发 8 份</span>
+              <span class="pill">✦ AI 写作在线</span>
+            </div>
+          </div>
+
+          <div class="quick">
+            <div class="qcard" style="--c:var(--primary);--cbg:var(--primary-soft)">
+              <div class="corner"></div>
+              <div class="ic">写</div>
+              <div class="tt">智能写作</div>
+              <div class="ds">一句话生成公文初稿，自动引法规</div>
+              <div class="go">进入 →</div>
+            </div>
+            <div class="qcard" style="--c:var(--accent);--cbg:var(--accent-soft)">
+              <div class="corner"></div>
+              <div class="ic">审</div>
+              <div class="tt">待办审批</div>
+              <div class="ds">核稿 · 签发 · 用印 一站流转</div>
+              <div class="go">进入 →</div>
+            </div>
+            <div class="qcard" style="--c:var(--purple);--cbg:var(--purple-soft)">
+              <div class="corner"></div>
+              <div class="ic">知</div>
+              <div class="tt">知识库</div>
+              <div class="ds">法规 · 范文 · 模板 即查即用</div>
+              <div class="go">进入 →</div>
+            </div>
+            <div class="qcard" style="--c:var(--ok);--cbg:var(--ok-soft)">
+              <div class="corner"></div>
+              <div class="ic">格</div>
+              <div class="tt">格式校验</div>
+              <div class="ds">GB/T 9704 国标一键体检</div>
+              <div class="go">进入 →</div>
+            </div>
+          </div>
+
+          <div class="two">
+            <div class="card">
+              <div class="sec-bar"><div class="sec-title">最近文档</div><span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:700">查看全部 →</span></div>
+              <div class="list" id="docList">
+                <div class="row"><span class="avt">总</span><span class="nm">2026 年度司法行政工作总结</span><span class="chip ok">已签发</span><span class="meta">09-20</span></div>
+                <div class="row"><span class="avt">矫</span><span class="nm">关于社区矫正工作情况的报告</span><span class="chip warn">核稿中</span><span class="meta">09-19</span></div>
+                <div class="row"><span class="avt">普</span><span class="nm">白云区普法宣传工作方案</span><span class="chip pri">草稿</span><span class="meta">09-18</span></div>
+                <div class="row"><span class="avt">调</span><span class="nm">人民调解员培训通知</span><span class="chip acc">已驳回</span><span class="meta">09-17</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div style="padding:14px 16px 4px" class="sec-title">我的统计</div>
+              <div class="stats">
+                <div class="stat"><span class="n">12</span><span class="l">本月起草</span></div>
+                <div class="stat"><span class="n">8</span><span class="l">已签发</span></div>
+                <div class="stat"><span class="n">3</span><span class="l">待我审批</span></div>
+                <div class="stat"><span class="n">96</span><span class="l">格式平均分</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ PPT 模块 ============ -->
+        <section class="screen" id="ppt">
+          <div class="tabs">
+            <div class="tab active" data-pane="ppt1">创建 PPT</div>
+            <div class="tab" data-pane="ppt2">我的 PPT</div>
+            <div class="tab" data-pane="ppt3">模板库</div>
+          </div>
+
+          <!-- 创建 PPT -->
+          <div class="pane show" id="ppt1">
+            <div class="ppt-build">
+              <div class="card compose" style="padding:16px">
+                <div class="sec-title">生成大纲</div>
+                <div class="field">
+                  <label>汇报主题</label>
+                  <textarea rows="3" placeholder="例如：社区矫正工作汇报">社区矫正工作汇报</textarea>
+                </div>
+                <div class="field">
+                  <label>风格 / 篇幅</label>
+                  <div class="opts">
+                    <span class="opt on">政务严谨</span>
+                    <span class="opt">数据汇报</span>
+                    <span class="opt">简洁大气</span>
+                  </div>
+                  <div class="opts" style="margin-top:8px">
+                    <span class="opt on">8 页</span>
+                    <span class="opt">12 页</span>
+                    <span class="opt">16 页</span>
+                  </div>
+                </div>
+                <button class="btn pri block">⚡ 生成 PPT 大纲</button>
+                <div style="font-size:11.5px;color:var(--muted);line-height:1.6">AI 将依据知识库范文与国标版式生成大纲，可在右侧逐页预览并微调。</div>
+              </div>
+
+              <div class="card" style="padding:16px">
+                <div class="sec-bar" style="margin:-16px -16px 14px;padding:14px 16px">
+                  <div class="sec-title">大纲预览 · 社区矫正工作汇报</div>
+                  <span style="font-size:12px;color:var(--muted)">8 页</span>
+                </div>
+                <div class="slides">
+                  <div class="slide"><div class="hd s1"><span>封面</span><span class="no">1</span></div>
+                    <div class="bd"><div class="t">社区矫正工作汇报</div><ul><li>白云区司法局 · 2026</li></ul></div></div>
+                  <div class="slide"><div class="hd s2"><span>目录</span><span class="no">2</span></div>
+                    <div class="bd"><div class="t">汇报内容</div><ul><li>工作成效</li><li>数据分析</li><li>问题与挑战</li></ul></div></div>
+                  <div class="slide"><div class="hd s3"><span>工作成效</span><span class="no">3</span></div>
+                    <div class="bd"><div class="t">全年工作成效</div><ul><li>接收对象 412 人</li><li>解除 368 人</li></ul></div></div>
+                  <div class="slide"><div class="hd s4"><span>数据分析</span><span class="no">4</span></div>
+                    <div class="bd"><div class="t">关键指标</div><ul><li>调解成功率 96.8%</li><li>法援案件 1286 件</li></ul></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 我的 PPT -->
+          <div class="pane" id="ppt2">
+            <div class="decks">
+              <div class="deck">
+                <div class="thumb"><span class="n">8 页</span></div>
+                <div class="info"><div class="t">社区矫正工作汇报</div><div class="m">更新于 09-28 · 政务蓝模板 · 96 分</div></div>
+                <div class="acts"><button class="btn pri">打开</button><button class="btn ghost">下载</button></div>
+              </div>
+              <div class="deck">
+                <div class="thumb" style="background:linear-gradient(135deg,var(--accent-light),var(--accent))"><span class="n">12 页</span></div>
+                <div class="info"><div class="t">普法宣传进社区方案</div><div class="m">更新于 09-21 · 司法红模板 · 草稿</div></div>
+                <div class="acts"><button class="btn pri">打开</button><button class="btn ghost">下载</button></div>
+              </div>
+              <div class="deck">
+                <div class="thumb" style="background:linear-gradient(135deg,#3f9c75,var(--ok))"><span class="n">10 页</span></div>
+                <div class="info"><div class="t">年度工作总结演示</div><div class="m">更新于 09-15 · 松绿模板 · 已归档</div></div>
+                <div class="acts"><button class="btn pri">打开</button><button class="btn ghost">下载</button></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 模板库 -->
+          <div class="pane" id="ppt3">
+            <div class="tpls">
+              <div class="tpl sel"><div class="prev tpl-b"><div class="bar"></div><div class="ln"></div><div class="ln s"></div></div>
+                <div class="cap">政务蓝<span class="tick">✓</span></div></div>
+              <div class="tpl"><div class="prev tpl-r"><div class="bar"></div><div class="ln"></div><div class="ln s"></div></div>
+                <div class="cap">司法红<span class="tick">✓</span></div></div>
+              <div class="tpl"><div class="prev tpl-g"><div class="bar"></div><div class="ln"></div><div class="ln s"></div></div>
+                <div class="cap">松绿<span class="tick">✓</span></div></div>
+              <div class="tpl"><div class="prev tpl-w"><div class="bar" style="background:#cdd5e1"></div><div class="ln" style="background:#dbe1ea"></div><div class="ln s" style="background:#dbe1ea"></div></div>
+                <div class="cap">简约白<span class="tick">✓</span></div></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 其余页面：复用基础样式（轻量占位，重点已放在首页 / PPT） -->
+        <section class="screen" id="write"><div class="card empty">智能写作（沿用 v3.0 布局，本次未重设计）</div></section>
+        <section class="screen" id="approval"><div class="card empty">待办审批（沿用 v3.0 布局，本次未重设计）</div></section>
+        <section class="screen" id="format"><div class="card empty">格式校验（沿用 v3.0 布局，本次未重设计）</div></section>
+        <section class="screen" id="kb"><div class="card empty">知识库（沿用 v3.0 布局，本次未重设计）</div></section>
+        <section class="screen" id="admin"><div class="card empty">管理后台（沿用 v3.0 布局，本次未重设计）</div></section>
+      </main>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var titles={home:'首页',write:'智能写作',approval:'待办审批',kb:'知识库',format:'格式校验',ppt:'PPT 助手',admin:'管理后台'};
+  document.querySelectorAll('.nav[data-go]').forEach(function(n){
+    n.addEventListener('click',function(){
+      document.querySelectorAll('.nav').forEach(function(x){x.classList.remove('active')});
+      n.classList.add('active');
+      var id=n.getAttribute('data-go');
+      document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('show')});
+      document.getElementById(id).classList.add('show');
+      document.getElementById('pageTitle').textContent=titles[id]||'';
+    });
+  });
+  document.querySelectorAll('.tab[data-pane]').forEach(function(t){
+    t.addEventListener('click',function(){
+      var box=t.closest('section');
+      box.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active')});
+      t.classList.add('active');
+      box.querySelectorAll('.pane').forEach(function(p){p.classList.remove('show')});
+      box.querySelector('#'+t.getAttribute('data-pane')).classList.add('show');
+    });
+  });
+  // 模板库选择
+  document.querySelectorAll('.tpl').forEach(function(t){
+    t.addEventListener('click',function(){
+      t.parentNode.querySelectorAll('.tpl').forEach(function(x){x.classList.remove('sel')});
+      t.classList.add('sel');
+    });
+  });
+  // 风格 / 篇幅选项
+  document.querySelectorAll('.opts').forEach(function(g){
+    g.addEventListener('click',function(e){
+      var o=e.target.closest('.opt'); if(!o)return;
+      g.querySelectorAll('.opt').forEach(function(x){x.classList.remove('on')});
+      o.classList.add('on');
+    });
+  });
+  // 搜索演示：过滤最近文档
+  var gs=document.getElementById('globalSearch'), list=document.getElementById('docList');
+  if(gs&&list){
+    gs.addEventListener('input',function(){
+      var q=gs.value.trim().toLowerCase(), rows=list.querySelectorAll('.row');
+      rows.forEach(function(r){
+        var name=r.querySelector('.nm').textContent.toLowerCase();
+        r.style.display=name.indexOf(q)>-1?'':'none';
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>
