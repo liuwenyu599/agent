@@ -1,4 +1,5 @@
 """PPT 助手应用服务：模板/素材/文档/生成/导出/云端生成的编排。"""
+import hashlib
 import io
 import json as _json
 import os
@@ -788,13 +789,35 @@ class PPTService:
                            ",".join(missing), doc_id)
             return self._degraded_preview(reason)
 
-        preview_source = "draft"
+        preview_source = "generated" if (
+            d.status == "generated" and d.file_path and os.path.exists(d.file_path)
+        ) else "draft"
+        # 结果缓存：大纲、模板、产物来源都没变时直接复用上次渲染的 PNG。
+        # 预览刷新/切模板是高频操作，LibreOffice 全量渲染一次要数秒到数十秒，
+        # key 命中即可秒回，显著改善工作台切换模板与重开文档的速度。
+        prev_dir = self.ppt_dir / "preview" / d.id
+        key_file = self.ppt_dir / "preview" / (d.id + ".key")
+        try:
+            cache_key = hashlib.md5(_json.dumps(
+                {"outline": d.outline, "template": d.template_id or "",
+                 "source": preview_source,
+                 "mtime": os.path.getmtime(d.file_path) if preview_source == "generated" else 0},
+                ensure_ascii=False, sort_keys=True, default=str,
+            ).encode("utf-8")).hexdigest()
+        except Exception:  # 序列化失败只影响缓存，不影响渲染主流程
+            cache_key = None
+        cached_names = sorted(p.name for p in prev_dir.glob("pg-*.png")) \
+            if prev_dir.exists() else []
+        if cache_key and cached_names and key_file.exists() \
+                and key_file.read_text(encoding="utf-8").strip() == cache_key:
+            return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in cached_names],
+                    "count": len(cached_names), "degraded": False, "reason": "",
+                    "source": preview_source}
         try:
             # 已生成且未再编辑：直接预览上次真实产出的 pptx。
             # 这保证“生成完成时看到什么，重新打开仍看到什么”，避免退回本地简化模板。
-            if d.status == "generated" and d.file_path and os.path.exists(d.file_path):
+            if preview_source == "generated":
                 data = Path(d.file_path).read_bytes()
-                preview_source = "generated"
             else:
                 template, trow = self._resolve_template(d.template_id, d.theme_id or "")
                 outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
@@ -805,7 +828,6 @@ class PPTService:
                            doc_id, type(e).__name__, e)
             return self._degraded_preview("版式渲染失败，暂无法显示真实预览")
 
-        prev_dir = self.ppt_dir / "preview" / d.id
         if prev_dir.exists():
             shutil.rmtree(prev_dir, ignore_errors=True)
         prev_dir.mkdir(parents=True, exist_ok=True)

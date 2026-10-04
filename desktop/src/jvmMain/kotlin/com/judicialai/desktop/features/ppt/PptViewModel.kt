@@ -931,9 +931,13 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     /** 先保存草稿，再渲染为逐页 PNG 供工作台真实版式预览（失败自动回退结构化卡） */
+    private var previewQueued = false
+
     fun refreshPreview() {
         val id = docId ?: return
-        if (previewBusy) return
+        // 渲染进行中又收到新的刷新请求（切模板/手动刷新）：不能静默吞掉——
+        // 排队一轮，当前渲染结束后按最新模板再渲染一次，否则用户切了模板看不到任何反应
+        if (previewBusy) { previewQueued = true; return }
         previewBusy = true
         scope.launch {
             repo.saveDraft(id, outlineTitle, outlineJson(), templateId)
@@ -947,8 +951,31 @@ class PptViewModel(private val repo: PptRepository) {
                     is ApiResult.Err -> previewPages = emptyList() // 服务端未部署/无 LibreOffice
                 }
                 previewBusy = false
+            } else {
+                // 文档已切换：本次请求作废的同时必须把 busy 放掉，
+                // 否则 previewBusy 永久卡死，之后所有刷新/切模板都会被当成"渲染中"吞掉
+                previewBusy = false
+            }
+            // 排队中的刷新请求：按当前（可能已切换的）模板再来一轮
+            if (previewQueued) {
+                previewQueued = false
+                if (docId != null) refreshPreview()
             }
         }
+    }
+
+    /**
+     * 工作台内切换模板的唯一入口：写 templateId → 立即重渲染预览，
+     * 并明确告诉用户"已生效 + 想出新片要重新生成"。此前直接赋值 + refreshPreview，
+     * 渲染中切换会被静默吞掉（点了没反应），且没有任何文字反馈。
+     */
+    fun switchTemplate(id: String?) {
+        if (templateId == id) return
+        templateId = id
+        val name = templates.firstOrNull { it["id"].str() == id }
+            ?.get("name").str().ifBlank { null } ?: "默认模板"
+        status = "已切换为「$name」，正在按新模板重渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
+        refreshPreview()
     }
 
     /**
@@ -1113,6 +1140,10 @@ class PptViewModel(private val repo: PptRepository) {
         PptJobEngine.reset()
         loadDocuments()
         status = null
+        // 生成完成后回到编辑工作台：必须重渲染预览。
+        // 否则看到的还是生成前的旧版式预览（甚至空骨架），
+        // 用户会以为"生成的 PPT 长这样"或"换的模板没生效"。
+        refreshPreview()
     }
 
     /** FAILED / CANCELLED 后重试：复用提交时需求；本地保存位置可稍后再选。 */

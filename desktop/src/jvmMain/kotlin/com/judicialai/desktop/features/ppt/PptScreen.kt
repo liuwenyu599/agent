@@ -1,7 +1,10 @@
 package com.judicialai.desktop.features.ppt
 
+import androidx.compose.foundation.BasicTextField
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
@@ -48,9 +52,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
@@ -64,7 +78,14 @@ import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.Muted
+import com.judicialai.desktop.design.theme.Primary
+import com.judicialai.desktop.design.theme.PrimaryDeep
 import com.judicialai.desktop.design.theme.SecondaryText
+import com.judicialai.desktop.design.theme.Surface
 import kotlinx.serialization.json.JsonObject
 
 /** 页型中文标签（与服务端 10 种页型一致） */
@@ -250,7 +271,17 @@ internal fun sel(selected: Boolean) = ButtonDefaults.outlinedButtonColors(
     backgroundColor = if (selected) MaterialTheme.colors.primary.copy(alpha = 0.12f)
     else Color.Transparent)
 
-// ================= 极简入口页 =================
+// ================= 极简入口页（按 ppt-assistant-redesign v3 设计稿重构） =================
+
+/** 风格卡渐变（政务红/政策蓝/宣传青/藏青，按序取色） */
+private val StyleGradients = listOf(
+    listOf(Color(0xFFB01E23), Color(0xFF741217)),
+    listOf(Color(0xFF234F91), Color(0xFF142F5A)),
+    listOf(Color(0xFF14738D), Color(0xFF0B4D60)),
+    listOf(Color(0xFF2B5AA0), Color(0xFF1B365D)),
+)
+/** 内容依据绿（材料芯片"已分析"文案） */
+private val ChipGreen = Color(0xFF2E7D4F)
 
 @Composable
 private fun PptEntryPane(
@@ -258,162 +289,454 @@ private fun PptEntryPane(
     onOpenDocuments: () -> Unit,
     onOpenTemplates: () -> Unit,
 ) {
+    /** 展开的工具面板：kb / page / meta（同一时间最多展开一个） */
+    var openPanel by remember { mutableStateOf<String?>(null) }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-            .padding(horizontal = 32.dp, vertical = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 32.dp, vertical = 20.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("今天想做一份什么 PPT？", style = MaterialTheme.typography.h5)
-                Spacer(Modifier.height(4.dp))
-                Text("描述任务或上传现有材料，先确认内容结构，再由 AI 完成整套视觉设计。",
-                    style = MaterialTheme.typography.body2, color = SecondaryText)
-            }
-            TextButton(onClick = onOpenDocuments) { Text("我的作品") }
-            TextButton(onClick = onOpenTemplates) { Text("模板管理") }
+        // 顶部右侧入口（设计稿放在顶栏，桌面端无独立顶栏，收到 Hero 上方）
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onOpenDocuments) { Text("我的作品", fontSize = 12.5.sp) }
+            TextButton(onClick = onOpenTemplates) { Text("模板管理", fontSize = 12.5.sp) }
         }
 
-        Card(Modifier.fillMaxWidth(), elevation = 2.dp) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    vm.topic, { vm.topic = it },
-                    placeholder = { Text("例如：根据社区矫正年度工作总结，生成一份面向局领导的工作汇报，重点体现工作成效、问题分析和下一步计划。") },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp),
+        // Hero：居中标题
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("今天想做一份什么 PPT？",
+                fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+            Spacer(Modifier.height(6.dp))
+            Text("描述任务或上传现有材料，先确认内容结构，再由 AI 完成整套视觉设计。",
+                fontSize = 12.5.sp, color = SecondaryText)
+        }
+        Spacer(Modifier.height(20.dp))
+
+        // Composer 输入卡
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Surface)
+                .border(1.dp, Line, RoundedCornerShape(16.dp)),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp)) {
+                BasicTextField(
+                    value = vm.topic,
+                    onValueChange = { vm.topic = it },
+                    textStyle = TextStyle(
+                        fontSize = 14.5.sp, lineHeight = 25.sp, color = Ink),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp),
+                    decorationBox = { inner ->
+                        Box {
+                            if (vm.topic.isEmpty()) Text(
+                                "例如：根据社区矫正年度工作总结，生成一份面向局领导的 12 页工作汇报，" +
+                                    "重点体现工作成效、问题分析和下一步计划。",
+                                fontSize = 14.sp, lineHeight = 24.sp, color = Muted)
+                            inner()
+                        }
+                    },
                 )
-                vm.materials.forEachIndexed { i, m ->
-                    Card(Modifier.fillMaxWidth(), elevation = 0.dp,
-                        backgroundColor = MaterialTheme.colors.primary.copy(alpha = 0.04f)) {
-                        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(m.filename, style = MaterialTheme.typography.subtitle2, maxLines = 1)
-                                Text(if (m.summary.isNotBlank()) "已分析 · " + m.summary
-                                    else "已分析 · ${m.chars} 字",
-                                    style = MaterialTheme.typography.caption,
-                                    color = SecondaryText, maxLines = 2)
-                            }
-                            IconButton(onClick = { vm.removeMaterial(i) }) {
-                                Icon(Icons.Default.Close, "移除", tint = SecondaryText)
-                            }
-                        }
-                    }
+                Spacer(Modifier.height(12.dp))
+                vm.materials.forEachIndexed { i, m -> MaterialChip(m) { vm.removeMaterial(i) } }
+                if (vm.materials.isNotEmpty()) Spacer(Modifier.height(10.dp))
+            }
+
+            // 工具面板（点工具栏按钮展开/收起）
+            when (openPanel) {
+                "kb" -> KbPanel(vm)
+                "page" -> PagePanel(vm)
+                "meta" -> MetaPanel(vm)
+            }
+
+            // Composer 工具栏
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(if (openPanel != null) Line.copy(alpha = 0.35f) else Color.Transparent)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ComposerTool("＋ 添加材料", active = false, enabled = !vm.analyzing) {
+                    val files = pickFiles("选择材料（doc/docx/pdf/txt/md/xlsx/csv/pptx，可多选）")
+                    if (files.isNotEmpty()) vm.analyzeMaterials(files)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(enabled = !vm.analyzing, onClick = {
-                        val files = pickFiles("选择材料（doc/docx/pdf/txt/md/xlsx/csv/pptx，可多选）")
-                        if (files.isNotEmpty()) vm.analyzeMaterials(files)
-                    }) { Text(if (vm.analyzing) "分析材料中…" else "＋ 添加材料") }
-                    Spacer(Modifier.width(10.dp))
-                    Text(if (vm.selectedKbIds.isEmpty()) "可结合知识库生成"
-                        else "知识库 · 已选 ${vm.selectedKbIds.size} 个",
-                        style = MaterialTheme.typography.caption,
-                        color = if (vm.selectedKbIds.isEmpty()) SecondaryText else MaterialTheme.colors.primary)
-                    Spacer(Modifier.weight(1f))
-                    Text("主题、材料、知识库有其一即可开始",
-                        style = MaterialTheme.typography.caption, color = SecondaryText)
+                ComposerTool(
+                    if (vm.selectedKbIds.isEmpty()) "▣ 知识库" else "▣ 知识库 · ${vm.selectedKbIds.size}",
+                    active = openPanel == "kb",
+                ) { openPanel = if (openPanel == "kb") null else "kb" }
+                ComposerTool(
+                    if (vm.slideCount.isNotBlank()) "▤ ${vm.slideCount} 页" else "▤ 页数",
+                    active = openPanel == "page",
+                ) { openPanel = if (openPanel == "page") null else "page" }
+                ComposerTool("◇ 汇报信息", active = openPanel == "meta") {
+                    openPanel = if (openPanel == "meta") null else "meta"
                 }
+                Spacer(Modifier.weight(1f))
+                val canGenerate = !vm.busy &&
+                    (vm.topic.isNotBlank() || vm.materials.isNotEmpty() ||
+                        vm.selectedKbIds.isNotEmpty())
+                GenerateButton(
+                    enabled = canGenerate && !vm.busy,
+                    label = if (vm.busy) vm.outlineStage.ifBlank { "正在生成…" } else "生成大纲 →",
+                    onClick = { vm.startOutline() },
+                )
             }
         }
 
-        if (vm.kbs.isNotEmpty()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("内容依据", style = MaterialTheme.typography.subtitle2,
-                    modifier = Modifier.weight(1f))
-                Text("共 " + vm.kbs.size + " 个可用知识库",
-                    style = MaterialTheme.typography.caption, color = SecondaryText)
-            }
-            vm.kbs.chunked(4).forEach { rowKbs ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    rowKbs.forEach { kb ->
-                        val kbId = kb["id"].str()
-                        val picked = kbId in vm.selectedKbIds
-                        OutlinedButton(
-                            onClick = { vm.toggleKb(kbId) },
-                            colors = sel(picked),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text((if (picked) "✓ " else "") +
-                                kb["name"].str().ifBlank { "未命名知识库" }, maxLines = 1)
-                        }
-                    }
-                    repeat(4 - rowKbs.size) { Spacer(Modifier.weight(1f)) }
-                }
-            }
-            Text("仅按当前主题语义检索相关片段，不会把整库内容直接灌入。",
-                style = MaterialTheme.typography.caption, color = SecondaryText)
-        } else if (vm.kbsError != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(vm.kbsError ?: "知识库暂时加载失败",
-                    style = MaterialTheme.typography.caption, color = SecondaryText,
-                    modifier = Modifier.weight(1f))
-                TextButton(enabled = !vm.kbsLoading, onClick = { vm.loadKbs() }) {
-                    Text(if (vm.kbsLoading) "重试中…" else "重新加载")
-                }
-            }
+        // Composer 下的辅助行
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+            Text("主题、材料、知识库有其一即可开始",
+                fontSize = 11.sp, color = Muted)
+            Spacer(Modifier.weight(1f))
+            Text("大纲确认后再进行 AI 视觉设计",
+                fontSize = 11.sp, color = Primary, fontWeight = FontWeight.SemiBold)
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                vm.slideCount,
-                { vm.slideCount = it.filter(Char::isDigit).take(2) },
-                label = { Text("页数（可选，2–18）") },
-                isError = vm.slideCount.isNotBlank() &&
-                    (vm.slideCount.toIntOrNull()?.let { it !in 2..18 } != false),
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(vm.generationYear, { vm.updateGenerationYear(it.filter(Char::isDigit).take(4)) },
-                label = { Text("年度") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(vm.location, { vm.updateLocation(it) },
-                label = { Text("单位/地点") }, modifier = Modifier.weight(1f))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(vm.presenter, { vm.updatePresenter(it) },
-                label = { Text("汇报人（可选）") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(vm.reportDate, { vm.updateReportDate(it) },
-                label = { Text("落款日期") }, modifier = Modifier.weight(1f))
-        }
-
-        Text("视觉风格", style = MaterialTheme.typography.subtitle2)
-        Text("不选择时由 AI 根据内容自动匹配；模板只控制视觉与版式，不改变已确认内容。",
-            style = MaterialTheme.typography.caption, color = SecondaryText)
-        TemplatePicker(vm)
-
-        val canGenerate = !vm.busy &&
-            (vm.topic.isNotBlank() || vm.materials.isNotEmpty() || vm.selectedKbIds.isNotEmpty())
-        AppButton(
-            text = if (vm.busy) vm.outlineStage.ifBlank { "正在生成大纲…" } else "生成大纲",
-            onClick = { vm.startOutline() }, enabled = canGenerate,
-            size = AppButtonSize.LG, fill = true,
-        )
-        Text("先确认页数、标题和逐页内容，再交给 AI 视觉设计。生成完成后自动保存到“我的作品”，需要时再下载到本地。",
-            style = MaterialTheme.typography.caption, color = SecondaryText)
         if (vm.busy && vm.step == PptStep.ENTRY) OutlineGeneratingPanel(vm)
         PptStatus(vm)
 
+        // 视觉风格
+        Spacer(Modifier.height(24.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("视觉风格", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+            Spacer(Modifier.width(8.dp))
+            Text("不选择时由 AI 根据内容自动匹配", fontSize = 11.sp, color = Muted)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth().height(140.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            StyleCardAuto(Modifier.weight(1f), selected = vm.templateId == null) {
+                vm.templateId = null
+            }
+            vm.templates.take(3).forEachIndexed { i, t ->
+                StyleCard(t, i, Modifier.weight(1f),
+                    selected = t["id"].str() == vm.templateId) {
+                    vm.templateId = t["id"].str()
+                }
+            }
+        }
+        Text("模板只控制视觉与版式，不改变已确认内容。",
+            fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
+
+        // 最近创建
         if (vm.documents.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(26.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("最近创建", style = MaterialTheme.typography.subtitle2,
-                    modifier = Modifier.weight(1f))
-                TextButton(onClick = onOpenDocuments) { Text("查看全部") }
+                Text("最近创建", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onOpenDocuments) { Text("查看全部 →", fontSize = 12.sp) }
             }
             vm.documents.take(3).forEach { d ->
-                Card(Modifier.fillMaxWidth(), elevation = 1.dp) {
-                    Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(d["title"].str().ifBlank { "未命名 PPT" },
-                                style = MaterialTheme.typography.subtitle2)
-                            Text(d["updated_at"].str().ifBlank { d["created_at"].str() },
-                                style = MaterialTheme.typography.caption, color = SecondaryText)
-                        }
-                        TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
-                            Text("继续编辑 →")
-                        }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Surface)
+                            .border(1.dp, Line, RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("PPT", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Primary) }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d["title"].str().ifBlank { "未命名 PPT" },
+                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(
+                                d["slide_count"].str().let { if (it.isNotBlank()) "$it 页" else "" },
+                                d["template_name"].str(),
+                                d["updated_at"].str().ifBlank { d["created_at"].str() },
+                            ).filter { it.isNotBlank() }.joinToString(" · "),
+                            fontSize = 11.sp, color = Muted, maxLines = 1)
+                    }
+                    TextButton(onClick = { vm.openDocument(d["id"].str()) }) {
+                        Text("继续编辑 →", fontSize = 12.sp, color = Primary)
                     }
                 }
             }
+        }
+
+        // 流程提示
+        Spacer(Modifier.height(20.dp))
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(9.dp))
+                .background(Primary.copy(alpha = 0.045f))
+                .padding(horizontal = 15.dp, vertical = 12.dp),
+        ) {
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = Primary, fontWeight = FontWeight.SemiBold)) {
+                        append("生成流程：")
+                    }
+                    append("AI 先根据你的需求、材料和知识库生成可编辑大纲；确认大纲后，再进入视觉设计与出片。")
+                },
+                fontSize = 11.5.sp, color = Ink2, lineHeight = 19.sp,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** Composer 工具按钮（添加材料 / 知识库 / 页数 / 汇报信息） */
+@Composable
+private fun ComposerTool(
+    label: String,
+    active: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        fontSize = 12.sp,
+        color = when {
+            active -> Primary
+            enabled -> Ink2
+            else -> Muted
+        },
+        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) Primary.copy(alpha = 0.07f) else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    )
+}
+
+/** 渐变主按钮（生成大纲 →） */
+@Composable
+private fun GenerateButton(enabled: Boolean, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .alpha(if (enabled) 1f else 0.45f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Brush.horizontalGradient(listOf(PrimaryDeep, Primary)))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 11.dp),
+    ) {
+        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** 已分析材料芯片（图标块 + 文件名 + 状态 + 移除） */
+@Composable
+private fun MaterialChip(m: MaterialAnalysis, onRemove: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFFF8F9FB))
+            .border(1.dp, Line, RoundedCornerShape(8.dp))
+            .padding(start = 9.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(28.dp).clip(RoundedCornerShape(6.dp))
+                .background(Primary.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                m.filename.substringAfterLast('.', "").uppercase().take(3).ifBlank { "文档" },
+                fontSize = 8.5.sp, fontWeight = FontWeight.Bold, color = Primary)
+        }
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Text(m.filename, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                if (m.summary.isNotBlank()) "✓ 已分析 · 可作为内容依据"
+                else "✓ 已分析 · ${m.chars} 字",
+                fontSize = 10.sp, color = ChipGreen, maxLines = 1)
+        }
+        Text(
+            "×", fontSize = 15.sp, color = Muted,
+            modifier = Modifier.clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onRemove).padding(horizontal = 8.dp, vertical = 4.dp))
+    }
+}
+
+/** 知识库面板（Composer 内展开） */
+@Composable
+private fun KbPanel(vm: PptViewModel) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+        when {
+            vm.kbs.isNotEmpty() -> {
+                vm.kbs.chunked(4).forEach { rowKbs ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowKbs.forEach { kb ->
+                            val kbId = kb["id"].str()
+                            val picked = kbId in vm.selectedKbIds
+                            OutlinedButton(
+                                onClick = { vm.toggleKb(kbId) },
+                                colors = sel(picked),
+                                modifier = Modifier.weight(1f).height(34.dp),
+                            ) {
+                                Text((if (picked) "✓ " else "") +
+                                    kb["name"].str().ifBlank { "未命名知识库" },
+                                    fontSize = 11.5.sp, maxLines = 1)
+                            }
+                        }
+                        repeat(4 - rowKbs.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+                Text("仅按当前主题语义检索相关片段，不会把整库内容直接灌入。",
+                    fontSize = 10.5.sp, color = Muted, modifier = Modifier.padding(top = 6.dp))
+            }
+            vm.kbsError != null -> {
+                Text(vm.kbsError ?: "知识库暂时加载失败",
+                    fontSize = 11.5.sp, color = SecondaryText)
+                TextButton(enabled = !vm.kbsLoading, onClick = { vm.loadKbs() }) {
+                    Text(if (vm.kbsLoading) "重试中…" else "重新加载", fontSize = 12.sp)
+                }
+            }
+            else -> Text(
+                if (vm.kbsLoading) "知识库加载中…" else "暂无可用知识库",
+                fontSize = 11.5.sp, color = Muted)
+        }
+    }
+}
+
+/** 页数面板（Composer 内展开） */
+@Composable
+private fun PagePanel(vm: PptViewModel) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+        OutlinedTextField(
+            vm.slideCount,
+            { vm.slideCount = it.filter(Char::isDigit).take(2) },
+            label = { Text("期望页数（2–18，留空由 AI 安排）", fontSize = 11.5.sp) },
+            isError = vm.slideCount.isNotBlank() &&
+                (vm.slideCount.toIntOrNull()?.let { it !in 2..18 } != false),
+            singleLine = true,
+            modifier = Modifier.width(280.dp),
+        )
+    }
+}
+
+/** 汇报信息面板（年度 / 单位 / 汇报人 / 落款日期，Composer 内展开） */
+@Composable
+private fun MetaPanel(vm: PptViewModel) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(vm.generationYear,
+                { vm.updateGenerationYear(it.filter(Char::isDigit).take(4)) },
+                label = { Text("年度", fontSize = 11.5.sp) },
+                singleLine = true, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.location, { vm.updateLocation(it) },
+                label = { Text("单位/地点", fontSize = 11.5.sp) },
+                singleLine = true, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.presenter, { vm.updatePresenter(it) },
+                label = { Text("汇报人（可选）", fontSize = 11.5.sp) },
+                singleLine = true, modifier = Modifier.weight(1f))
+            OutlinedTextField(vm.reportDate, { vm.updateReportDate(it) },
+                label = { Text("落款日期", fontSize = 11.5.sp) },
+                singleLine = true, modifier = Modifier.weight(1f))
+        }
+        Text("这些信息会作为关键事实带入大纲，AI 不会替你编造。",
+            fontSize = 10.5.sp, color = Muted)
+    }
+}
+
+/** 风格卡：智能选择（templateId = null） */
+@Composable
+private fun StyleCardAuto(modifier: Modifier, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        modifier
+            .height(140.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(
+                if (selected) 1.5.dp else 1.dp,
+                if (selected) Primary else Line,
+                RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().height(97.dp)
+                .background(Brush.linearGradient(
+                    listOf(Color(0xFFF0F2F5), Color(0xFFE7EBF0)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(34.dp).clip(RoundedCornerShape(10.dp))
+                        .background(Surface),
+                    contentAlignment = Alignment.Center,
+                ) { Text("AI", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Primary) }
+                Spacer(Modifier.width(9.dp))
+                Text("根据内容智能匹配", fontSize = 12.sp, color = Ink2)
+            }
+        }
+        StyleCardMeta("智能选择", recommend = true, selected = selected)
+    }
+}
+
+/** 风格卡：真实模板（预览图优先，无图用渐变底 + 名称） */
+@Composable
+private fun StyleCard(
+    t: JsonObject,
+    index: Int,
+    modifier: Modifier,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val grad = StyleGradients[index % StyleGradients.size]
+    Column(
+        modifier
+            .height(140.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(
+                if (selected) 1.5.dp else 1.dp,
+                if (selected) Primary else Line,
+                RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick),
+    ) {
+        Box(Modifier.fillMaxWidth().height(97.dp).background(Brush.linearGradient(grad))) {
+            val img = rememberServerImage(AppState.api, t["preview_url"].str().ifBlank { null })
+            if (img != null) {
+                Image(img, contentDescription = t["name"].str(),
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Column(Modifier.align(Alignment.BottomStart).padding(12.dp)) {
+                Text(t["name"].str(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("AI DESIGN", fontSize = 8.sp, color = Color.White.copy(alpha = 0.72f))
+            }
+        }
+        StyleCardMeta(t["name"].str(), recommend = false, selected = selected)
+    }
+}
+
+@Composable
+private fun StyleCardMeta(name: String, recommend: Boolean, selected: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().height(43.dp).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (recommend) {
+            Spacer(Modifier.width(6.dp))
+            Text("推荐",
+                fontSize = 9.sp, color = Primary,
+                modifier = Modifier.clip(RoundedCornerShape(99.dp))
+                    .background(Primary.copy(alpha = 0.07f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp))
+        }
+        if (selected) {
+            Spacer(Modifier.weight(1f))
+            Text("✓", fontSize = 14.sp, color = Primary, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -447,48 +770,6 @@ private fun OutlineGeneratingPanel(vm: PptViewModel) {
             SkeletonBar(Modifier.fillMaxWidth(0.9f).height(10.dp))
             SkeletonBar(Modifier.fillMaxWidth(0.8f).height(10.dp))
             SkeletonBar(Modifier.fillMaxWidth(0.85f).height(10.dp))
-        }
-    }
-}
-
-@Composable
-internal fun TemplatePicker(vm: PptViewModel) {
-    Text("选择模板", style = MaterialTheme.typography.subtitle2)
-    Row(Modifier.fillMaxWidth().height(130.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        vm.templates.take(6).forEach { t ->
-            val tid = t["id"].str()
-            val selected = tid == vm.templateId
-            Card(
-                Modifier.width(180.dp).fillMaxHeight(),
-                elevation = if (selected) 6.dp else 1.dp,
-                backgroundColor = if (selected)
-                    MaterialTheme.colors.primary.copy(alpha = 0.10f)
-                else MaterialTheme.colors.surface,
-            ) {
-                TextButton(onClick = { vm.templateId = tid }, modifier = Modifier.fillMaxSize()) {
-                    Column(Modifier.fillMaxSize()) {
-                        val img = rememberServerImage(AppState.api,
-                            t["preview_url"].str().ifBlank { null })
-                        if (img != null) {
-                            Image(img, contentDescription = t["name"].str(),
-                                modifier = Modifier.fillMaxWidth().weight(1f),
-                                contentScale = ContentScale.Crop)
-                        } else {
-                            Box(Modifier.fillMaxWidth().weight(1f),
-                                contentAlignment = Alignment.Center) {
-                                Text(t["name"].str(), style = MaterialTheme.typography.caption)
-                            }
-                        }
-                        Text(t["name"].str(), style = MaterialTheme.typography.caption,
-                            maxLines = 1, modifier = Modifier.padding(4.dp))
-                    }
-                }
-            }
-        }
-        if (vm.templates.isEmpty()) {
-            Text("模板加载中或为空，可进入右上角“模板管理”上传。", style = MaterialTheme.typography.caption,
-                color = SecondaryText, modifier = Modifier.align(Alignment.CenterVertically))
         }
     }
 }

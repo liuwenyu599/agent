@@ -27,6 +27,8 @@ import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
 import androidx.compose.material.CircularProgressIndicator
+import androidx.compose.material.DropdownMenu
+import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedButton
@@ -221,6 +223,23 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
             Spacer(Modifier.width(10.dp))
             Text(job.stageText, fontSize = 12.sp, color = Ink2, maxLines = 1)
             Spacer(Modifier.weight(1f))
+            // 生成完成后：换模板 → 重新生成，一条龙补齐（此前 DONE 后没有任何换模板入口）
+            if (job.status == PptJobStatus.DONE) {
+                DoneTemplateSwitcher(vm)
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    enabled = !vm.busy && !job.exporting,
+                    onClick = {
+                        // 回到编辑态并按当前模板重新提交生成任务：
+                        // startGenerateAsync 内部会先落草稿（带 template_id），服务端按它渲染
+                        vm.dismissJob()
+                        vm.startGenerateAsync()
+                    },
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("重新生成 PPT", color = Color.White, fontSize = 12.5.sp) }
+                Spacer(Modifier.width(8.dp))
+            }
             TextButton(onClick = { vm.dismissJob() }) {
                 Text("← 返回编辑", color = Primary, fontSize = 12.5.sp)
             }
@@ -264,12 +283,34 @@ private fun jobHintText(job: PptJobProgress): String = when (job.status) {
     PptJobStatus.GENERATING -> "每生成完一页就会出现在左侧，可点选查看大图"
     PptJobStatus.CLARIFYING -> "AI 需要你补充一点信息，回答后会接着刚才的进度继续生成"
     PptJobStatus.DONE -> if (job.exportedPath == null)
-        "全部页面已生成，并已保存到“我的作品”；需要本地文件时点击下方“下载 PPTX”"
+        "全部页面已生成并保存到“我的作品”；想换风格：在上方切换模板后点「重新生成 PPT」"
     else
-        "全部页面已生成；服务端“我的作品”中已保留，也可再次下载到其他位置"
+        "全部页面已生成；想换风格：在上方切换模板后点「重新生成 PPT」，也可再次下载到本地"
     PptJobStatus.FAILED -> "生成未完成，可点击「重试」用同一份大纲再生成一次"
     PptJobStatus.CANCELLED -> "已停止等待本次生成，可点击「重新开始」再生成一次"
     PptJobStatus.IDLE -> ""
+}
+
+/** DONE 态的模板切换下拉（与编辑工作台同一份模板列表与选中态） */
+@Composable
+private fun DoneTemplateSwitcher(vm: PptViewModel) {
+    var tplOpen by remember { mutableStateOf(false) }
+    val curName = vm.templates
+        .firstOrNull { it["id"].str() == vm.templateId }
+        ?.get("name").str().ifBlank { "默认模板" }
+    Box {
+        OutlinedButton(onClick = { tplOpen = true }) {
+            Text("模板：$curName ▾", fontSize = 12.sp)
+        }
+        DropdownMenu(tplOpen, { tplOpen = false }) {
+            vm.templates.forEach { t ->
+                DropdownMenuItem(onClick = {
+                    tplOpen = false
+                    vm.switchTemplate(t["id"].str())
+                }) { Text(t["name"].str()) }
+            }
+        }
+    }
 }
 
 @Composable

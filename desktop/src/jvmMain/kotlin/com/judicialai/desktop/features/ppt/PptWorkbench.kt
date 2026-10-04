@@ -265,10 +265,9 @@ private fun PreviewPane(vm: PptViewModel) {
                 DropdownMenu(tplOpen, { tplOpen = false }) {
                     vm.templates.forEach { t ->
                         DropdownMenuItem(onClick = {
-                            vm.templateId = t["id"].str()
                             tplOpen = false
                             previewTick++
-                            vm.refreshPreview()
+                            vm.switchTemplate(t["id"].str())
                         }) { Text(t["name"].str()) }
                     }
                 }
