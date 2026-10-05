@@ -15,7 +15,7 @@ QLoRA 训练脚本（4-bit，适用于 7B/14B 显存受限场景）
       --batch-size 1 \
       --gradient-accumulation 8 \
       --learning-rate 1e-4 \
-      --max-length 2048 \
+      --max-length 4096 \
       --lora-r 64 \
       --lora-alpha 16 \
       --lora-dropout 0.05
@@ -27,6 +27,11 @@ import os
 import sys
 import time
 from pathlib import Path
+
+# 见 train_lora.py 里的说明：显式把脚本目录放进 sys.path，
+# 免得换了调用方式就报 ModuleNotFoundError: No module named 'common'。
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import torch
 from datasets import Dataset
@@ -53,7 +58,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
-    parser.add_argument("--max-length", type=int, default=2048)
+    parser.add_argument("--max-length", type=int, default=4096,
+                        help="默认放宽到 4096：一篇公文正文加 system 侧检索资料"
+                             "轻松超过 2048，截断会削掉落款和结尾")
     parser.add_argument("--lora-r", type=int, default=64)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -78,26 +85,7 @@ def load_jsonl(path: str) -> list[dict]:
     return records
 
 
-def build_dataset(records: list[dict], tokenizer, max_length: int):
-    def process(example):
-        messages = example["messages"]
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        model_inputs = tokenizer(
-            text,
-            max_length=max_length,
-            truncation=True,
-            padding=False,
-        )
-        model_inputs["labels"] = model_inputs["input_ids"].copy()
-        return model_inputs
-
-    ds = Dataset.from_list(records)
-    ds = ds.map(process, remove_columns=ds.column_names, batched=False)
-    return ds
+from common import build_dataset, reconcile_step_config
 
 
 def main() -> int:
@@ -174,6 +162,10 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    save_steps, eval_steps = reconcile_step_config(
+        args.save_steps, args.eval_steps, len(train_ds), args.batch_size,
+        args.gradient_accumulation, args.epochs)
+
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.epochs,
@@ -183,8 +175,8 @@ def main() -> int:
         learning_rate=args.learning_rate,
         warmup_ratio=args.warmup_ratio,
         logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
+        save_steps=save_steps,
+        eval_steps=eval_steps,
         evaluation_strategy="steps",
         save_strategy="steps",
         load_best_model_at_end=True,

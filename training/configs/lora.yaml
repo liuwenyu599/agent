@@ -1,7 +1,12 @@
-# LoRA 训练默认配置（7B 模型，RTX 4090 24GB）
-# 用法: python training/scripts/train_lora.py --config training/configs/lora.yaml （脚本内自行解析，或按参数覆盖）
+# LoRA 训练默认配置
+# 用法: python training/scripts/train_lora.py --config training/configs/lora.yaml
 
-model: "/home/lwy/Qwen2.5-7B-Instruct"
+# ⚠ 基座必须与生产一致：生产（.env / deploy/model-pool.env.example）是
+# Qwen2.5-14B-Instruct，写作走宿主机 8003。这里写过 /home/lwy/Qwen2.5-7B-Instruct
+# ——那是另一台机器的另一个模型，训出来的 adapter 装不到 14B 上。
+# 另外生产那 8 张昇腾 310P3 是**推理卡**，训练要在这之外跑；下面这个路径指的是
+# 训练机上基座权重的落点，不一定是 /home/lcode 那份。
+model: "Qwen2.5-14B-Instruct"
 train_file: "training/data/processed/train.jsonl"
 val_file: "training/data/processed/val.jsonl"
 output_dir: "training/outputs/judicial-lora"
@@ -12,17 +17,24 @@ batch_size: 1
 gradient_accumulation: 8
 learning_rate: 2.0e-4
 warmup_ratio: 0.03
-max_length: 2048
+# 2048 会截掉落款和结尾：一篇公文正文加上 system 侧的检索资料，很容易超。
+max_length: 4096
 seed: 42
 
 # LoRA 参数
+# r=64 很好：vLLM-Ascend 上 max_lora_rank >= 128 会退化到 PyTorch 原生算子，
+# 而 310P 本来就等于这条路，别再往上加。
 lora_r: 64
 lora_alpha: 128
 lora_dropout: 0.05
 
 # 保存与评估
-save_steps: 500
-eval_steps: 500
+# ⚠ 原来是 500。几百条样本下，总步数 = ceil(N/(batch×accum)) × epochs 往往不足 500，
+# 结果是全程零 checkpoint、零 eval，日志干净、目录空——典型的静默失效。
+# 现在脚本会检测到并自动收敛（见 common.reconcile_step_config），
+# 这里给一个几百条样本下也会触发的值。
+save_steps: 20
+eval_steps: 20
 logging_steps: 10
 
 # 精度
