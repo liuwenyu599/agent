@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Iterator, List, Optional
 
 from fastapi import HTTPException
@@ -16,6 +17,20 @@ from app.application.writing import task_parser
 from app.application.writing.calculation_guard import verify_and_fix_calculations
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.shared.prompt_budget import compact_style_examples
+
+_STYLE_ADAPTER_ENV = "WRITING_STYLE_ADAPTER"
+
+
+def style_adapter_active() -> bool:
+    """风格是否已经蒸馏到模型权重里。
+
+    这是一道**运行期开关**，目的很直白：训练是可以选择不做的事。
+    配了这个变量说明模型本身已经会这套写法，推理时就不再灌那张 1100 字风格卡
+    （灌了等于把学过的东西再说一遍，白占上下文）；不配则退回今天的行为，
+    一字不变。所以「训了」和「没训」共用同一套代码，只差一个环境变量，
+    不会出现训到一半、adapter 撤了之后质量突然塌掉的中间态。
+    """
+    return bool((os.getenv(_STYLE_ADAPTER_ENV) or "").strip())
 
 
 class GroundedWritingTaskService(SemanticWritingTaskService):
@@ -113,6 +128,11 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
 
     def _example_style_block(self, query: str, user_id: str) -> str:
         """Retrieve one doc-type-aware exemplar and inject only a structured style card."""
+        if style_adapter_active():
+            # 风格已经在权重里了，再塞一张卡只是白占上下文。
+            # 留着这段返回值是为了让「撤卡」成为一个可回滚的运行期开关，
+            # 而不是改代码：哪天 adapter 不想要了，删掉环境变量就回到原路。
+            return ""
         if not self.rag:
             return ""
         try:
