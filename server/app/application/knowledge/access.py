@@ -161,6 +161,31 @@ class KnowledgeAccessPolicy:
             return False
         return True
 
+    def filter_readable_docs(self, docs, user) -> List:
+        """按文档级可见性过滤，保证**列表与详情同口径**。
+
+        ``can_read_doc`` 有两道校验：先看所属知识库，再看文档自身 department_code。
+        但列表接口历史上只按 kb_id 取交集，漏掉了第二道——于是文档标了他人科室时
+        会出现「列表看得到标题、点进详情才 403」的半泄漏：用户察觉不到自己已经
+        看到了越权标题，而列表与详情两套口径本身也是缺陷。
+
+        这里一次性解析用户科室与可访问知识库，再逐条跑与 can_read_doc 完全相同的
+        判定，避免列表接口退化成 can_read_doc 的旁路。
+        """
+        if self.is_system_admin(user):
+            return list(docs)
+        dept_code = self.dept_code_of(user)
+        allowed_kb = set(self.accessible_kb_ids(user))
+        result = []
+        for d in docs:
+            if getattr(d, "kb_id", "") not in allowed_kb:
+                continue
+            doc_dept = (getattr(d, "department_code", "") or "").strip()
+            if doc_dept and doc_dept != dept_code:
+                continue
+            result.append(d)
+        return result
+
     def can_manage_doc(self, doc, user) -> bool:
         """文档可管理性（改状态/审核/归档）。"""
         if doc is None:

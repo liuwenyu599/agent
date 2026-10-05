@@ -58,6 +58,7 @@ def _isolate_database_per_module(request):
 # 把该模块后续所有正常登录一起拦掉，表现为 KeyError: 'access_token'。
 _SEED_USERNAMES = {
     "test_department_permissions": "developer",
+    "test_knowledge_isolation_contract": "developer",
     "test_knowledge_route_order": "kbroutedev",
     "test_password_policy": "pwddev",
     "test_ppt_agent_jobs": "jobdev",

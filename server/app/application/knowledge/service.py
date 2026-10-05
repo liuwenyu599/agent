@@ -309,16 +309,17 @@ class KnowledgeService:
             sort_key = "newest"
             q = q.order_by(DocumentModel.created_at.desc(), DocumentModel.id.desc())
 
-        total = len(self.db.scalars(q).all())
-        rows = self.db.scalars(
-            q.offset((page - 1) * page_size).limit(page_size)
-        ).all()
+        # 先按文档级可见性过滤，再分页：否则「过滤」只是把本页漏出的行删掉，
+        # total 仍是未过滤的数目，翻页会出现页码对不上、末页空白的假象。
+        rows = self.access.filter_readable_docs(self.db.scalars(q).all(), user)
+        total = len(rows)
+        page_rows = rows[(page - 1) * page_size:page * page_size]
         return {
             "total": total,
             "page": page,
             "page_size": page_size,
             "sort": sort_key,
-            "data": [self.docs._display_dict(m) for m in rows],
+            "data": [self.docs._display_dict(m) for m in page_rows],
         }
 
     def search_kb_documents(self, kb_id: str, user, query: str,
@@ -336,8 +337,9 @@ class KnowledgeService:
         q = select(DocumentModel).where(DocumentModel.kb_id == kb_id)
         if not can_review:
             q = q.where(DocumentModel.status == "published")
-        rows = self.db.scalars(
-            q.order_by(DocumentModel.created_at.desc())).all()
+        # 与列表接口同口径：库内搜索同样跑文档级可见性，不能成为列表的旁路
+        rows = self.access.filter_readable_docs(
+            self.db.scalars(q.order_by(DocumentModel.created_at.desc())).all(), user)
 
         title_hits: List[DocumentModel] = []
         content_hits: List[DocumentModel] = []
@@ -374,10 +376,13 @@ class KnowledgeService:
         if effective:
             q = q.where(DocumentModel.status == effective)
         q = q.order_by(DocumentModel.created_at.desc())
-        total = len(self.db.scalars(q).all())
-        rows = self.db.scalars(q.offset((page - 1) * page_size).limit(page_size)).all()
+        # 先跑文档级可见性再分页：与 GET /knowledge/documents/{id} 保持同口径，
+        # 否则列表会把「详情 403」的文档标题泄漏出来（半泄漏）。
+        rows = self.access.filter_readable_docs(self.db.scalars(q).all(), user)
+        total = len(rows)
+        page_rows = rows[(page - 1) * page_size:page * page_size]
         return {"total": total, "page": page, "page_size": page_size,
-                "data": [self.docs._display_dict(m) for m in rows]}
+                "data": [self.docs._display_dict(m) for m in page_rows]}
 
     def list_pending(self, user) -> List[dict]:
         """待审队列：科室管理员仅看本科室，系统管理员看全部。"""
