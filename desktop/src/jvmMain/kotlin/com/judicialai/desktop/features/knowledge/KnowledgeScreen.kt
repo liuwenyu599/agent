@@ -59,7 +59,9 @@ import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog
-import com.judicialai.desktop.design.components.MarkdownView
+import com.judicialai.desktop.design.components.AppSegmentedTabs
+import com.judicialai.desktop.design.components.DocumentBodyOverflowHint
+import com.judicialai.desktop.design.components.DocumentBodyView
 import com.judicialai.desktop.design.theme.Dimens
 import com.judicialai.desktop.design.theme.EpDanger
 import com.judicialai.desktop.design.theme.EpPrimary
@@ -133,7 +135,7 @@ fun KnowledgeDocDialog(
     AppDialog(
         onDismissRequest = onClose,
         title = if (editable) "查看 / 编辑文档" else "查看文档",
-        width = 640.dp,
+        width = 720.dp,
         actions = {
             AppButton("关闭", onClick = onClose, kind = AppButtonKind.SECONDARY)
             if (editable) {
@@ -151,7 +153,18 @@ fun KnowledgeDocDialog(
             shape = RoundedCornerShape(Dimens.radiusControl),
             colors = docFieldColors(),
         )
+        // 有编辑权限时也要能「看」：编辑器里是裸文本，段落层级全靠脑补。
+        // 默认落预览页——打开文档的第一诉求是阅读，改是少数情况。
+        var preview by remember { mutableStateOf(true) }
         if (editable) {
+            AppSegmentedTabs(
+                tabs = listOf("预览", "编辑"),
+                selectedIndex = if (preview) 0 else 1,
+                onSelect = { preview = it == 0 },
+                modifier = Modifier.fillMaxWidth(0.45f),
+            )
+        }
+        if (editable && !preview) {
             OutlinedTextField(
                 value = content, onValueChange = onContentChange,
                 label = { Text("正文内容", fontSize = 13.sp) },
@@ -176,7 +189,7 @@ fun KnowledgeDocDialog(
                     if (busy) {
                         Text("正在加载正文…", fontSize = 13.sp, color = TextPlaceholder)
                     } else {
-                        MarkdownView(content.ifBlank { "（该文档暂无正文内容）" })
+                        DocumentBodyView(content.ifBlank { "（该文档暂无正文内容）" })
                     }
                 }
             }
@@ -185,11 +198,20 @@ fun KnowledgeDocDialog(
             if (editable) "约 ${content.length} 字 · 保存后将重新分块并同步检索"
             else "约 ${content.length} 字 · 当前知识库为只读",
             fontSize = 11.sp, color = TextSecondary)
+        if (content.isNotBlank() && (!editable || preview)) {
+            // 抽取异常时明确告知，而不是让用户对着一坨挤在一起的文字猜
+            DocumentBodyOverflowHint(content)
+        }
     }
 }
 
-/** 正文框固定高度：够放下十几行正文，同时保证弹窗总高不超过普通窗口的可视高度 */
-private val DocContentFieldHeight = 300.dp
+/**
+ * 正文框固定高度。
+ *
+ * 300.dp 只够放十几行，一篇通知要滚三四屏才能读完，读起来很费劲；
+ * 放大到 460.dp 后常规公文一屏能看大半，同时弹窗总高仍在普通窗口可视范围内。
+ */
+private val DocContentFieldHeight = 460.dp
 
 /**
  * 文档弹窗内两个输入框统一的配色：tonal 底 + 标准描边。

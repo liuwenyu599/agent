@@ -45,6 +45,7 @@ import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppCard
 import com.judicialai.desktop.design.components.AppDialog
+import com.judicialai.desktop.design.components.DocumentBodyView
 import com.judicialai.desktop.design.components.EmptyView
 import com.judicialai.desktop.design.components.ErrorText
 import com.judicialai.desktop.design.components.LoadingView
@@ -123,7 +124,7 @@ fun DocumentsScreen() {
                     TextButton(onClick = { vm.closePreview() }) { Text("返回当前版本") }
                 }
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                    MarkdownView(preview["content"].str())
+                    DocumentBodyView(preview["content"].str())
                 }
             } else {
                 // 编辑台：默认预览（带格式），「编辑正文」切到源文编辑框。
@@ -171,7 +172,9 @@ fun DocumentsScreen() {
                             Text("（暂无正文，点右上角「编辑正文」开始撰写）",
                                 fontSize = 13.sp, color = Muted)
                         } else {
-                            MarkdownView(vm.content)
+                            // 同样是「先判形态再渲染」：AI 生成的稿子带 Markdown 会走
+                            // Markdown 分支，手写/抽取的纯文本自动按公文版式推断结构
+                            DocumentBodyView(vm.content)
                         }
                     }
                 }
