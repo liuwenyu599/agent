@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -63,6 +62,7 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.AppIconButton
 import com.judicialai.desktop.design.components.AppTextField
+import com.judicialai.desktop.design.components.ChatTextBubble
 import com.judicialai.desktop.design.components.Hairline
 import com.judicialai.desktop.design.components.LoadingBlock
 import com.judicialai.desktop.design.components.MarkdownView
@@ -83,7 +83,6 @@ import com.judicialai.desktop.design.theme.QuickOrange
 import com.judicialai.desktop.design.theme.QuickPurple
 import com.judicialai.desktop.design.theme.QuickBlue
 import com.judicialai.desktop.design.theme.Surface
-import com.judicialai.desktop.design.theme.SurfaceTonal
 import com.judicialai.desktop.design.theme.Warn
 import com.judicialai.desktop.design.theme.WarnSoft
 import com.judicialai.desktop.features.chat.model.ChatMessage
@@ -473,25 +472,11 @@ private fun ChatViewDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 messages.forEach { m ->
-                    val isUser = m.role == "user"
-                    Column(
-                        Modifier.fillMaxWidth(),
-                        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-                    ) {
-                        Text(if (isUser) "我" else "助手", fontSize = 11.sp, color = Muted)
-                        Spacer(Modifier.height(3.dp))
-                        Box(
-                            Modifier.widthIn(max = 460.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isUser) Primary else SurfaceTonal)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                        ) {
-                            SelectionContainer {
-                                Text(m.content, fontSize = 13.sp, lineHeight = 20.sp,
-                                    color = if (isUser) Color.White else Ink)
-                            }
-                        }
-                    }
+                    ChatTextBubble(
+                        isUser = m.role == "user",
+                        label = if (m.role == "user") "我" else "助手",
+                        text = m.content,
+                    )
                 }
             }
         }

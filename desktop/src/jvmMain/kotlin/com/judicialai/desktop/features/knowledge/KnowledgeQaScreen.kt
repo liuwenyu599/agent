@@ -3,11 +3,14 @@ package com.judicialai.desktop.features.knowledge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
@@ -19,15 +22,26 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.LocalAwtWindow
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AppDialog
 import com.judicialai.desktop.design.components.AppTextField
+import com.judicialai.desktop.design.components.ChatBubble
+import com.judicialai.desktop.design.components.DocumentBodyView
 import com.judicialai.desktop.design.components.MarkdownView
+import com.judicialai.desktop.design.theme.Ink
+import com.judicialai.desktop.design.theme.Ink2
+import com.judicialai.desktop.design.theme.Line
+import com.judicialai.desktop.design.theme.Primary
+import com.judicialai.desktop.design.theme.PrimarySoft
+import com.judicialai.desktop.design.theme.TextSecondary
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.chat.model.ChatMessage
 import com.judicialai.desktop.features.chat.model.KnowledgeCitation
@@ -256,50 +270,87 @@ private fun QaSessionSidebar(vm: KnowledgeQaViewModel) {
 @Composable
 private fun QaMessageCard(msg: ChatMessage, onCitation: (KnowledgeCitation) -> Unit) {
     val assistant = msg.role == "assistant"
-    Column(
-        Modifier.fillMaxWidth()
-            .background(
-                if (assistant) MaterialTheme.colors.surface
-                else MaterialTheme.colors.primary.copy(alpha = 0.07f),
-                RoundedCornerShape(10.dp))
-            .border(1.dp, MaterialTheme.colors.onSurface.copy(alpha = 0.08f),
-                RoundedCornerShape(10.dp))
-            .padding(12.dp),
+    ChatBubble(
+        isUser = !assistant,
+        label = if (assistant) "知识助手" else "我",
+        // 助手气泡要容得下引用列表，比普通对话放宽一些
+        maxWidth = if (assistant) 620.dp else 460.dp,
     ) {
-        Text(if (assistant) "知识助手" else "我", style = MaterialTheme.typography.caption)
-        Spacer(Modifier.height(5.dp))
-        if (assistant) MarkdownView(msg.content) else Text(msg.content)
-        if (msg.attachments.isNotEmpty()) {
-            Spacer(Modifier.height(6.dp))
-            Text("附件：" + msg.attachments.joinToString("、") { it.name },
-                style = MaterialTheme.typography.caption)
-        }
-        if (msg.citations.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Text("引用", style = MaterialTheme.typography.subtitle2)
-            Spacer(Modifier.height(4.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                msg.citations.forEachIndexed { index, c ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickable { onCitation(c) }
-                            .background(MaterialTheme.colors.primary.copy(alpha = 0.05f),
-                                RoundedCornerShape(7.dp))
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.Description, null, tint = MaterialTheme.colors.primary)
-                        Spacer(Modifier.width(6.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("[${index + 1}] ${c.docTitle.ifBlank { c.source }}",
-                                style = MaterialTheme.typography.body2)
-                            Text("${kbTypeLabel(c.kbType)} · ${c.kbName.ifBlank { "知识库" }} · 第${c.chunkIndex}段",
-                                style = MaterialTheme.typography.caption)
-                        }
-                        Text("查看原文 →", style = MaterialTheme.typography.caption,
-                            color = MaterialTheme.colors.primary)
-                    }
+        Column {
+            if (assistant) {
+                MarkdownView(msg.content)
+            } else {
+                SelectionContainer {
+                    Text(msg.content, fontSize = 13.sp, lineHeight = 20.sp, color = Color.White)
                 }
+            }
+            if (msg.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text("附件：" + msg.attachments.joinToString("、") { it.name },
+                    style = MaterialTheme.typography.caption,
+                    color = if (assistant) TextSecondary else Color.White.copy(alpha = 0.75f))
+            }
+            if (msg.citations.isNotEmpty()) {
+                CitationList(msg.citations, assistant, onCitation)
+            }
+        }
+    }
+}
+
+/**
+ * 引用来源区：与正文用分隔线隔开并带独立小标题。
+ *
+ * 引用是「答案的依据」，必须让用户在视觉上一眼看出它不属于回答正文，
+ * 否则会误以为模型在正文里啰嗦地报出处。
+ */
+@Composable
+private fun CitationList(
+    citations: List<KnowledgeCitation>,
+    assistant: Boolean,
+    onCitation: (KnowledgeCitation) -> Unit,
+) {
+    Spacer(Modifier.height(10.dp))
+    Divider(color = Line)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "引用来源（${citations.size}）",
+        fontSize = 11.5.sp,
+        color = if (assistant) Ink2 else Color.White.copy(alpha = 0.75f),
+    )
+    Spacer(Modifier.height(6.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        citations.forEachIndexed { index, c ->
+            val interaction = remember { MutableInteractionSource() }
+            val hovered by interaction.collectIsHoveredAsState()
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(
+                        if (assistant) PrimarySoft else Color.White.copy(alpha = 0.10f),
+                        RoundedCornerShape(7.dp),
+                    )
+                    .border(
+                        1.dp,
+                        if (hovered) Primary.copy(alpha = 0.55f) else Color.Transparent,
+                        RoundedCornerShape(7.dp),
+                    )
+                    .clickable(interactionSource = interaction, indication = null) {
+                        onCitation(c)
+                    }
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Description, null, tint = Primary,
+                    modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("[${index + 1}] ${c.docTitle.ifBlank { c.source }}",
+                        fontSize = 12.5.sp, color = if (assistant) Ink else Color.White)
+                    Text("${kbTypeLabel(c.kbType)} · ${c.kbName.ifBlank { "知识库" }} · 第${c.chunkIndex}段",
+                        style = MaterialTheme.typography.caption,
+                        color = if (assistant) Ink2 else Color.White.copy(alpha = 0.7f))
+                }
+                Text("查看原文 →", style = MaterialTheme.typography.caption, color = Primary)
             }
         }
     }
@@ -363,27 +414,37 @@ private fun CitationDialog(
     }
 }
 
+/**
+ * 按段落切分原文并高亮命中片段。
+ *
+ * 块内渲染改用 [DocumentBodyView]：知识库原文是 docx/pdf 抽取的纯文本，
+ * 用 MarkdownView 等于铺一屏没结构的字。同一个问题此前已在知识库文档查看处修过，
+ * 这里是同一条链路的下游。
+ */
 @Composable
 private fun HighlightedDocument(text: String, excerpt: String) {
     val needle = excerpt.trim().replace(Regex("\\s+"), " ").take(80)
     val blocks = text.split(Regex("\\n\\s*\\n"))
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEach { block ->
             val normalized = block.trim().replace(Regex("\\s+"), " ")
             val hit = needle.isNotBlank() && (
                 normalized.contains(needle, ignoreCase = true) ||
                     needle.take(40).let { it.isNotBlank() && normalized.contains(it, ignoreCase = true) }
             )
-            Box(
-                Modifier.fillMaxWidth()
-                    .background(
-                        if (hit) MaterialTheme.colors.primary.copy(alpha = 0.12f)
-                        else androidx.compose.ui.graphics.Color.Transparent,
-                        RoundedCornerShape(6.dp),
-                    )
-                    .padding(if (hit) 8.dp else 0.dp),
-            ) {
-                MarkdownView(block)
+            // 命中与否都要有相同的 padding：原先只有命中块加 padding，
+            // 会让相邻段落左边界左右参差，读起来像排版错位。
+            Row(Modifier.fillMaxWidth()
+                .background(
+                    if (hit) PrimarySoft else Color.Transparent,
+                    RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 6.dp)) {
+                if (hit) {
+                    Box(Modifier.width(3.dp).fillMaxHeight()
+                        .background(Primary, RoundedCornerShape(2.dp)))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Box(Modifier.weight(1f)) { DocumentBodyView(block) }
             }
         }
     }
