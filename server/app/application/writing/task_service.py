@@ -15,6 +15,7 @@ from app.core.timeutil import now_local
 import json
 import logging
 import re
+import zlib
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -38,6 +39,36 @@ REVISE_MODES = {
     "rewrite": "改写：按用户要求重写",
     "revise": "修改：按用户指令修改",
 }
+
+# ---- 兜底回复措辞变体（供 _collecting_reply 轮换）----
+# 单句模板反复出现是「回复死板」的直接观感来源。这里每种情形备几种说法，
+# 由 _collecting_reply 按 message 确定性取模挑选，不再每次同一副骨架。
+_REPLY_OPENERS_WITH_CHANGES = (
+    "记下了，{changes}。",
+    "已经同步好了：{changes}。",
+    "{changes}，这部分我改过了。",
+)
+_REPLY_OPENERS_KNOWN = (
+    "现在手头有：{known}。",
+    "我这边记着的是：{known}。",
+    "目前定下来的：{known}。",
+)
+_REPLY_OPENERS_BLANK = (
+    "需求我记下了，我们先理一下还差什么。",
+    "我先按你说的建个写作任务。",
+)
+_REPLY_MISSING = (
+    "还有一处没定：{m}。你给个准话，写出来的准确度会高不少；暂时没有的话我也能先按常规写法搭一版。",
+    "就差 {m} 了——告诉我具体口径我就动手，或者我先写个框架你再往里补。",
+    "要动笔还缺 {m}。不确定的地方直接说「先写一版」，我按惯例先架起来。",
+)
+# 「信息够了」的三个变体必须都带「起草」这个触发词：这是用户对上就需要按下的指令，
+# 只说「可以开始写了」而不给动作，用户会卡在「那我该点哪儿」上。
+_REPLY_READY = (
+    "信息够动笔了，说「起草」我就开工。",
+    "条件齐了，随时能起第一版——你说起草就行。",
+    "这些足够了，要动笔说一声「起草」。",
+)
 
 REVISION_RULES = (
     "这是一个【已有文档修改】任务，不是新的起草请求。必须遵守：\n"
@@ -669,10 +700,52 @@ class WritingTaskService:
         self.db.commit()
         return ("；".join(events) if events else "正文已同步") + f"（v{ver}）"
 
+    _DRAFT_FOLLOWUP_VARIANTS = (
+        "哪儿要改跟我说，或者直接改正文再存一版。",
+        "接着聊就行，哪块不对我改哪块。",
+        "要微调直接讲，也可以在正文里改完自己保存。",
+    )
+
+    def _draft_followup(self, quality: Optional[Dict[str, Any]],
+                        missing_fields: Optional[List[str]], seed: str) -> str:
+        """草稿生成后的下一步引导：先看这一稿实际怎么样，再决定说什么。
+
+        原先这里无条件拼「您可以继续对话修改，或直接编辑正文后保存版本。」——
+        每一轮、每一篇、无论写得好不好、缺不缺依据，都跟同一句，
+        是用户眼里最典型的橡皮图章。改成：有该处理的事先说那件事，
+        实在没得说才给一句通用引导（且措辞轮换）。
+        """
+        if missing_fields:
+            return (f"这几处建议你给个准确说法（尤其「{missing_fields[0]}」），"
+                    "我再改一版会实很多。")
+        review = list((quality or {}).get("review") or [])
+        if review:
+            return f"另外有一条待复核：{review[0]}，定稿前最好过一眼。"
+        return self._DRAFT_FOLLOWUP_VARIANTS[
+            zlib.crc32((seed or "").encode("utf-8")) % len(self._DRAFT_FOLLOWUP_VARIANTS)
+        ]
+
     def _collecting_reply(self, ctx, changes, missing, message) -> str:
+        """LLM 不可用时的兜底回复。
+
+        这是用户抱怨「回复很死板」的直接来源之一：原先每段都是写死的单句模板，
+        无论说什么都回同一副骨架。这里改成**措辞变体确定性轮换**——按 message
+        取模而不是随机，保证同一句话重放时回复稳定（也让测试可以断言）。
+        这个路径拿不到模型能力，所以只能轮换措辞 + 把 missing 转成会说人话的追问，
+        做不到真正理解语义；有 LLM 时一律走 ``_interpret`` 的 reply。
+        """
+        # 各段落用不同 salt 独立取模：否则同一 seed 会让开头、追问总落在同一个
+        # 索引上，四种情形撞成同一种组合，轮换等于没做。
+        seed = message or ""
+
+        def pick(options, salt: int) -> str:
+            h = zlib.crc32(f"{seed}|{salt}".encode("utf-8"))
+            return options[h % len(options)]
+
         parts: List[str] = []
         if changes:
-            parts.append("已更新任务信息：" + "；".join(changes) + "。")
+            parts.append(pick(_REPLY_OPENERS_WITH_CHANGES, 1).format(
+                changes="；".join(changes)))
         known = []
         if ctx.get("document_type"):
             known.append(f"文种是{ctx['document_type']}")
@@ -680,16 +753,20 @@ class WritingTaskService:
             known.append(f"主题是{ctx['topic']}")
         if ctx.get("time_range"):
             known.append(f"时间范围是{ctx['time_range']}")
+
         if not parts:
             if known:
-                parts.append("好的，目前我知道：" + "，".join(known) + "。")
+                parts.append(pick(_REPLY_OPENERS_KNOWN, 2).format(
+                    known="，".join(known)))
             else:
-                parts.append("好的，我先记下您的写作需求。")
+                parts.append(pick(_REPLY_OPENERS_BLANK, 3))
+
         if missing:
-            parts.append("为了让初稿更准确，还需要补充：" + "、".join(missing) +
-                         "。如果暂时没有材料，回复「先写一版」我可以先搭建框架。")
+            # 把「缺什么」说成人话的追问，并留出「先写一版」的逃生口：
+            # 用户手头常常没有材料，不能因为没有就把人拦在这里。
+            parts.append(pick(_REPLY_MISSING, 4).format(m="、".join(missing)))
         else:
-            parts.append("关键信息已齐，回复「起草」即可生成第一版草稿。")
+            parts.append(pick(_REPLY_READY, 5))
         return "".join(parts)
 
     # ---------------- 模板 ----------------
@@ -926,7 +1003,8 @@ class WritingTaskService:
             )
         if ctx.get("missing_fields"):
             reply += "以下内容因缺少事实依据已标注：" + "、".join(ctx["missing_fields"]) + "。"
-        reply += "您可以继续对话修改，或直接编辑正文后保存版本。"
+        seed = t.current_content or ""
+        reply += self._draft_followup(quality, ctx.get("missing_fields"), seed)
         return {**self._to_dict(t), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
                 "postprocess_events": events, "references": references}

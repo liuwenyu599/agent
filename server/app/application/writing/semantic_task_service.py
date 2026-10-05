@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import zlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -393,6 +394,43 @@ class SemanticWritingTaskService(WritingTaskService):
                 break
         return "\n\n".join(rows)
 
+    # 「改完了」这句话的措辞变体：原先恒为「已按你的指令修改正文并保存为 vN。」
+    _REVISE_OPENERS = (
+        "改好了，存成 v{version}。",
+        "已经改完并存为 v{version}。",
+        "这一部分改过了，新版本是 v{version}。",
+    )
+
+    def _revise_reply(self, version: int, summary: str,
+                      citation_warnings, seed: str) -> str:
+        """修改完成后的回复：说清楚改了什么，而不只是报个版本号。
+
+        原先只有一句套话 + 版本号，用户看着改动量一无所知；而 ``_revision_diff``
+        算出的 summary 虽然也回传了（前端可对照），但那是一大段前后对照文本，
+        不适合整段塞进对话。这里提炼成「改了几处、什么类型」的一句话。
+        """
+        h = zlib.crc32((seed or "").encode("utf-8"))
+        openers = self._REVISE_OPENERS
+        parts = [openers[h % len(openers)].format(version=version)]
+
+        text = summary or ""
+        changed = text.count("原：")
+        added = text.count("新增：")
+        removed = text.count("删除：")
+        detail = []
+        if changed:
+            detail.append(f"改写了 {changed} 处表述")
+        if added:
+            detail.append(f"补进了 {added} 处内容")
+        if removed:
+            detail.append(f"删掉了 {removed} 处")
+        if detail:
+            parts.append("这次主要是" + "、".join(detail) + "，可以对照正文看一下。")
+        if citation_warnings:
+            parts.append(f"另外有 {len(citation_warnings)} 处文号核实不到依据，"
+                         "已替换成「相关文件」，确认来源后再补回。")
+        return "".join(parts)
+
     def revise(self, task_id: str, user_id: str, instruction: str,
                mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
@@ -457,9 +495,7 @@ class SemanticWritingTaskService(WritingTaskService):
         self.db.commit()
 
         summary = self._revision_diff(current, revised)
-        reply = f"已按你的指令修改正文并保存为 v{version}。"
-        if citation_warnings:
-            reply += f"\n\n另移除了 {len(citation_warnings)} 处无法核实的具体文号。"
+        reply = self._revise_reply(version, summary, citation_warnings, instruction)
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
                 "postprocess_events": events, "context_changes": [],
