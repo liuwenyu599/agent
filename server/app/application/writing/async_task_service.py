@@ -11,6 +11,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 
 from app.application.writing import task_parser
+from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.ops_task_service import LOCAL_OPERATIONS
 from app.application.writing.quality_gate import QualityGate
@@ -25,6 +26,43 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     def __init__(self, db, assistant=None, rag=None, attachments=None):
         super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
         self.interpreter = AsyncWritingIntentInterpreter(assistant) if assistant else None
+
+    # ---------------------------------------------------- 起草提示 + 训练留痕
+
+    def _record_prompt(self, base: str, card: str, instruction: str, sources,
+                       attachment_ctx, user_id: str, kind: str = "draft") -> None:
+        """留痕一次真实的模型调用输入。改写路径与起草路径共用。
+
+        改写也必须记：`EvalCaptureWritingTaskService` 配的是「最近一个 AI 版本 →
+        用户终稿」，而最新那个 AI 版本往往来自一次改写而不是首次起草。
+        只记起草的话，样本输入反而是最初那一版指令，跟输出对不上。
+        """
+        prompt_snapshot.record(
+            prompt_snapshot.current_task(),
+            base_system=base,
+            style_card=card,
+            instruction=instruction,
+            sources=sources,
+            attachment_context=attachment_ctx,
+            kind=kind,
+            user_id=user_id or prompt_snapshot.current_user(),
+        )
+
+    def _draft_prompt(self, instruction: str, sources, attachment_ctx, user_id: str,
+                      template: Optional[Dict[str, Any]] = None) -> str:
+        """组装起草用的 system，并把「撤卡的底稿 + 本次风格卡 + 当时的资料」留痕。
+
+        原先每个起草入口都各自写两行（拼底稿、拼风格卡），这里收敛成一处，
+        顺带把快照记下来——三处以外的入口同样忘了留，不如统一收口。
+
+        留痕只在 ``SFT_SNAPSHOT_DIR`` 配置了时发生，否则 record 直接返回 False，
+        除了这一次函数调用没有任何额外开销。
+        """
+        base = self._draft_system(user_id, template)
+        card = self._example_style_block(instruction, user_id)
+        self._record_prompt(base, card, instruction, sources, attachment_ctx, user_id,
+                            kind="draft")
+        return base + card
 
     async def _interpret_async(self, message: str, ctx: Dict[str, Any],
                                has_draft: bool = False):
@@ -58,8 +96,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                                template: Optional[Dict[str, Any]] = None) -> str:
         if not self.assistant:
             raise HTTPException(status_code=503, detail="模型服务不可用")
-        system = self._draft_system(user_id, template)
-        system += self._example_style_block(instruction, user_id)
+        system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
         system += (
             "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计。凡正文必须给出由多个数字推导的结果，"
             "应确保运算关系明确且结果精确；最终文本还会由程序做确定性复核。"
@@ -75,7 +112,9 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         agent = self._agent_prompt(user_id)
         from app.application.writing.task_service import REVISION_RULES
         system = (agent + "\n" if agent else "") + REVISION_RULES
-        system += self._example_style_block(prompt, user_id)
+        card = self._example_style_block(prompt, user_id)
+        self._record_prompt(system, card, prompt, sources, attachment_ctx, user_id, kind="revise")
+        system += card
         system += (
             "\n\n若用户要求规范化、仿写、按单位口径调整，应以以上知识库风格卡的结构和措辞习惯作为风格依据；"
             "不要迁移历史稿的事实。"
@@ -504,6 +543,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     async def draft_async(self, task_id: str, user_id: str,
                           outline_only: bool = False) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        prompt_snapshot.enter_task(
+            task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         ctx = dict(task.context or {})
         template = self._load_template(ctx.get("template_id"))
         attachment_ctx = self._attachment_context(task, ctx)
@@ -543,6 +584,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                                  outline_only: bool = False) -> AsyncIterator[str]:
         try:
             task = self._get_owned(task_id, user_id)
+            prompt_snapshot.enter_task(
+                task_id, user_id, session_id=getattr(task, "session_id", "") or "")
             ctx = dict(task.context or {})
             template = self._load_template(ctx.get("template_id"))
             attachment_ctx = self._attachment_context(task, ctx)
@@ -567,8 +610,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
 
             instruction = self._build_draft_instruction(ctx, outline_only, template)
             sources = self._retrieve(ctx, user_id)
-            system = self._draft_system(user_id, template)
-            system += self._example_style_block(instruction, user_id)
+            system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
             parts: List[str] = []
             async for delta in self.assistant.achat_stream(
                 message=instruction, history=[], sources=sources, user_role="user",
@@ -594,6 +636,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     # ---------------------------------------------------------------- chat ops
     async def chat_async(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        prompt_snapshot.enter_task(
+            task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         ctx = dict(task.context or {})
         has_draft = bool((task.current_content or "").strip())
         self._push_history(ctx, "user", message)
