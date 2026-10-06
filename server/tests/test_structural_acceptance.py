@@ -96,6 +96,19 @@ class FingerprintTests(unittest.TestCase):
         self.assertIn("closing_date", diffs)
         self.assertIn("closing_org", diffs)
 
+        no_date = _NOTICE_A.rsplit("\n", 1)[0]
+        date_score, date_diffs = compare_structure(
+            structure_fingerprint(_NOTICE_A), structure_fingerprint(no_date))
+        self.assertLess(date_score, 0.85)
+        self.assertIn("closing_date", date_diffs)
+
+    def test_addressee_only_change_is_a_meaningful_difference(self):
+        changed = _NOTICE_A.replace("各司法所：", "各区人民政府：")
+        score, diffs = compare_structure(
+            structure_fingerprint(_NOTICE_A), structure_fingerprint(changed))
+        self.assertLessEqual(score, 0.7)
+        self.assertIn("addressee", diffs)
+
     def test_different_doc_types_are_not_treated_as_equivalent(self):
         score, _ = compare_structure(structure_fingerprint(_NOTICE_A),
                                      structure_fingerprint(_REQUEST))
@@ -144,7 +157,7 @@ class GateTests(unittest.TestCase):
             {"tag": "with_card", "output": _NOTICE_A},
             {"tag": "without_card", "output": _NOTICE_B}]}]
         _, verdict = evaluate(parity_ok, thresholds)
-        self.assertIn("可以配 WRITING_STYLE_ADAPTER", verdict)
+        self.assertIn("不能据此撤卡", verdict)
 
         parity_bad = [{"id": "p", "variants": [
             {"tag": "with_card", "output": _NOTICE_A},
@@ -156,8 +169,40 @@ class GateTests(unittest.TestCase):
             {"tag": "run1", "output": _NOTICE_A},
             {"tag": "run2", "output": _NOTICE_B}]}]
         _, verdict = evaluate(not_run, thresholds)
-        self.assertIn("还不能据此撤卡", verdict,
+        self.assertIn("不能据此撤卡", verdict,
                       "没跑 C 线就不能说风格已经进权重——这是最容易误判的一种批准")
+
+    def test_all_three_gates_must_pass_before_card_removal(self):
+        cases = [
+            {"id": "notice", "expected_differs_from": "request", "variants": [
+                {"tag": "run1", "output": _NOTICE_A},
+                {"tag": "run2", "output": _NOTICE_B},
+                {"tag": "with_card", "output": _NOTICE_A},
+                {"tag": "without_card", "output": _NOTICE_B},
+            ]},
+            {"id": "request", "variants": [
+                {"tag": "run1", "output": _REQUEST},
+                {"tag": "run2", "output": _REQUEST},
+                {"tag": "with_card", "output": _REQUEST},
+                {"tag": "without_card", "output": _REQUEST},
+            ]},
+        ]
+        gates, verdict = evaluate(cases, {"A": 0.85, "B": 0.30, "C": 0.85})
+        self.assertTrue(all(g.passed for g in gates))
+        self.assertIn("可以配 WRITING_STYLE_ADAPTER", verdict)
+
+    def test_identically_incomplete_outputs_do_not_pass(self):
+        no_date = _NOTICE_A.rsplit("\n", 1)[0]
+        cases = [{"id": "same-bad", "variants": [
+            {"tag": "run1", "output": no_date},
+            {"tag": "run2", "output": no_date},
+            {"tag": "with_card", "output": no_date},
+            {"tag": "without_card", "output": no_date},
+        ]}]
+        gates, verdict = evaluate(cases, {"A": 0.85, "B": 0.30, "C": 0.85})
+        self.assertFalse(gates[0].passed)
+        self.assertFalse(gates[2].passed)
+        self.assertIn("先别上线", verdict)
 
 
 if __name__ == "__main__":

@@ -66,6 +66,19 @@ class SnapshotRoundTripTests(unittest.TestCase):
             self.assertEqual(snap["base_system"], "基础提示")
             self.assertEqual(snap["sources"][0]["title"], "细则")
 
+    def test_snapshot_keeps_every_source_and_full_attachment_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"SFT_SNAPSHOT_DIR": tmp}):
+                prompt_snapshot.enter_task("task-all", "u1", session_id="sess-all")
+                sources = [{"title": str(i), "content": f"依据{i}"} for i in range(13)]
+                attachment = "附件依据" * 600
+                self.assertTrue(prompt_snapshot.record(
+                    "task-all", base_system="基础", style_card="", instruction="起草",
+                    sources=sources, attachment_context=attachment))
+                snap = prompt_snapshot.latest("task-all")
+        self.assertEqual(len(snap["sources"]), 13)
+        self.assertEqual(snap["attachment_context"], attachment)
+
     def test_build_inputs_drops_the_style_card_and_keeps_sources(self):
         snap = {
             "base_system": "基础提示", "style_card": "【风格卡：X】一级结构骨架",
@@ -108,6 +121,12 @@ class ExportIndexTests(unittest.TestCase):
 
         snaps = [{"ts": "2026-10-01T10:00:00", "base_system": "首版"}]
         self.assertEqual(exporter.pick_snapshot(snaps, "")["base_system"], "首版")
+
+    def test_pick_snapshot_rejects_future_context(self):
+        from training.scripts import export_accepted_samples as exporter
+
+        snaps = [{"ts": "2026-10-01T12:00:00", "base_system": "后续改写"}]
+        self.assertIsNone(exporter.pick_snapshot(snaps, "2026-10-01T11:00:00"))
 
     def test_intermediate_dir_avoids_dangling_symlink(self):
         """training/data/raw 是断链符号链接，mkdir(exist_ok=True) 仍会抛错。"""

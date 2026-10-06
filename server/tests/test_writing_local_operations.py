@@ -97,6 +97,8 @@ def test_sync_async_execution_saves_local_changes(cls, operation):
     assert result["operation"] == operation
     assert "二、申报流程\n向属地司法所申报。" in task.current_content
     assert "本次实际变化" not in result["reply"]
+    assert "v2" in result["reply"]
+    assert any(word in result["reply"] for word in ("补进了", "删掉了"))
     if operation == "delete_range":
         svc._llm_revise.assert_not_called()
         assert "每人每月补贴100元。" not in task.current_content
@@ -165,3 +167,24 @@ def test_chat_routes_local_operations_to_execution(cls, operation):
     assert result["content_changed"] is True
     assert task.version_no == 2
     assert task.context["history"][-1]["content"] == result["reply"]
+
+
+@pytest.mark.parametrize("cls", [OpsWritingTaskService, AsyncWritingTaskService])
+def test_chat_local_edit_without_draft_reports_missing_draft(cls):
+    svc, task = service_stub(cls)
+    task.current_content = ""
+    parsed = _sanitize_tool_args({"operation": "patch_section", "field_updates": {},
+                                  "target": "第二段", "instruction": "补充经费依据。"})
+    svc._interpret = lambda *_args, **_kwargs: parsed
+
+    async def interpret(*_args, **_kwargs):
+        return parsed
+
+    svc._interpret_async = interpret
+    if cls is AsyncWritingTaskService:
+        result = asyncio.run(svc.chat_async("task", "user", "第二段补充经费依据"))
+    else:
+        result = svc.chat("task", "user", "第二段补充经费依据")
+    assert "还没有草稿" in result["reply"]
+    assert result["content_changed"] is False
+    assert task.version_no == 1

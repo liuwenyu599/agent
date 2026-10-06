@@ -124,3 +124,19 @@ def test_unchanged_manual_save_after_ai_does_not_create_low_value_pair():
         assert db.query(TrainingSampleModel).count() == 0
     finally:
         db.close()
+
+
+def test_historical_ai_export_captures_the_exported_version_not_current_text():
+    db = _db()
+    try:
+        task = _task_with_version(db, content="AI v1 正文。")
+        task.current_content = "随后另行编辑的正文。"
+        db.commit()
+
+        EvalCaptureWritingTaskService(db)._try_capture_accepted(task.id, "u1", version_no=1)
+
+        sample = db.query(TrainingSampleModel).one()
+        assert sample.draft == "AI v1 正文。"
+        assert sample.output == "AI v1 正文。"
+    finally:
+        db.close()

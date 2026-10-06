@@ -210,6 +210,10 @@ def compare_structure(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[float, List
     }
     score = sum(_WEIGHTS[k] * v for k, v in fields.items())
     diffs = [k for k, v in fields.items() if v < 1.0]
+    # 主送、落款、日期是公文的关键槽位。单靠加权平均会让漏掉日期的
+    # 文本仍得 0.88，通过默认的 0.85 验收线。
+    if any(fields[k] < 1.0 for k in ("addressee", "closing_org", "closing_date")):
+        score = min(score, 0.5)
     return round(score, 4), diffs
 
 
@@ -299,6 +303,11 @@ def gate_a_consistency(cases: List[Dict[str, Any]], threshold: float) -> Gate:
                 score, diff = compare_structure(fps[0], fps[i])
                 if score < worst:
                     worst, diffs = score, diff
+            missing = [key for key in ("closing_org", "closing_date")
+                       if any(not fp[key] for fp in fps)]
+            if missing:
+                worst = 0.0
+                diffs = list(dict.fromkeys(diffs + missing))
             gate.add(worst, f"{case.get('id', '?')} {' vs '.join(tags)}",
                      "、".join(_FIELD_LABEL[d] for d in diffs))
     return gate
@@ -334,8 +343,13 @@ def gate_c_parity(cases: List[Dict[str, Any]], threshold: float) -> Gate:
                         if o.get("tag") == "without_card"), "")
         if not with_card or not without:
             continue
-        score, diffs = compare_structure(structure_fingerprint(with_card),
-                                         structure_fingerprint(without))
+        fps = (structure_fingerprint(with_card), structure_fingerprint(without))
+        score, diffs = compare_structure(*fps)
+        missing = [key for key in ("closing_org", "closing_date")
+                   if any(not fp[key] for fp in fps)]
+        if missing:
+            score = 0.0
+            diffs = list(dict.fromkeys(diffs + missing))
         gate.add(score, f"{case.get('id')} 有卡 vs 无卡",
                  "、".join(_FIELD_LABEL[d] for d in diffs))
     return gate
@@ -412,20 +426,17 @@ def evaluate(cases: List[Dict[str, Any]], thresholds: Dict[str, float]) -> Tuple
     ran = [g for g in gates if g.ran]
     if not ran:
         return gates, "没有任何一条验收线跑起来——数据不足，无法判断能否上线。"
-    ran_keys = [g.key for g in ran]
     passed = [g.key for g in ran if g.passed]
     failed = [g.key for g in ran if not g.passed]
 
     if not failed:
-        head = f"✅ {'、'.join(passed)} 全部通过"
-        if "C" in passed:
-            verdict = (head + " —— 风格已经进权重，可以配 WRITING_STYLE_ADAPTER "
-                              "把那张 1100 字风格卡撤掉。")
-        elif "C" not in ran_keys:
-            verdict = (head + " —— 但 C 线没跑（缺 with_card / without_card 两组输出），"
-                              "**还不能据此撤卡**，要不要撤请用 --style-card 补跑。")
+        if len(ran) < len(gates):
+            missing = "、".join(g.key for g in gates if not g.ran)
+            verdict = (f"⚠ {'、'.join(passed)} 已通过，但 {missing} 未跑；"
+                       "尚不能判定整体达标，也不能据此撤卡。")
         else:
-            verdict = head + "。"
+            verdict = ("✅ A、B、C 全部通过 —— 风格已经进权重，可以配 "
+                       "WRITING_STYLE_ADAPTER 把那张 1100 字风格卡撤掉。")
     elif "A" in failed or "B" in failed:
         blocked = "、".join(failed)
         verdict = (f"❌ {blocked} 未通过 —— 先别上线。"
@@ -499,8 +510,7 @@ def main() -> int:
             "verdict": verdict,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    judged = [g for g in gates if g.ran]
-    return 0 if judged and all(g.passed for g in judged) else 1
+    return 0 if all(g.passed for g in gates) else 1
 
 
 if __name__ == "__main__":

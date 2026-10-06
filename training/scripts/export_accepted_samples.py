@@ -116,6 +116,7 @@ def pick_snapshot(snaps: List[Dict[str, Any]], created_at: str) -> Optional[Dict
         earlier = [s for s in snaps if (s.get("ts") or "") <= created_at]
         if earlier:
             return earlier[-1]
+        return None
     return snaps[-1]
 
 

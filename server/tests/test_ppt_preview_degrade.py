@@ -244,6 +244,14 @@ def test_preview_success_returns_page_urls(client, token, doc_id, monkeypatch):
     assert body["pages"] == [f"/api/v1/ppt/preview/{doc_id}/pg-{i}.png"
                              for i in (1, 2, 3)]
 
+    def _should_not_render(cmd, *a, **k):
+        raise AssertionError("未变化的预览应命中缓存")
+
+    _stub_run(monkeypatch, _should_not_render)
+    cached = client.post(f"{BASE}/ppt/documents/{doc_id}/preview", headers=_hdr(token))
+    assert cached.status_code == 200, cached.text
+    assert cached.json()["pages"] == body["pages"]
+
 
 # ============================================================ 4. 鉴权与 404
 

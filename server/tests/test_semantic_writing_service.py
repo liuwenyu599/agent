@@ -9,6 +9,7 @@ from app.application.writing.sectioned_generation_service import SectionedGenera
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_service import WritingTaskService
+from app.application.shared.writing_assistant import WritingAssistant
 
 
 class BrokenAssistant:
@@ -90,6 +91,20 @@ def test_tool_call_routes_local_edit_to_patch_section():
     assert result["routing"] == "tool_call"
     assert assistant.tool_calls == 1
     assert assistant.complete_calls == 0
+
+
+def test_sync_writing_assistant_exposes_gateway_tool_calls():
+    assistant = WritingAssistant.__new__(WritingAssistant)
+    gateway = ToolAssistant({
+        "operation": "patch_section", "field_updates": {}, "target": "第二段",
+        "instruction": "精简第二段", "reply": "将只修改第二段。",
+    })
+    assistant.gateway = gateway
+    result = WritingIntentInterpreter(assistant).interpret(
+        "只改第二段", context={}, has_draft=True)
+    assert result["operation"] == "patch_section"
+    assert result["routing"] == "tool_call"
+    assert gateway.tool_calls == 1
 
 
 def test_tool_call_keeps_field_updates_separate_from_body_operation():

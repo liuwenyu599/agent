@@ -16,9 +16,9 @@ from app.application.chat.docx_export import (
 )
 from app.application.writing.content_check import ContentChecker
 from app.application.writing.postprocessor import (
-    TODAY_STR,
     PostProcessor,
     derive_daizi,
+    local_date_string,
 )
 from app.application.writing.task_service import WritingTaskService
 from app.application.writing.task_parser import (
@@ -68,9 +68,50 @@ def test_postprocessor_injects_real_current_signoff_date():
         inject_docnum=False,
         inject_date=True,
     )
-    assert TODAY_STR in out
-    assert out_date == TODAY_STR
+    assert local_date_string() in out
+    assert out_date == local_date_string()
     assert "2026年X月X日" not in out
+
+
+def test_postprocessor_uses_request_day_instead_of_import_day(monkeypatch):
+    from datetime import datetime
+    from app.application.writing import postprocessor
+
+    source = "关于报送材料的通知\n请按要求报送。\n广州市白云区司法局"
+    monkeypatch.setattr(postprocessor, "now_local", lambda: datetime(2026, 12, 31, 23, 59))
+    first, _, _, first_date = PostProcessor().process(
+        source, inject_docnum=False, inject_date=True)
+    monkeypatch.setattr(postprocessor, "now_local", lambda: datetime(2027, 1, 1, 0, 1))
+    second, _, _, second_date = PostProcessor().process(
+        source, inject_docnum=False, inject_date=True)
+    assert first_date == "2026年12月31日" and first_date in first
+    assert second_date == "2027年1月1日" and second_date in second
+
+
+def test_signoff_date_replaces_stale_year_without_changing_body_citation(monkeypatch):
+    from datetime import datetime
+    from app.application.writing import postprocessor
+
+    monkeypatch.setattr(postprocessor, "now_local", lambda: datetime(2027, 1, 1, 0, 1))
+    source = ("根据2025年5月6日印发的规定办理。\n"
+              "广州市白云区司法局\n2026年12月31日")
+    out, _, _, actual = PostProcessor().process(
+        source, inject_docnum=False, inject_date=True)
+    assert "根据2025年5月6日印发的规定办理。" in out
+    assert out.endswith("广州市白云区司法局\n2027年1月1日")
+    assert actual == "2027年1月1日"
+
+
+def test_body_citation_at_end_is_not_treated_as_signoff_date(monkeypatch):
+    from datetime import datetime
+    from app.application.writing import postprocessor
+
+    monkeypatch.setattr(postprocessor, "now_local", lambda: datetime(2027, 1, 1, 0, 1))
+    source = "根据上级规定办理。\n2025年5月6日"
+    out, _, _, actual = PostProcessor().process(
+        source, inject_docnum=False, inject_date=True)
+    assert out == source
+    assert actual == "2027年1月1日"
 
 
 class _FakeDb:
@@ -178,7 +219,7 @@ def test_official_export_keeps_red_header_separate_from_document_title():
         doc_number="",
         recipient="各镇街、各部门：",
         signature=authority,
-        date_text=TODAY_STR,
+        date_text=local_date_string(),
     )
     doc = Document(BytesIO(buf.getvalue()))
     texts = [p.text for p in doc.paragraphs if p.text.strip()]
@@ -201,6 +242,15 @@ def test_postprocessor_corrects_explicit_multiplication_amount():
     assert "240.48 万元" in out
     assert "239.85 万元" not in out
     assert any("算术校正" in e for e in events)
+
+
+def test_postprocessor_corrects_prose_calculation_used_by_chat():
+    raw = "本次补助涉及1336人，按每人每月150元补助，补助12个月，共计239.85万元。"
+    out, events, _number, _date = PostProcessor().process(
+        raw, inject_docnum=False, inject_date=False)
+    assert "240.48万元" in out
+    assert "239.85万元" not in out
+    assert any("算术校验" in event for event in events)
 
 
 def test_correspondence_uses_official_ending_and_concise_prompt():
@@ -242,9 +292,9 @@ def test_placeholder_docnum_and_date_are_removed_or_replaced():
     )
     assert "xx司发" not in out
     assert "×月×日" not in out
-    assert TODAY_STR in out
+    assert local_date_string() in out
     assert number is None
-    assert out_date == TODAY_STR
+    assert out_date == local_date_string()
 
 
 def test_baiyun_recipient_is_normalized_to_full_agency_name():
@@ -405,14 +455,14 @@ def test_revise_applies_user_date_to_context_and_keeps_body_chrome_free():
 
 def test_parser_understands_everyday_phrasings_for_context_updates():
     """回归：用户口语化的改要素说法必须能被解析，否则「我让改的都没改」。"""
-    from datetime import date
-
     assert parse_message("日期再填2026年10月10日") == {"document_date": "2026年10月10日"}
     assert parse_message("落款日期改成2026年10月10日") == {"document_date": "2026年10月10日"}
     assert parse_message("成文日期设为2026年10月10日") == {"document_date": "2026年10月10日"}
     assert "time_range" not in parse_message("日期再填2026年10月10日")
 
-    today = date.today()
+    from app.core.timeutil import now_local
+
+    today = now_local().date()
     expected_today = f"{today.year}年{today.month}月{today.day}日"
     assert parse_message("落款是今天") == {"document_date": expected_today}
     assert parse_message("日期用今天") == {"document_date": expected_today}
