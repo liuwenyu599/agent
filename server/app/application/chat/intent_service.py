@@ -28,6 +28,8 @@ class IntentService:
         "生成", "出一份", "给我一份", "整理成",
         "扩写", "润色", "精简", "改写", "修改", "改成", "删除",
         "删掉", "导出", "换成", "调整为", "加上", "补一段",
+        "改一下", "短一点", "短些", "长一点", "顺一点", "通顺些",
+        "正式点", "简洁点", "补一句", "加一句", "删一句",
     )
 
     # 弱线索：保留作兜底，必须与指令口吻同时出现才算写作意图
@@ -88,14 +90,22 @@ class IntentService:
             return False
         has_action = any(k in m for k in IntentService.ACTION_HINTS)
         has_imperative = any(k in m for k in IntentService._IMPERATIVE_WORDS)
-        if not has_action:
-            # 兜底：弱线索（文种词/拟）必须配指令口吻才算 workspace
-            if not (has_imperative and any(k in m for k in IntentService.WRITING_HINTS)):
-                return False
         is_question = (
             "？" in m or "?" in m
             or any(w in m for w in IntentService._QUESTION_WORDS)
         )
+        # “帮我看看这份材料有哪些问题”中的“帮我”只是礼貌说法，
+        # 不能把只读检查送进起草澄清与自动保存流程。
+        if is_question and m.startswith(("帮我看看", "请看看", "麻烦看看",
+                                         "帮我分析", "帮我检查", "帮我指出",
+                                         "请指出", "帮我评价")) and not any(
+            k in m for k in ("并修改", "再修改", "直接修改", "顺便修改", "并改写")
+        ):
+            return False
+        if not has_action:
+            # 兜底：弱线索（文种词/拟）必须配指令口吻才算 workspace
+            if not (has_imperative and any(k in m for k in IntentService.WRITING_HINTS)):
+                return False
         if is_question and not has_imperative:
             return False
         return True

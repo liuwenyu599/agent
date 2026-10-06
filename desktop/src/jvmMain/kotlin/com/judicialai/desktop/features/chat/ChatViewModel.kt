@@ -260,12 +260,14 @@ class ChatViewModel(
         messages = emptyList()
         attachments = emptyList()
         referenceTemplate = null
+        status = null
         closeInlineDoc()
     }
 
     fun openSession(id: String) {
         closeInlineDoc()
         currentSessionId = id
+        status = null
         // 先清空：取不到（已删除 / 换账号）时若不清，界面会残留上一条对话，
         // 看起来像「这篇文档对应的对话」其实是别人那轮。
         messages = emptyList()

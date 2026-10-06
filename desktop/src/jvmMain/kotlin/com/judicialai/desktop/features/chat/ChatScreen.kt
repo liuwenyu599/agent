@@ -149,6 +149,7 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
     var renameTarget by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteTarget by remember { mutableStateOf<HistoryItem?>(null) }
     var viewingChat by remember { mutableStateOf<HistoryItem?>(null) }
+    var composingNew by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewingChat?.id) {
         viewingChat?.let { vm.openSession(it.id) }
@@ -183,6 +184,11 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
             }
             Spacer(Modifier.weight(1f))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AppButton("新对话", onClick = {
+                    vm.newSession()
+                    viewingChat = null
+                    composingNew = true
+                })
                 HistoryCategory.values().forEach { c ->
                     StatChip(icon = categoryIcon(c), label = c.label,
                         count = vm.historyCount(c), color = categoryColor(c),
@@ -278,8 +284,18 @@ fun ChatScreen(vm: ChatViewModel = remember { ChatViewModel(Repositories.chat) }
         }
     }
 
-    viewingChat?.let { item ->
-        ChatViewDialog(item = item, messages = vm.messages, onClose = { viewingChat = null })
+    if (composingNew || viewingChat != null) {
+        ChatViewDialog(
+            item = viewingChat ?: HistoryItem("", "新对话", HistoryCategory.CHAT),
+            messages = vm.messages,
+            sending = vm.sending,
+            status = vm.status,
+            onSend = vm::send,
+            onClose = {
+                viewingChat = null
+                composingNew = false
+            },
+        )
     }
     if (vm.openedDoc != null || vm.openedDocLoading) {
         DocPreviewDialog(
@@ -452,15 +468,24 @@ private fun TimelineEmpty(filter: HistoryCategory?, searching: Boolean) {
 private fun ChatViewDialog(
     item: HistoryItem,
     messages: List<ChatMessage>,
+    sending: Boolean,
+    status: String?,
+    onSend: (String) -> Unit,
     onClose: () -> Unit,
 ) {
+    var draft by remember(item.id) { mutableStateOf("") }
+    val scroll = rememberScrollState()
+    LaunchedEffect(messages.lastOrNull()?.content) {
+        scroll.scrollTo(scroll.maxValue)
+    }
     AppDialog(
-        onDismissRequest = onClose,
+        onDismissRequest = { if (!sending) onClose() },
         title = item.title.ifBlank { "对话记录" },
-        subtitle = "对话记录 · 只读回看",
+        subtitle = "可继续提问和修改",
         width = 640.dp,
         actions = {
-            AppButton("关闭", onClick = onClose, kind = AppButtonKind.SECONDARY)
+            AppButton("关闭", onClick = onClose, kind = AppButtonKind.SECONDARY,
+                enabled = !sending)
         },
     ) {
         if (messages.isEmpty()) {
@@ -468,7 +493,7 @@ private fun ChatViewDialog(
         } else {
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(scroll),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 messages.forEach { m ->
@@ -480,6 +505,27 @@ private fun ChatViewDialog(
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                placeholder = { Text("输入问题或修改要求") },
+                modifier = Modifier.weight(1f),
+                maxLines = 4,
+                enabled = !sending,
+            )
+            Spacer(Modifier.width(8.dp))
+            AppButton("发送", onClick = {
+                val text = draft.trim()
+                if (text.isNotEmpty()) {
+                    onSend(text)
+                    draft = ""
+                }
+            }, enabled = !sending && draft.isNotBlank())
+        }
+        if (sending) Text("正在生成…", fontSize = 12.sp, color = Muted)
+        else if (!status.isNullOrBlank()) Text(status, fontSize = 12.sp, color = Warn)
     }
 }
 

@@ -118,6 +118,18 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     ClientLog.warn("请求参数不合法 status=$status loc=$loc msg=${prim(first?.get("msg"))}")
                     "请求参数不合法" + (status?.let { "（HTTP $it）" } ?: "")
                 }
+                // 写作质量门等业务错误：detail 为 {code,message,issues}。
+                is JsonObject -> {
+                    val message = prim(el["message"])?.takeIf { it.isNotBlank() }
+                    val issues = (el["issues"] as? JsonArray).orEmpty()
+                        .mapNotNull { issue ->
+                            prim((issue as? JsonObject)?.get("message"))
+                                ?.takeIf { it.isNotBlank() }
+                        }.take(3)
+                    listOfNotNull(message, issues.takeIf { it.isNotEmpty() }
+                        ?.joinToString("；")).joinToString("\n")
+                        .takeIf { it.isNotBlank() }
+                }
                 else -> null
             }
         }.getOrNull()
