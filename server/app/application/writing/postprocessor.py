@@ -236,6 +236,15 @@ def fix_date_typos(text: str) -> Tuple[str, List[str]]:
     return new, events
 
 
+def fix_redundant_comma_after_period(text: str) -> Tuple[str, Optional[str]]:
+    """句号/叹号/问号后紧跟逗号是错误衔接（如「落实。，要及时」），去掉逗号（含跨行）。"""
+    new = re.sub(r"(。|！|？)\s*[，,]", r"\1", text)
+    new = re.sub(r"(。|！|？)[　 \t]*\n[　 \t]*[，,]", r"\1\n", new)
+    if new != text:
+        return new, "标点衔接修正（句号后多余逗号）"
+    return text, None
+
+
 # ---------- 占位符 / 退化 / 截断 / 乱码检测 ----------
 
 PLACEHOLDER_PATTERNS = [
@@ -524,6 +533,11 @@ class PostProcessor:
             events.append(fw)
         text, typo_events = fix_date_typos(text)
         events.extend(typo_events)
+
+        # 4.5 标点衔接：句号后紧跟逗号是错误衔接，去掉多余逗号
+        text, punct_event = fix_redundant_comma_after_period(text)
+        if punct_event:
+            events.append(punct_event)
 
         # 5. 文号：用户指定 > 程序生成 > 不注入
         # 注意：参数 inject_docnum 是开关（bool），插入函数为 _insert_docnum_line，

@@ -210,6 +210,37 @@ def test_production_body_contains_no_structured_chrome_at_all():
     assert all(value not in body for value in ctx.values())
 
 
+def test_canonicalize_strips_placeholder_signoff_and_inline_citations():
+    """回归（P0 A2/A3/A6）：模型自写的 ×× 占位落款/日期 与 行内溯源标注 不得留在正文。"""
+    ctx = {
+        "title": "关于申请经费的请示",
+        "recipient": "广州市白云区司法局",
+        "authority": "广州市白云区司法局",
+        "document_date": "2026年10月6日",
+    }
+    raw = (
+        "关于申请经费的请示\n"
+        "广州市白云区司法局：\n"
+        "\n"
+        "一、请示理由与依据\n"
+        "办公设备老化严重。（参考资料1）\n"
+        "二、请求批准事项\n"
+        "妥否，请批示。\n"
+        "××年××月\n"
+        "××日\n"
+    )
+    body = StructuredFieldWritingTaskService._canonicalize_body(raw, ctx)
+    assert "××" not in body
+    assert "参考资料" not in body
+    assert "缺少事实依据" not in body
+    # 真实落款/日期由 chrome 渲染，正文不应含
+    assert "2026年10月6日" not in body
+    # 正文实质内容保留
+    assert "办公设备老化严重。" in body
+    assert "妥否，请批示。" in body
+    assert "一、请示理由与依据" in body
+
+
 def test_revision_summary_is_visible_in_conversation():
     before = "第一段保持不变。\n\n第二段原来比较啰嗦，需要处理。"
     after = "第一段保持不变。\n\n第二段已经精简。"

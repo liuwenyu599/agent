@@ -275,6 +275,12 @@ class WritingViewModel(
             try {
                 when (val r = repo.getTask(id)) {
                     is ApiResult.Ok -> {
+                        // 护栏：取回结果期间用户可能已点「新建任务」或切走，
+                        // 此时 pendingWritingTaskId 已不再是本任务 id，绝不可把旧内容写回
+                        // 当前（全新）任务，否则串台。
+                        if (AppState.pendingWritingTaskId != id) {
+                            return@launch
+                        }
                         val d = r.data
                         if (d != null) {
                             applyResponse(d)

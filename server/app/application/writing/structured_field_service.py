@@ -23,13 +23,28 @@ _DOCNUM_ONLY_RE = re.compile(
     r"^[\u4e00-\u9fa5A-Za-z]{1,16}[〔\[【［].{2,18}[〕\]】］]\s*[0-9０-９]{1,8}\s*号$"
 )
 
+# 占位符落款/日期行（如 ××年××月、××日、×月×日）：纯属占位，应整体剥离；
+# 落款与日期由 chrome 层从 ctx 渲染，正文里绝不该出现两套（否则 ×× 原样 + 真实落款叠加）。
+_PLACEHOLDER_LINE_RE = re.compile(r"^[×XＸxｏ年月日\s]+$")
+# 行内溯源标注（参考资料N / 依据N / 缺少事实依据）：应只在「依据」标签页结构化展示，不进正文。
+# 注意：仅匹配标记形态（括号包裹 / ⚠️ 前缀），避免误伤正文里「…缺少事实依据支撑」等合法表述。
+_INLINE_CITATION_RE = re.compile(
+    r"[（(](?:参考(?:资料)?|依据)\d*[）)]"
+    r"|\[参考资料\d+\]"
+    r"|（缺少事实依据）"
+    r"|⚠️\s*缺少事实依据"
+)
+
 
 class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
     """Keep ``current_content`` body-only; render chrome from structured context exactly once."""
 
     @staticmethod
     def _canonicalize_body(text: str, ctx: Dict[str, Any]) -> str:
-        lines = [line.rstrip() for line in (text or "").replace("\r\n", "\n").split("\n")]
+        # 行内溯源标注（参考资料N / 依据N / 缺少事实依据）不应进入正文，
+        # 它们只在右侧「依据」标签页结构化展示。先整体剥离，避免污染纯正文。
+        text = _INLINE_CITATION_RE.sub("", text or "")
+        lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
         title = str(ctx.get("title") or "").strip()
         recipient = str(ctx.get("recipient") or "").strip().rstrip("：:")
         docnum = str(ctx.get("document_number") or "").strip()
@@ -40,6 +55,10 @@ class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
         nonempty_seen = 0
         for raw in lines:
             s = raw.strip()
+            # 占位符落款/日期行（××年××月 / ××日 等）纯属占位，直接剥离；
+            # 落款与日期由 chrome 层从 ctx 渲染，正文里绝不该出现两套。
+            if s and _PLACEHOLDER_LINE_RE.fullmatch(s):
+                continue
             in_header = nonempty_seen < 10
             if s:
                 nonempty_seen += 1
@@ -64,6 +83,8 @@ class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
             s = raw.strip()
             if not s:
                 tail.append(raw)
+                continue
+            if _PLACEHOLDER_LINE_RE.fullmatch(s):
                 continue
             if authority and s == authority:
                 continue
