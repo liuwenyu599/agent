@@ -306,7 +306,7 @@ class PPTService:
                 if left < -tol or top < -tol or left + width > sw + tol or top + height > sh + tol:
                     issues.append("封面存在越界元素")
                     break
-        risky_fonts = ("dejavu", "liberation sans")
+        risky_fonts = ("dejavu")
         for slide in prs.slides:
             for shape in slide.shapes:
                 if not getattr(shape, "has_text_frame", False):
