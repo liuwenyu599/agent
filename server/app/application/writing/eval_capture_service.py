@@ -163,11 +163,13 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
             if ai_version is None:
                 return
             ai_content = (ai_version.content or "").strip()
-            final_content = (task.current_content or "").strip()
-            if not ai_content or not final_content:
-                return
             if version_no and ai_version.version_no != version_no:
                 # 导出的不是那个 AI 版本本身，配对关系会含糊，宁可不抓
+                return
+            # 历史 AI 版导出的是该版本自身，不能把任务当前（可能已编辑）的正文
+            # 误记成这次导出的内容。
+            final_content = (ai_version.content if version_no else task.current_content or "").strip()
+            if not ai_content or not final_content:
                 return
             if self._already_captured(task.session_id, ai_content, final_content):
                 return

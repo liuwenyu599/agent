@@ -248,6 +248,15 @@ class WritingAssistant:
                  max_tokens: Optional[int] = None) -> str:
         return self.gateway.complete(messages, temperature=temperature, max_tokens=max_tokens)
 
+    def complete_with_tools(self, messages: List[Dict], tools: List[Dict],
+                            tool_choice=None, temperature: Optional[float] = 0.0,
+                            max_tokens: Optional[int] = None) -> Dict:
+        fn = getattr(self.gateway, "complete_with_tools", None)
+        if not callable(fn):
+            raise NotImplementedError("gateway does not support tool calling")
+        return fn(messages, tools=tools, tool_choice=tool_choice,
+                  temperature=temperature, max_tokens=max_tokens)
+
     def _build_system_prompt(self, message: str, sources: List[Dict],
                              examples: list = None,
                              memories: List[Dict] = None,

@@ -692,10 +692,15 @@ class PPTService:
         elif body.title and body.title != d.title:
             d.title = body.title
             changed = True
-        if body.template_id:
-            t = self.templates.get(body.template_id)
-            if t and t.id != d.template_id:
-                d.template_id = t.id
+        if "template_id" in body.model_fields_set:
+            if body.template_id:
+                t = self.templates.get(body.template_id)
+                if t and t.id != d.template_id:
+                    d.template_id = t.id
+                    changed = True
+            elif d.template_id is not None:
+                # 显式选择“智能选择”时清除之前绑定的模板；省略字段仍表示保持原值。
+                d.template_id = None
                 changed = True
         if changed and d.status == "generated":
             d.status = "draft"
@@ -739,6 +744,7 @@ class PPTService:
         prev_dir = self.ppt_dir / "preview" / d.id
         if prev_dir.exists():
             shutil.rmtree(prev_dir, ignore_errors=True)
+        (self.ppt_dir / "preview" / (d.id + ".key")).unlink(missing_ok=True)
         self.documents.delete(d)
         return {"message": "已删除"}
 
@@ -869,6 +875,11 @@ class PPTService:
             logger.warning("PPT 逐页预览降级：未产出任何预览图（doc_id=%s）", doc_id)
             return self._degraded_preview(
                 "渲染流程完成但未生成预览图（请检查 pdftoppm 与字体依赖）")
+        if cache_key:
+            try:
+                key_file.write_text(cache_key, encoding="utf-8")
+            except OSError as e:
+                logger.warning("PPT 预览缓存键写入失败（doc_id=%s）：%s", doc_id, e)
         return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in names],
                 "count": len(names), "degraded": False, "reason": "",
                 "source": preview_source}

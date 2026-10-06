@@ -47,11 +47,8 @@ _CURRENT_USER: ContextVar[str] = ContextVar("sft_snapshot_user", default="")
 # 导出时要靠它把快照和样本对起来，留了 task_id 却对不上等于白记。
 _CURRENT_SESSION: ContextVar[str] = ContextVar("sft_snapshot_session", default="")
 
-# 单篇资料与附件原文的留痕上限。推理时每条资料本来就被截到 800 字
-# （writing_assistant._SOURCE_CHARS_PER_ITEM），这里再兜一层，防止异常
-# 输入把磁盘写满——毕竟这是个旁路功能，绝不能影响主流程。
-_MAX_ITEM_CHARS = 2000
-_MAX_ITEMS = 12
+# 留痕必须覆盖模型实际看到的资料，否则训练输入与成稿会错配。
+_SOURCE_CHARS_PER_ITEM = 800
 
 
 def _root() -> Optional[Path]:
@@ -95,12 +92,12 @@ def current_user() -> str:
 
 def _trim_sources(sources: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for item in (sources or [])[:_MAX_ITEMS]:
+    for item in sources or []:
         if not isinstance(item, dict):
             continue
         rows.append({
             "title": str(item.get("title") or "")[:200],
-            "content": str(item.get("content") or "")[:_MAX_ITEM_CHARS],
+            "content": str(item.get("content") or "")[:_SOURCE_CHARS_PER_ITEM],
         })
     return rows
 
@@ -130,7 +127,7 @@ def record(task_id: str, *, base_system: str, style_card: str, instruction: str,
         "style_card": style_card or "",
         "instruction": instruction or "",
         "sources": _trim_sources(sources),
-        "attachment_context": (attachment_context or "")[:_MAX_ITEM_CHARS],
+        "attachment_context": attachment_context or "",
     }
     try:
         with _LOCK:
