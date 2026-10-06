@@ -666,5 +666,15 @@ fun formatJobDuration(seconds: Int): String {
     return if (m <= 0) "${rest}秒" else "${m}分${rest.toString().padStart(2, '0')}秒"
 }
 
-/** 渲染器与降级原因属于内部诊断信息；用户只需要拿到最终可用文件。 */
-fun pptRendererNote(renderer: String?): String? = null
+/**
+ * 渲染来源提示：让用户知道拿到的是 AI 智能设计产物，还是本地模板兜底渲染。
+ * - "pptagent"        ：AI 智能设计成功返回，无需提示
+ * - "pptagent_retry"  ：AI 经一次重试后成功返回，仍是 AI 产物，无需提示
+ * - "local" / 空 / 未知：AI 成品未成功回传，已回退本地模板渲染，必须明确告知用户核对
+ */
+fun pptRendererNote(renderer: String?): String? {
+    return when (renderer) {
+        "pptagent", "pptagent_retry" -> null
+        else -> "⚠️ AI 智能设计未能成功返回成品，已自动采用本地模板渲染。排版与内容为兜底结果，请核对后再使用。"
+    }
+}
