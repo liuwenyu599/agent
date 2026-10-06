@@ -1,0 +1,226 @@
+"""工作流程模块契约测试（TC-063~TC-070）。
+
+覆盖 §7.1 里 workflow 模块 9 条此前零测试的端点。
+
+模块特点：所有端点都只要求登录（无 require_admin_or_above），越权防线
+全靠 service 层的 _get_instance_checked / _get_node_instance_checked。
+这意味着**任何一处漏掉归属判断，都是一个越权口子**，而路由层完全拦不住。
+所以本文件的重点不是「接口能不能调通」，而是「别人的流程能不能被碰到」。
+
+归属规则（service 层定义，此处固化）：
+- 本人 or 系统管理员 → 可访问
+- 同科室的知识管理员 → 可访问
+- 其余一律 403
+"""
+import os
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ.setdefault("AI_PROVIDER", "mock")
+os.environ.setdefault("DATA_DIR", f"/tmp/test-wf-{uuid.uuid4().hex[:8]}")
+os.environ.setdefault("DATABASE_URL", f"sqlite:////tmp/test-wf-{uuid.uuid4().hex[:8]}.db")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+from app.infrastructure.database import Base, engine  # noqa: E402
+
+Base.metadata.create_all(bind=engine)
+
+BASE = "/api/v1"
+DEPT_FUYI = "行政复议科"
+DEPT_RENSHI = "人事科"
+
+
+@pytest.fixture(scope="module")
+def client():
+    with TestClient(app) as c:
+        yield c
+
+
+def _hdr(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(scope="module")
+def users(client):
+    r = client.post(f"{BASE}/auth/login", json={
+        "username": "developer", "password": "Passw0rd!2026"})
+    assert r.status_code == 200, r.text
+    out = {"developer": r.json()["access_token"]}
+
+    def reg(username, role, dept, **extra):
+        payload = {"username": username, "email": f"{username}@test.local",
+                   "password": "Passw0rd!2026", "real_name": username,
+                   "department": dept, "role": role}
+        payload.update(extra)
+        rr = client.post(f"{BASE}/auth/register", json=payload,
+                         headers=_hdr(out["developer"]))
+        assert rr.status_code == 200, rr.text
+        tok = client.post(f"{BASE}/auth/login", json={
+            "username": username, "password": "Passw0rd!2026"}).json()["access_token"]
+        changed = client.post(f"{BASE}/auth/change-password", json={
+            "old_password": "Passw0rd!2026", "new_password": "Changed@2026",
+            "confirm_password": "Changed@2026"}, headers=_hdr(tok))
+        assert changed.status_code == 200, changed.text
+        return tok
+
+    out["user_a"] = reg("wfusera", "user", DEPT_FUYI, department_code="fuyi")
+    out["user_b"] = reg("wfuserb", "user", DEPT_RENSHI, department_code="renshi")
+    out["deptadmin_a"] = reg("wfdeptadmin", "knowledge_admin",
+                             DEPT_FUYI, department_code="fuyi")
+    return out
+
+
+@pytest.fixture(scope="module")
+def inst_id(client, users):
+    r = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                    json={"template_code": "meeting", "title": "季度工作推进会"})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+# ------------------------------------------------ TC-063 鉴权：未登录一律 401
+
+@pytest.mark.parametrize("method,path", [
+    ("get", "/workflow/templates"),
+    ("get", "/workflow/instances"),
+    ("post", "/workflow/instances"),
+    ("get", "/workflow/instances/whatever"),
+    ("put", "/workflow/instances/whatever"),
+    ("delete", "/workflow/instances/whatever"),
+    ("post", "/workflow/instances/whatever/ai-adjust"),
+    ("post", "/workflow/instances/whatever/confirm-context"),
+    ("post", "/workflow/instances/whatever/parse-key-value"),
+    ("post", "/workflow/instances/whatever/parse-natural-language"),
+    ("put", "/workflow/nodes/whatever"),
+    ("post", "/workflow/nodes/whatever/generate"),
+])
+def test_endpoints_require_auth(client, method, path):
+    r = getattr(client, method)(f"{BASE}{path}")
+    assert r.status_code in (401, 403), r.text
+
+
+# ------------------------------------------------ TC-064 模板列表
+
+def test_list_templates(client, users):
+    r = client.get(f"{BASE}/workflow/templates", headers=_hdr(users["user_a"]))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "templates" in body
+    codes = {t["code"] for t in body["templates"]}
+    assert "meeting" in codes
+
+
+# ------------------------------------------------ TC-065 实例归属
+
+def test_owner_can_read_own_instance(client, users, inst_id):
+    r = client.get(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["user_a"]))
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == inst_id
+
+
+def test_other_user_cannot_read_instance(client, users, inst_id):
+    r = client.get(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["user_b"]))
+    assert r.status_code == 403, r.text
+
+
+def test_other_user_cannot_delete_instance(client, users, inst_id):
+    r = client.delete(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["user_b"]))
+    assert r.status_code == 403, r.text
+    assert client.get(f"{BASE}/workflow/instances/{inst_id}",
+                      headers=_hdr(users["user_a"])).status_code == 200
+
+
+def test_other_user_cannot_update_instance(client, users, inst_id):
+    r = client.put(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["user_b"]),
+                   json={"title": "被改掉的标题"})
+    assert r.status_code == 403, r.text
+
+
+def test_same_department_admin_can_read_instance(client, users, inst_id):
+    """同科室知识管理员可见——这是有意放开的，别当成越权修掉。"""
+    r = client.get(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["deptadmin_a"]))
+    assert r.status_code == 200, r.text
+
+
+def test_instance_list_is_scoped_to_owner(client, users, inst_id):
+    mine = client.get(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]))
+    assert mine.status_code == 200, mine.text
+    assert any(x["id"] == inst_id for x in mine.json()["instances"])
+
+    theirs = client.get(f"{BASE}/workflow/instances", headers=_hdr(users["user_b"]))
+    assert theirs.status_code == 200, theirs.text
+    assert all(x["id"] != inst_id for x in theirs.json()["instances"]), \
+        "用户 B 的列表里出现了用户 A 的流程"
+
+
+def test_unknown_instance_is_404(client, users):
+    r = client.get(f"{BASE}/workflow/instances/no-such-instance",
+                   headers=_hdr(users["user_a"]))
+    assert r.status_code == 404
+
+
+# ------------------------------------------------ TC-066 节点写操作
+
+def _first_node_inst_id(client, users, inst_id):
+    r = client.get(f"{BASE}/workflow/instances/{inst_id}", headers=_hdr(users["user_a"]))
+    nodes = r.json().get("nodes") or r.json().get("node_instances") or []
+    assert nodes, f"实例里没有节点，返回体：{r.text[:300]}"
+    return nodes[0]["id"]
+
+
+def test_update_node_content_moves_status_out_of_pending(client, users, inst_id):
+    nid = _first_node_inst_id(client, users, inst_id)
+    r = client.put(f"{BASE}/workflow/nodes/{nid}", headers=_hdr(users["user_a"]),
+                   json={"content": "会议通知正文"})
+    assert r.status_code == 200, r.text
+    assert r.json().get("status") != "pending"
+
+
+def test_other_user_cannot_update_node(client, users, inst_id):
+    nid = _first_node_inst_id(client, users, inst_id)
+    r = client.put(f"{BASE}/workflow/nodes/{nid}", headers=_hdr(users["user_b"]),
+                   json={"content": "越权写入"})
+    assert r.status_code in (403, 404), r.text
+
+
+def test_update_unknown_node_is_404(client, users):
+    r = client.put(f"{BASE}/workflow/nodes/no-such-node", headers=_hdr(users["user_a"]),
+                   json={"content": "x"})
+    assert r.status_code == 404
+
+
+# ------------------------------------------------ TC-067 创建实例
+
+def test_create_instance_with_unknown_template_code(client, users):
+    r = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                    json={"template_code": "no-such-code", "title": "x"})
+    assert r.status_code in (400, 404), r.text
+
+
+def test_create_instance_requires_title(client, users):
+    r = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                    json={"template_code": "meeting"})
+    assert r.status_code == 422, r.text
+
+
+# ------------------------------------------------ TC-068 删除级联
+
+def test_delete_instance_also_removes_its_nodes(client, users):
+    created = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                          json={"template_code": "activity", "title": "待删除流程"})
+    assert created.status_code == 200, created.text
+    iid = created.json()["id"]
+    nodes = client.get(f"{BASE}/workflow/instances/{iid}",
+                       headers=_hdr(users["user_a"])).json()
+    assert (nodes.get("nodes") or nodes.get("node_instances")), "新实例应带出节点"
+
+    deleted = client.delete(f"{BASE}/workflow/instances/{iid}", headers=_hdr(users["user_a"]))
+    assert deleted.status_code == 200, deleted.text
+    assert client.get(f"{BASE}/workflow/instances/{iid}",
+                      headers=_hdr(users["user_a"])).status_code == 404

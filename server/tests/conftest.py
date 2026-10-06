@@ -57,15 +57,20 @@ def _isolate_database_per_module(request):
 # 因此种子账号必须与之一致，否则登录失败会累加到 IP 限流桶（5 次锁定 15 分钟），
 # 把该模块后续所有正常登录一起拦掉，表现为 KeyError: 'access_token'。
 _SEED_USERNAMES = {
+    "test_chat_session_contract": "developer",
     "test_department_permissions": "developer",
     "test_knowledge_isolation_contract": "developer",
     "test_knowledge_route_order": "kbroutedev",
     "test_password_policy": "pwddev",
     "test_ppt_agent_jobs": "jobdev",
+    "test_ppt_job_lifecycle_contract": "developer",
     "test_ppt_kb_rag": "kbdev",
     "test_ppt_preview_degrade": "pptprevdev",
     "test_ppt_workbench": "pptdev",
+    "test_references_contract": "developer",
+    "test_templates_contract": "developer",
     "test_timezone": "tzadmin",
+    "test_workflow_contract": "developer",
     "test_user_preferences": "prefdev",
 }
 _SEED_PASSWORD = "Passw0rd!2026"
