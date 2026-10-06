@@ -243,6 +243,15 @@ class OpsWritingTaskService(GroundedWritingTaskService):
             "clarify": "clarify",
         }.get(it.get("intent") or "answer", "answer")
 
+        if operation in (*LOCAL_OPERATIONS, "rewrite_document") and not has_draft:
+            reply = "当前还没有草稿，请先起草，再告诉我需要修改的段落或内容。"
+            self._push_history(ctx, "assistant", reply)
+            task.context = ctx
+            self.db.commit()
+            return {**self._to_dict(task), "reply": reply,
+                    "content_changed": False, "context_changes": changes,
+                    "operation": operation}
+
         if operation in LOCAL_OPERATIONS and has_draft:
             result = self.patch_section(
                 task_id,
@@ -372,7 +381,9 @@ class OpsWritingTaskService(GroundedWritingTaskService):
 
         from app.application.writing.quality_gate import QualityGate
         from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        quality = QualityGate().evaluate(
+            revised, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         content_check = ContentChecker().check(
             revised, sources=sources, header_docnum=doc_number)
         if content_check["issues"]:
@@ -392,7 +403,8 @@ class OpsWritingTaskService(GroundedWritingTaskService):
 
         summary = self._revision_diff(current, revised)
         verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
-        reply = f"已在“{target}”完成{verb}，保存为 v{version}。"
+        reply = (f"“{target}”已完成{verb}。"
+                 + self._revise_reply(version, summary, citation_warnings, instruction))
         return {
             **self._to_dict(task),
             "reply": reply,

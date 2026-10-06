@@ -25,7 +25,7 @@ class QualityRetryWritingTaskService(OpsWritingTaskService):
 
     @staticmethod
     def _quality_result(text: str, topic: str = "") -> Dict[str, Any]:
-        return QualityGate().evaluate(text or "", topic=topic or "")
+        return QualityGate().evaluate(text or "", topic=topic or "", body_only=True)
 
     @staticmethod
     def _critical_issue_lines(quality: Dict[str, Any]) -> List[str]:

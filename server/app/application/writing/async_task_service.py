@@ -311,7 +311,9 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         if doc_date:
             ctx["document_date"] = doc_date
         from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        quality = QualityGate().evaluate(
+            revised, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
         if content_check["issues"]:
             quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
@@ -328,7 +330,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         self.db.commit()
         summary = self._revision_diff(current, revised)
         verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
-        reply = f"已在“{target}”完成{verb}，保存为 v{version}。"
+        reply = (f"“{target}”已完成{verb}。"
+                 + self._revise_reply(version, summary, citation_warnings, instruction))
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
                 "postprocess_events": events, "context_changes": [],
@@ -370,7 +373,9 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         revised = self._canonicalize_body(revised, ctx)
         revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
         from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        quality = QualityGate().evaluate(
+            revised, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
         if content_check["issues"]:
             quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
@@ -514,7 +519,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                 instruction, sources, attachment_ctx, user_id, template=template)),
             section["heading"],
         )
-        quality = QualityGate().evaluate(candidate, topic=section["heading"])
+        quality = QualityGate().evaluate(candidate, body_only=True)
         retry_no = 0
         while quality.get("level") == "D" and retry_no < 2:
             retry_no += 1
@@ -531,7 +536,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                     repair, sources, attachment_ctx, user_id, template=template)),
                 section["heading"],
             )
-            quality = QualityGate().evaluate(candidate, topic=section["heading"])
+            quality = QualityGate().evaluate(candidate, body_only=True)
         if quality.get("level") == "D":
             raise HTTPException(status_code=422, detail={
                 "code": "WRITING_SECTION_QUALITY_D",
@@ -656,6 +661,15 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         task.updated_at = now_local()
         self.db.commit()
         operation = interpreted.get("operation") or "answer"
+
+        if operation in (*LOCAL_OPERATIONS, "rewrite_document") and not has_draft:
+            reply = "当前还没有草稿，请先起草，再告诉我需要修改的段落或内容。"
+            self._push_history(ctx, "assistant", reply)
+            task.context = ctx
+            self.db.commit()
+            return {**self._to_dict(task), "reply": reply,
+                    "content_changed": False, "context_changes": changes,
+                    "operation": operation}
 
         if operation in LOCAL_OPERATIONS and has_draft:
             result = await self.patch_section_async(

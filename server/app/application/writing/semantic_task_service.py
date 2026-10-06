@@ -476,7 +476,9 @@ class SemanticWritingTaskService(WritingTaskService):
 
         from app.application.writing.quality_gate import QualityGate
         from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        quality = QualityGate().evaluate(
+            revised, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         content_check = ContentChecker().check(
             revised, sources=sources, header_docnum=doc_number)
         if content_check["issues"]:

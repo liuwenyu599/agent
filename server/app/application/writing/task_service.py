@@ -873,7 +873,7 @@ class WritingTaskService:
         # 用户指定了字数时也不能靠加章节凑字数：条目一旦超过 6 条，
         # 即便字数达标照样精简（只合并条目，不砍字数）。
         word_target = ctx.get("word_count_target")
-        compact函 = (
+        compact_letter = (
             "函" in doc_type
             and (
                 heading_count > 6
@@ -882,7 +882,7 @@ class WritingTaskService:
                          or heading_count > 5))
             )
         )
-        if not degenerate and not compact函:
+        if not degenerate and not compact_letter:
             return text, None
 
         if degenerate:
@@ -928,7 +928,7 @@ class WritingTaskService:
             return text, None
         if degenerate and len(retry) <= len(text):
             return text, None
-        if compact函:
+        if compact_letter:
             retry_len = len(re.sub(r"\s+", "", retry))
             original_len = len(re.sub(r"\s+", "", text))
             retry_headings = len(
@@ -959,7 +959,9 @@ class WritingTaskService:
         else:
             ctx.pop("citation_warnings", None)
         from app.application.writing.quality_gate import QualityGate
-        quality = QualityGate().evaluate(text, topic=ctx.get("title") or ctx.get("topic") or "")
+        quality = QualityGate().evaluate(
+            text, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         from app.application.writing.content_check import ContentChecker
         content_check = ContentChecker().check(
             text, sources=sources, header_docnum=doc_number)
@@ -1054,7 +1056,9 @@ class WritingTaskService:
         else:
             ctx.pop("citation_warnings", None)
         from app.application.writing.quality_gate import QualityGate
-        quality = QualityGate().evaluate(revised, topic=ctx.get("title") or "")
+        quality = QualityGate().evaluate(
+            revised, body_only=True, document_type=ctx.get("document_type") or "",
+            word_count_target=ctx.get("word_count_target"))
         from app.application.writing.content_check import ContentChecker
         content_check = ContentChecker().check(
             revised, sources=sources, header_docnum=doc_number)

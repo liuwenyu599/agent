@@ -166,7 +166,7 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         )
         candidate = self._normalize_section(candidate, section["heading"])
 
-        quality = QualityGate().evaluate(candidate, topic=section["heading"])
+        quality = QualityGate().evaluate(candidate, body_only=True)
         retry_no = 0
         while quality.get("level") == "D" and retry_no < 2:
             retry_no += 1
@@ -184,7 +184,7 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
                 self._llm_draft(repair, sources, attachment_ctx, user_id, template=template)
             )
             candidate = self._normalize_section(candidate, section["heading"])
-            quality = QualityGate().evaluate(candidate, topic=section["heading"])
+            quality = QualityGate().evaluate(candidate, body_only=True)
         if quality.get("level") == "D":
             raise HTTPException(
                 status_code=422,

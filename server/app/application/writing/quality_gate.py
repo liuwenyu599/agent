@@ -24,7 +24,9 @@ class QualityGate:
     """对（已后处理的）生成稿做自动质量检查。"""
 
     def evaluate(
-        self, text: str, topic: Optional[str] = None
+        self, text: str, topic: Optional[str] = None, *,
+        body_only: bool = False, document_type: str = "",
+        word_count_target: Optional[int] = None,
     ) -> Dict[str, Any]:
         critical: List[str] = []
         review: List[str] = []
@@ -59,7 +61,7 @@ class QualityGate:
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         if not lines:
             critical.append("空输出")
-        else:
+        elif not body_only:
             first = lines[0]
             if not (4 <= len(first) <= 60 and not first.endswith("。")):
                 review.append("缺少规范标题行")
@@ -81,11 +83,16 @@ class QualityGate:
                 review.append("缺少成文日期")
 
         char_count = len(re.sub(r"\s+", "", text))
-        if char_count < MIN_BODY_CHARS:
-            review.append(f"正文偏短（{char_count} 字 < {MIN_BODY_CHARS}）")
+        min_chars = MIN_BODY_CHARS
+        if "函" in document_type:
+            min_chars = 200
+        if word_count_target:
+            min_chars = min(min_chars, max(100, int(word_count_target * 0.7)))
+        if char_count < min_chars:
+            review.append(f"正文偏短（{char_count} 字 < {min_chars}）")
 
         # 主题相关性：主题词至少出现 2 次
-        if topic:
+        if topic and not body_only:
             topic_key = re.sub(r"[的地得了呢吧啊哦呀么吗？?！!，,。.、\s]", "",
                                topic)
             hits = 0
