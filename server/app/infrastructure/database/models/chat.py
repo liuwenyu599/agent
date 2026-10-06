@@ -17,10 +17,13 @@ class ChatSessionModel(Base, IdMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
     user: Mapped[Optional[object]] = relationship("UserModel", lazy="joined")
-    messages: Mapped[list] = relationship(
+    # 注意：必须写成 Mapped[list["XxxModel"]]。裸 list 不会被 SQLAlchemy 2.0 的
+    # 注解解析识别为集合，会按标量关系配成 uselist=False，级联删除随之失效——
+    # 表现是删除会话时 chat_messages 外键约束失败（500），会话删不掉。
+    messages: Mapped[list["ChatMessageModel"]] = relationship(
         "ChatMessageModel", back_populates="session", cascade="all, delete-orphan"
     )
-    attachments: Mapped[list] = relationship(
+    attachments: Mapped[list["ChatAttachmentModel"]] = relationship(
         "ChatAttachmentModel", back_populates="session", cascade="all, delete-orphan"
     )
 
