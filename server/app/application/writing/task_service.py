@@ -70,12 +70,17 @@ _REPLY_READY = (
     "这些足够了，要动笔说一声「起草」。",
 )
 
+def _today_doc_date() -> str:
+    """默认成文日期（今天），形如「2026年10月6日」，与 PostProcessor 日期格式一致。"""
+    t = now_local()
+    return f"{t.year}年{t.month}月{t.day}日"
+
 REVISION_RULES = (
     "这是一个【已有文档修改】任务，不是新的起草请求。必须遵守：\n"
     "1. 只修改用户要求的部分，其余内容原样保留，不得重新生成全文；\n"
     "2. 不得改变或删除用户未要求修改的事实；\n"
     "3. 不得虚构数据、成效或日期；区分两类内容——外部事实（他人姓名、统计数字、"
-    "具体日期、已有成效）材料中没有的用「⚠️ 缺少事实依据」标注，"
+    "具体日期、已有成效）材料中没有出处的，不得自行填充或编造；"
     "而工作计划、方案、举措等用户自主规划的内容应充分展开，不得整段标注占位；\n"
     "4. 如果用户的要求在当前文档中已经满足、或不构成实质改动，"
     "原样输出全文，不得为了显得有改动而做无谓变动；\n"
@@ -87,7 +92,7 @@ DRAFT_RULES = (
     "1. 不要编造文号，不要写文号行；\n"
     "2. 区分两类内容，区别对待，不可一刀切：\n"
     "   （1）外部事实——政策文号、他人姓名、统计数字、具体日期、已有成效——"
-    "必须有出处，材料里没有的用「⚠️ 缺少事实依据」标注，不得自行填充；\n"
+    "必须有出处，材料里没有的不得自行填充或编造；\n"
     "   （2）工作计划、方案、举措、下一步打算等属于用户自主规划的内容，"
     "按用户意图充分展开，写清工作思路、具体举措、责任分工与预期目标；"
     "这类内容本就没有现成出处，不得因缺少数据而退化为占位说明；\n"
@@ -341,6 +346,15 @@ class WritingTaskService:
             if tmpl:
                 ctx["template_id"] = tmpl["id"]
                 ctx["template_name"] = tmpl["name"]
+                # 模板声明 need_signature / need_date 但用户未显式填落款单位 / 日期时，
+                # 由系统兜底：落款取组织机构名 org.name，日期取今天。
+                # 这样“排版三件套”（标题 / 主送 / 落款 / 日期）不会漏渲染。
+                if tmpl.get("need_signature") and not ctx.get("authority"):
+                    authority = self._default_authority()
+                    if authority:
+                        ctx["authority"] = authority
+                if tmpl.get("need_date") and not ctx.get("document_date"):
+                    ctx["document_date"] = _today_doc_date()
         if kb_ids:
             ctx["kb_ids"] = [k for k in kb_ids if k]
         missing = task_parser.compute_missing(ctx)
@@ -782,6 +796,24 @@ class WritingTaskService:
         except Exception as e:
             logger.warning("[写作任务] 模板 %s 读取失败: %s", template_id, e)
             return None
+
+    def _default_authority(self) -> str:
+        """从系统配置 org.name 读取本单位名称，作为落款单位的默认值。
+
+        模板声明 need_signature 且用户未显式指定落款单位时调用，兑现“落款由系统补齐”。
+        org.name 不存在时返回空串（不强行编一个落款）。
+        """
+        try:
+            from app.infrastructure.database.models.system import SystemConfigModel
+            from sqlalchemy import select
+            row = self.db.scalars(
+                select(SystemConfigModel).where(SystemConfigModel.key == "org.name")
+            ).first()
+            if row and row.value:
+                return str(row.value).strip()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[写作任务] 读取 org.name 失败: %s", e)
+        return ""
 
     # ---------------- 起草 / 继续生成 ----------------
 

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.judicialai.desktop.core.network.ApiClient
 import com.judicialai.desktop.core.storage.ServerConfig
 import com.judicialai.desktop.features.ppt.PptJobEngine
+import kotlinx.serialization.json.JsonObject
 
 /**
  * 模板中心「使用模板」→ 智能写作工作台 的一次性参数。
@@ -24,6 +25,9 @@ data class PendingTemplateWrite(
     val docType: String,
     val title: String,
     val message: String,
+    /** 模板表单中填写的要素（name→value），由后端按结构化上下文已知键写入 ctx，
+     *  确保标题/主送机关等排版字段不依赖 LLM 二次抽取而漏渲染。内容要素同时保留在 message 中。 */
+    val plannedContext: JsonObject? = null,
 )
 
 /**

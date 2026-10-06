@@ -115,6 +115,15 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
         t["content_template"].str().takeIf { it.isNotBlank() }?.let {
             msg += "\n\n【结构参考】\n$it"
         }
+        // 结构化要素（标题、主送机关等）直接以 planned_context 形式下发：
+        // 服务端按 empty_context 已知键原样写入 ctx，使排版三件套（标题/主送/落款/日期）
+        // 不再依赖 LLM 从自由文本二次抽取而漏渲染。正文内容要素仍保留在 msg 中供起草使用。
+        // 后端只认 empty_context 里的键（如 title/recipient/authority/document_date），
+        // content_template 里的内容要素（理由/事项等）不在其中，会被安全忽略、不影响。
+        val plannedContext = JsonObject(params.mapNotNull { (name, pair) ->
+            val v = pair.second.trim()
+            if (v.isEmpty()) null else name to JsonPrimitive(v)
+        }.toMap())
         AppState.lastTemplateUseId = t["id"].str()
         AppState.lastTemplateUseValues = params.mapValues { it.value.second }
         AppState.pendingWritingTemplate = PendingTemplateWrite(
@@ -123,6 +132,7 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
             docType = t["category"].str(),
             title = t["name"].str(),
             message = msg,
+            plannedContext = plannedContext,
         )
         usingTemplate = null
         AppState.navigate(AppScreen.WRITING)

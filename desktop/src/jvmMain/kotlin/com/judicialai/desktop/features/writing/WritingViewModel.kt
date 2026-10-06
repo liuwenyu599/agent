@@ -454,6 +454,7 @@ class WritingViewModel(
                 source = "template",
                 templateId = p.templateId,
                 templateName = p.templateName,
+                plannedContext = p.plannedContext,
             )
             spec = planned
             when (val r = repo.createTask(p.message, planned)) {
