@@ -14,6 +14,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from app.application.writing.postprocessor import _parse_date_year
+from app.core.timeutil import now_local
 
 # 《...》文件引用
 CITATION_RE = re.compile(r"《([^《》\n]{2,50})》")
@@ -128,5 +129,4 @@ class ContentChecker:
 
 
 def _current_year() -> int:
-    from datetime import date
-    return date.today().year
+    return now_local().year

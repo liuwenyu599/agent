@@ -4,7 +4,6 @@
 序号按（代字, 年份）在数据库中自增，保证同年不重复。
 序号策略可替换：换实现时保持 next_number(daizi) 签名即可。
 """
-from datetime import date
 from typing import Optional
 
 from sqlalchemy import select
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.timeutil import now_local
 from app.infrastructure.database.models.doc_number import (
     DocNumberSequenceModel,
 )
@@ -26,7 +26,7 @@ class DocNumberService:
     def next_number(self, daizi: Optional[str] = None) -> str:
         """生成下一个文号，如 粤府办〔2026〕001号。"""
         daizi = daizi or resolve_daizi(self.db)
-        year = date.today().year
+        year = now_local().year
         seq = self._next_seq(daizi, year)
         return f"{daizi}〔{year}〕{seq:03d}号"
 

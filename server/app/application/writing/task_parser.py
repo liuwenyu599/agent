@@ -4,8 +4,9 @@
 由 missing_fields 显式列出，交给对话逐步补全。
 """
 import re
-from datetime import date
 from typing import Any, Dict, List, Optional
+
+from app.core.timeutil import now_local
 
 # 文种关键词（长词优先，避免"总结报告"误判）
 DOC_TYPE_KEYWORDS = [
@@ -185,7 +186,7 @@ def parse_message(message: str) -> Dict[str, Any]:
     if m and DATE_CUE_RE.search(msg):
         upd["document_date"] = re.sub(r"\s+", "", m.group(1))
     elif TODAY_DATE_RE.search(msg):
-        today = date.today()
+        today = now_local().date()
         upd["document_date"] = f"{today.year}年{today.month}月{today.day}日"
 
     m = WORD_COUNT_RE.search(msg)

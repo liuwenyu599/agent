@@ -7,14 +7,17 @@
 """
 import re
 import unicodedata
-from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
 from app.core.config import settings
+from app.core.timeutil import now_local
+from app.application.writing.calculation_guard import verify_and_fix_calculations
 
-TODAY = date.today()
-TODAY_STR = f"{TODAY.year}年{TODAY.month}月{TODAY.day}日"
+
+def local_date_string() -> str:
+    today = now_local().date()
+    return f"{today.year}年{today.month}月{today.day}日"
 
 # ---------- 日期识别 ----------
 
@@ -68,6 +71,7 @@ def _clean_num_part(s: str, letter_map: Dict[str, str]) -> str:
 def normalize_document_numbers(text: str) -> Tuple[str, List[Tuple[str, str]]]:
     """机械修复引用文号格式污染。年份不合理（2106/212）不猜测。"""
     fixes: List[Tuple[str, str]] = []
+    current_year = now_local().year
 
     def repl(m: "re.Match") -> str:
         prefix, year_raw, num_raw = m.groups()
@@ -77,7 +81,7 @@ def normalize_document_numbers(text: str) -> Tuple[str, List[Tuple[str, str]]]:
             num_raw, {"O": "0", "o": "0", "l": "1", "I": "1"})
         if not year.isdigit() or not num.isdigit():
             return m.group(0)
-        if not (len(year) == 4 and 1949 <= int(year) <= TODAY.year + 1):
+        if not (len(year) == 4 and 1949 <= int(year) <= current_year + 1):
             return m.group(0)
         new = f"{prefix}〔{year}〕{num}号"
         if new != m.group(0):
@@ -166,24 +170,26 @@ def _insert_docnum_line(text: str, docnum: str) -> str:
 # ---------- 落款日期 ----------
 
 def fix_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
-    """文末 200 字内的落款日期偏离目标日期（默认今天）→ 替换。
-    正文中的历史引用日期不受影响。"""
-    target = target or TODAY_STR
+    """仅替换落款单位之后的独立日期行，保留正文中引用的日期。"""
+    target = target or local_date_string()
     normalized = normalize_width(text)
     matches = []
     for pattern in DATE_PATTERNS:
         matches.extend(re.finditer(pattern, normalized))
     if not matches:
         return text, None
-    last = matches[-1]
-    if last.start() < len(normalized) - 200:
+    last = max(matches, key=lambda match: match.start())
+    line_start = normalized.rfind("\n", 0, last.start()) + 1
+    line_end = normalized.find("\n", last.end())
+    if line_end < 0:
+        line_end = len(normalized)
+    if normalized[line_start:line_end].strip() != last.group(0).strip():
+        return text, None
+    prior_lines = [line.strip() for line in normalized[:line_start].splitlines() if line.strip()]
+    if not prior_lines or not SIGNOFF_LINE_RE.fullmatch(prior_lines[-1]):
         return text, None
     if normalize_width(last.group(0)).replace(" ", "") == target:
         return text, None
-    if target == TODAY_STR:
-        year = _parse_date_year(last.group(0))
-        if year is None or (TODAY.year - 1 <= year <= TODAY.year + 1):
-            return text, None
     old = last.group(0)
     return text[:last.start()] + target + text[last.end():], \
         f"落款日期校正：{old} → {target}"
@@ -191,7 +197,7 @@ def fix_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Opti
 
 def ensure_signoff_date(text: str, target: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """有落款单位但缺成文日期时，在落款后补目标日期（默认今天）。"""
-    target = target or TODAY_STR
+    target = target or local_date_string()
     lines = text.split("\n")
     for i in range(len(lines) - 1, max(len(lines) - 8, -1), -1):
         if SIGNOFF_LINE_RE.match(lines[i].strip()):
@@ -469,6 +475,7 @@ class PostProcessor:
             DocNumberService,
         )
         events: List[str] = []
+        today_str = local_date_string()
 
         # 1. 剥离模型自写的文头文号（LLM 禁止自由生成文号）
         text, stripped = strip_header_docnum(text)
@@ -486,6 +493,8 @@ class PostProcessor:
 
         text, arithmetic_events = fix_simple_multiplication_amounts(text)
         events.extend(arithmetic_events)
+        text, calculation_events = verify_and_fix_calculations(text)
+        events.extend(calculation_events)
 
         # 3. 落款日期：用户指定 > 系统当天 > 不处理
         if doc_date:
@@ -499,13 +508,13 @@ class PostProcessor:
             if date_add:
                 events.append(date_add)
         elif inject_date:
-            text, placeholder_fix = fix_placeholder_signoff_date(text, TODAY_STR)
+            text, placeholder_fix = fix_placeholder_signoff_date(text, today_str)
             if placeholder_fix:
                 events.append(placeholder_fix)
-            text, date_fix = fix_signoff_date(text)
+            text, date_fix = fix_signoff_date(text, today_str)
             if date_fix:
                 events.append(date_fix)
-            text, date_add = ensure_signoff_date(text)
+            text, date_add = ensure_signoff_date(text, today_str)
             if date_add:
                 events.append(date_add)
 
@@ -530,5 +539,5 @@ class PostProcessor:
             text = _insert_docnum_line(text, out_number)
             events.append(f"程序注入文号：{out_number}")
 
-        out_date = doc_date or (TODAY_STR if inject_date else None)
+        out_date = doc_date or (today_str if inject_date else None)
         return text, events, out_number, out_date
