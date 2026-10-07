@@ -16,7 +16,10 @@ docker run --rm --entrypoint sh "$SANDBOX_IMAGE" -c '
   [ -n "$capture" ]
   [ "$(grep -o "offline-patch" "$capture" | wc -l | tr -d " ")" = "2" ]
 
-  schemas=$(find / -type f -name schemas.js 2>/dev/null | head -n 1)
+  # 必须先筛出「含 rewrite: z.union 的那个」schemas.js，不能拿第一个 schemas.js 就断言。
+  # 镜像里存在多个 schemas.js 时，旧写法会挑中不含该改动的那个，
+  # 导致基线校验恒失败或误判。
+  schemas=$(find / -type f -name schemas.js 2>/dev/null | xargs grep -l "rewrite: z.union" 2>/dev/null | head -n 1)
   [ -n "$schemas" ]
   grep -q "rewrite: z.union" "$schemas"
 
