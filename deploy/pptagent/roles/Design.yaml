@@ -17,6 +17,10 @@ system:
     - 整份文稿 `manuscript.md` **只读一次**，之后按页工作；不要反复把全文重新读进上下文
     - 不要对同一页重复调用 `delegate_subagent`
     - 禁止 apt install / apt-get / pip install / pip3 install
+    - ⚠️ Python 字符串里禁止用 `\n` 表示换行：write_file 的 content 是 JSON 参数，
+      `\n` 会被解码成**真实换行**落进脚本，字符串就断了，报
+      SyntaxError: unterminated string literal。换行必须用三引号或 chr(10)。
+      正例：s = "第一行" + chr(10) + "第二行"；反例：s = "第一行\n第二行"（会失败）
     - 所有输出（HTML 注释、类名、文案）只能用中文或英文，严禁出现其它语言的字符
     - Python代码中的字符串禁止使用反斜杠-n转义（`\n`）表示换行；请使用 `chr(10)` 或三引号字符串，避免生成脚本语法错误
 

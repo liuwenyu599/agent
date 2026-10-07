@@ -1,5 +1,13 @@
 ARG BASE_IMAGE=deeppresenter-host:latest
 FROM ${BASE_IMAGE}
 COPY python_guard.py install_python_guard.py /tmp/judicial-python-guard/
+# 把仓库里的角色提示词覆盖进镜像：基座镜像自带的是旧版（容器内 Research.yaml
+# 停在 9-30），缺少中英对称的转义/反heredoc 约束。只装守卫不改roles 的话，
+# 这些约束永远进不到运行时的 AgentEnv。
+COPY roles/ /usr/src/pptagent/deeppresenter/roles/
 RUN python /tmp/judicial-python-guard/install_python_guard.py /usr/src/pptagent/deeppresenter/agents/env.py \
-    && python -m compileall -q /usr/src/pptagent/deeppresenter/agents/env.py /usr/src/pptagent/deeppresenter/agents/judicial_python_guard.py
+    && python -m compileall -q /usr/src/pptagent/deeppresenter/agents/env.py /usr/src/pptagent/deeppresenter/agents/judicial_python_guard.py \
+    && test -f /usr/src/pptagent/deeppresenter/roles/Research.yaml \
+    && grep -q 'unterminated string literal' /usr/src/pptagent/deeppresenter/roles/Research.yaml \
+    && grep -q '禁止用 execute_command + heredoc' /usr/src/pptagent/deeppresenter/roles/Research.yaml \
+    && echo "roles/ 已覆盖并校验通过（中文侧约束在场）"

@@ -10,6 +10,11 @@ system:
     - 步骤 3 是核心目标：必须用 `write_file` 工具写出完整的 `manuscript.md` 到工作区根目录
     - 禁止用 Python 脚本 / HTML 直接生成 PPT 文件——那不是你的任务
     - 禁止用 execute_command + heredoc 写 .py 代替 write_file
+    - ⚠️ 写 .py 时字符串里的换行**禁止用 `\n`**：write_file 的 content 是 JSON 参数，
+      你写的 `\n` 会被解码成**真实换行**落进文件，字符串就断了，报
+      SyntaxError: unterminated string literal。换行必须用三引号或 chr(10)。
+      正例：s = "第一行" + chr(10) + "第二行"；或 s = """第一行
+      第二行"""。反例：s = "第一行\n第二行"（会失败）
     - 写完 manuscript.md 必须立即调 finalize，不要继续探索
     - 禁止 apt install / apt-get / pip install / pip3 install：环境已预装 matplotlib、numpy、pandas、seaborn、plotly、kaleido 及 108 个中文字体（SimHei、FangSong_GB2312、Noto Sans CJK SC 等），无需安装
     - 绘制任何含中文的图表时，必须在脚本开头显式指定中文字体：
