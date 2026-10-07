@@ -120,13 +120,20 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------- 3. 备份
-step "3/8 部署前记录回滚锚点"
+step "3/8 部署前备份（数据库 + 向量索引）"
 mkdir -p /opt/justice-office/data/delivery-images
 docker tag "$OLD_IMAGE" "rollback-backup:$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
 docker inspect justice-api --format '{{.Config.Image}}' > /tmp/predeploy-image.txt 2>/dev/null || true
-docker exec justice-api sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' \
-  > /opt/justice-office/data/backup-$(date +%Y%m%d-%H%M%S).sql 2>/dev/null \
-  && ok "数据库已备份" || bad "数据库备份跳过（容器内无 pg_dump，可用 backup-production.sh）"
+
+# 复用已维护的 backup-production.sh：它从生产 .env 读配置，且优先走运行中的
+# justice-db 容器（宿主机无需装pg_dump 客户端），同时备份 FAISS 向量索引并生成
+# manifest。不要在本脚本里手写 pg_dump——容器名/凭据随部署配置变，写死易错。
+if [[ -x "$SRC_DIR/deploy/backup-production.sh" || -f "$SRC_DIR/deploy/backup-production.sh" ]]; then
+  bash "$SRC_DIR/deploy/backup-production.sh" && ok "备份完成（含数据库 + 向量索引）" \
+    || bad "备份失败——**必须在确认备份成功后再继续**，否则回滚无数据可依"
+else
+  bad "缺 backup-production.sh，未备份。回滚将无数据可依，建议先手工备份再继续"
+fi
 
 # ---------------------------------------------------------------- 4. 构建后端镜像
 step "4/8 构建后端镜像（勿传 INSTALL_PPT_PREVIEW）"
@@ -194,31 +201,37 @@ RUNNING=$(docker inspect justice-api --format '{{.Config.Image}}' 2>/dev/null ||
 echo "  运行镜像：$RUNNING"
 [[ "$RUNNING" == "$IMAGE" ]] && ok "镜像已切到 $IMAGE" || bad "镜像未切换（仍是 $RUNNING）"
 
-docker exec justice-api sh -c 'pg_isready -U "$POSTGRES_USER"' >/dev/null 2>&1 && ok "数据库可连" || bad "数据库不可连"
+# 数据库在独立的 justice-db 容器里（应用容器 justice-api 内没有 psql/pg_isready）
+PGUSER_NAME=${PGUSER_NAME:-justice}
+docker exec justice-db pg_isready -U "$PGUSER_NAME" >/dev/null 2>&1 \
+  && ok "数据库可连（justice-db / $PGUSER_NAME）" \
+  || bad "数据库不可连（justice-db）——先查容器状态与 .env 里的 POSTGRES_*，勿继续"
 
 curl -sf http://127.0.0.1:8000/health >/dev/null && ok "health 正常" || bad "health 异常"
 curl -sf http://127.0.0.1:8000/ready  >/dev/null && ok "ready 正常（向量库就绪）" || bad "ready 异常"
 
-# C1 验证：版本列已加宽
+# C1 验证 + 迁移版本：一次 python 输出两个可解析标记，避免分别 grep 造成假阴性
 docker exec justice-api python -c "
 import sqlalchemy as sa
 from app.infrastructure.database import engine
-with engine.connect() as c:
-    t = sa.inspect(c).get_columns('alembic_version')
-    w = [x['type'].length for x in t if x['name']=='version_num']
-    print('  alembic_version.version_num 宽度 =', w)
-" 2>/dev/null | grep -q '255' && ok "C1 版本列已扩宽到 255" || bad "C1 版本列未达255（迁移未生效）"
-
-docker exec justice-api python -c "
-from alembic import command
-from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine
-from app.core.config import settings
-e = create_engine(settings.DATABASE_URL)
-with e.connect() as c:
-    print('  当前版本 =', MigrationContext.configure(c).get_current_revision())
-" 2>/dev/null | grep -q '015_' && ok "迁移已到 015" || bad "迁移未到 015"
+with engine.connect() as c:
+    cols = sa.inspect(c).get_columns('alembic_version')
+    w = [x['type'].length for x in cols if x['name'] == 'version_num']
+    print('VERSION_NUM_WIDTH=' + str(w[0] if w else 'MISSING'))
+    print('ALEMBIC_REV=' + str(MigrationContext.configure(c).get_current_revision()))
+" > /tmp/c1-check.txt 2>/tmp/c1-check.err || true
+
+if [[ -s /tmp/c1-check.txt ]]; then
+  W=$(grep -o 'VERSION_NUM_WIDTH=[^ ]*' /tmp/c1-check.txt | cut -d= -f2)
+  R=$(grep -o 'ALEMBIC_REV=[^ ]*' /tmp/c1-check.txt | cut -d= -f2)
+  echo "  version_num 宽度 = ${W:-?}    alembic 版本 = ${R:-?}"
+  [[ "$W" == "255" ]] && ok "C1 版本列已扩宽到 255" || bad "C1 版本列 = ${W:-?}，应为 255（迁移未生效或被回滚）"
+  [[ "$R" == 015_* ]] && ok "迁移已到 015" || bad "alembic 版本 = ${R:-?}，未到 015_widen_alembic_version"
+  [[ -s /tmp/c1-check.err ]] && printf '  (python stderr: %s)\n' "$(head -c 300 /tmp/c1-check.err)"
+else
+  bad "无法在容器内查库（/tmp/c1-check.txt 为空）。stderr：$(head -c 300 /tmp/c1-check.err 2>/dev/null)"
+fi
 
 docker logs justice-api --tail 80 2>&1 | grep -iE 'error|exception|does not exist' \
   && bad "日志有异常（见上）" || ok "日志干净"
