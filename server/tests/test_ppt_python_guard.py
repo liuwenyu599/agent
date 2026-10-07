@@ -37,6 +37,37 @@ def test_preflight_checks_edited_script_and_inline_python(tmp_path):
     assert "SyntaxError" in guard.preflight(tmp_path, "execute_command", {"command": "python -c 'print('"})
 
 
+def test_unrelated_command_is_not_blocked_by_stale_broken_script(tmp_path):
+    """与 Python 无关的命令不应被工作区里残留的坏 .py 拦下。
+
+    回归：早期实现对任何 execute_command 都 rglob 整个工作区并校验全部 .py，
+    一个半截残留脚本会让 ls/cd 全返回 SyntaxError，而相同错误连续两次即中止，
+    于是两次 ls 就能把 agent 打死。
+    """
+    (tmp_path / "stale.py").write_text("def broken(:\n")
+    for command in ["ls -la", "cd /tmp", "mkdir out", "cat stale.py"]:
+        assert guard.preflight(tmp_path, "execute_command", {"command": command}) is None, command
+    # 目标脚本本身坏掉时仍必须拦
+    assert "SyntaxError" in guard.preflight(
+        tmp_path, "execute_command", {"command": "python stale.py"})
+
+
+def test_only_the_executed_script_is_validated(tmp_path):
+    """命令点名要跑的那份脚本要校验；同目录其他坏文件不应牵连。"""
+    (tmp_path / "stale.py").write_text("def broken(:\n")
+    good = tmp_path / "chart.py"
+    good.write_text("print('ok')")
+    assert guard.preflight(tmp_path, "execute_command", {"command": "python chart.py"}) is None
+    assert "SyntaxError" in guard.preflight(
+        tmp_path, "execute_command", {"command": "python stale.py"})
+
+
+def test_python_dash_m_resolves_module_file(tmp_path):
+    (tmp_path / "broken_mod.py").write_text("def broken(:\n")
+    assert "SyntaxError" in guard.preflight(
+        tmp_path, "execute_command", {"command": "python -m broken_mod"})
+
+
 def test_guard_aborts_second_error_and_is_job_scoped(tmp_path, monkeypatch):
     class Message:
         def __init__(self, content="", is_error=False, **kwargs):
