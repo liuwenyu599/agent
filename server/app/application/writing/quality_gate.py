@@ -87,9 +87,11 @@ class QualityGate:
         if "函" in document_type:
             min_chars = 200
         if word_count_target:
-            min_chars = min(min_chars, max(100, int(word_count_target * 0.7)))
+            min_chars = max(100, int(word_count_target * 0.8))
         if char_count < min_chars:
             review.append(f"正文偏短（{char_count} 字 < {min_chars}）")
+        if word_count_target and char_count > int(word_count_target * 1.3):
+            review.append(f"正文偏长（{char_count} 字 > 目标 {word_count_target} 字的 130%）")
 
         # 主题相关性：主题词至少出现 2 次
         if topic and not body_only:

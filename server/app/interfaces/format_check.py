@@ -13,6 +13,7 @@ from app.application.format_check.dto import (
     ContentUpdateRequest,
     FixRequest,
     IssueActionRequest,
+    RuleActiveRequest,
     RuleCompileRequest,
     RuleRequest,
 )
@@ -23,7 +24,7 @@ from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway
 from app.infrastructure.database import get_db
 from app.infrastructure.rag import get_embedder, get_vector_store
-from app.interfaces.deps import get_current_user, require_admin_or_above
+from app.interfaces.deps import get_current_user
 
 router = APIRouter(prefix="/format-check", tags=["格式校验"])
 
@@ -143,30 +144,37 @@ def fix_document(req: FixRequest, user: User = Depends(get_current_user),
 @router.get("/rules")
 def list_rules(user: User = Depends(get_current_user),
                svc: FormatCheckService = Depends(get_format_check_service)):
-    return svc.list_rules()
+    return svc.list_rules(user)
 
 
 @router.post("/rules/compile")
 def compile_rule(req: RuleCompileRequest, user: User = Depends(get_current_user),
                  svc: FormatCheckService = Depends(get_format_check_service)):
-    """白话描述 → AI 生成校验项（不落库，任何登录用户可用；保存规则仍需管理员权限）。"""
+    """白话描述 → AI 生成校验项（不落库，登录用户可保存个人规则）。"""
     return svc.compile_rule(req, user)
 
 
 @router.post("/rules")
-def create_rule(req: RuleRequest, admin: User = Depends(require_admin_or_above),
+def create_rule(req: RuleRequest, user: User = Depends(get_current_user),
                 svc: FormatCheckService = Depends(get_format_check_service)):
-    return svc.create_rule(req, admin)
+    return svc.create_rule(req, user)
 
 
 @router.put("/rules/{rule_id}")
 def update_rule(rule_id: str, req: RuleRequest,
-                admin: User = Depends(require_admin_or_above),
+                user: User = Depends(get_current_user),
                 svc: FormatCheckService = Depends(get_format_check_service)):
-    return svc.update_rule(rule_id, req)
+    return svc.update_rule(rule_id, req, user)
+
+
+@router.patch("/rules/{rule_id}/active")
+def set_rule_active(rule_id: str, req: RuleActiveRequest,
+                    user: User = Depends(get_current_user),
+                    svc: FormatCheckService = Depends(get_format_check_service)):
+    return svc.set_rule_active(rule_id, req.is_active, user)
 
 
 @router.delete("/rules/{rule_id}")
-def delete_rule(rule_id: str, admin: User = Depends(require_admin_or_above),
+def delete_rule(rule_id: str, user: User = Depends(get_current_user),
                 svc: FormatCheckService = Depends(get_format_check_service)):
-    return svc.delete_rule(rule_id)
+    return svc.delete_rule(rule_id, user)

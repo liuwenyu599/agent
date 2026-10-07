@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from app.core.config import settings  # noqa: E402
 from app.infrastructure.database import Base  # noqa: E402,E401
 from app.infrastructure.database.models import *  # noqa: F401,F403
+from app.migrations.version_capacity import ensure_version_capacity  # noqa: E402
 
 # this is the Alembic Config object
 config = context.config
@@ -45,6 +46,10 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # Alembic creates version_num as VARCHAR(32) by default. Revision 014 is
+        # longer and cannot be recorded on PostgreSQL until this column is widened.
+        # Do this before running 014; a later revision alone would be unreachable.
+        ensure_version_capacity(connection)
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

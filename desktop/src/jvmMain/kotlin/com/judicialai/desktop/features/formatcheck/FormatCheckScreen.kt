@@ -847,6 +847,7 @@ private val RULE_TARGETS = listOf(
     "page" to "页面设置", "title" to "标题", "body" to "正文",
     "heading1" to "一级标题", "heading2" to "二级标题",
     "signature" to "落款", "date" to "成文日期", "general" to "全文通用", "content" to "内容规范",
+    "ppt" to "PPT 成品",
 )
 private val RULE_SEVERITIES = listOf("error" to "严重", "warning" to "警告", "info" to "提示")
 
@@ -860,7 +861,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("格式与内容规则（确定性规则 + AI 内容审校同时执行）", fontSize = 12.sp,
+            Text("个人校验规则（公文与 PPT 预置规则可停用，也可新建）", fontSize = 12.sp,
                 color = TextSecondary, modifier = Modifier.weight(1f))
             Button(onClick = { vm.openRuleEditor(null) },
                 colors = ButtonDefaults.buttonColors(backgroundColor = EpPrimary)) {
@@ -881,7 +882,7 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                     Text("名称", Modifier.weight(1.4f), fontSize = 12.sp, color = TextSecondary)
                     Text("对象", Modifier.width(100.dp), fontSize = 12.sp, color = TextSecondary)
                     Text("程度", Modifier.width(70.dp), fontSize = 12.sp, color = TextSecondary)
-                    Text("默认", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
+                    Text("来源", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
                     Text("启用", Modifier.width(60.dp), fontSize = 12.sp, color = TextSecondary)
                     Text("操作", Modifier.width(190.dp), fontSize = 12.sp, color = TextSecondary)
                 }
@@ -908,19 +909,30 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                                         "error" -> EpDanger; "warning" -> EpWarning; else -> EpPrimary
                                     })
                             }
-                            Text(if (rule["is_default"].bool()) "是" else "否",
+                            Text(if (!rule["is_default"].bool()) "自建" else when (rule["target"].str()) {
+                                "ppt" -> "PPT"; "content" -> "内置"; else -> "国标"
+                            },
                                 Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
                             Text(if (rule["is_active"].bool(true)) "启用" else "停用",
                                 Modifier.width(60.dp), fontSize = 12.sp, color = TextRegular)
                             Row(Modifier.width(190.dp)) {
-                                TextButton(onClick = { vm.openRuleEditor(rule) }) {
-                                    Text("编辑", color = EpPrimary, fontSize = 12.sp)
+                                TextButton(onClick = { vm.toggleRule(rule) }, enabled = !vm.busy) {
+                                    Text(if (rule["is_active"].bool(true)) "停用" else "启用",
+                                        color = EpPrimary, fontSize = 12.sp)
                                 }
-                                TextButton(onClick = { vm.duplicateRule(rule) }, enabled = !vm.busy) {
-                                    Text("复制", color = EpPrimary, fontSize = 12.sp)
+                                if (rule["is_default"].bool()) {
+                                    TextButton(onClick = { vm.duplicateRule(rule) }, enabled = !vm.busy) {
+                                        Text("复制", color = EpPrimary, fontSize = 12.sp)
+                                    }
+                                } else {
+                                    TextButton(onClick = { vm.openRuleEditor(rule) }) {
+                                        Text("编辑", color = EpPrimary, fontSize = 12.sp)
+                                    }
                                 }
-                                TextButton(onClick = { pendingDeleteRule = rule }) {
-                                    Text("删除", color = EpDanger, fontSize = 12.sp)
+                                if (!rule["is_default"].bool()) {
+                                    TextButton(onClick = { pendingDeleteRule = rule }) {
+                                        Text("删除", color = EpDanger, fontSize = 12.sp)
+                                    }
                                 }
                             }
                         }
@@ -968,9 +980,13 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
 @Composable
 private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modifier = Modifier) {
     var name by remember { mutableStateOf(form.name) }
+    androidx.compose.runtime.LaunchedEffect(form.name) { name = form.name }
     var target by remember { mutableStateOf(form.target) }
     var severity by remember { mutableStateOf(form.severity) }
     var description by remember { mutableStateOf(form.description) }
+    var checksJson by remember { mutableStateOf(form.checksJson) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(form.checksJson) { checksJson = form.checksJson }
     var isDefault by remember { mutableStateOf(form.isDefault) }
     var isActive by remember { mutableStateOf(form.isActive) }
 
@@ -978,7 +994,8 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
     fun syncForm(): RuleForm {
         val f = vm.editingRule ?: form
         val merged = f.copy(name = name, target = target, severity = severity,
-            description = description, isDefault = isDefault, isActive = isActive)
+            description = description, checksJson = checksJson,
+            isDefault = isDefault, isActive = isActive)
         vm.editingRule = merged
         return merged
     }
@@ -1009,13 +1026,14 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                     }
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("严重程度", fontSize = 12.sp, color = TextSecondary)
-                    RULE_SEVERITIES.forEach { (key, label) ->
-                        RuleRadio(label, selected = severity == key) { severity = key }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(isDefault, { isDefault = it })
-                        Text("默认规则", fontSize = 12.sp)
+                    if (target == "ppt") {
+                        Text("PPT 成品规则未通过时会自动重试；仍未通过则使用模板成品",
+                            fontSize = 12.sp, color = TextSecondary)
+                    } else {
+                        Text("严重程度", fontSize = 12.sp, color = TextSecondary)
+                        RULE_SEVERITIES.forEach { (key, label) ->
+                            RuleRadio(label, selected = severity == key) { severity = key }
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(isActive, { isActive = it })
@@ -1035,6 +1053,17 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
                 modifier = Modifier.fillMaxWidth().height(96.dp))
             Text("用自然语言描述校验要求即可，系统会自动生成对应的检查项",
                 fontSize = 11.5.sp, color = TextSecondary)
+            TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                Text(if (showAdvanced) "收起手动配置" else "手动配置校验项（无需 AI）",
+                    color = EpPrimary, fontSize = 12.sp)
+            }
+            if (showAdvanced) {
+                androidx.compose.material.OutlinedTextField(
+                    checksJson, { checksJson = it },
+                    label = { Text("校验项 JSON") },
+                    placeholder = { Text("例如：{\"font_name\":\"仿宋_GB2312\",\"font_size_pt\":16}", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth().height(110.dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(enabled = !vm.compilingRule && !vm.busy && description.isNotBlank(),
                     onClick = {
@@ -1051,15 +1080,16 @@ private fun RuleEditor(vm: FormatCheckViewModel, form: RuleForm, modifier: Modif
             }
 
             // 校验项白话预览（AI 生成结果 / 既有规则的已配置项）
-            if (vm.compiledSummary.isNotEmpty()) {
+            val liveSummary = describeChecks(checksJson)
+            if (liveSummary.isNotEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
                         .background(Color(0xFFF6F8FA)).padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("将按以下校验项检查（AI 生成，可改描述后重新生成）",
+                    Text("已配置校验项",
                         fontSize = 11.5.sp, color = TextSecondary)
-                    vm.compiledSummary.forEach {
+                    liveSummary.forEach {
                         Text("· $it", fontSize = 12.5.sp, color = TextPrimary)
                     }
                 }

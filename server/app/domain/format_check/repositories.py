@@ -6,11 +6,17 @@ from app.domain.format_check.entities import FormatCheckRecord, FormatRule
 
 
 class FormatRuleRepository(Repository[FormatRule]):
-    def list_active(self) -> List[FormatRule]:
+    def ensure_user_defaults(self, user_id: str) -> None:
         raise NotImplementedError
 
-    def list_for_check(self, rule_ids: Optional[List[str]]) -> List[FormatRule]:
-        """rule_ids 为空时返回全部默认启用规则。"""
+    def list_by_user(self, user_id: str) -> List[FormatRule]:
+        raise NotImplementedError
+
+    def get_owned(self, rule_id: str, user_id: str) -> Optional[FormatRule]:
+        raise NotImplementedError
+
+    def list_for_check(self, user_id: str, rule_ids: Optional[List[str]]) -> List[FormatRule]:
+        """只返回该用户已启用的规则。"""
         raise NotImplementedError
 
     def update(self, rule: FormatRule) -> FormatRule:

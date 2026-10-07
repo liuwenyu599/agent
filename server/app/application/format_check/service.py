@@ -57,21 +57,26 @@ _PAGE_KEYS = {
 }
 _PARA_KEYS = {
     "font_name", "font_size_pt", "bold", "alignment", "line_spacing_pt",
-    "first_line_indent_chars", "space_before_pt", "space_after_pt",
+    "first_line_indent_chars", "right_indent_chars", "space_before_pt", "space_after_pt",
 }
 _GENERAL_KEYS = {"no_extra_blank_lines", "no_trailing_spaces"}
-_CONTENT_KEYS = {"forbidden_words", "sensitive_words", "preferred_terms"}
+_CONTENT_KEYS = {"forbidden_words", "sensitive_words", "preferred_terms",
+                 "normalize_numeric_dates", "relative_time_notice"}
+_PPT_KEYS = {"check_page_count", "check_cover_overflow", "forbidden_fonts", "max_chars_per_slide"}
 _NUMERIC_KEYS = _PAGE_KEYS | {
-    "font_size_pt", "line_spacing_pt", "first_line_indent_chars",
+    "font_size_pt", "line_spacing_pt", "first_line_indent_chars", "right_indent_chars",
     "space_before_pt", "space_after_pt",
 }
 _BOOL_KEYS = {"bold", "no_extra_blank_lines", "no_trailing_spaces"}
+_BOOL_KEYS |= {"check_page_count", "check_cover_overflow"}
+_BOOL_KEYS |= {"normalize_numeric_dates", "relative_time_notice"}
 _ALIGN_VALUES = ("left", "center", "right", "justify")
 
 _TARGET_LABELS = {
     "page": "页面设置", "title": "标题", "body": "正文",
     "heading1": "一级标题", "heading2": "二级标题",
     "signature": "落款", "date": "成文日期", "general": "全文通用", "content": "内容规范",
+    "ppt": "PPT 成品",
 }
 _KEY_LABELS = {
     "top_margin_cm": "上边距", "bottom_margin_cm": "下边距",
@@ -80,9 +85,13 @@ _KEY_LABELS = {
     "font_name": "字体", "font_size_pt": "字号", "bold": "加粗",
     "alignment": "对齐方式", "line_spacing_pt": "行距",
     "first_line_indent_chars": "首行缩进",
+    "right_indent_chars": "右侧缩进",
     "space_before_pt": "段前间距", "space_after_pt": "段后间距",
     "no_extra_blank_lines": "不允许多余空行", "no_trailing_spaces": "不允许行尾空格",
     "forbidden_words": "禁用词", "sensitive_words": "敏感词", "preferred_terms": "规范替换词",
+    "normalize_numeric_dates": "数字日期规范", "relative_time_notice": "相对时间提示",
+    "check_page_count": "检查页数", "check_cover_overflow": "检查封面越界",
+    "forbidden_fonts": "禁用字体", "max_chars_per_slide": "每页最多字数",
 }
 _ALIGN_CN = {"left": "左对齐", "center": "居中", "right": "右对齐", "justify": "两端对齐"}
 
@@ -94,6 +103,8 @@ def _allowed_keys(target: str) -> set:
         return set(_GENERAL_KEYS)
     if target == "content":
         return set(_CONTENT_KEYS)
+    if target == "ppt":
+        return set(_PPT_KEYS)
     return set(_PARA_KEYS)
 
 
@@ -126,6 +137,12 @@ def _sanitize_checks(target: str, raw) -> Dict:
                     out[key] = [str(x).strip() for x in value if str(x).strip()]
                 elif isinstance(value, str):
                     out[key] = [x.strip() for x in re.split(r"[,，;；\n]", value) if x.strip()]
+            elif key == "forbidden_fonts":
+                out[key] = [str(x).strip() for x in value if str(x).strip()] if isinstance(value, list) else []
+            elif key == "max_chars_per_slide":
+                count = int(value)
+                if 20 <= count <= 2000:
+                    out[key] = count
             elif key == "preferred_terms":
                 if isinstance(value, dict):
                     out[key] = {str(k).strip(): str(v).strip()
@@ -153,7 +170,7 @@ def _summarize_checks(checks: Dict) -> List[str]:
                 text = f"{float(value):g} 磅"
             elif key.endswith("_cm"):
                 text = f"{float(value):g} 厘米"
-            elif key == "first_line_indent_chars":
+            elif key in ("first_line_indent_chars", "right_indent_chars"):
                 text = f"{float(value):g} 字符"
             else:
                 text = str(value)
@@ -266,13 +283,12 @@ class FormatCheckService:
             raise AppError(400, "文件为空")
 
         ids = [i for i in rule_ids.split(",") if i] if rule_ids else None
-        rules = self.rules.list_for_check(ids)
-        # 无配置规则不再阻塞校验：降级为纯 AI 校验模式
-        ai_only = not rules
-        if ai_only:
-            if self.engine.assistant is None:
-                raise AppError(503, "尚未配置格式规则，且 AI 服务不可用，暂时无法校验")
-            use_ai = True
+        self.rules.ensure_user_defaults(user.id)
+        rules = [r for r in self.rules.list_for_check(user.id, ids) if r.target != "ppt"]
+        if ids and len({r.id for r in rules}) != len(set(ids)):
+            raise PermissionDeniedError("所选规则不存在、已停用或不属于当前用户")
+        # 用户可停用全部可配置规则；基础内容检查仍可独立执行。
+        ai_only = not rules and use_ai and self.engine.assistant is not None
         rule_dicts = [_rule_to_dict(r) for r in rules]
 
         tmp_path = self.check_dir / f"{uuid.uuid4().hex}_{filename}"
@@ -746,9 +762,12 @@ class FormatCheckService:
             mapped = (p - offset(p)) if p is not None else None
             old_keys.setdefault(match_key(it, mapped), it.get("id"))
 
-        # 老快照可能缺 severity（B5'），补兜底，避免复检新增问题一律变 error
+        # 复检沿用原检查项快照，但停用的规则立即退出复检范围。
+        # 老快照可能缺 severity（B5'），补兜底，避免新增问题一律变 error。
+        active_ids = {r.id for r in self.rules.list_for_check(user.id, None)}
         rules = [{**r, "severity": (r.get("severity") or "error")}
-                 for r in (record.rule_snapshot or []) if isinstance(r, dict)]
+                 for r in (record.rule_snapshot or [])
+                 if isinstance(r, dict) and r.get("id") in active_ids]
 
         doc_path = self._build_current_doc(record, applied)
         result = self.engine.check_file(doc_path, record.filename, rules, use_ai=True)
@@ -816,15 +835,16 @@ class FormatCheckService:
         }
 
     # ================= 规则管理 =================
-    def list_rules(self) -> List[dict]:
-        return [_rule_to_dict(r) for r in self.rules.list_active()]
+    def list_rules(self, user: User) -> List[dict]:
+        self.rules.ensure_user_defaults(user.id)
+        return [_rule_to_dict(r) for r in self.rules.list_by_user(user.id)]
 
     def compile_rule(self, req, user: User) -> dict:
         """白话描述 → AI 生成校验项（不落库）。
 
         管理员和普通用户都只写自然语言；AI 输出先经白名单过滤
         （只保留 check_engine 认识的键、类型收敛），再交给前端预览确认。
-        保存仍走 create_rule / update_rule 的管理员权限校验。
+        保存时只操作当前用户自己的规则。
         """
         target = (req.target or "").strip()
         if target not in VALID_RULE_TARGETS:
@@ -852,6 +872,15 @@ class FormatCheckService:
                 "- forbidden_words：禁用词数组，如 [\"严禁出现词\"]\n"
                 "- sensitive_words：敏感词数组，如 [\"需核实词\"]\n"
                 "- preferred_terms：不规范表达到规范表达的对象，如 {\"截止目前\": \"截至目前\"}"
+                "\n- normalize_numeric_dates：提示数字日期写法（true/false）"
+                "\n- relative_time_notice：提示相对时间（true/false）"
+            )
+        elif target == "ppt":
+            catalog = (
+                "- check_page_count：页数与已确认大纲一致（true/false）\n"
+                "- check_cover_overflow：封面元素不越界（true/false）\n"
+                "- forbidden_fonts：中文禁用字体数组，如 [\"DejaVu\"]\n"
+                "- max_chars_per_slide：每页最大文字数（20-2000 的整数）"
             )
         else:
             catalog = (
@@ -862,6 +891,7 @@ class FormatCheckService:
                 "- alignment：对齐方式（left/center/right/justify，两端对齐用 justify）\n"
                 "- line_spacing_pt：固定行距，单位磅（数值，如 28）\n"
                 "- first_line_indent_chars：首行缩进字符数（数值，如 2）\n"
+                "- right_indent_chars：右侧缩进字符数（数值，如 4）\n"
                 "- space_before_pt / space_after_pt：段前/段后间距，单位磅（数值）"
             )
 
@@ -914,43 +944,55 @@ class FormatCheckService:
             "summary": _summarize_checks(checks),
         }
 
-    def create_rule(self, req, admin: User) -> dict:
+    def create_rule(self, req, user: User) -> dict:
         if req.target not in VALID_RULE_TARGETS:
             raise AppError(400, f"target 必须是: {', '.join(VALID_RULE_TARGETS)}")
         checks = _sanitize_checks(req.target, req.checks)
         if not checks:
             # 与 AI 编译路径同一道闸：存进去一条空规则，界面上会显示「规则已保存」
             # 但校验永远查不出问题，用户无从判断是规则没生效还是文档本来就合规。
-            raise AppError(400, "没有可执行的校验项，请先用「AI 生成校验项」生成后再保存")
+            raise AppError(400, "没有可执行的校验项，请填写校验项 JSON 或用 AI 生成")
         rule = self.rules.add(FormatRule(
             name=req.name, target=req.target, checks=checks,
-            severity=req.severity, is_default=req.is_default,
-            is_active=req.is_active, remark=req.remark, created_by=admin.id,
+            severity="error" if req.target == "ppt" else req.severity, is_default=False,
+            is_active=req.is_active, remark=req.remark, created_by=user.id,
         ))
         return {"id": rule.id, "message": "规则已创建"}
 
-    def update_rule(self, rule_id: str, req) -> dict:
+    def update_rule(self, rule_id: str, req, user: User) -> dict:
         if req.target not in VALID_RULE_TARGETS:
             raise AppError(400, f"target 必须是: {', '.join(VALID_RULE_TARGETS)}")
-        rule = self.rules.get(rule_id)
+        rule = self.rules.get_owned(rule_id, user.id)
         if not rule:
             raise NotFoundError("Rule not found")
+        if rule.is_default:
+            raise AppError(400, "系统预置规则只能启用或停用；如需修改，请先复制为个人规则")
         checks = _sanitize_checks(req.target, req.checks)
         if not checks:
-            raise AppError(400, "没有可执行的校验项，请先用「AI 生成校验项」生成后再保存")
+            raise AppError(400, "没有可执行的校验项，请填写校验项 JSON 或用 AI 生成")
         rule.name = req.name
         rule.target = req.target
         rule.checks = checks
-        rule.severity = req.severity
-        rule.is_default = req.is_default
+        rule.severity = "error" if req.target == "ppt" else req.severity
+        rule.is_default = False
         rule.is_active = req.is_active
         rule.remark = req.remark
         self.rules.update(rule)
         return {"message": "规则已更新"}
 
-    def delete_rule(self, rule_id: str) -> dict:
-        rule = self.rules.get(rule_id)
+    def set_rule_active(self, rule_id: str, is_active: bool, user: User) -> dict:
+        rule = self.rules.get_owned(rule_id, user.id)
         if not rule:
             raise NotFoundError("Rule not found")
+        rule.is_active = is_active
+        self.rules.update(rule)
+        return _rule_to_dict(rule)
+
+    def delete_rule(self, rule_id: str, user: User) -> dict:
+        rule = self.rules.get_owned(rule_id, user.id)
+        if not rule:
+            raise NotFoundError("Rule not found")
+        if rule.is_default:
+            raise AppError(400, "系统预置规则不可删除，请停用")
         self.rules.hard_delete(rule)
         return {"message": "规则已删除"}

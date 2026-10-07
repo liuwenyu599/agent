@@ -110,5 +110,8 @@ class FormatCheckRepository(private val api: ApiClient) {
     suspend fun updateRule(id: String, body: Map<String, Any?>) =
         api.put(Endpoints.FormatCheck.rule(id), body)
 
+    suspend fun setRuleActive(id: String, active: Boolean) =
+        api.patch(Endpoints.FormatCheck.ruleActive(id), mapOf("is_active" to active))
+
     suspend fun deleteRule(id: String) = api.del(Endpoints.FormatCheck.rule(id))
 }

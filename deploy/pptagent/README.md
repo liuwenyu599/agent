@@ -3,7 +3,8 @@
 ## Python 执行预检与重复错误闸门（2026-10-04）
 
 `python_guard.py` 安装在真实的 `AgentEnv.tool_execute` 边界：写 `.py`
-之前及 sandbox 执行命令之前做 `ast.parse`；非法脚本不会进入执行工具。
+之前及 sandbox 执行命令之前做 `ast.parse` 和非执行式 `compile` 检查；
+断裂字符串与重复关键字参数等非法脚本不会进入执行工具。
 同一执行错误在同一 AgentEnv/job 内出现两次后抛出确定性终止异常，取消
 已登记的后台工具任务。后端 SSE 识别终止标记并把 job 标为失败。
 守卫在 Host 的 MCP→sandbox 边界执行，覆盖共享工作区脚本，而非仅靠角色提示词。

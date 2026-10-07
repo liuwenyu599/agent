@@ -66,6 +66,15 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             for heading, focus in items
         ]
 
+    @staticmethod
+    def _plan_meets_length(plan: List[Dict[str, Any]], total: int) -> bool:
+        """Reject model plans that cannot plausibly meet the requested length."""
+        return bool(plan) and 0.8 * total <= sum(p["target_chars"] for p in plan) <= 1.2 * total
+
+    @staticmethod
+    def _section_is_short(text: str, target: int) -> bool:
+        return len(re.sub(r"\s+", "", text)) < int(target * 0.8)
+
     def _section_plan(self, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Ask the model only for a compact chapter plan; deterministic fallback on any failure."""
         if not self.assistant:
@@ -100,9 +109,9 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
                     plan.append({
                         "heading": heading[:80],
                         "focus": focus[:240],
-                        "target_chars": max(300, min(chars or total // 4, 1200)),
+                        "target_chars": max(300, min(chars or total // 4, max(1200, total))),
                     })
-            if 3 <= len(plan) <= 6:
+            if 3 <= len(plan) <= 6 and self._plan_meets_length(plan, total):
                 return plan
         except Exception:
             pass
@@ -165,6 +174,19 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             self._llm_draft(instruction, sources, attachment_ctx, user_id, template=template)
         )
         candidate = self._normalize_section(candidate, section["heading"])
+
+        if self._section_is_short(candidate, section["target_chars"]):
+            expanded = self._normalize_section(
+                self._clean_markdown(self._llm_draft(
+                    instruction + "\n\n上一版篇幅明显不足。请依据已提供的事实和材料，"
+                    "完整展开当前章节的过程、结果及必要的承接句；不得补造数据或事例。"
+                    "仍只输出这一节。\n上一版：\n" + candidate[:5000],
+                    sources, attachment_ctx, user_id, template=template)),
+                section["heading"],
+            )
+            if (len(expanded) > len(candidate)
+                    and QualityGate().evaluate(expanded, body_only=True).get("level") != "D"):
+                candidate = expanded
 
         quality = QualityGate().evaluate(candidate, body_only=True)
         retry_no = 0

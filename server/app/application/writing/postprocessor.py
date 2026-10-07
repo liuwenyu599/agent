@@ -353,6 +353,8 @@ def detect_truncation(text: str) -> Optional[str]:
 def detect_garbled(text: str) -> Optional[str]:
     if "\ufffd" in text:
         return "含替换符 U+FFFD"
+    if re.search(r"(?<=[\u4e00-\u9fff])\?{2,}(?=[\u4e00-\u9fff])", text):
+        return "中文词语中含连续问号"
     pua = re.findall(r"[\ue000-\uf8ff]", text)
     if pua:
         return f"含私用区字符 ×{len(pua)}"

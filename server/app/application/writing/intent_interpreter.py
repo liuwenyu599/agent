@@ -122,6 +122,7 @@ reply 是用户在对话气泡里看到的那句话，不是给程序看的操�
 - 确实发现可以改进的，可以提一句建议（如这段结论最好补一个数据支撑），点到为止。
 - 措辞每次都要有变化，不要套同一副句式，不要罗列要点，不要打官腔，不要复述字段名。
 底线：不得谎称尚未执行的修改已经完成，也不要承诺还没发生的结果。
+若“是否已有正文草稿”为 true，当前文档已经有正文；不得说“尚未起草”“还不能动笔”或忽略现有稿件。
 """ + LEGACY_JSON_SCHEMA
 
 _FIELD_PROPERTIES: Dict[str, Any] = {
@@ -439,6 +440,7 @@ class WritingIntentInterpreter:
         payload = {
             "当前任务信息": ctx_view or "（空，新任务）",
             "是否已有正文草稿": has_draft,
+            "当前正文字数": (context or {}).get("_current_draft_chars", 0) if has_draft else 0,
             "用户最新消息": message,
         }
         messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]

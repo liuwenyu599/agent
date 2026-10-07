@@ -121,6 +121,7 @@ object Endpoints {
         /** 白话描述 → AI 生成校验项（不落库，预览确认后再保存） */
         const val RULES_COMPILE = "/format-check/rules/compile"
         fun rule(id: String) = "/format-check/rules/$id"
+        fun ruleActive(id: String) = "/format-check/rules/$id/active"
     }
 
     object Ppt {

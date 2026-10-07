@@ -267,8 +267,10 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
 
         Text(jobHintText(job), fontSize = 11.5.sp, color = SecondaryText)
         // 回退本地渲染是有意行为（宁可给能打开的文件），要明确说清楚，否则用户以为排版出错
-        pptRendererNote(job.renderer)?.let {
-            Text(it, fontSize = 11.5.sp, color = Ink2, lineHeight = 17.sp)
+        if (job.status == PptJobStatus.DONE) {
+            pptRendererNote(job.renderer)?.let {
+                Text(it, fontSize = 11.5.sp, color = Ink2, lineHeight = 17.sp)
+            }
         }
         job.exportError?.let {
             Text("保存失败：$it", fontSize = 11.5.sp, color = MaterialTheme.colors.error)

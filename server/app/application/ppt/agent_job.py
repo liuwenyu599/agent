@@ -361,6 +361,7 @@ class PPTAgentJobRunner:
         except Exception as e:  # noqa: BLE001
             logger.warning("[PPT] 自动重试失败：job_id=%s %s: %s",
                            self.doc_id, type(e).__name__, e)
+            self.slot["retry_error"] = f"{type(e).__name__}: {str(e) or '上游服务未提供具体原因'}"
             return None
 
     def _accept_or_retry_quality(self, data: bytes, event_id: str,
@@ -368,7 +369,12 @@ class PPTAgentJobRunner:
                                  attachments: List[Any], num_pages: Optional[int],
                                  deadline: float) -> bool:
         expected = int(num_pages or 0)
-        issues = PPTService.assess_generated_pptx(data, expected)
+        db: Session = _db.SessionLocal()
+        try:
+            quality_rules = PPTService(db, None).active_quality_rules(self.user_id)
+        finally:
+            db.close()
+        issues = PPTService.assess_generated_pptx(data, expected, quality_rules)
         if not issues:
             self._store(data, renderer="pptagent", event_id=event_id)
             return True
@@ -381,7 +387,7 @@ class PPTAgentJobRunner:
             + "；".join(issues)
             + "。必须保持已确认页数，不得新增封面或结束页，不得编造数据。")
         if retry and retry.pptx:
-            retry_issues = PPTService.assess_generated_pptx(retry.pptx, expected)
+            retry_issues = PPTService.assess_generated_pptx(retry.pptx, expected, quality_rules)
             if not retry_issues:
                 logger.info("[PPT] AI 智能设计自动重试通过质量闸：job_id=%s", self.doc_id)
                 self._store(retry.pptx, renderer="pptagent_retry",
@@ -409,7 +415,10 @@ class PPTAgentJobRunner:
                     outcome.pptx, outcome.event_id, client, message,
                     attachments, num_pages, deadline):
                 return
-            self._fallback_local("AI 智能设计质量检查未通过")
+            reason = "AI 智能设计质量检查未通过"
+            if self.slot.get("retry_error"):
+                reason += "；自动重试失败：" + self.slot["retry_error"]
+            self._fallback_local(reason)
             return
         if outcome.question.strip():
             # 用户已确认过大纲，中间追问由系统按默认策略自动回答一次。

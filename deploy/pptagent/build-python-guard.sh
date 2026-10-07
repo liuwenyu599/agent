@@ -12,6 +12,7 @@ from deeppresenter.agents.env import AgentEnv
 assert AgentEnv.tool_execute._judicial_python_guard
 from deeppresenter.agents.judicial_python_guard import preflight
 assert "SyntaxError" in preflight("/tmp", "write_file", {"path": "test.py", "content": "print("})
+assert "SyntaxError" in preflight("/tmp", "write_file", {"path": "test.py", "content": "draw(color=1, color=2)"})
 '
 HOST_IMAGE="$GUARDED_IMAGE" bash "$SCRIPT_DIR/verify-patched-images.sh"
 echo "Guard verified: $GUARDED_IMAGE. Configure the host to use this image and restart the host."

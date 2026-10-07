@@ -27,6 +27,17 @@ def test_fallback_plan_is_multi_section_and_budgeted():
     assert sum(item["target_chars"] for item in plan) == 2400
 
 
+def test_short_model_plan_cannot_override_requested_length():
+    plan = [{"target_chars": 300}] * 4
+    assert not SectionedGenerationWritingTaskService._plan_meets_length(plan, 4000)
+    assert SectionedGenerationWritingTaskService._plan_meets_length(
+        SectionedGenerationWritingTaskService._fallback_plan({
+            "document_type": "报告", "word_count_target": 4000,
+        }), 4000)
+    assert SectionedGenerationWritingTaskService._section_is_short("正文" * 390, 1000)
+    assert not SectionedGenerationWritingTaskService._section_is_short("正文" * 410, 1000)
+
+
 def test_normalize_section_adds_expected_heading_and_stops_next_section_spill():
     raw = "全文标题\n一、基本情况\n第一段。\n第二段。\n二、主要工作\n不应属于本节。"
     result = SectionedGenerationWritingTaskService._normalize_section(raw, "一、基本情况")

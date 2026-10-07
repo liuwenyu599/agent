@@ -22,6 +22,13 @@ def test_preflight_handles_decoded_newline_before_execution(tmp_path):
         "path": "chart.py", "content": 'label = "a" + chr(10) + "b"'}) is None
 
 
+def test_preflight_rejects_duplicate_keyword_arguments(tmp_path):
+    error = guard.preflight(tmp_path, "write_file", {
+        "path": "slide.py", "content": "draw(color='red', color='blue')"})
+    assert "SyntaxError" in error
+    assert "keyword argument repeated" in error
+
+
 def test_preflight_checks_edited_script_and_inline_python(tmp_path):
     script = tmp_path / "chart.py"
     script.write_text('label = "a\nb"')

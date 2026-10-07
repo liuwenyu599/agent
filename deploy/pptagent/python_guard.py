@@ -52,7 +52,10 @@ def preflight(workspace, name, arguments):
                             sources.append((str(path), source.read()))
     for filename, source in sources:
         try:
-            ast.parse(source, filename=filename)
+            tree = ast.parse(source, filename=filename)
+            # ast.parse accepts duplicate call keywords; compilation catches
+            # that SyntaxError without running any user script.
+            compile(tree, filename, "exec")
         except SyntaxError as error:
             return (f"SyntaxError: {error.msg}; line {error.lineno}. "
                     "检查字符串字面量中的转义；换行请用 chr(10) 或三引号。")

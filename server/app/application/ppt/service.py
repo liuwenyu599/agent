@@ -29,6 +29,8 @@ from app.infrastructure.repositories.ppt import (
     SqlAlchemyPPTTemplateFavoriteRepository,
     SqlAlchemyPPTTemplateRepository,
 )
+from app.infrastructure.repositories.format_check import SqlAlchemyFormatRuleRepository
+from app.domain.presentation_quality import PPT_DEFAULT_RULES
 
 logger = get_logger(__name__)
 
@@ -284,18 +286,29 @@ class PPTService:
             + (f"主色参考：{palette}。" if palette else "")
         )
 
+    def active_quality_rules(self, user_id: str) -> List[Dict]:
+        repo = SqlAlchemyFormatRuleRepository(self.db)
+        repo.ensure_user_defaults(user_id)
+        return [dict(target=r.target, checks=r.checks, name=r.name)
+                for r in repo.list_for_check(user_id, None) if r.target == "ppt"]
+
     @staticmethod
-    def assess_generated_pptx(data: bytes, expected_pages: int) -> List[str]:
+    def assess_generated_pptx(data: bytes, expected_pages: int,
+                              rules: Optional[List[Dict]] = None) -> List[str]:
         """静态质量闸：页数、封面越界、明显不适合中文的显式字体。"""
         issues: List[str] = []
+        if rules is None:
+            rules = PPT_DEFAULT_RULES
+        checks = [r.get("checks") or {} for r in rules if r.get("target") == "ppt"]
         try:
             from pptx import Presentation
             prs = Presentation(io.BytesIO(data))
         except Exception as e:
             return [f"文件解析失败：{type(e).__name__}"]
-        if expected_pages and len(prs.slides) != expected_pages:
+        if expected_pages and len(prs.slides) != expected_pages and any(
+                c.get("check_page_count") for c in checks):
             issues.append(f"页数不符：期望{expected_pages}页，实际{len(prs.slides)}页")
-        if prs.slides:
+        if prs.slides and any(c.get("check_cover_overflow") for c in checks):
             sw, sh = int(prs.slide_width), int(prs.slide_height)
             tol = max(sw, sh) // 1000
             for shape in prs.slides[0].shapes:
@@ -306,18 +319,24 @@ class PPTService:
                 if left < -tol or top < -tol or left + width > sw + tol or top + height > sh + tol:
                     issues.append("封面存在越界元素")
                     break
-        risky_fonts = ("dejavu")
-        for slide in prs.slides:
+        risky_fonts = [str(font).lower() for c in checks
+                       for font in (c.get("forbidden_fonts") or []) if str(font).strip()]
+        max_chars = min((int(c["max_chars_per_slide"]) for c in checks
+                         if c.get("max_chars_per_slide")), default=0)
+        for slide_no, slide in enumerate(prs.slides, 1):
+            slide_chars = 0
             for shape in slide.shapes:
                 if not getattr(shape, "has_text_frame", False):
                     continue
+                slide_chars += len(re.sub(r"\s+", "", shape.text or ""))
                 for para in shape.text_frame.paragraphs:
                     for run in para.runs:
                         if re.search(r"[\u4e00-\u9fff]", run.text or ""):
                             name = (run.font.name or "").lower()
                             if any(bad in name for bad in risky_fonts):
                                 issues.append(f"中文字体异常：{run.font.name}")
-                                return list(dict.fromkeys(issues))
+            if max_chars and slide_chars > max_chars:
+                issues.append(f"第{slide_no}页文字过多：{slide_chars}字，超过{max_chars}字")
         return list(dict.fromkeys(issues))
 
     # ---- 存储路径 ----
@@ -1430,7 +1449,8 @@ class PPTService:
             if not ok:
                 raise PPTAgentError(f"结果非法：{why}")
 
-            issues = self.assess_generated_pptx(data, expected)
+            quality_rules = self.active_quality_rules(d.user_id)
+            issues = self.assess_generated_pptx(data, expected, quality_rules)
             if issues:
                 logger.warning("[PPT] 同步 AI 智能设计未通过质量闸：%s", "；".join(issues))
                 retry_content = (
@@ -1445,7 +1465,7 @@ class PPTService:
                     template_hint=(template or {}).get("name") or (template or {}).get("id") or "",
                 )
                 ok2, why2 = looks_like_pptx(retry)
-                retry_issues = self.assess_generated_pptx(retry, expected) if ok2 else [why2]
+                retry_issues = self.assess_generated_pptx(retry, expected, quality_rules) if ok2 else [why2]
                 if retry_issues:
                     raise PPTAgentError("质量检查未通过：" + "；".join(retry_issues))
                 data = retry

@@ -219,7 +219,8 @@ class OpsWritingTaskService(GroundedWritingTaskService):
         has_draft = bool((task.current_content or "").strip())
         self._push_history(ctx, "user", message)
 
-        it = self._interpret(message, ctx, has_draft=has_draft)
+        interpret_ctx = {**ctx, "_current_draft_chars": len((task.current_content or "").strip())}
+        it = self._interpret(message, interpret_ctx, has_draft=has_draft)
         if not it:
             reply = self._answer_only(message, ctx, task.current_content or "")
             self._push_history(ctx, "assistant", reply)

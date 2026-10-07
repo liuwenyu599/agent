@@ -43,6 +43,8 @@ _ALIGN_CN = {"left": "左对齐", "center": "居中", "right": "右对齐", "jus
 _RE_H1 = re.compile(r'^[一二三四五六七八九十]+、')
 _RE_H2 = re.compile(r'^（[一二三四五六七八九十]+）')
 _RE_H3 = re.compile(r'^\d+[\.、]')
+_RE_DATE_LINE = re.compile(r'^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日$')
+_RE_SIGNATURE_LINE = re.compile(r'^.{2,60}(?:委员会|人民政府|人民法院|人民检察院|办公室|中心|协会|公司|局|厅|部|署|院)$')
 
 
 def _run_font_name(run) -> Optional[str]:
@@ -58,6 +60,34 @@ def _run_font_name(run) -> Optional[str]:
             if ascii_f:
                 return ascii_f
     return run.font.name
+
+
+def _effective_font_name(p, run) -> Optional[str]:
+    name = _run_font_name(run)
+    if name:
+        return name
+    style = p.style
+    for _ in range(10):
+        if style is None:
+            break
+        name = style.font.name
+        if name:
+            return name
+        style = style.base_style
+    return None
+
+
+def _same_font_family(actual: Optional[str], expected: str) -> bool:
+    if not actual:
+        return False
+    a = re.sub(r"[\s_-]", "", actual).lower()
+    e = re.sub(r"[\s_-]", "", expected).lower()
+    if a == e:
+        return True
+    for family in ("仿宋", "楷体", "小标宋"):
+        if family in e and family in a:
+            return True
+    return False
 
 
 def _style_font_pt(style) -> Optional[float]:
@@ -137,6 +167,21 @@ def _first_line_indent_chars(p) -> Optional[float]:
     return round(pf.first_line_indent.pt / font_pt, 2)
 
 
+def _right_indent_chars(p) -> float:
+    ppr = p._p.pPr
+    if ppr is not None:
+        ind = ppr.find(qn('w:ind'))
+        if ind is not None:
+            raw = ind.get(qn('w:rightChars'))
+            if raw is not None:
+                try:
+                    return int(raw) / 100.0
+                except ValueError:
+                    pass
+    value = p.paragraph_format.right_indent
+    return round(value.pt / _paragraph_font_pt(p), 2) if value is not None else 0.0
+
+
 def _fmt_value(kind: str, value) -> str:
     """把属性值格式化为人类可读描述。"""
     if value is None:
@@ -151,7 +196,7 @@ def _fmt_value(kind: str, value) -> str:
         return f"{value:g}厘米"
     if kind.endswith("_pt"):
         return f"{value:g}磅"
-    if kind == "first_line_indent_chars":
+    if kind in ("first_line_indent_chars", "right_indent_chars"):
         return f"缩进{value}字符"
     return str(value)
 
@@ -222,6 +267,12 @@ class FormatCheckEngine:
 
         paragraphs = [p for p in doc.paragraphs]
         nonempty = [p for p in paragraphs if p.text.strip()]
+        date_para = nonempty[-1] if nonempty and _RE_DATE_LINE.fullmatch(nonempty[-1].text.strip()) else None
+        signature_para = None
+        if date_para is not None and len(nonempty) >= 2:
+            candidate = nonempty[-2]
+            if _RE_SIGNATURE_LINE.fullmatch(candidate.text.strip()):
+                signature_para = candidate
 
         # ---- 页面设置 ----
         for rule in rule_map.get("page", []):
@@ -243,6 +294,8 @@ class FormatCheckEngine:
                 continue
             if title_para is not None and p is title_para:
                 continue
+            if p is signature_para or p is date_para:
+                continue
             label = f"第{idx + 1}段"
             if _RE_H1.match(text):
                 for rule in h1_rules:
@@ -257,14 +310,12 @@ class FormatCheckEngine:
         # ---- 落款 / 日期（文末段落） ----
         sig_rules = rule_map.get("signature", [])
         date_rules = rule_map.get("date", [])
-        if sig_rules or date_rules:
-            tail = nonempty[-2:] if len(nonempty) >= 2 else nonempty[-1:]
-            for p in tail:
+        for p, target_rules, kind in (
+            (signature_para, sig_rules, "落款"),
+            (date_para, date_rules, "成文日期"),
+        ):
+            if p is not None:
                 idx = paragraphs.index(p)
-                text = p.text.strip()
-                is_date = bool(re.search(r'\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日', text))
-                target_rules = date_rules if is_date else sig_rules
-                kind = "成文日期" if is_date else "落款"
                 for rule in target_rules:
                     issues.extend(self._check_paragraph(p, idx, rule, f"文末（{kind}）"))
 
@@ -353,13 +404,13 @@ class FormatCheckEngine:
             })
 
         if "font_name" in checks and run is not None:
-            cur = _run_font_name(run)
-            if cur != checks["font_name"]:
+            cur = _effective_font_name(p, run)
+            if not _same_font_family(cur, checks["font_name"]):
                 add("字体", "font_name", cur, checks["font_name"],
                     f"应将字体设置为「{checks['font_name']}」。")
 
         if "font_size_pt" in checks and run is not None:
-            cur = run.font.size.pt if run.font.size else None
+            cur = _effective_font_pt(p)
             if cur is None or abs(cur - float(checks["font_size_pt"])) > 0.5:
                 add("字号", "font_size_pt", cur, float(checks["font_size_pt"]),
                     f"应将字号调整为{_fmt_value('font_size_pt', float(checks['font_size_pt']))}。")
@@ -397,6 +448,13 @@ class FormatCheckEngine:
                 add("首行缩进", "first_line_indent_chars", cur_chars,
                     expected_chars,
                     f"应设置首行缩进{expected_chars:g}字符。")
+
+        if "right_indent_chars" in checks:
+            expected_chars = float(checks["right_indent_chars"])
+            cur_chars = _right_indent_chars(p)
+            if abs(cur_chars - expected_chars) > 0.3:
+                add("右侧空位", "right_indent_chars", cur_chars, expected_chars,
+                    f"应将右侧缩进设置为{expected_chars:g}字符。")
 
         for key, label in (("space_before_pt", "段前间距"), ("space_after_pt", "段后间距")):
             if key in checks:
@@ -502,52 +560,64 @@ class FormatCheckEngine:
                 "fix_hint": hint,
             })
 
-        forbidden_words = list(settings.FORMAT_CHECK_FORBIDDEN_WORDS)
-        sensitive_words = list(settings.FORMAT_CHECK_SENSITIVE_WORDS)
+        forbidden_words = {str(word).strip(): "error" for word in settings.FORMAT_CHECK_FORBIDDEN_WORDS
+                           if str(word).strip()}
+        sensitive_words = {str(word).strip(): "warning" for word in settings.FORMAT_CHECK_SENSITIVE_WORDS
+                           if str(word).strip()}
         preferred_terms = {}
+        normalize_numeric_dates = None
+        relative_time_notice = None
         for rule in (rules or []):
             if not isinstance(rule, dict) or rule.get("target") != "content":
                 continue
             checks = rule.get("checks") or {}
-            forbidden_words.extend(checks.get("forbidden_words") or [])
-            sensitive_words.extend(checks.get("sensitive_words") or [])
-            preferred_terms.update(checks.get("preferred_terms") or {})
+            severity = rule.get("severity") or "warning"
+            forbidden_words.update({str(word).strip(): severity for word in checks.get("forbidden_words") or []
+                                    if str(word).strip()})
+            sensitive_words.update({str(word).strip(): severity for word in checks.get("sensitive_words") or []
+                                    if str(word).strip()})
+            preferred_terms.update({str(old): (str(new), severity)
+                                    for old, new in (checks.get("preferred_terms") or {}).items()})
+            if checks.get("normalize_numeric_dates"):
+                normalize_numeric_dates = severity
+            if checks.get("relative_time_notice"):
+                relative_time_notice = severity
 
-        for word in dict.fromkeys(str(x).strip() for x in forbidden_words if str(x).strip()):
+        for word, severity in forbidden_words.items():
             if word in text:
-                add(word, "禁用词", "不得使用", f"删除或改写禁用词“{word}”。", "error")
-        for word in dict.fromkeys(str(x).strip() for x in sensitive_words if str(x).strip()):
+                add(word, "禁用词", "不得使用", f"删除或改写禁用词“{word}”。", severity)
+        for word, severity in sensitive_words.items():
             if word in text:
-                add(word, "敏感词", "需人工核实语境", f"请核实“{word}”是否符合本单位发布口径。")
+                add(word, "敏感词", "需人工核实语境", f"请核实“{word}”是否符合本单位发布口径。", severity)
 
         # 高置信表达规范：仅检查明确可替换项，避免误伤正常公文表达。
-        replacements = {
-            "截止目前": ("时间表述", "截至目前"),
-            "截止现在": ("时间表述", "截至目前"),
-            "我们局": ("称谓规范", "我局"),
-            "我们单位": ("称谓规范", "我单位"),
-            "咱们": ("称谓规范", "本单位"),
-        }
-        for old, new in preferred_terms.items():
+        replacements = {}
+        for old, (new, severity) in preferred_terms.items():
             old = str(old).strip()
             new = str(new).strip()
             if old and new:
-                replacements[old] = ("规范表达", new)
-        for old, (element, new) in replacements.items():
+                element = ("时间表述" if old in ("截止目前", "截止现在") else
+                           "称谓规范" if old in ("我们局", "我们单位", "咱们") else "规范表达")
+                replacements[old] = (element, new, severity)
+        for old, (element, new, severity) in replacements.items():
             if old in text:
-                add(old, element, new, f"建议将“{old}”规范为“{new}”。", replacement=new)
+                add(old, element, new, f"建议将“{old}”规范为“{new}”。",
+                    severity=severity, replacement=new)
 
         # 日期写法：正式公文中优先使用“YYYY年M月D日”，避免斜杠/点号日期。
-        for m in re.finditer(r"(?<!\d)(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?!\d)", text):
-            old = m.group(0)
-            new = f"{m.group(1)}年{int(m.group(2))}月{int(m.group(3))}日"
-            add(old, "日期写法", new, f"建议使用完整中文日期“{new}”。", replacement=new)
+        if normalize_numeric_dates:
+            for m in re.finditer(r"(?<!\d)(20\d{2})[./-](\d{1,2})[./-](\d{1,2})(?!\d)", text):
+                old = m.group(0)
+                new = f"{m.group(1)}年{int(m.group(2))}月{int(m.group(3))}日"
+                add(old, "日期写法", new, f"建议使用完整中文日期“{new}”。",
+                    severity=normalize_numeric_dates, replacement=new)
 
         # 相对时间容易在归档后失真：提示人工确认，不自动替换。
-        for term in ("近日", "近期", "今年", "明年", "去年", "昨天", "今日"):
-            if term in text:
-                add(term, "时间表述", "必要时写明具体日期或时间范围",
-                    f"“{term}”属于相对时间，请确认归档后是否仍能准确理解；正式材料宜尽量写明具体时间。", "info")
+        if relative_time_notice:
+            for term in ("近日", "近期", "今年", "明年", "去年", "昨天", "今日"):
+                if term in text:
+                    add(term, "时间表述", "必要时写明具体日期或时间范围",
+                        f"“{term}”属于相对时间，请确认归档后是否仍能准确理解；正式材料宜尽量写明具体时间。", relative_time_notice)
 
         return issues
 
@@ -764,6 +834,16 @@ paragraph_index 使用 0 开始的段落下标；无法定位时填 null：
                 ppr.append(ind)
             ind.set(qn("w:firstLine"), str(int(round(font_pt * chars * 20))))
             ind.set(qn("w:firstLineChars"), str(int(round(chars * 100))))
+        elif field == "right_indent_chars":
+            chars = float(value)
+            font_pt = _paragraph_font_pt(para)
+            pf.right_indent = Pt(font_pt * chars)
+            ppr = para._p.get_or_add_pPr()
+            ind = ppr.find(qn("w:ind"))
+            if ind is None:
+                ind = ppr.makeelement(qn("w:ind"), {})
+                ppr.append(ind)
+            ind.set(qn("w:rightChars"), str(int(round(chars * 100))))
         elif field == "space_before_pt":
             pf.space_before = Pt(float(value))
         elif field == "space_after_pt":

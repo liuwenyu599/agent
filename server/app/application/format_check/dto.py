@@ -9,7 +9,7 @@ class RuleRequest(BaseModel):
     target: str
     checks: dict
     severity: str = "error"
-    is_default: bool = True
+    is_default: bool = False
     is_active: bool = True
     remark: Optional[str] = ""
 
@@ -19,6 +19,10 @@ class RuleCompileRequest(BaseModel):
     target: str
     description: str
     name: Optional[str] = None
+
+
+class RuleActiveRequest(BaseModel):
+    is_active: bool
 
 
 class ContentUpdateRequest(BaseModel):

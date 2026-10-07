@@ -6,6 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.format_check.entities import FormatCheckRecord, FormatRule
+from app.domain.official_document_format import GBT_RULES, GBT_RULESET
+from app.domain.presentation_quality import PPT_DEFAULT_RULES
+from app.domain.content_quality_rules import CONTENT_DEFAULT_RULES
 from app.domain.format_check.repositories import (
     FormatCheckRecordRepository,
     FormatRuleRepository,
@@ -92,19 +95,41 @@ class SqlAlchemyFormatRuleRepository(FormatRuleRepository):
         m = self.db.get(FormatRuleModel, id)
         return _rule_to_entity(m) if m else None
 
-    def list_active(self) -> List[FormatRule]:
-        q = select(FormatRuleModel).where(FormatRuleModel.is_active == True)  # noqa: E712
+    def ensure_user_defaults(self, user_id: str) -> None:
+        """为每个用户各建一份国标规则；已有行（含停用行）永不覆盖。"""
+        existing = set(self.db.scalars(select(FormatRuleModel.name).where(
+            FormatRuleModel.created_by == user_id,
+            FormatRuleModel.is_default.is_(True),
+        )).all())
+        for spec in [*GBT_RULES, *CONTENT_DEFAULT_RULES, *PPT_DEFAULT_RULES]:
+            if spec["name"] in existing:
+                continue
+            self.db.add(FormatRuleModel(
+                name=spec["name"], target=spec["target"],
+                checks=spec["checks"], severity=spec["severity"],
+                is_active=True, is_default=True,
+                ruleset=("ppt" if spec["target"] == "ppt" else
+                         "builtin" if spec["target"] == "content" else GBT_RULESET),
+                remark=spec["remark"], created_by=user_id,
+            ))
+        if len(existing) < len(GBT_RULES) + len(CONTENT_DEFAULT_RULES) + len(PPT_DEFAULT_RULES):
+            self.db.commit()
+
+    def list_by_user(self, user_id: str) -> List[FormatRule]:
+        q = select(FormatRuleModel).where(
+            FormatRuleModel.created_by == user_id).order_by(
+                FormatRuleModel.is_default.desc(), FormatRuleModel.created_at)
         return [_rule_to_entity(m) for m in self.db.scalars(q).all()]
 
-    def list_for_check(self, rule_ids: Optional[List[str]]) -> List[FormatRule]:
-        """取参与本次校验的规则。
+    def get_owned(self, rule_id: str, user_id: str) -> Optional[FormatRule]:
+        m = self.db.scalar(select(FormatRuleModel).where(
+            FormatRuleModel.id == rule_id, FormatRuleModel.created_by == user_id))
+        return _rule_to_entity(m) if m else None
 
-        不指定规则时用**全部启用规则**：``is_default`` 只表示「国标预置 / 新建表单里
-        默认勾选」，不再作为「是否参与校验」的开关。否则桌面端新建规则时「默认规则」
-        复选框默认未勾选（is_default=false），用户保存后规则静默不生效——表现为
-        「明明配了规则，校验却查不出问题」。
-        """
-        q = select(FormatRuleModel).where(FormatRuleModel.is_active == True)  # noqa: E712
+    def list_for_check(self, user_id: str, rule_ids: Optional[List[str]]) -> List[FormatRule]:
+        q = select(FormatRuleModel).where(
+            FormatRuleModel.created_by == user_id,
+            FormatRuleModel.is_active.is_(True))
         if rule_ids:
             q = q.where(FormatRuleModel.id.in_(rule_ids))
         return [_rule_to_entity(m) for m in self.db.scalars(q).all()]
@@ -113,7 +138,8 @@ class SqlAlchemyFormatRuleRepository(FormatRuleRepository):
         m = FormatRuleModel(
             name=rule.name, target=rule.target, checks=rule.checks,
             severity=rule.severity, is_active=rule.is_active,
-            is_default=rule.is_default, remark=rule.remark, created_by=rule.created_by,
+            is_default=rule.is_default, ruleset="custom" if not rule.is_default else "builtin",
+            remark=rule.remark, created_by=rule.created_by,
         )
         self.db.add(m)
         self.db.commit()

@@ -118,7 +118,7 @@ def seed_system_configs(db: Session) -> int:
         ("doc.number.daizi", "白云司", "公文文号代字"),
         ("doc.number.format", "{daizi}〔{year}〕{seq}号", "文号格式模板"),
         ("approval.default_flow", "dept,office,leader", "默认审核流转环节"),
-        ("org.name", "白云区司法局", "机构名称"),
+        ("org.name", "广州市白云区司法局", "机构名称"),
     ]
     n = 0
     for key, value, desc in defaults:

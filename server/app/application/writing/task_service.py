@@ -810,7 +810,8 @@ class WritingTaskService:
                 select(SystemConfigModel).where(SystemConfigModel.key == "org.name")
             ).first()
             if row and row.value:
-                return str(row.value).strip()
+                value = str(row.value).strip()
+                return "广州市白云区司法局" if value == "白云区司法局" else value
         except Exception as e:  # noqa: BLE001
             logger.warning("[写作任务] 读取 org.name 失败: %s", e)
         return ""

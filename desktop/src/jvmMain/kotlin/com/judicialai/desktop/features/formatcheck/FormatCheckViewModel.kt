@@ -474,7 +474,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     /**
      * 白话描述 → AI 生成校验项（不落库）。
      * 管理员和普通用户都只写自然语言；生成的校验项在编辑器里以白话预览确认，
-     * 确认后保存（保存权限由服务端按角色校验）。
+     * 确认后保存为当前账号的个人规则。
      */
     fun compileRuleDescription() {
         val form = editingRule ?: return
@@ -522,18 +522,18 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             form.description.trim().take(18).ifBlank { prefix + "校验规则" }
         }
         if (form.checksJson.isBlank() || form.checksJson.trim() == "{}") {
-            status = "请先点「AI 生成校验项」，根据白话描述生成校验项后再保存"
+            status = "请填写校验项 JSON，或点「AI 生成校验项」"
             return
         }
         val checks = try {
             kotlinx.serialization.json.Json.parseToJsonElement(form.checksJson).jsonObject
         } catch (e: Exception) {
-            status = "校验项数据异常，请重新点「AI 生成校验项」生成"
+            status = "校验项不是有效的 JSON 对象，请检查后再保存"
             return
         }
         val body = mapOf<String, Any?>(
             "name" to effectiveName, "target" to form.target, "checks" to checks,
-            "severity" to form.severity, "is_default" to form.isDefault,
+            "severity" to form.severity, "is_default" to false,
             "is_active" to form.isActive,
             // 白话描述同时存为备注，下次编辑时原样回填
             "remark" to form.description,
@@ -565,9 +565,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             "target" to rule["target"].str().ifBlank { "body" },
             "checks" to (rule["checks"] ?: kotlinx.serialization.json.JsonObject(emptyMap())),
             "severity" to rule["severity"].str().ifBlank { "error" },
-            // 复制＝同配置副本：原规则是默认规则时副本也应是，否则复制出来的规则
-            // 在列表里看着一样、行为却不同。
-            "is_default" to rule["is_default"].bool(false),
+            "is_default" to false,
             "is_active" to rule["is_active"].bool(true),
             "remark" to rule["remark"].str(),
         )
@@ -597,6 +595,23 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                     loadRules()
                 }
                 is ApiResult.Err -> fail("删除规则失败", ruleErrorOf(r))
+            }
+            busy = false
+        }
+    }
+
+    fun toggleRule(rule: JsonObject) {
+        val id = rule["id"].str()
+        if (id.isBlank()) return
+        val enable = !rule["is_active"].bool(true)
+        busy = true
+        scope.launch {
+            when (val r = repo.setRuleActive(id, enable)) {
+                is ApiResult.Ok -> {
+                    status = if (enable) "规则已启用" else "规则已停用"
+                    loadRules()
+                }
+                is ApiResult.Err -> fail("切换规则状态失败", r.message)
             }
             busy = false
         }

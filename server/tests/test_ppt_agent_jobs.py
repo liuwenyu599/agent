@@ -159,6 +159,8 @@ def test_server_design_guidance_is_appended_to_agent_message(monkeypatch):
 def test_quality_gate_retries_once_then_accepts(monkeypatch):
     """第一次低质时系统自动重试一次；第二次合格后直接收下，不再追问用户。"""
     runner = agent_job.PPTAgentJobRunner("doc-1", "user-1")
+    from app.domain.presentation_quality import PPT_DEFAULT_RULES
+    monkeypatch.setattr(PPTService, "active_quality_rules", lambda self, user_id: PPT_DEFAULT_RULES)
     first = _make_pptx_bytes("bad", pages=2)
     good = _make_pptx_bytes("good", pages=3)
     calls = []
@@ -190,6 +192,31 @@ def test_generated_pptx_quality_gate_detects_page_mismatch():
     assert PPTService.assess_generated_pptx(data, 3) == []
     issues = PPTService.assess_generated_pptx(data, 6)
     assert any("页数不符" in item for item in issues)
+
+
+def test_ppt_quality_rule_can_be_disabled_or_customized():
+    data = _make_pptx_bytes("质量", pages=3)
+    assert PPTService.assess_generated_pptx(data, 6, rules=[]) == []
+    rules = [{"target": "ppt", "checks": {"check_page_count": True}}]
+    assert any("页数不符" in issue for issue in
+               PPTService.assess_generated_pptx(data, 6, rules=rules))
+
+
+def test_liberation_sans_does_not_reject_ai_pptx():
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+    run = box.text_frame.paragraphs[0].add_run()
+    run.text = "司法行政工作"
+    run.font.name = "Liberation Sans"
+    data = io.BytesIO()
+    prs.save(data)
+    assert PPTService.assess_generated_pptx(data.getvalue(), 1) == []
+    run.font.name = "DejaVu Sans"
+    data = io.BytesIO()
+    prs.save(data)
+    assert any("中文字体异常" in issue for issue in
+               PPTService.assess_generated_pptx(data.getvalue(), 1))
 
 
 def _wrapped(value: Any) -> Dict[str, Any]:
@@ -627,6 +654,7 @@ def test_generate_deck_handles_process_failed(monkeypatch):
 @pytest.mark.parametrize("body, message", [
     ('event: error\ndata: PPT_PYTHON_GUARD_ABORT: repeated syntax\n\n', "已中止"),
     ('event: error\ndata: raw syntax failure\n\n', "失败"),
+    ('event: error\ndata: null\n\n', "未提供具体原因"),
     ('event: error\ndata: "PPT_PYTHON_GUARD_ABORT: repeated syntax"\n\n', "已中止"),
     ('event: error\ndata: "syntax failure"\n\n', "失败"),
     ('data: {"msg":"process_completed","success":false}\n\n', "失败"),
@@ -853,7 +881,15 @@ def test_job_status_flow_and_export(monkeypatch, doc_and_token):
     """状态流转到 succeeded，导出先是 404、完成后能下载到合法 pptx。"""
     token, doc_id = doc_and_token
     pptx_bytes = _make_pptx_bytes("JOBOK")
-    _install(monkeypatch, _handler_with(pptx_bytes))
+    base_handler = _handler_with(pptx_bytes)
+    submissions = []
+
+    def handler(request):
+        if request.url.path.rstrip("/") == settings.PPT_AGENT_SUBMIT_PATH.rstrip("/"):
+            submissions.append(request)
+        return base_handler(request)
+
+    _install(monkeypatch, handler)
 
     client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
     # 未完成时导出应 404，绝不返回半成品
@@ -863,6 +899,7 @@ def test_job_status_flow_and_export(monkeypatch, doc_and_token):
     status = _wait_terminal(token, doc_id)
     assert status["status"] == "succeeded", status
     assert status["renderer"] == "pptagent"
+    assert len(submissions) == 1
 
     r = client.get(f"{BASE}/ppt/jobs/{doc_id}/export", headers=_hdr(token))
     assert r.status_code == 200, r.text

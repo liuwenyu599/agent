@@ -187,6 +187,31 @@ def test_rule_hits_are_reported(env):
     assert [i["id"] for i in res["issues"]] == list(range(len(res["issues"])))
 
 
+def test_body_rule_does_not_mislabel_signature_and_date(env):
+    db, svc, tmp = env
+    _rule(db, name="正文字号", checks={"font_size_pt": 16})
+    res = _check(svc, _make_docx(tmp / "body-only.docx"))
+    assert not any(issue["element"] == "字号" and issue["paragraph_index"] in (3, 4)
+                   for issue in res["issues"])
+
+
+def test_body_font_rule_uses_paragraph_style_and_font_family(env):
+    db, svc, tmp = env
+    from docx import Document
+    from docx.shared import Pt
+    _rule(db, name="正文样式字体", checks={"font_name": "仿宋_GB2312", "font_size_pt": 16})
+    doc = Document()
+    doc.styles["Normal"].font.name = "仿宋"
+    doc.styles["Normal"].font.size = Pt(16)
+    doc.add_paragraph("标题")
+    doc.add_paragraph("正文使用段落样式设置字体字号。")
+    path = tmp / "style-font.docx"
+    doc.save(str(path))
+    res = _check(svc, path)
+    assert not any(issue["element"] in ("字体", "字号") and issue["paragraph_index"] == 1
+                   for issue in res["issues"])
+
+
 def test_ai_issues_are_merged_and_counted(env):
     """勾选 AI 时：AI 审校结果与规则结果合并，ai_issue_count 正确。"""
     db, svc, tmp = env
@@ -230,26 +255,27 @@ def test_ai_prompt_uses_real_paragraph_index(env):
     assert "[第3段] 我局截止目前已完成阶段性摸排工作。" in prompt
 
 
-def test_no_rules_falls_back_to_ai_only(env):
-    """没有任何规则时不能报 400/500，应降级为纯 AI 校验。"""
+def test_missing_rule_rows_are_seeded_from_national_standard(env):
+    """新账号无需管理员手工播种，首次校验即使用国标预置规则。"""
     db, svc, tmp = env
     db_svc = FormatCheckService(db, _Assistant("[]"), None)
     doc = _make_docx(tmp / "b.docx")
 
     res = _check(db_svc, doc, use_ai=False)
 
-    assert res["check_mode"] == "ai_only"
+    assert res["check_mode"] == "rule"
+    assert res["rules_used"]
     # 内容确定性检查仍然执行
     assert any(i["element"] == "时间表述" for i in res["issues"])
 
 
-def test_no_rules_and_no_ai_is_rejected(env):
-    """既无规则也无 AI：必须给出可理解的 503，而不是空结果。"""
+def test_default_rules_work_without_ai(env):
+    """国标预置规则不依赖 AI 可用性。"""
     db, svc, tmp = env
     doc = _make_docx(tmp / "c.docx")
-    with pytest.raises(AppError) as e:
-        _check(svc, doc)
-    assert e.value.status_code == 503
+    res = _check(svc, doc)
+    assert res["rules_used"]
+    assert res["check_mode"] == "rule"
 
 
 def test_unsupported_suffix_is_rejected(env):
@@ -524,6 +550,124 @@ def test_custom_rule_participates_in_check(env):
     assert res["check_mode"] == "rule"
 
 
+def test_rules_are_seeded_per_user_and_disabled_rule_can_be_reenabled(env):
+    db, svc, tmp = env
+    admin_rules = svc.list_rules(ADMIN)
+    user_rules = svc.list_rules(USER)
+    assert admin_rules and user_rules
+    assert all(rule["is_default"] for rule in user_rules)
+    assert {rule["id"] for rule in admin_rules}.isdisjoint(
+        {rule["id"] for rule in user_rules})
+
+    selected = next(rule for rule in user_rules if rule["target"] == "body")
+    svc.set_rule_active(selected["id"], False, USER)
+    inactive = next(rule for rule in svc.list_rules(USER) if rule["id"] == selected["id"])
+    assert inactive["is_active"] is False
+    assert selected["id"] not in {
+        rule.id for rule in svc.rules.list_for_check(USER.id, None)}
+    assert selected["id"] not in {
+        rule.id for rule in svc.rules.list_for_check(ADMIN.id, None)}
+    svc.set_rule_active(selected["id"], True, USER)
+    assert selected["id"] in {
+        rule.id for rule in svc.rules.list_for_check(USER.id, None)}
+
+
+def test_ppt_preset_toggle_affects_generated_deck_quality(env):
+    from app.application.ppt.service import PPTService
+    from pptx import Presentation
+    from io import BytesIO
+
+    db, svc, tmp = env
+    prs = Presentation()
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[6])
+    output = BytesIO()
+    prs.save(output)
+    data = output.getvalue()
+    ppt = PPTService(db, None)
+    rules = ppt.active_quality_rules(USER.id)
+    assert any("页数不符" in issue for issue in
+               ppt.assess_generated_pptx(data, 3, rules))
+    page_rule = next(rule for rule in svc.list_rules(USER)
+                     if rule["target"] == "ppt" and rule["checks"].get("check_page_count"))
+    svc.set_rule_active(page_rule["id"], False, USER)
+    assert not any("页数不符" in issue for issue in
+                   ppt.assess_generated_pptx(data, 3, ppt.active_quality_rules(USER.id)))
+
+
+def test_custom_ppt_quality_rule_is_blocking(env):
+    db, svc, tmp = env
+
+    class _Req:
+        target = "ppt"
+        name = "每页文字数量"
+        checks = {"max_chars_per_slide": 120}
+        severity = "warning"
+        is_active = True
+        remark = "个人 PPT 规则"
+
+    created = svc.create_rule(_Req(), USER)
+    rule = next(item for item in svc.list_rules(USER) if item["id"] == created["id"])
+    assert rule["severity"] == "error"
+
+
+def test_all_format_rules_disabled_still_allows_manual_check(env):
+    db, svc, tmp = env
+    for rule in svc.list_rules(USER):
+        if rule["target"] != "ppt":
+            svc.set_rule_active(rule["id"], False, USER)
+    doc = _make_docx(tmp / "all-disabled.docx")
+    import asyncio
+    data = doc.read_bytes()
+
+    class _File:
+        filename = "all-disabled.docx"
+
+        async def read(self):
+            return data
+
+    result = asyncio.run(svc.check_upload(_File(), USER, use_ai=False))
+    assert result["rules_used"] == []
+    assert result["ai_used"] is False
+    assert not any(issue["current"] == "截止目前" for issue in result["issues"])
+
+
+def test_disabled_rule_stops_reporting_on_recheck(env):
+    db, svc, tmp = env
+    rule = _rule(db, name="停用复检测试", target="content",
+                 checks={"forbidden_words": ["专用测试词"]}, is_default=False)
+    doc = _make_docx(tmp / "disable-recheck.docx")
+    from docx import Document
+    document = Document(str(doc))
+    document.add_paragraph("专用测试词")
+    document.save(str(doc))
+    checked = _check(svc, doc)
+    issue = next(item for item in checked["issues"] if item["element"] == "禁用词"
+                 and item["current"] == "专用测试词")
+    svc.set_rule_active(rule.id, False, ADMIN)
+    rechecked = svc.recheck(checked["id"], ADMIN)
+    assert issue["id"] in rechecked["resolved_ids"]
+
+
+def test_user_custom_rules_do_not_leak_to_other_user(env):
+    db, svc, tmp = env
+
+    class _Req:
+        target = "content"
+        name = "个人禁用词"
+        checks = {"forbidden_words": ["测试专用词"]}
+        severity = "warning"
+        is_default = True
+        is_active = True
+        remark = "个人规则"
+
+    created = svc.create_rule(_Req(), USER)
+    assert any(rule["id"] == created["id"] for rule in svc.list_rules(USER))
+    assert not any(rule["id"] == created["id"] for rule in svc.list_rules(ADMIN))
+    with pytest.raises(AppError):
+        svc.set_rule_active(created["id"], False, ADMIN)
+
+
 def test_duplicated_rule_participates_in_check(env):
     """「复制」出来的规则（is_default 恒为 false）也必须生效。"""
     db, svc, tmp = env
@@ -536,16 +680,16 @@ def test_duplicated_rule_participates_in_check(env):
 
 
 def test_inactive_rule_is_ignored(env):
-    """停用的规则不参与校验（无规则时降级为纯 AI）。"""
+    """停用的个人规则不参与校验；其他国标规则继续生效。"""
     db, svc, tmp = env
     db_svc = FormatCheckService(db, _Assistant("[]"), None)
-    _rule(db, name="停用规则", checks={"font_size_pt": 16}, is_active=False)
+    disabled = _rule(db, name="停用规则", checks={"font_size_pt": 16}, is_active=False)
     doc = _make_docx(tmp / "p.docx")
 
     res = _check(db_svc, doc, use_ai=True)
 
-    assert res["check_mode"] == "ai_only"
-    assert not any(i["element"] == "字号" for i in res["issues"])
+    assert res["check_mode"] == "hybrid"
+    assert disabled.id not in {r["id"] for r in res["rules_used"]}
 
 
 def test_create_rule_rejects_empty_checks(env):
@@ -654,8 +798,8 @@ def test_http_button_flow_smoke(tmp_path):
         db.close()
 
 
-def test_http_rules_require_admin(tmp_path):
-    """规则增删改必须管理员：普通用户点「保存」应 403，而不是静默失败。"""
+def test_http_rules_are_personal_and_toggleable(tmp_path):
+    """普通用户能管理自己的规则，停用后仍能从列表中找回。"""
     from fastapi.testclient import TestClient
 
     from app.interfaces.deps import get_current_user
@@ -667,7 +811,15 @@ def test_http_rules_require_admin(tmp_path):
             base = "/api/v1/format-check"
             body = {"name": "r", "target": "body", "checks": {"font_size_pt": 16},
                     "severity": "error", "is_default": True, "is_active": True}
-            assert c.post(f"{base}/rules", json=body).status_code == 403
+            created = c.post(f"{base}/rules", json=body)
+            assert created.status_code == 200
+            rid = created.json()["id"]
+            listed = c.get(f"{base}/rules").json()
+            assert any(r["id"] == rid and not r["is_default"] for r in listed)
+            assert c.patch(f"{base}/rules/{rid}/active",
+                           json={"is_active": False}).status_code == 200
+            assert any(r["id"] == rid and not r["is_active"]
+                       for r in c.get(f"{base}/rules").json())
             # 白话 → 校验项的 AI 编译不落库，任何登录用户都可用。
             # 400 = 网关/AI 返回内容映射不出校验项（mock 网关下就是这个结果），
             # 502/503 = AI 不可用，三者都不是权限问题；关键是普通用户不被 403 拦。

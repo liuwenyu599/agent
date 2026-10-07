@@ -474,11 +474,11 @@ class TestServiceLevel:
 
 class TestFormatCheck:
     def test_rules_crud_and_permission(self, client, admin, user_a):
-        # 普通用户（非首个开发者账号）不能建规则
+        # 每个账号维护自己的规则；管理员也不能替其他用户改规则。
         plain = auth_headers(client, f"plain-{uuid.uuid4().hex[:6]}@t.cn")
         r = client.post("/api/v1/format-check/rules", headers=plain, json={
             "name": "正文字体", "target": "body", "checks": {"font_size_pt": 16}})
-        assert r.status_code in (401, 403)
+        assert r.status_code == 200
         # 管理员 CRUD
         r = client.post("/api/v1/format-check/rules", headers=admin, json={
             "name": "正文字号", "target": "body",
@@ -486,7 +486,7 @@ class TestFormatCheck:
         assert r.status_code == 200, r.text
         rid = r.json()["id"]
         r = client.get("/api/v1/format-check/rules", headers=user_a)
-        assert any(x["id"] == rid for x in r.json())
+        assert not any(x["id"] == rid for x in r.json())
         r = client.put(f"/api/v1/format-check/rules/{rid}", headers=admin, json={
             "name": "正文字号(改)", "target": "body",
             "checks": {"font_size_pt": 15}, "severity": "warning"})
@@ -494,10 +494,10 @@ class TestFormatCheck:
         r = client.delete(f"/api/v1/format-check/rules/{rid}", headers=admin)
         assert r.status_code == 200
         assert not any(x["id"] == rid for x in
-                       client.get("/api/v1/format-check/rules", headers=user_a).json())
+                       client.get("/api/v1/format-check/rules", headers=admin).json())
 
     def test_rule_based_check(self, client, admin, user_a):
-        client.post("/api/v1/format-check/rules", headers=admin, json={
+        client.post("/api/v1/format-check/rules", headers=user_a, json={
             "name": "标题居中", "target": "title",
             "checks": {"alignment": "center"}, "severity": "error"})
         data = make_docx_bytes(["关于社区矫正工作的通知", "各司法所：", "请抓好落实。"])
@@ -509,8 +509,8 @@ class TestFormatCheck:
         assert any(i["element"] == "对齐方式" for i in d["issues"])
         assert d["rules_used"]
 
-    def test_ai_only_when_no_rules(self, client, user_a):
-        """无规则时不再报 400，降级为 AI 校验模式"""
+    def test_national_rules_seed_on_first_check(self, client, user_a):
+        """清空旧规则后，首次校验会为当前账号建立国标预置规则。"""
         # 保证规则表为空（前面用例已删除各自规则；此处防御性清理）
         from app.infrastructure.database import SessionLocal
         from app.infrastructure.database.models.format_check import FormatRuleModel
@@ -524,8 +524,8 @@ class TestFormatCheck:
                         files={"file": ("报告.docx", data)})
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["check_mode"] == "ai_only"
-        assert d["rules_used"] == []
+        assert d["check_mode"] in ("hybrid", "rule")
+        assert d["rules_used"]
         assert d["ai_used"] is True  # mock 网关返回最小 JSON → AI 路径生效
 
     def test_record_isolation(self, client, admin, user_a):
