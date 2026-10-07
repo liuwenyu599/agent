@@ -157,15 +157,62 @@ docker run --rm --entrypoint sh "$IMAGE" -c '
 ok "镜像内部代码校验通过"
 
 # ---------------------------------------------------------------- 5. 构建 PPT 宿主守卫镜像
-step "5/8 构建 PPT 宿主守卫镜像（B2/B3 只有重建宿主镜像才生效）"
-if [[ -f deploy/pptagent/build-python-guard.sh ]]; then
-  cd "$SRC_DIR"
+step "5/8 安装 PPT 宿主执行守卫（B2/B3 只有完成本步才生效）"
+# 依据 deploy/pptagent/README.md：仅 push 源码不会让运行中的第三方 Host 镜像
+# 自动获得守卫，**必须现场构建 + 把生产 Host 切到该 tag + 重建容器**。
+# 官方流程：build-python-guard.sh → 设 PPT_HOST_IMAGE → docker compose up -d
+GUARDED_IMAGE=deeppresenter-host:python-guard-v1
+
+if [[ ! -f "$SRC_DIR/deploy/pptagent/build-python-guard.sh" ]]; then
+  bad "缺 build-python-guard.sh——B2/B3 未生效（sandbox 仍会漏过重复关键字参数）"
+elif ! bash "$SRC_DIR/deploy/pptagent/build-python-guard.sh" 2>&1 | tee "/tmp/guard-build.log"; then
+  # ⚠️ 上面这行依赖 `set -o pipefail`（见文件头）：管道默认只返回 tee 的退出码，
+  #    没有 pipefail 时守卫构建失败会被 tee 吞成"成功"，导致 B2/B3 实际未生效却
+  #    报绿灯。已实测：有 pipefail 能检出失败，去掉则漏掉。**不要删 pipefail。**
   # 该脚本自带断言：会实测 draw(color=1, color=2) 必须被拦
-  bash deploy/pptagent/build-python-guard.sh 2>&1 | tee "/tmp/guard-build-${ACTUAL_SHA}.log" \
-    && ok "守卫镜像已构建并自检通过" \
-    || bad "守卫镜像构建失败——B2/B3 修复本次不生效，PPT 代码预检仍会漏过"
+  bad "守卫镜像构建失败——B2/B3 本次不生效。其前置 verify-patched-images.sh 会校验冻结
+     镜像基线（host 需含 soffice/unoconv/fasttext lid.176.bin），基线不过属镜像问题，
+     **不要绕过检查**（README：安装器失败不能绕过继续交付）"
 else
-  bad "缺 build-python-guard.sh，跳过守卫镜像（B2/B3 未生效）"
+  ok "守卫镜像 $GUARDED_IMAGE 构建并自检通过"
+
+  # 找到生产 PPTAgent 的 compose 目录（仓库内与 /opt/justice-ppt 都可能）
+  PPT_COMPOSE_DIR=""
+  for d in "$SRC_DIR/deploy/pptagent" /opt/justice-ppt/deploy /opt/justice-ppt; do
+    [[ -f "$d/docker-compose.yml" ]] && { PPT_COMPOSE_DIR="$d"; break; }
+  done
+
+  if [[ -z "$PPT_COMPOSE_DIR" ]]; then
+    bad "找不到 PPTAgent 的 docker-compose.yml（B2/B3 仍未生效）。请手工执行：
+     cd <PPTAgent 部署目录> && PPT_HOST_IMAGE=$GUARDED_IMAGE docker compose up -d"
+  else
+    ok "PPTAgent compose 目录：$PPT_COMPOSE_DIR"
+    cd "$PPT_COMPOSE_DIR"
+    # 写入 .env（compose 默认值已是该tag，但显式写入可防 .env 里残留旧值覆盖）
+    if [[ -f .env ]]; then
+      if grep -q '^PPT_HOST_IMAGE=' .env; then
+        sed -i "s|^PPT_HOST_IMAGE=.*|PPT_HOST_IMAGE=$GUARDED_IMAGE|" .env
+      else
+        printf '\nPPT_HOST_IMAGE=%s\n' "$GUARDED_IMAGE" >> .env
+      fi
+      ok "已把 .env 的 PPT_HOST_IMAGE 指向 $GUARDED_IMAGE"
+    else
+      export PPT_HOST_IMAGE="$GUARDED_IMAGE"
+      ok "无 .env，用环境变量传入 PPT_HOST_IMAGE"
+    fi
+    # 重建 host 容器使新镜像生效
+    docker compose up -d 2>&1 | tail -5
+    sleep 5
+    RUNNING_PPT=$(docker inspect justice-ppt-host --format '{{.Config.Image}}' 2>/dev/null || echo "<无>")
+    if [[ "$RUNNING_PPT" == "$GUARDED_IMAGE" ]]; then
+      ok "justice-ppt-host 已在运行 $GUARDED_IMAGE —— 守卫已生效"
+    else
+      bad "justice-ppt-host 仍运行 ${RUNNING_PPT}，未切到 $GUARDED_IMAGE
+     → B2/B3 尚未生效。查：docker logs justice-ppt-host --tail 50
+     该容器挂载 compose 里的 volumes/环境变量，改镜像后必须 up -d 重建"
+    fi
+    cd "$SRC_DIR"
+  fi
 fi
 
 # ---------------------------------------------------------------- 6. 切compose
