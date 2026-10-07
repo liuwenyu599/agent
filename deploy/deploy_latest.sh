@@ -3,21 +3,29 @@
 #  云法智办 · 生产覆盖部署脚本（后端镜像 + PPT 宿主守卫镜像）
 # ============================================================================
 #  用法（在生产服务器 10.128.85.133 上执行）：
-#     bash deploy_latest.sh              # 正常部署
+#     bash deploy_latest.sh              # 离线模式（生产标准做法，见下）
 #     bash deploy_latest.sh --check-only # 只做构建前校验，不build
+#     bash deploy_latest.sh --pull       # 仅在可出网的开发/测试机：先 git 拉最新再部署
+#
+#  ⚠️ 生产环境是**司法局内网，严禁出网**（《完整交接文档-20261004.md》第 74/140/
+#     1039-1040 行明文），源码**走 tar 覆盖、不在服务器上 git pull/push**。
+#     所以本脚本默认**离线模式**：源码已由 Windows 端 git archive 打包 + scp 上传
+#     并替换到位，脚本只做「校验 → 构建 → 切流量 → 验证」，全程不依赖 git 与网络。
+#     （此前的版本第1 步硬编码 git fetch，在生产必失败，已改。）
 #
 #  设计要点（都是踩过的坑，勿改）：
-#   1. 源码用**两段式** git fetch + merge --ff-only；**不要 git pull**（会被
-#      SIGTERM 打断并损坏 .git）。
-#   2. 代码是**烤进镜像**的（deploy/Dockerfile `COPY server/ /app/`），
+#   1. 代码是**烤进镜像**的（deploy/Dockerfile `COPY server/ /app/`），
 #      改宿主机文件 + docker restart **不生效**，必须 docker build。
-#   3. **不要传 --build-arg INSTALL_PPT_PREVIEW**（仓库 Dockerfile 只认
+#   2. **不要传 --build-arg INSTALL_PPT_PREVIEW**（仓库 Dockerfile 只认
 #      PIP_INDEX_URL，传了会报 unexpected build arg 而失败）。
-#   4. **不要用 --strip-components 解包** pack_release.py 的包（那是扁平包，
-#      strip 会把 server/ 削成 app/）。本脚本走 git 路径，绕开此坑。
-#   5. 迁移正规入口是 compose 的 `justice-migrate` 服务，不是 docker exec alembic。
-#   6. push 后本地 tracking ref 常不更新，本脚本一律用 `git rev-parse HEAD`
-#      读真实 SHA，不信任 origin/app。
+#      ⚠️ PRODUCTION_DEPLOYMENT.md §8 仍写着该参数，是过时文档。
+#   3. 解包**不要用 --strip-components**（pack_release.py / 建议的
+#      `git archive HEAD` 产的是**扁平包**，strip 会把 server/ 削成 app/）。
+#      ⚠️ PRODUCTION_DEPLOYMENT.md §6 用的是带 prefix 的包，strip 对它才成立。
+#   4. 迁移正规入口是 compose 的 `justice-migrate` 服务，不是 docker exec alembic。
+#   5. 部署后必须核对 `docker inspect justice-api --format '{{.Config.Image}}'`，
+#      确认镜像真的切过去了（宿主机改文件 + restart 不会生效，容易假成功）。
+#   6. 生产 compose 只在服务器 /opt/justice-office/deploy/；仓库里那份是开发用的。
 # ============================================================================
 set -euo pipefail
 
@@ -46,17 +54,39 @@ OLD_IMAGE=$(docker inspect justice-api --format '{{.Config.Image}}' 2>/dev/null 
 ok "当前运行镜像：$OLD_IMAGE"
 
 # ---------------------------------------------------------------- 1. 取最新代码
-step "1/8 拉取最新源码（两段式，勿用 git pull）"
-git fetch origin app
-git merge --ff-only origin/app
-ACTUAL_SHA=$(git rev-parse --short HEAD)
-ok "服务器当前 SHA = $ACTUAL_SHA"
+step "1/8 获取源码"
+# 部署模式（依据《完整交接文档-20261004.md》第74/140/1039-1040 行）：
+#   司法局内网严禁出网，生产服务器走 **tar 覆盖**，不在服务器上 git pull/push。
+#   因此默认 offline：源码已由 Windows 端 git archive 打包 + scp 上传并替换到位，
+#   本脚本只负责「校验 → 构建 → 切流量 → 验证」，不碰 git。
+#   若在可出网的开发/测试机想让它顺带拉代码，加 --pull。
+PULL=0
+for a in "$@"; do [[ "$a" == "--pull" ]] && PULL=1; done
 
-if [[ "$ACTUAL_SHA" != "$EXPECT_SHA" ]]; then
-  bad "期望 $EXPECT_SHA，实际 $ACTUAL_SHA"
-  die "若这是你想要的版本，改用 EXPECT_SHA=$ACTUAL_SHA bash deploy_latest.sh 重跑"
+if [[ -f "$SRC_DIR/.git" && $PULL -eq 1 ]]; then
+  # 可出网环境：两段式拉取（禁用 git pull，会SIGTERM 打断并损坏 .git）
+  git fetch origin app
+  git merge --ff-only origin/app
+  ACTUAL_SHA=$(git rev-parse --short HEAD)
+  ok "已拉取，服务器 SHA = $ACTUAL_SHA"
+  MODE=pull
+  if [[ "$ACTUAL_SHA" != "$EXPECT_SHA" ]]; then
+    bad "期望 $EXPECT_SHA，实际 $ACTUAL_SHA"
+    die "若这是你想要的版本，用 EXPECT_SHA=$ACTUAL_SHA 重跑"
+  fi
+  ok "SHA 与预期一致"
+else
+  if [[ $PULL -eq 1 ]]; then
+    die "指定了 --pull 但 $SRC_DIR/.git 不存在（tar 覆盖部署无 .git）。去掉 --pull 走离线模式。"
+  fi
+  # 离线模式：无.git 属正常。SHA 只能作记录用，真正的闸门是下面的 11 项标记校验。
+  ACTUAL_SHA="offline-$(date +%Y%m%d-%H%M%S)"
+  MODE=offline
+  ok "离线模式：源码已由 tar 覆盖部署，跳过 git（本步无网络依赖）"
+  if [[ ! -f "$SRC_DIR/.git" ]]; then
+    ok "确认无 .git —— 符合 tar 覆盖部署预期"
+  fi
 fi
-ok "SHA 与预期一致：$ACTUAL_SHA"
 
 # ---------------------------------------------------------------- 2. 构建前校验
 step "2/8 校验今天这批修复确实在源码里（缺任何一项都中止）"
@@ -81,7 +111,7 @@ chk "B1 落款兜底接线"                    server/app/application/writing/ta
 chk "B1 日期兜底接线"                    server/app/application/writing/task_service.py '_today_doc_date()'
 chk "B6 本地渲染兜底仍存在（治本需修 B1/B7）" server/app/application/ppt/agent_job.py '_fallback_local'
 
-[[ $MISSING -eq 0 ]] || die "有修复未进入源码，中止部署。先查 git 是否真的 pull 到 $EXPECT_SHA"
+[[ $MISSING -eq 0 ]] || die "有修复未进入源码，中止部署。当前模式：$MODE。在可出网机加 --pull 可自动核对 SHA；离线部署请确认上传的包就是目标版本（Windows 端 git log --oneline -1）"
 ok "全部修复标记命中"
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
