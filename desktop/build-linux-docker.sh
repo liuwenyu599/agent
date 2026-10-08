@@ -43,9 +43,30 @@ d2w() {
 }
 
 step "0/5 环境自检"
-command -v docker >/dev/null || die "找不到 docker，请先启动 Docker Desktop"
-docker info >/dev/null 2>&1 || die "Docker 未运行，请先启动 Docker Desktop"
-ok "docker 可用: $(docker --version)"
+# Docker Desktop 常见安装位置；PATH 里常常没有 docker，需要主动探测
+DOCKER_BIN="${DOCKER_BIN:-}"
+if [[ -z "$DOCKER_BIN" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    DOCKER_BIN="$(command -v docker)"
+  else
+    for cand in \
+      "/c/Users/$USER/AppData/Local/Programs/DockerDesktop/resources/bin/docker.exe" \
+      "/c/Program Files/Docker/Docker/resources/bin/docker.exe" \
+      "$LOCALAPPDATA/DockerDesktop/resources/bin/docker.exe"
+    do
+      [[ -f "$cand" ]] && { DOCKER_BIN="$cand"; break; }
+    done
+  fi
+fi
+[[ -n "$DOCKER_BIN" ]] || die "找不到 docker 可执行文件。若 Docker Desktop 装在别处，用 DOCKER_BIN=/path/to/docker.exe 指定"
+ok "docker 路径：$DOCKER_BIN"
+
+# Docker Desktop 必须已启动，否则 daemon 连不上
+if ! "$DOCKER_BIN" info >/dev/null 2>&1; then
+  bad "Docker daemon 未运行"
+  die  "请先在开始菜单启动 Docker Desktop，等右下角图标不再转圈后再跑本脚本"
+fi
+ok "daemon 可用：$("$DOCKER_BIN" --version 2>/dev/null | head -1)"
 
 # Docker Desktop 的 WSL 集成可能未挂载 /mnt/c，用 docker 自己探测宿主盘
 HOST_ROOT=$(d2w "$REPO_ROOT")
@@ -56,7 +77,7 @@ ok "仓库映射：$HOST_ROOT/desktop"
 ok "Linux 图标齐备"
 
 # 架构：只做 x64。ARM64 已确认不需要（目标机是兆芯 KX-7000，x86_64 兼容）
-DOCKER_HOST_ARCH=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+DOCKER_HOST_ARCH=$("$DOCKER_BIN" run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   alpine uname -m 2>/dev/null || echo unknown)
 if [[ "$DOCKER_HOST_ARCH" == "aarch64" ]]; then
   ok "宿主是aarch64，产出 arm64 包"
@@ -111,12 +132,12 @@ fi
 
 # ------------------------------------------------------------ 构建
 step "1/5 拉取构建镜像"
-docker pull eclipse-temurin:17-jdk
+"$DOCKER_BIN" pull eclipse-temurin:17-jdk
 ok "eclipse-temurin:17-jdk 就绪"
 
 step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
 # shellcheck disable=SC2086
-docker run --rm \
+"$DOCKER_BIN" run --rm \
   -v "$HOST_ROOT:/src" \
   -v "$GRADLE_CACHE:/g" \
   -v "$(d2w "$OUT_DIR"):/out" \
