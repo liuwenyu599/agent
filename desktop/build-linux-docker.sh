@@ -278,7 +278,21 @@ BUILD_RC=0
     ./gradlew packageDeb --no-daemon --stacktrace
     echo '--- 收集产物 ---'
     mkdir -p /out
-    find /src/desktop/build/compose/binaries -name '*.deb' -exec cp {} /out/ \;
+    shopt -s nullglob
+    produced=(/src/desktop/build/compose/binaries/main/deb/*.deb)
+    shopt -u nullglob
+    if [ \${#produced[@]} -gt 0 ]; then
+      newest=\"\${produced[0]}\"
+      for f in \"\${produced[@]}\"; do
+        if [ \"\$f\" -nt \"\$newest\" ]; then newest=\"\$f\"; fi
+      done
+      echo \"    产物: \$newest\"
+      cp \"\$newest\" /out/
+    else
+      echo '!! jpackage 未产出 .deb，请检查上方 packageDeb 任务输出'
+      ls -laR /src/desktop/build/compose/binaries 2>/dev/null | head -30
+      exit 3
+    fi
     ls -lh /out/
   " > "$BUILD_LOG" 2>&1 || BUILD_RC=$?
 
@@ -295,7 +309,21 @@ fi
 ok "构建日志：$BUILD_LOG"
 
 step "3/5 校验产物"
-DEB=$(find "$OUT_DIR" -name '*.deb' -newermt '-30 minutes' -print -quit 2>/dev/null || true)
+# 不用 find 也不用 ls 找产物，两者在本机都不可靠：
+#   · find  会解析成 Windows 的 find.exe（只支持 find /V），`find . -name x` 报
+#     「找不到文件 - -NAME」
+#   · ls 对 /d/... 与 /cygdrive/d/... 的行为与 glob 不一致，会出现「glob匹配到
+#     1 个但 ls -t 返回空」
+# 改为纯 shell glob + bash 内建 -nt 做时间比较，全程不调外部命令。
+shopt -s nullglob 2>/dev/null || true
+debs=("$OUT_DIR"/*.deb)
+shopt -u nullglob 2>/dev/null || true
+DEB=""
+for f in "${debs[@]}"; do
+  if [[ -z "$DEB" || "$f" -nt "$DEB" ]]; then
+    DEB="$f"
+  fi
+done
 if [[ -z "$DEB" ]]; then
   bad "未找到 .deb 产物"
   echo "  构建日志在上面的输出里；常见原因见下"
