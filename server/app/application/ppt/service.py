@@ -1,5 +1,6 @@
 """PPT 助手应用服务：模板/素材/文档/生成/导出/云端生成的编排。"""
 import hashlib
+from app.core.fonts import DEFAULT_CJK_FONT
 import io
 import json as _json
 import os
@@ -266,7 +267,7 @@ class PPTService:
         """根据已选模板/场景生成服务端内置设计约束；未选模板默认政务模板。"""
         category = "工作汇报"
         name = "政务工作汇报"
-        font = "微软雅黑"
+        font = DEFAULT_CJK_FONT
         colors: Dict[str, Any] = {}
         if doc.template_id:
             t = self.templates.get(doc.template_id)
@@ -282,7 +283,7 @@ class PPTService:
         base = DEFAULT_DESIGN_PROMPT[scene]
         palette = "、".join(str(v) for v in list(colors.values())[:6] if v)
         return (
-            f"{base}\n已选模板：{name}（{category}）；字体：{font or '微软雅黑'}；"
+            f"{base}\n已选模板：{name}（{category}）；字体：{font or DEFAULT_CJK_FONT}；"
             + (f"主色参考：{palette}。" if palette else "")
         )
 

@@ -2,6 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from app.core.fonts import DEFAULT_CJK_FONT
 
 
 class TemplateIn(BaseModel):
@@ -9,7 +10,7 @@ class TemplateIn(BaseModel):
     category: str = "其他"
     description: str = ""
     colors: Optional[dict] = None
-    font: str = "微软雅黑"
+    font: str = DEFAULT_CJK_FONT
     layouts: Optional[dict] = None
 
 

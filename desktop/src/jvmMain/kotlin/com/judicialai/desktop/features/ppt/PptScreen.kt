@@ -1054,7 +1054,9 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
     var name by remember(id) { mutableStateOf(t["name"].str()) }
     var category by remember(id) { mutableStateOf(t["category"].str()) }
     var description by remember(id) { mutableStateOf(t["description"].str()) }
-    var font by remember(id) { mutableStateOf(t["font"].str().ifBlank { "微软雅黑" }) }
+    // 与后端 app/core/fonts.py 的 DEFAULT_CJK_FONT 保持一致。
+    // 原为「微软雅黑」，但麒麟 +麒麟版 WPS 没有该字体，生成的 pptx 会回退。
+    var font by remember(id) { mutableStateOf(t["font"].str().ifBlank { "SimHei" }) }
 
     var cover by remember(id) { mutableStateOf(originalLayouts["cover"].str()) }
     var toc by remember(id) { mutableStateOf(originalLayouts["toc"].str()) }

@@ -8,6 +8,7 @@ from sqlalchemy import (JSON, BigInteger, Boolean, DateTime, ForeignKey,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.base import Base, IdMixin
+from app.core.fonts import DEFAULT_CJK_FONT
 
 
 class PPTTemplateModel(Base, IdMixin):
@@ -20,7 +21,7 @@ class PPTTemplateModel(Base, IdMixin):
     is_official: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
     colors: Mapped[Optional[dict]] = mapped_column(JSON)
-    font: Mapped[str] = mapped_column(String(50), default="微软雅黑")
+    font: Mapped[str] = mapped_column(String(50), default=DEFAULT_CJK_FONT)
     layouts: Mapped[Optional[dict]] = mapped_column(JSON)
     layout_library: Mapped[Optional[list]] = mapped_column(JSON)
     source_file: Mapped[Optional[str]] = mapped_column(String(500))

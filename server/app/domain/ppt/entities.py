@@ -5,6 +5,7 @@
 - 视觉样式由 template_id 指向的 PPTTemplate 决定，换模板只换样式不动内容。
 """
 from dataclasses import dataclass, field
+from app.core.fonts import DEFAULT_CJK_FONT
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +21,7 @@ class PPTTemplate:
     is_official: bool = False
     created_by: Optional[str] = None
     colors: Dict[str, Any] = field(default_factory=dict)
-    font: str = "微软雅黑"
+    font: str = DEFAULT_CJK_FONT
     layouts: Dict[str, Any] = field(default_factory=dict)
     layout_library: List[Dict[str, Any]] = field(default_factory=list)
     source_file: Optional[str] = None

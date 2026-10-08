@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from app.core.fonts import DEFAULT_CJK_FONT
 """智能 PPT 引擎（移植自旧系统 ppt_service，AI 调用改经 WritingAssistant）。
 
 核心设计：内容与版式分离
@@ -106,14 +107,14 @@ def template_to_dict(t) -> Dict:
         return {
             "id": t.get("id"), "name": t.get("name", "模板"), "category": t.get("category", "其他"),
             "colors": {**DEFAULT_COLORS, **(t.get("colors") or {})},
-            "font": t.get("font") or "微软雅黑",
+            "font": t.get("font") or DEFAULT_CJK_FONT,
             "layouts": {**DEFAULT_LAYOUTS, **(t.get("layouts") or {})},
             "layout_library": t.get("layout_library") or [],
         }
     return {
         "id": t.id, "name": t.name, "category": t.category,
         "colors": {**DEFAULT_COLORS, **(t.colors or {})},
-        "font": t.font or "微软雅黑",
+        "font": t.font or DEFAULT_CJK_FONT,
         "layouts": {**DEFAULT_LAYOUTS, **(t.layouts or {})},
         "layout_library": t.layout_library or [],
     }
@@ -505,7 +506,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
     from pptx.oxml.ns import qn
 
     colors, layouts = template["colors"], template["layouts"]
-    FONT = template.get("font") or "微软雅黑"
+    FONT = template.get("font") or DEFAULT_CJK_FONT
     C = lambda h: RGBColor.from_string(h)
     PRIMARY, ACCENT = C(colors["primary"]), C(colors["accent"])
     LIGHT, DARK = C(colors["light"]), C(colors["dark"])
@@ -1137,7 +1138,7 @@ def extract_style_from_pptx(file_bytes: bytes) -> Dict:
     """
     import zipfile
     colors = {}
-    font = "微软雅黑"
+    font = DEFAULT_CJK_FONT
     try:
         with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
             theme_files = sorted(n for n in z.namelist() if n.startswith("ppt/theme/theme"))
@@ -1701,7 +1702,7 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     模板没有的页型自动降级到已有版式，不套用 DEFAULT_LAYOUTS。"""
     from pptx import Presentation
     colors = template["colors"]
-    font = template.get("font") or "微软雅黑"
+    font = template.get("font") or DEFAULT_CJK_FONT
     prs = Presentation(io.BytesIO(base_pptx))
     src_slides = list(prs.slides)
     used = {}
