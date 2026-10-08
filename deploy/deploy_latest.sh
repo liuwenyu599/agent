@@ -137,13 +137,25 @@ fi
 
 # ---------------------------------------------------------------- 4. 构建后端镜像
 step "4/8 构建后端镜像（勿传 INSTALL_PPT_PREVIEW）"
+# 按**宿主机实际架构**构建。早先版本写死 --platform linux/arm64（源自
+# PRODUCTION_DEPLOYMENT.md §8），那是基于「鲲鹏 920 + 昇腾 310P」的记录；
+# 若换机到别的国产平台（如兆芯 x86_64），写死 arm64 会让 docker 拉错架构的
+# 基础镜像，构建直接失败或产出无法运行的镜像。故改为探测。
+HOST_ARCH=$(uname -m)
+case "$HOST_ARCH" in
+  aarch64|arm64) BUILD_PLATFORM=linux/arm64 ;;
+  x86_64|amd64)  BUILD_PLATFORM=linux/amd64 ;;
+  *) die "无法识别的架构 $HOST_ARCH，请手动确认 --platform" ;;
+esac
+ok "宿主机架构：$HOST_ARCH → 目标平台 $BUILD_PLATFORM"
+
 IMAGE="justice-office-server:$(date +%Y%m%d)-${ACTUAL_SHA}"
-docker build --platform linux/arm64 \
+docker build --platform "$BUILD_PLATFORM" \
   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
   -f deploy/Dockerfile \
   -t "$IMAGE" \
   . 2>&1 | tee "/tmp/build-${ACTUAL_SHA}.log"
-ok "镜像构建完成：$IMAGE"
+ok "镜像构建完成：$IMAGE（$BUILD_PLATFORM）"
 
 # 验证镜像内部真的含今天的修复
 docker run --rm --entrypoint sh "$IMAGE" -c '
