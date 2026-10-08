@@ -49,6 +49,12 @@ JAVA_MAJOR=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
 [[ "${JAVA_MAJOR:-0}" -ge 17 ]] && ok "JDK $JAVA_MAJOR" || bad "JDK 版本 $JAVA_MAJOR，建议 17+"
 
 chmod +x ./gradlew 2>/dev/null || true
+# gradlew 没有 .sh 后缀，.gitattributes 的 *.sh 规则管不到；从 Windows 复制
+# 过来时可能是 CRLF，执行会报「bad interpreter: /bin/sh^M」。统一收敛成 LF。
+if grep -q $'\r' ./gradlew 2>/dev/null; then
+  sed -i 's/\r$//' ./gradlew
+  ok "已把 gradlew 从 CRLF 转为 LF"
+fi
 [[ -f ./gradlew ]] || die "缺少 gradlew"
 
 # 解析包名与版本（与 build.gradle.kts 保持一致）

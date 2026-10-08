@@ -2,6 +2,13 @@
 *.sh text eol=lf
 *.py text eol=lf
 
+# gradle wrapper：文件名没有 .sh 后缀，上面的规则匹配不到，必须单列。
+#漏掉这条会导致 Windows checkout 后 gradlew 变成 CRLF，在 Linux 容器里
+# 报「bash: ./gradlew: /bin/sh^M: bad interpreter」而查不出原因。
+# gradlew.bat 反之——Windows 批处理必须是 CRLF。
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+
 # Kotlin/Gradle sources are text; keep consistent line endings across platforms.
 *.kt text eol=lf
 *.kts text eol=lf

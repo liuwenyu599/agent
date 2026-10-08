@@ -259,6 +259,14 @@ step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
     echo '--- 开始打包（首次会下载依赖，请耐心等待）---'
     cd /src/desktop
     chmod +x gradlew
+    # gradlew 没有 .sh 后缀，.gitattributes 的 *.sh 规则管不到它；Windows 上
+    # checkout 后可能是 CRLF，Linux 执行会报
+    #「bash: ./gradlew: /bin/sh^M: bad interpreter」。这里统一收敛成 LF。
+    if grep -q \$'\r' gradlew 2>/dev/null; then
+      sed -i 's/\r$//' gradlew
+      echo '    已把 gradlew 从 CRLF 转为 LF'
+    fi
+    head -n 1 gradlew | grep -q '^#!.*sh\$' && echo "    gradlew shebang OK: $(head -n 1 gradlew)"
     ./gradlew packageDeb --no-daemon --stacktrace
     echo '--- 收集产物 ---'
     mkdir -p /out
