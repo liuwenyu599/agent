@@ -85,6 +85,22 @@ if [[ -z "$DOCKER_BIN" ]]; then
 fi
 ok "docker 路径：$DOCKER_BIN"
 
+#关键：把 docker.exe 所在目录加入 PATH，否则 pull 时会报
+#   error getting credentials - exec: "docker-credential-desktop": not found in %PATH%
+# 该helper（凭据助手）与 docker.exe 同目录，PATH 里没有中文目录时必然找不到。
+# 这与凭据内容无关——eclipse-temurin 是公共镜像，根本不需要认证，
+# 但 Docker 仍会先调用 helper 才决定「不需要」。
+DOCKER_BIN_DIR="$(dirname "$DOCKER_BIN")"
+case ":$PATH:" in
+  *":$DOCKER_BIN_DIR:"*) : ;;
+  *) export PATH="$DOCKER_BIN_DIR:$PATH"
+     ok "已把 docker 目录加入 PATH（供 credential helper 使用）"
+     ;;
+esac
+command -v docker-credential-desktop >/dev/null 2>&1 \
+  && ok "credential helper 可用" \
+  || bad "credential helper 仍不可用；若 pull 报 credentials 错误，见对话中的排查"
+
 # Docker Desktop 必须已启动，否则 daemon 连不上
 if ! "$DOCKER_BIN" info >/dev/null 2>&1; then
   bad "Docker daemon 未运行"
@@ -155,9 +171,30 @@ if [[ -n "$PROXY_PORT" ]]; then
 fi
 
 # ------------------------------------------------------------ 构建
+# 构建镜像。国内直连 Docker Hub 经常又慢又超时，容易误判成"卡死"，
+# 故默认走 DaoCloud 的 Docker Hub 镜像代理（只代理拉取，不改内容）。
+JDK_IMAGE="${JDK_IMAGE:-m.daocloud.io/docker.io/library/eclipse-temurin:17-jdk}"
+
 step "1/5 拉取构建镜像"
-"$DOCKER_BIN" pull eclipse-temurin:17-jdk
-ok "eclipse-temurin:17-jdk 就绪"
+echo "     镜像：$JDK_IMAGE"
+if ! "$DOCKER_BIN" pull "$JDK_IMAGE"; then
+  bad "从 $JDK_IMAGE 拉取失败"
+  echo "     依次尝试备用源…"
+  for alt in \
+    "eclipse-temurin:17-jdk" \
+    "docker.m.daocloud.io/library/eclipse-temurin:17-jdk" \
+    "dockerproxy.net/library/eclipse-temurin:17-jdk"
+  do
+    echo "--- 尝试 $alt"
+    if "$DOCKER_BIN" pull "$alt"; then
+      JDK_IMAGE="$alt"
+      break
+    fi
+  done
+  [[ "$JDK_IMAGE" != "m.daocloud.io/docker.io/library/eclipse-temurin:17-jdk" ]] \
+    || die "所有镜像源都拉取失败。若报 credentials 错误，先重开一个 PowerShell窗口让新 PATH 生效再试"
+fi
+ok "构建镜像就绪：$JDK_IMAGE"
 
 step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
 # shellcheck disable=SC2086
@@ -167,7 +204,7 @@ step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
   -v "$(d2w "$OUT_DIR"):/out" \
   -e GRADLE_USER_HOME=/g \
   $PROXY_ENV \
-  eclipse-temurin:17-jdk \
+  "$JDK_IMAGE" \
   bash -c "
     set -e
     echo '--- 换镜像源 ---'
