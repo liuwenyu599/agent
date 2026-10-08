@@ -32,11 +32,31 @@ bad()  { printf '\033[1;31m  [FAIL]\033[0m %*s\n' "$*"; }
 die()  { printf '\033[1;31m[中止] %s\033[0m\n' "$*"; exit 1; }
 
 # ------------------------------------------------------------ Docker 路径转换
-# Git Bash 里 /d/... 需要转成 Docker 能识别的 D:/...
+# 把 Git Bash 的 POSIX 路径转成 Docker 能识别的 Windows 盘符路径。
+#
+# 必须交给 cygpath -m 处理，因为 Git Bash 的 pwd 形态不固定：
+#   Cygwin/MSYS2 传统形态：/d/Projects/...
+#   MSYS2 新形态：          /cygdrive/d/Projects/...
+# 手写正则只能匹配前者，遇到后者会原样返回 /cygdrive/...，
+# 而 Docker Desktop 认不出这种内部路径，表现为「cd: /src/desktop: No such file」。
+# cygpath 对两种形态都能正确转成 D:/...
 d2w() {
-  local p="$1"
-  if [[ "$p" =~ ^/([a-zA-Z])/(.*)$ ]]; then
-    printf '%s:/%s' "$(echo "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')" "${BASH_REMATCH[2]}"
+  local p="$1" out
+  # 首选 cygpath（走 Windows 原生 API，中文/空格都安全）
+  if command -v cygpath >/dev/null 2>&1; then
+    out="$(cygpath -m "$p" 2>/dev/null || true)"
+    # 合理性校验：必须是 盘符:/... 或 盘符:\... 才认为转换成功
+    if [[ "$out" =~ ^[A-Za-z]:[/\\] ]]; then
+      printf '%s' "$out"
+      return 0
+    fi
+  fi
+  # 回退：手工剥掉 /cygdrive 或 /mnt 前缀，再取盘符
+  local q="$p"
+  q="${q#/cygdrive/}"
+  q="${q#/mnt/}"
+  if [[ "$q" =~ ^/([a-zA-Z])/(.*)$ ]]; then
+    printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"
   else
     printf '%s' "$p"
   fi
@@ -108,8 +128,10 @@ if ! "$DOCKER_BIN" info >/dev/null 2>&1; then
 fi
 ok "daemon 可用：$("$DOCKER_BIN" --version 2>/dev/null | head -1)"
 
-# Docker Desktop 的 WSL 集成可能未挂载 /mnt/c，用 docker 自己探测宿主盘
-HOST_ROOT=$(d2w "$REPO_ROOT")
+# Docker Desktop 的 WSL 集成可能未挂载 /mnt/c，用 docker 自己探测宿主盘。
+# 支持 HOST_ROOT_OVERRIDE 手动指定（Git Bash 对 /d 与 /cygdrive/d 两种形态
+# 的接受度不同，实测两者都可能不被 Docker 识别，所以留逃生口）。
+HOST_ROOT="${HOST_ROOT_OVERRIDE:-$(d2w "$REPO_ROOT")}"
 [[ -f "$REPO_ROOT/desktop/build.gradle.kts" ]] || HOST_ROOT="D:/Projects/judicial_app"
 ok "仓库映射：$HOST_ROOT/desktop"
 
@@ -195,6 +217,25 @@ if ! "$DOCKER_BIN" pull "$JDK_IMAGE"; then
     || die "所有镜像源都拉取失败。若报 credentials 错误，先重开一个 PowerShell窗口让新 PATH 生效再试"
 fi
 ok "构建镜像就绪：$JDK_IMAGE"
+
+# 挂载预检：路径写法不对时 docker run 会挂出一个空目录，表现为容器里
+# `cd: /src/desktop: No such file or directory`，而真正原因（宿主路径
+# 没被 Docker 识别）藏在前面的日志里。这里提前失败并给出可选写法。
+if ! "$DOCKER_BIN" run --rm -v "$HOST_ROOT:/probe:ro" "$JDK_IMAGE" \
+      ls /probe/desktop/build.gradle.kts >/dev/null 2>&1; then
+  # 预先算好两种候选写法，避免现场拼错
+  win_path="$(cygpath -m "$REPO_ROOT" 2>/dev/null || printf 'D:/Projects/judicial_app')"
+  drive_lc="$(printf '%s' "$win_path" | cut -c1 | tr 'A-Z' 'a-z')"
+  rest_path="$(printf '%s' "$win_path" | cut -c2-)"
+  bad "挂载预检失败：Docker 读不到 $HOST_ROOT"
+  printf '\033[1;31m[中止]\033[0m Git Bash 对路径形态的接受度不同，请依次尝试：\n'
+  printf '  a) export HOST_ROOT_OVERRIDE=%s      # MSYS 风格\n' "/$drive_lc$rest_path"
+  printf '  b) export HOST_ROOT_OVERRIDE=%s                            # Cygwin 风格\n' "$win_path"
+  printf '  c) 检查 Docker Desktop 是否授权该目录：设置 → 资源 → 文件共享\n'
+  printf '  当前解析结果：%s\n' "$HOST_ROOT"
+  exit 1
+fi
+ok "挂载预检通过（Docker 能读取仓库）"
 
 step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
 # shellcheck disable=SC2086
