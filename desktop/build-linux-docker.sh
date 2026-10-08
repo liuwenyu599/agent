@@ -43,19 +43,34 @@ d2w() {
 }
 
 step "0/5 环境自检"
-# Docker Desktop 常见安装位置；PATH 里常常没有 docker，需要主动探测
+# Docker Desktop 常见安装位置；PATH 里常常没有 docker，需要主动探测。
+# 注意：**不要依赖 $USER** —— Git Bash 下该变量可能未定义，set -u 会直接报错
+# （实测报 line 52: USER: unbound variable）。改用 LOCALAPPDATA + cygpath 转换。
 DOCKER_BIN="${DOCKER_BIN:-}"
 if [[ -z "$DOCKER_BIN" ]]; then
   if command -v docker >/dev/null 2>&1; then
     DOCKER_BIN="$(command -v docker)"
   else
     for cand in \
-      "/c/Users/$USER/AppData/Local/Programs/DockerDesktop/resources/bin/docker.exe" \
       "/c/Program Files/Docker/Docker/resources/bin/docker.exe" \
-      "$LOCALAPPDATA/DockerDesktop/resources/bin/docker.exe"
+      "/c/Program Files/Docker/Docker/resources/bin/docker" \
+      "/c/ProgramData/DockerDesktop/resources/bin/docker.exe"
     do
       [[ -f "$cand" ]] && { DOCKER_BIN="$cand"; break; }
     done
+    # 用户级安装目录（默认位置），用 cygpath 把 Windows 路径转成 POSIX 路径，
+    # 这样即使用户名含中文/空格（%USERNAME% 非 ASCII）也能正确定位。
+    if [[ -z "$DOCKER_BIN" && -n "${LOCALAPPDATA:-}" ]]; then
+      win_cand="${LOCALAPPDATA}\\DockerDesktop\\resources\\bin\\docker.exe"
+      [[ -f "$win_cand" ]] && DOCKER_BIN="$(cygpath -u "$win_cand")"
+    fi
+    # 最后兜底：逐个遍历 /c/Users/*（跳过非 ASCII 用户目录会漏，但成本极低）
+    if [[ -z "$DOCKER_BIN" ]]; then
+      for u in /c/Users/*; do
+        cand="$u/AppData/Local/Programs/DockerDesktop/resources/bin/docker.exe"
+        [[ -f "$cand" ]] && { DOCKER_BIN="$cand"; break; }
+      done
+    fi
   fi
 fi
 [[ -n "$DOCKER_BIN" ]] || die "找不到 docker 可执行文件。若 Docker Desktop 装在别处，用 DOCKER_BIN=/path/to/docker.exe 指定"
