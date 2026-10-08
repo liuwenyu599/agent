@@ -28,7 +28,9 @@ done
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m  [ OK ]\033[0m %s\n' "$*"; }
-bad()  { printf '\033[1;31m  [FAIL]\033[0m %*s\n' "$*"; }
+# 注意 %s 而非 %*s —— 后者会把第一个参数当宽度，中文消息会报
+#「printf: xxx: invalid number」并丢掉真正的错误文本。
+bad()  { printf '\033[1;31m  [FAIL]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[中止] %s\033[0m\n' "$*"; exit 1; }
 
 # ------------------------------------------------------------ Docker 路径转换
@@ -238,6 +240,10 @@ fi
 ok "挂载预检通过（Docker 能读取仓库）"
 
 step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
+BUILD_LOG="$OUT_DIR/build-$(date +%Y%m%d-%H%M%S).log"
+# 日志落盘而不是 tail 截断：Gradle 失败时真正的错误可能在几百行之前，
+# tail 会把它整段吃掉，只留下「没产物」这种没有信息量的结论。
+BUILD_RC=0
 # shellcheck disable=SC2086
 "$DOCKER_BIN" run --rm \
   -v "$HOST_ROOT:/src" \
@@ -263,16 +269,30 @@ step "2/5 容器内编译 + 打包 deb（首次需下载依赖，较慢）"
     # checkout 后可能是 CRLF，Linux 执行会报
     #「bash: ./gradlew: /bin/sh^M: bad interpreter」。这里统一收敛成 LF。
     if grep -q \$'\r' gradlew 2>/dev/null; then
-      sed -i 's/\r$//' gradlew
+      sed -i 's/\r\$//' gradlew
       echo '    已把 gradlew 从 CRLF 转为 LF'
     fi
-    head -n 1 gradlew | grep -q '^#!.*sh\$' && echo "    gradlew shebang OK: $(head -n 1 gradlew)"
+    echo \"    gradlew 首行: [\$(head -n 1 gradlew)]\"
+    echo \"    架构: \$(uname -m) / JDK: \$(java -version 2>&1 | head -1)\"
+    echo '--- 执行 packageDeb ---'
     ./gradlew packageDeb --no-daemon --stacktrace
     echo '--- 收集产物 ---'
     mkdir -p /out
     find /src/desktop/build/compose/binaries -name '*.deb' -exec cp {} /out/ \;
     ls -lh /out/
-  " 2>&1 | tail -60
+  " > "$BUILD_LOG" 2>&1 || BUILD_RC=$?
+
+# 实时显示关键行（构建中），但完整日志在文件里
+grep -E '^(---|fakeroot|    |BUILD|\* What went wrong|Caused by|FAILURE|Execution failed|> )' "$BUILD_LOG" 2>/dev/null | tail -25 || true
+
+if [[ $BUILD_RC -ne 0 ]]; then
+  bad "容器内构建失败（退出码 $BUILD_RC）"
+  echo "     完整日志：${BUILD_LOG}"
+  echo "     查看最后 40 行：tail -40 \"$BUILD_LOG\""
+  echo "     找真正的错误：grep -nE 'What went wrong|error:|Caused by|FAILURE' \"$BUILD_LOG\" | head -20"
+  exit 1
+fi
+ok "构建日志：$BUILD_LOG"
 
 step "3/5 校验产物"
 DEB=$(find "$OUT_DIR" -name '*.deb' -newermt '-30 minutes' -print -quit 2>/dev/null || true)
