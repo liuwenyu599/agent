@@ -26,11 +26,6 @@ data class ServerConfig(
          */
         const val DEFAULT_BASE_URL = "http://10.128.85.133:8000"
 
-        /**
-         * 历史默认值（2026-10-07 之前）。仅用于识别并自动迁移，见 [load]。
-         */
-        private const val LEGACY_LOOPBACK = "http://127.0.0.1:8000"
-
         private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
         val configDir: File by lazy {
@@ -53,25 +48,50 @@ data class ServerConfig(
         }
 
         /**
-         * 把历史遗留的默认地址自动升级为当前默认值。
+         * 把历史遗留的回环地址自动升级为当前默认值。
          *
          * 为什么需要：`load()` 只在**文件不存在**时才用默认值。一旦用户（或旧版）
          * 落过盘，配置里就固化了当时的地址，后续升级包改默认值对它无效——
          * 表现为「明明装了新版，还是连 127.0.0.1 连不上」。
          *
-         * 只迁移一个精确匹配的历史默认值：
-         * - 用户自己设过别的地址（含故意用回环做本地调试）→ 一律不动
-         * - 不确定是不是用户意图的值 → 不动，宁可让人手工改
+         * **为什么回环地址可以一律迁移、而不必逐个精确匹配：**
+         * 交付版客户端运行在**用户的办公机**上，后端在另一台内网服务器。
+         * 用户机器上**永远不存在**本机后端服务，所以任何指向
+         * `localhost` / `127.0.0.1` / `0.0.0.0` 的地址（不论端口、不论写法）
+         * 都是无意义的残留值，不是用户的真实意图。
+         * 唯一例外是开发机自测——那种场景不该用交付包。
+         *
+         * 非回环地址（内网 IP / 域名）一律不动：那是用户或管理员有意配置的，
+         * 覆盖它等于擅自改变部署目标。
          *
          * 迁移后立即落盘，避免每次启动都判一次。
          */
         private fun migrateLegacyDefaults(cfg: ServerConfig): ServerConfig {
-            val normalized = cfg.baseUrl.trim().trimEnd('/')
-            if (!normalized.equals(LEGACY_LOOPBACK, ignoreCase = true)) return cfg
+            if (!isLoopback(cfg.baseUrl)) return cfg
             val migrated = cfg.copy(baseUrl = DEFAULT_BASE_URL)
             save(migrated)
-            ClientLog.info("服务器地址已从历史默认值 $LEGACY_LOOPBACK 自动升级为 $DEFAULT_BASE_URL")
+            ClientLog.info(
+                "服务器地址已从无效的回环地址 ${cfg.baseUrl} 自动升级为 $DEFAULT_BASE_URL"
+            )
             return migrated
+        }
+
+        /**
+         * 判断地址是否指向本机回环。
+         *
+         * 覆盖 `127.0.0.1` / `localhost` / `0.0.0.0` / IPv6 回环 `::1`，
+         * 任意端口、任意大小写、末尾斜杠都算。
+         */
+        private fun isLoopback(rawUrl: String): Boolean {
+            // 去掉 scheme、末尾斜杠与路径，只留 host[:port]
+            val host = rawUrl.trim().removePrefix("http://").removePrefix("https://")
+                .substringBefore('/').substringBefore('\\').trim().trimEnd('/')
+            val hostOnly = host.substringBeforeLast(':').trim('[', ']').lowercase()
+            return hostOnly == "127.0.0.1" ||
+                hostOnly == "localhost" ||
+                hostOnly == "0.0.0.0" ||
+                hostOnly == "::1" ||
+                hostOnly == "::"
         }
 
         fun save(cfg: ServerConfig) {
