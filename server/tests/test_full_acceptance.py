@@ -36,6 +36,7 @@ from app.infrastructure.database import Base, engine  # noqa: E402
 # 服务级测试不走应用 lifespan，这里幂等建表（create_all 对已有表无副作用）
 Base.metadata.create_all(bind=engine)
 from app.application.writing import task_parser  # noqa: E402
+from app.application.templates.builtin_data import BUILTIN_TEMPLATES  # noqa: E402
 from app.application.writing.intent_interpreter import (  # noqa: E402
     WritingIntentInterpreter,
     _extract_json,
@@ -250,6 +251,29 @@ def admin(client):
 
 
 class TestWritingTaskFlow:
+    @pytest.mark.parametrize("genre", list(dict.fromkeys(
+        [item["name"] for item in BUILTIN_TEMPLATES] +
+        ["决议", "决定", "命令", "公报", "公告", "通告", "意见", "通报", "批复", "议案"] +
+        ["倡议书", "公开信", "新闻评论", "情况说明", "读书分享稿"]
+    )))
+    def test_catalog_and_open_genres_can_create_and_draft_without_template(self, client, user_a, genre):
+        message = f"写一篇社区法治宣传活动{genre}"
+        created = client.post("/api/v1/writing/tasks", headers=user_a,
+                              json={"message": message, "planned_context": {
+                                  "document_type": genre, "topic": "社区法治宣传活动"}})
+        assert created.status_code == 201, created.text
+        task = created.json()
+        assert task["task_context"]["document_type"] == genre
+        assert task["task_context"]["template_id"] is None
+
+        drafted = client.post(f"/api/v1/writing/tasks/{task['task_id']}/draft",
+                              headers=user_a, json={"outline_only": False})
+        assert drafted.status_code == 200, drafted.text
+        result = drafted.json()
+        assert result["version_no"] == 1
+        assert result["content_changed"] is True
+        assert result["current_content"].strip()
+
     def test_create_and_reply(self, client, user_a):
         r = client.post("/api/v1/writing/tasks", headers=user_a,
                         json={"message": "帮我写一份2026年度司法行政工作总结"})

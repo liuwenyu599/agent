@@ -173,9 +173,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                 if not task_parser.explicit_document_type(message):
                     parsed.pop("document_type", None)
                 changes = task_parser.merge_context(ctx, parsed)
-        explicit_type = task_parser.explicit_document_type(message)
-        if explicit_type:
-            ctx["document_type"] = explicit_type
+        ctx["document_type"] = task_parser.resolved_document_type(
+            message, ctx.get("document_type"))
 
         if not ctx.get("title"):
             derived = task_parser.build_title(ctx)
@@ -219,9 +218,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                         "document_number_enabled", "document_number", "document_date")
         task_parser.merge_context(ctx, {k: literal_plan[k] for k in literal_keys
                                         if k in literal_plan})
-        explicit_type = task_parser.explicit_document_type(message)
-        if explicit_type:
-            ctx["document_type"] = explicit_type
+        ctx["document_type"] = task_parser.resolved_document_type(
+            message, ctx.get("document_type"))
         for key in ("topic", "title", "recipient", "authority"):
             if not ctx.get(key) and literal_plan.get(key):
                 ctx[key] = literal_plan[key]

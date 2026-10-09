@@ -40,6 +40,21 @@ def explicit_document_type(message: str) -> Optional[str]:
                 return dtype
     return None
 
+
+def resolved_document_type(message: str, model_type: Optional[str]) -> Optional[str]:
+    """Keep a precise model genre if the user actually requested that full name.
+
+    The lexical fallback protects against a wrong model guess for known forms, but
+    must not shorten 调研报告 to 报告 or 活动方案 to 方案.
+    """
+    model_type = str(model_type or "").strip()
+    if model_type and re.search(
+        re.escape(model_type) + r"(?=$|[，。；,;\n]|\s*(?:给|面向|用于|字|左右|以上|以下))",
+        message or "",
+    ):
+        return model_type
+    return explicit_document_type(message) or model_type or None
+
 # 需要文号的概率较高的正式文种（仅用于 missing 提示，不自动开启）
 DOCNUM_TYPICAL = {"通知", "请示", "报告", "函", "通报", "意见"}
 
