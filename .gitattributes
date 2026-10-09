@@ -19,3 +19,9 @@ gradlew.bat text eol=crlf
 *.yaml text eol=lf
 *.toml text eol=lf
 *.env text eol=lf
+
+# Inno Setup 脚本：Windows 上用 ISCC.exe 编译，只在 Windows 跑，用 CRLF。
+# 但它**必须保留 UTF-8 BOM**——Inno Setup 读无 BOM 的 UTF-8 脚本时按本地代码页
+# 解析，中文会变乱码且不报错。
+# `text` 同时保证入库内容统一为 LF，避免 CRLF 混入 .iss 引发解析差异。
+*.iss text eol=crlf
