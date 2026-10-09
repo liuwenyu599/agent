@@ -469,9 +469,11 @@ class WritingViewModel(
             // 无论是否规划成功，都按用户的原话创建任务（不阻断写作）
             when (val r = repo.createTask(text, specResult)) {
                 is ApiResult.Ok -> {
-                    r.data?.let { d ->
-                        applyResponse(d)
+                    val task = r.data ?: run {
+                        fail("创建写作任务失败：服务端未返回任务")
+                        return@launch
                     }
+                    applyResponse(task)
                     entryInput = ""
                     busy = false
                     AppState.writingGenerating = false

@@ -142,8 +142,8 @@ def test_explicit_speech_type_overrides_wrong_model_guess_in_planning():
     assert plan["template_id"] == ""
 
 
-def test_model_can_choose_an_unlisted_genre_despite_topic_keyword():
-    assert task_parser.explicit_document_type("写一篇方案发布会新闻稿") is None
+def test_model_keeps_requested_genre_despite_topic_keyword():
+    assert task_parser.explicit_document_type("写一篇方案发布会新闻稿") == "新闻稿"
     svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     svc.db = None
     svc.rag = None

@@ -11,6 +11,7 @@ import pytest
 from app.application.templates.builtin_data import BUILTIN_TEMPLATES
 from app.application.writing.async_task_service import AsyncWritingTaskService
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
+from app.application.writing import task_parser
 
 
 OFFICIAL_GENRES = (
@@ -70,3 +71,32 @@ def test_topic_keyword_does_not_override_requested_genre(prompt, genre):
     service._plan_knowledge = lambda *args, **kwargs: []
     plan = asyncio.run(service.plan_task_async("user-1", prompt))
     assert plan["doc_type"] == genre
+
+
+@pytest.mark.parametrize("prompt,model_type,expected", [
+    ("写个调研报告", "报告", "调研报告"),
+    ("写个活动方案", "方案", "活动方案"),
+    ("写个发言稿2000字", "讲话稿", "发言稿"),
+    ("写个方案发布会新闻稿", "新闻稿", "新闻稿"),
+    ("写个法治宣传读书分享稿", "读书分享稿", "读书分享稿"),
+])
+def test_precise_user_genre_wins_in_production_planner(prompt, model_type, expected):
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service.db = None
+    service.rag = None
+
+    async def model_plan(*args, **kwargs):
+        return {"document_type": model_type, "topic": "法治宣传"}
+
+    service._interpret_async = model_plan
+    service._plan_knowledge = lambda *args, **kwargs: []
+    plan = asyncio.run(service.plan_task_async("user-1", prompt))
+    assert plan["doc_type"] == expected
+    assert plan["planned_context"]["document_type"] == expected
+
+
+def test_builtin_names_are_in_lexical_fallback_without_restricting_model_genres():
+    for item in BUILTIN_TEMPLATES:
+        genre = item["name"]
+        assert task_parser.explicit_document_type(f"写一篇{genre}") == genre
+    assert task_parser.resolved_document_type("写一篇新闻评论", "新闻评论") == "新闻评论"

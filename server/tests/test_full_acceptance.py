@@ -251,6 +251,27 @@ def admin(client):
 
 
 class TestWritingTaskFlow:
+    @pytest.mark.parametrize("genre,model_guess", [
+        ("调研报告", "报告"), ("活动方案", "方案"),
+    ])
+    def test_precise_genre_survives_plan_and_direct_creation(self, client, user_a,
+                                                               genre, model_guess):
+        message = f"写个社区法治宣传{genre}"
+        planned = client.post("/api/v1/writing/tasks/plan", headers=user_a,
+                              json={"message": message})
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["doc_type"] == genre
+
+        for planned_context in (None, {"document_type": model_guess,
+                                       "topic": "社区法治宣传"}):
+            body = {"message": message}
+            if planned_context is not None:
+                body["planned_context"] = planned_context
+            created = client.post("/api/v1/writing/tasks", headers=user_a,
+                                  json=body)
+            assert created.status_code == 201, created.text
+            assert created.json()["task_context"]["document_type"] == genre
+
     @pytest.mark.parametrize("genre", list(dict.fromkeys(
         [item["name"] for item in BUILTIN_TEMPLATES] +
         ["决议", "决定", "命令", "公报", "公告", "通告", "意见", "通报", "批复", "议案"] +

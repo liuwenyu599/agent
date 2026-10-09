@@ -6,24 +6,24 @@ missing_fields 仅供提示补充，不阻断一句话直接起草。
 import re
 from typing import Any, Dict, List, Optional
 
+from app.application.templates.builtin_data import BUILTIN_TEMPLATES
 from app.core.timeutil import now_local
 
-# 文种关键词（长词优先，避免"总结报告"误判）
-DOC_TYPE_KEYWORDS = [
-    ("工作总结", ["工作总结", "总结"]),
+# 词法表只在模型缺席或明显误判时兜底；内置模板名称也必须可被完整识别。
+DOC_TYPE_KEYWORDS = sorted([
+    *((item["name"], [item["name"]]) for item in BUILTIN_TEMPLATES),
     ("情况报告", ["情况报告"]),
     ("工作报告", ["工作报告"]),
-    ("通知", ["通知"]),
-    ("请示", ["请示"]),
-    ("报告", ["报告"]),
-    ("函", ["函件", "公函", "函"]),
     ("致辞稿", ["致辞稿", "致辞"]),
-    ("讲话稿", ["讲话稿", "讲话", "发言稿", "发言"]),
+    ("讲话稿", ["讲话"]),
+    ("发言稿", ["发言"]),
+    ("工作总结", ["总结"]),
+    ("函", ["函件", "公函"]),
     ("方案", ["工作方案", "实施方案", "方案"]),
     ("意见", ["指导意见", "实施意见", "意见"]),
     ("通报", ["通报"]),
-    ("会议纪要", ["会议纪要", "纪要"]),
-]
+    ("会议纪要", ["会议纪要"]),
+], key=lambda item: max(map(len, item[1])), reverse=True)
 FORMAL_DOC_TYPES = {"通知", "请示", "报告", "情况报告", "工作报告", "函", "方案", "意见", "通报"}
 
 
@@ -36,7 +36,7 @@ def explicit_document_type(message: str) -> Optional[str]:
     message = (message or "").strip()
     for dtype, keywords in DOC_TYPE_KEYWORDS:
         for keyword in sorted(keywords, key=len, reverse=True):
-            if re.search(re.escape(keyword) + r"(?:稿)?(?=$|[，。；,;\n]|\s*(?:给|面向|用于|字|左右|以上|以下))", message):
+            if re.search(re.escape(keyword) + r"(?:稿)?(?=$|[，。；,;\n]|\s*(?:\d{2,5}\s*字|给|面向|用于|字|左右|以上|以下))", message):
                 return dtype
     return None
 
@@ -48,12 +48,15 @@ def resolved_document_type(message: str, model_type: Optional[str]) -> Optional[
     must not shorten 调研报告 to 报告 or 活动方案 to 方案.
     """
     model_type = str(model_type or "").strip()
+    explicit_type = explicit_document_type(message)
+    if explicit_type and model_type and explicit_type != model_type and explicit_type.endswith(model_type):
+        return explicit_type
     if model_type and re.search(
         re.escape(model_type) + r"(?=$|[，。；,;\n]|\s*(?:给|面向|用于|字|左右|以上|以下))",
         message or "",
     ):
         return model_type
-    return explicit_document_type(message) or model_type or None
+    return explicit_type or model_type or None
 
 # 需要文号的概率较高的正式文种（仅用于 missing 提示，不自动开启）
 DOCNUM_TYPICAL = {"通知", "请示", "报告", "函", "通报", "意见"}
