@@ -37,6 +37,12 @@ data class WorkspaceSpec(
     /** 推荐模板 */
     val templateId: String = "",
     val templateName: String = "",
+    /**
+     * 可选的文种模板（模板中心）。**默认不选**——不选时后端不注入任何模板要求，
+     * 模型按其自身判断组织文种与结构；选了才在该文种的专门要求下撰写。
+     * 刻意做成可选而非强制：强套模板会让 14B 变得死板。
+     */
+    val templateOptions: List<SpecOption> = emptyList(),
     /** 后端实际使用的知识范围（allowed_scope） */
     val scopes: List<String> = emptyList(),
     /** 传给后端的知识库 id 列表 */

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,6 +73,7 @@ import com.judicialai.desktop.design.components.AiActionChip
 import com.judicialai.desktop.design.components.AiBubble
 import com.judicialai.desktop.design.components.AiWorkingRow
 import com.judicialai.desktop.design.components.AppButton
+import com.judicialai.desktop.design.components.FilterChip
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
 import com.judicialai.desktop.design.components.AppDialog
@@ -127,7 +130,9 @@ private const val Pending = "待补充"
  */
 @Composable
 fun WritingScreen() {
-    val vm = remember { WritingViewModel(Repositories.writing, Repositories.knowledge) }
+    val vm = remember {
+        WritingViewModel(Repositories.writing, Repositories.knowledge, Repositories.templates)
+    }
 
     // ---- 跨页面恢复 ----
     // 切走再切回时 remember 会重建 ViewModel（状态清零），但生成协程不会被取消，
@@ -780,10 +785,13 @@ private fun EntryHero() {
 
 // ---------------- 左栏：任务上下文 ----------------
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
     val spec = vm.spec ?: return
     val deptName = AppState.departmentName
+    // 拉取模板中心的启用模板供「文种模板（可选）」下拉使用；失败时静默降级为无选项。
+    LaunchedEffect(Unit) { vm.loadTemplateOptions() }
     Column(
         modifier.fillMaxHeight()
             .clip(RoundedCornerShape(Dimens.radiusLg))
@@ -884,6 +892,33 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                 if (spec.source == "template") {
                     Spacer(Modifier.height(Dimens.space1))
                     AppLinkButton("返回模板重新填写要素", onClick = { vm.returnToTemplate() })
+                }
+            }
+        }
+
+        // 文种模板（可选增强）
+        // 默认「不使用」——此时后端不注入任何模板要求，模型按自身判断组织文种与结构。
+        // 刻意做成可选而非强制：强套模板会把模型锁死（曾把讲话稿套成报告四段式）。
+        val tplOptions by vm.templateOptions.collectAsState()
+        val chosenTpl by vm.chosenTemplateId.collectAsState()
+        if (tplOptions.isNotEmpty()) {
+            Spacer(Modifier.height(Dimens.space3))
+            ContextBlock(title = "文种模板（可选）") {
+                Text(
+                    "不选则由模型自行判断文种与结构；选中后附加该文种的专门写作要求。",
+                    fontSize = 11.sp, color = Muted,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Dimens.space1),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space1),
+                ) {                    FilterChip("不使用", selected = chosenTpl.isBlank(),
+                        onClick = { vm.chooseTemplate("") })
+                    tplOptions.forEach { opt ->
+                        FilterChip(opt.label, selected = chosenTpl == opt.id,
+                            onClick = { vm.chooseTemplate(opt.id) })
+                    }
                 }
             }
         }

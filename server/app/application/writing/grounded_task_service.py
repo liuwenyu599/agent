@@ -126,10 +126,24 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             "ai_actions": self._plan_actions(doc_type),
         }
 
+    # 范文注入的两块内容与各自预算（上下文有限，按重要性分配）：
+    #   风格卡 —— 结构/套语/开头结尾的抽象，好处是短
+    #   原文摘录 —— 真实段落，好处是模型能看到本单位怎么说话
+    # 两者都要：只有风格卡时模型学得到「怎么写」但拿不到「写什么」，
+    # 表现为格式对、内容空洞且容易编造（实测曾生成已过期的年份）。
+    _STYLE_CARD_CHARS = 900
+    _EXCERPT_CHARS = 1800
+    _EXCERPT_TOP_K = 3
+
     def _example_style_block(self, query: str, user_id: str) -> str:
-        """Retrieve one doc-type-aware exemplar and inject only a structured style card."""
+        """检索同文种范文，向模型注入「风格卡 + 原文摘录」。
+
+        防照抄的边界仍然保留：只迁移写法与本单位行文习惯，不搬具体数据、
+        人名、日期与文号。但必须让模型看到原文——只给抽象的写法摘要时，
+        模型无从获得本单位的实际表述，产出会退化成通用套话。
+        """
         if style_adapter_active():
-            # 风格已经在权重里了，再塞一张卡只是白占上下文。
+            # 风格已经在权重里了，再塞范文只是白占上下文。
             # 留着这段返回值是为了让「撤卡」成为一个可回滚的运行期开关，
             # 而不是改代码：哪天 adapter 不想要了，删掉环境变量就回到原路。
             return ""
@@ -139,20 +153,57 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             examples = self.rag.search_examples(
                 query=self._exemplar_query(query),
                 user_id=user_id,
-                top_k=1,
-                max_chars=1200,
+                top_k=self._EXCERPT_TOP_K,
+                max_chars=2500,
             ) or []
         except Exception:
             examples = []
-        cards = compact_style_examples(examples, max_chars=1100)
-        if not cards:
+        if not examples:
+            return ""
+
+        cards = compact_style_examples(examples, max_chars=self._STYLE_CARD_CHARS)
+        excerpts = self._excerpt_block(examples, self._EXCERPT_CHARS)
+        parts = []
+        if cards:
+            parts.append(
+                "【结构与行文风格参考】\n" + cards
+            )
+        if excerpts:
+            parts.append(
+                "【同文种范文原文摘录】\n" + excerpts
+            )
+        if not parts:
             return ""
         return (
-            "\n\n【知识库范文风格卡】\n"
-            "只学习以下同文种优先范文提炼出的结构层级、段落节奏、固定套语、过渡方式和结尾方式；"
-            "禁止迁移范文中的具体单位、人名、数字、日期、文号和个案事实。"
-            "本次事实只能来自用户输入、附件和本轮 RAG 资料。\n\n" + cards
+            "\n\n【知识库范文参考】\n"
+            + "\n\n".join(parts)
+            + "\n\n使用方式：学习其章节组织、句式、过渡与本单位行文习惯，"
+            "可复用其中属于本单位的专有表述；"
+            "但严禁把范文里具体的数据、日期、人名、文号与个案事实当作本次事实"
+            "照搬——本次事实只能来自用户输入、附件与本轮检索到的资料。"
         )
+
+    @staticmethod
+    def _excerpt_block(examples: List[Dict], max_chars: int) -> str:
+        """拼接范文原文摘录，按 total 预算均分，保留段落原貌。"""
+        items = []
+        total = max_chars
+        for ex in examples:
+            if not ex:
+                continue
+            title = str(ex.get("title") or "").strip()
+            content = str(ex.get("content") or "").strip()
+            if not content:
+                continue
+            share = max(400, total // max(1, len(examples)))
+            excerpt = content[:share].rstrip()
+            if not excerpt:
+                continue
+            items.append(f"—《{title or '范文'}》—\n{excerpt}")
+            total -= len(excerpt) + 40
+            if total <= 0:
+                break
+        return "\n\n".join(items)
 
     def _draft_system(self, user_id: str, template: Optional[Dict[str, Any]] = None) -> str:
         return super()._draft_system(user_id, template)

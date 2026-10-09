@@ -14,12 +14,16 @@ import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import com.judicialai.desktop.features.knowledge.KnowledgeRepository
+import com.judicialai.desktop.features.templates.TemplatesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 
@@ -60,8 +64,49 @@ data class WritingTaskState(
 class WritingViewModel(
     private val repo: WritingRepository,
     private val knowledgeRepo: KnowledgeRepository? = null,
+    private val templatesRepo: TemplatesRepository? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /**
+     * 模板中心的可选模板（供「本次写作」左栏下拉）。
+     * 刻意保持**可选**：默认空表示不套模板，模型按自身判断组织文种与结构；
+     * 强套模板会让 14B 变得死板（曾经把讲话稿套成报告四段式就是这个后果）。
+     */
+    private val _templateOptions = MutableStateFlow<List<SpecOption>>(emptyList())
+    val templateOptions: StateFlow<List<SpecOption>> = _templateOptions.asStateFlow()
+
+    /** 当前选中的模板 id；空串 = 不使用模板。 */
+    private val _chosenTemplateId = MutableStateFlow("")
+    val chosenTemplateId: StateFlow<String> = _chosenTemplateId.asStateFlow()
+
+    /** 拉取模板中心的启用模板，供下拉使用。失败时静默降级为「无模板可选」。 */
+    fun loadTemplateOptions() {
+        val tpl = templatesRepo ?: return
+        scope.launch {
+            val items = tpl.list()
+            val opts = (items as? List<*>)?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+                ?.filter { (it["is_active"] as? kotlinx.serialization.json.JsonPrimitive)?.content != "false" }
+                ?.map { o ->
+                    SpecOption(
+                        id = (o["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty(),
+                        label = (o["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty(),
+                        selected = false,
+                    )
+                }
+                ?.filter { it.id.isNotBlank() && it.label.isNotBlank() }
+                .orEmpty()
+            _templateOptions.value = opts
+        }
+    }
+
+    /** 切换选中的模板；传空串表示不使用模板（恢复14B 自由生成）。 */
+    fun chooseTemplate(id: String) {
+        _chosenTemplateId.value = id
+        _templateOptions.value = _templateOptions.value.map {
+            it.copy(selected = it.id == id)
+        }
+    }
 
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
@@ -518,8 +563,12 @@ class WritingViewModel(
                 SpecOption(id = o["id"].str(), label = o["label"].str(),
                     selected = o["selected"].bool(), note = o["note"].str())
             },
-            templateId = d["template_id"].str(),
-            templateName = d["template_name"].str(),
+            // 后端 plan 可能带一个推荐模板，但**不自动选中**：模板是可选增强，
+            // 自动勾上等于把模型锁死成某文种的固定骨架（曾导致讲话稿被套成报告体例）。
+            // 只有用户在下拉里显式选过才带上 templateId。
+            templateId = _chosenTemplateId.value,
+            templateName = if (_chosenTemplateId.value.isBlank()) ""
+                           else _templateOptions.value.firstOrNull { it.id == _chosenTemplateId.value }?.label.orEmpty(),
             scopes = scopeArr,
             kbIds = d["kb_ids"].arr().map { it.str() }.filter { it.isNotBlank() },
             aiActions = d["ai_actions"].arr().map { it.str() }.filter { it.isNotBlank() },

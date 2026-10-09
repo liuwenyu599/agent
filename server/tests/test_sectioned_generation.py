@@ -17,12 +17,20 @@ def test_long_report_uses_sectioned_generation_without_explicit_word_target():
 
 
 def test_fallback_plan_is_multi_section_and_budgeted():
+    """兜底计划只规定「每节写什么」，不再规定小标题。
+
+    此前 heading 写死「一、基本情况」这类报告骨架，未匹配文种一律落到「报告」，
+    导致讲话稿、发言稿等连续行文体例被套上不相称的小标题——这是「讲话稿怎么有
+    小标题」的根因。现改为heading 留空，由模型按文种体例自行决定是否设小标题。
+    """
     plan = SectionedGenerationWritingTaskService._fallback_plan({
         "document_type": "工作总结", "word_count_target": 2400,
     })
     assert len(plan) == 4
-    assert plan[0]["heading"].startswith("一、")
-    assert plan[-1]["heading"].startswith("四、")
+    # heading 统一留空 = 不注入小标题
+    assert all(item["heading"] == "" for item in plan)
+    # 内容要求（focus）必须保留，否则各节无从区分
+    assert all(item["focus"] for item in plan)
     assert all(item["target_chars"] >= 350 for item in plan)
     assert sum(item["target_chars"] for item in plan) == 2400
 

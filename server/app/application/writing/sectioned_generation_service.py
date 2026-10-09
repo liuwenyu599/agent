@@ -56,14 +56,22 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
 
     @staticmethod
     def _fallback_plan(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
-        doc_type = str(ctx.get("document_type") or "报告")
+        """模型规划失败时的兜底。
+
+        heading 一律留空：不硬塞「一、基本情况」这类报告骨架。
+        此前未匹配文种会落到「报告」四段式，导致讲话稿、发言稿等连续行文体例
+        被套上不相称的小标题。这里只保留「本节写什么」的内容要求，
+        标题与层次交给模型按文种体例自行决定。
+        """
+        doc_type = str(ctx.get("document_type") or "")
         key = "方案" if "方案" in doc_type else ("工作总结" if "总结" in doc_type else "报告")
         items = _DEFAULT_SECTIONS[key]
         total = int(ctx.get("word_count_target") or 2200)
         per = max(350, total // len(items))
         return [
-            {"heading": heading, "focus": focus, "target_chars": per}
-            for heading, focus in items
+            # heading 置空 = 不要小标题；focus 保留该节应覆盖的内容。
+            {"heading": "", "focus": focus, "target_chars": per}
+            for _heading, focus in items
         ]
 
     @staticmethod
@@ -81,10 +89,14 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             return self._fallback_plan(ctx)
         total = int(ctx.get("word_count_target") or 2200)
         prompt = (
-            "为一篇司法行政机关正式材料规划一级章节。只返回 JSON 数组，不要正文、Markdown 或解释。"
-            "数组 3-6 项，每项字段必须为 heading、focus、target_chars。heading 必须使用"
-            "‘一、…’‘二、…’格式；focus 用一句话说明本节只写什么；target_chars 为本节目标字数。"
-            "章节之间职责不能重叠，目标字数合计应接近全文目标。\n"
+            "为一篇司法行政机关正式材料规划章节。只返回 JSON 数组，不要正文、Markdown 或解释。"
+            "数组 3-6 项，每项字段为 heading、focus、target_chars。\n"
+            "heading 是本节的小标题，**由你按该文种的体例自行决定用什么形式**："
+            "报告、方案等可用「一、××」「（一）××」；讲话稿、发言稿、主持词等连续行文体例"
+            "请把 heading 留空字符串，表示本节直接接续上文写、不要插入小标题。"
+            "切勿把所有文种一律套用「一、二、三」。\n"
+            "focus 用一句话说明本节只写什么（写内容要求，不要写标题格式）；"
+            "target_chars 为本节目标字数。章节之间职责不能重叠，目标字数合计应接近全文目标。\n"
             f"文种：{ctx.get('document_type') or '报告'}\n"
             f"主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
             f"用途：{ctx.get('purpose') or ''}\n"
@@ -105,7 +117,10 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
                     chars = int(item.get("target_chars") or 0)
                 except (TypeError, ValueError):
                     chars = 0
-                if heading and focus and re.match(r"^[一二三四五六七八九十]+、", heading):
+                # heading 允许为空：代表该节不要小标题（连续行文体例）。
+                # 原先强制匹配「一、二、」会把这类plan 整条丢弃并退回兜底骨架，
+                # 而兜底骨架只有报告/方案/总结三种，正是讲话稿被套成报告体例的来源。
+                if focus:
                     plan.append({
                         "heading": heading[:80],
                         "focus": focus[:240],
@@ -121,20 +136,34 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
     def _section_instruction(ctx: Dict[str, Any], section: Dict[str, Any],
                              previous_headings: List[str], next_headings: List[str]) -> str:
         key_facts = "；".join(str(x) for x in (ctx.get("key_facts") or [])[:12])
+        # heading 为空 = 本节不加小标题、接续上文写（讲话稿/发言稿等连续行文体例）
+        heading = str(section.get("heading") or "").strip()
+        heading_line = (
+            f"当前章节标题：{heading}\n"
+            if heading else
+            "当前章节：不设小标题，直接接续上文连贯行文，不要另起「一、二、三」式标题。\n"
+        )
         return (
             "这是长文分章节生成任务，只写当前这一节，不要生成其他章节。\n"
             f"全文文种：{ctx.get('document_type') or '正式材料'}\n"
             f"全文主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
             f"全文用途：{ctx.get('purpose') or ''}\n"
-            f"当前章节：{section['heading']}\n"
-            f"本节职责：{section['focus']}\n"
+            + heading_line
+            + f"本节职责：{section['focus']}\n"
             f"本节目标字数：约 {section['target_chars']} 字\n"
             f"前文章节（禁止重复）：{'、'.join(previous_headings) or '无'}\n"
             f"后续章节（内容留给后文，不要提前展开）：{'、'.join(next_headings) or '无'}\n"
             f"已确认关键事实：{key_facts or '以本节检索材料为准'}\n"
-            "输出必须从当前章节标题开始，随后写完整正式段落。涉及多个事项时用“（一）”“1．”“（1）”"
-            "组织本节层级，事项超过 3 条不得写成连续叙述段落。不得输出全文标题、主送机关、文号、"
-            "发文机关署名或成文日期；不得用‘略’‘待补充’等占位文字；不得重复前文。"
+            # 无小标题时不能说「从标题开始」，也不能强制事项分层——
+            # 讲话稿/发言稿按自然段推进才是它们的体例。
+            + ("输出直接从本节正文开始，不要另起章节标题。" if not heading
+               else "输出必须从当前章节标题开始，随后写完整正式段落。")
+            + ("\n本节内部按需组织层次：事项较多时可用「（一）」「1．」「（1）」分层，"
+               "内容连贯的场合直接写成连贯段落即可，不要为了分层而分层。" if not heading
+               else "\n涉及多个事项时用“（一）”“1．”“（1）”组织本节层级，"
+                    "事项超过 3 条不得写成连续叙述段落。")
+            + "\n不得输出全文标题、主送机关、文号、发文机关署名或成文日期；"
+            "不得用'略''待补充'等占位文字；不得重复前文。"
         )
 
     @staticmethod
@@ -142,6 +171,10 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         text = (text or "").strip()
         if not text:
             return ""
+        # heading 为空表示「本节不要小标题」（讲话稿、发言稿等连续行文体例）。
+        # 此时不做标题注入，也不用标题去切分正文——按内容自然推进即可。
+        if not heading:
+            return text
         # Model sometimes repeats the document title before the requested chapter; discard anything
         # before the exact requested heading. If it omitted the heading, backend adds it once.
         pos = text.find(heading)
