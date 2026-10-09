@@ -88,8 +88,9 @@ REVISION_RULES = (
 )
 
 DRAFT_RULES = (
-    "这是公文起草任务。要求：\n"
-    "1. 不要编造文号，不要写文号行；\n"
+    "这是写作任务。以用户指定的文种、对象和用途为准；可写各种文种，"
+    "不要把未知文种强行改成通知、报告或方案。要求：\n"
+    "1. 正式公文不要编造文号；其他文种不添加无关的公文要素；\n"
     "2. 区分两类内容，区别对待，不可一刀切：\n"
     "   （1）外部事实——政策文号、他人姓名、统计数字、具体日期、已有成效——"
     "必须有出处，材料里没有的不得自行填充或编造；\n"
@@ -102,11 +103,9 @@ DRAFT_RULES = (
     "4. 文种与边界以用户表达为准：用户说明了文种、用途、报送对象、时间范围的，"
     "严格照此撰写，不得擅自改文种、不得扩写范围；用户没有明说的，由你根据内容特征"
     "选择最贴切的文种与结构，不要因为信息缺失就退回成提纲或空话；\n"
-    "5. 标题、主送机关、成文日期已由结构化字段提供时，不要在正文开头重复书写；"
-    "**用户未提供这些要素时，按内容自行拟定合理的标题、主送机关与成文日期，"
-    "不要留空、不要输出「XX」「××」等占位符**；\n"
-    "6. 文号一律不写、不编造；成文日期若系统已给定则服从系统安排，未给定时"
-    "在落款处按内容拟一个合理日期，不要在正文中混用其他日期；"
+    "5. 标题由系统统一管理；正式公文的主送、落款和成文日期由系统字段管理，"
+    "正文不要重复这些字段。其他文种按自身体例行文，不添加无关的公文套式；\n"
+    "6. 不编造文号；正式公文成文日期由系统确定，不要在正文中另写日期；"
     "联系人、电话、邮箱等材料未提供时直接省略，不得伪造；\n"
     "7. 输出前自检：逐节回看，凡是章节标题下面没有完整段落、只有「略」"
     "「待补充」「仅保留思路」式说明的，一律重写该节为具体内容后再输出——"
@@ -318,6 +317,9 @@ class WritingTaskService:
             for key in tuple(ctx.keys()):
                 if key in planned_context and key not in ("history", "missing_fields"):
                     ctx[key] = planned_context[key]
+            # A planning snapshot may suggest a template, but binding requires explicit choice.
+            ctx["template_id"] = None
+            ctx["template_name"] = None
             # planned_context 已经完成过语义理解，文种/主题/主送/发文机关等语义字段
             # 必须以它为准。规则 parser 这里只刷新“可从原文字面确定”的严格字段，
             # 避免诸如“关于报送材料的通知”被误抽成 recipient="材料的通知"。
@@ -360,6 +362,7 @@ class WritingTaskService:
                     ctx["document_date"] = _today_doc_date()
         if kb_ids:
             ctx["kb_ids"] = [k for k in kb_ids if k]
+        self._complete_default_authority(ctx)
         missing = task_parser.compute_missing(ctx)
         self._push_history(ctx, "user", message)
 
@@ -430,7 +433,6 @@ class WritingTaskService:
         materials = self._plan_materials(ctx, user_id, org_ctx) \
             if any(cue in message for cue in material_cues) else []
         knowledge = self._plan_knowledge(user_id, org_ctx)
-        template = self._plan_template(doc_type, org_ctx)
 
         return {
             "doc_type": doc_type,
@@ -447,8 +449,8 @@ class WritingTaskService:
             "fields": fields,
             "materials": materials,
             "knowledge": knowledge,
-            "template_id": template.get("id") or "",
-            "template_name": template.get("name") or "",
+            "template_id": "",
+            "template_name": "",
             "scopes": org_ctx.get("scopes") or ["GLOBAL"],
             "kb_ids": [k["id"] for k in knowledge],
             "ai_actions": self._plan_actions(doc_type),
@@ -550,7 +552,7 @@ class WritingTaskService:
 
     @staticmethod
     def _plan_actions(doc_type: str) -> List[str]:
-        base = ["完善结构", "补充依据", "压缩篇幅", "公文润色"]
+        base = ["完善结构", "补充依据", "压缩篇幅", "润色表达"]
         if doc_type in ("会议纪要", "纪要"):
             return ["补全参会信息", "整理议定事项", "压缩篇幅", "公文润色"]
         if doc_type in ("工作总结", "报告", "工作情况报告"):
@@ -818,6 +820,12 @@ class WritingTaskService:
         except Exception as e:  # noqa: BLE001
             logger.warning("[写作任务] 读取 org.name 失败: %s", e)
         return ""
+
+    def _complete_default_authority(self, ctx: Dict[str, Any]) -> None:
+        """Use the configured issuing organization for official documents when omitted."""
+        doc_type = str(ctx.get("document_type") or "")
+        if not ctx.get("authority") and doc_type in task_parser.FORMAL_DOC_TYPES:
+            ctx["authority"] = self._default_authority() or None
 
     # ---------------- 起草 / 继续生成 ----------------
 
@@ -1345,7 +1353,14 @@ class WritingTaskService:
 
     def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool,
                                  template: Optional[Dict[str, Any]] = None) -> str:
-        parts = ["请起草一份公文提纲。" if outline_only else "请起草一份公文。"]
+        parts = ["请起草一份提纲。" if outline_only else "请起草一份完整材料。"]
+        original_request = next((str(item.get("content") or "").strip()
+                                 for item in ctx.get("history") or []
+                                 if item.get("role") == "user" and item.get("content")), "")
+        if original_request:
+            parts.append(f"用户原始需求：{original_request}。")
+        parts.append(f"当前日期：{_today_doc_date()}。只用于理解本次写作的时间背景，"
+                     "不得把历史范文中的旧时间移植到本稿。")
         # 关联模板：把模板的结构/写作指导/篇幅作为起草依据（模板内容由管理员/用户预先配置，非模型编造）
         if template:
             parts.append(f"本任务关联写作模板「{template.get('name', '')}」，请遵循其要求。")
@@ -1378,7 +1393,9 @@ class WritingTaskService:
             parts.append(f"语气风格：{ctx['tone']}。")
         if not outline_only:
             doc_type = str(ctx.get("document_type") or "")
-            if "函" in doc_type:
+            original_request = original_request or str(ctx.get("requirements") or "")
+            wants_sections = any(cue in original_request for cue in ("小标题", "分章节", "分节", "分条", "一二三"))
+            if doc_type == "函":
                 length_rule = (
                     "3) 函件务必简明，"
                     + ("全文按用户指定字数执行，字数必须通过把每段写实写足来达标，"
@@ -1397,24 +1414,50 @@ class WritingTaskService:
                     "凡涉及请对方拨款、审批、配合的事项，必须明确写出"
                     "“请予……”“望予……”“……为盼”等商请表述；\n"
                 )
+            elif any(kind in doc_type for kind in ("致辞", "讲话", "发言", "主持词")) and not wants_sections:
+                length_rule = (
+                    "3) 这是现场宣读的致辞或讲话，按自然段推进：向听众开场，紧扣活动主题，"
+                    "表达认识与期待，最后自然致谢或祝愿；不要写成工作方案、实施步骤、"
+                    "责任分工或报告式成效清单；\n"
+                )
+                ending_rule = ""
             else:
                 length_rule = "3) 按文种组织必要结构，避免机械凑章节；除用户另有字数要求外，以完整、精炼为准；\n"
                 ending_rule = ""
+            if any(kind in doc_type for kind in ("致辞", "讲话", "发言", "主持词")) and not wants_sections:
+                structure_rule = "按现场讲话体例写连贯自然段，不硬设公文章节标题；\n"
+            elif doc_type in task_parser.FORMAL_DOC_TYPES:
+                structure_rule = (
+                    "正文按事项分条时，层级依次采用“一、”“（一）”“1．”“（1）”，"
+                    "按实际需要使用，不必凑齐四级；事项超过 3 条时不得写成连续叙述段落，"
+                    "也不要给短材料机械增加章节；\n"
+                )
+            else:
+                structure_rule = "按用户要求和该文种的自然体例组织段落；有明确结构要求时照办，不套公文层级；\n"
+            boundary_rule = (
+                "通知围绕具体事项和工作要求行文，不得把通知写成工作要点，"
+                "不得把报送事项扩写成全年工作部署；\n"
+                if doc_type == "通知" else ""
+            )
+            metadata_rule = (
+                "8) 当前文件的文号与成文日期由系统程序处理，正文不要输出文号或日期占位符；\n"
+                if doc_type in task_parser.FORMAL_DOC_TYPES else
+                "8) 不添加与本次文种无关的文号、落款或日期占位符；\n"
+            )
             parts.append(
                 "\n严格要求：\n"
-                "1) 必须输出完整公文正文，禁止只输出提纲或片段；\n"
-                "2) 标题、主送机关由系统结构化字段单独排版；你的输出正文不要重复标题或主送机关，从正文第一段直接开始；\n"
+                "1) 必须输出完整正文，禁止只输出提纲或片段；\n"
+                "2) 标题由系统单独排版；正文从第一段开始，不重复系统已有的结构字段；\n"
                 + length_rule +
                 "4) 禁止使用任何 Markdown 标记：不要 ###、####、**、---、-、* 等；\n"
                 "5) 直接以纯文本输出，段落之间用一个空行分隔；\n"
-                "正文按事项分条组织，层级依次采用“一、”“（一）”“1．”“（1）”，"
-                "按实际需要使用层级，不必凑齐四级；事项超过 3 条时不得写成连续叙述段落。"
-                "通知围绕具体事项和工作要求分条，不能套用工作报告的成效总结结构；\n"
-                "6) 语言规范、正式、符合党政机关公文写作惯例；同文种知识库范文命中时优先参考其体例和固定用语；\n"
+                + structure_rule +
+                boundary_rule +
+                "6) 语气、措辞和结构符合本次文种与使用场景；知识库同类范文仅供参考写法，不照抄事实和段落；\n"
                 "7) 严禁编造具体信息：不得虚构联系人姓名、联系电话、邮箱地址、网址；"
                 "材料未提供这类可选字段时直接省略，不得输出 XX/xx/XXXX 等占位符；\n"
-                "8) 当前文件的文号与成文日期由系统程序处理，正文不要自行输出文号或日期占位符；\n"
-                "9) 严格遵守已确认文种和内容边界，不得把通知写成工作要点、把报送事项扩写成全年工作部署；\n"
+                + metadata_rule +
+                "9) 严格遵守用户确认的文种与内容边界，不得把一种文种写成另一种；\n"
                 + ending_rule +
                 "12) 外部事实（姓名、电话、文号、统计数字、具体日期）必须有来源；"
                 "工作思路、具体举措、责任分工、预期目标属于作者自主规划，应写实写具体。"
@@ -1452,15 +1495,39 @@ class WritingTaskService:
                   extra_query: str = "") -> List[Dict]:
         if not self.rag:
             return []
+        original_request = next((str(item.get("content") or "").strip()
+                                 for item in ctx.get("history") or []
+                                 if item.get("role") == "user" and item.get("content")), "")
         query = " ".join(filter(None, [
-            ctx.get("title"), ctx.get("topic"),
-            ctx.get("time_range"), extra_query,
+            ctx.get("document_type"), ctx.get("title"), ctx.get("topic"),
+            ctx.get("purpose"), ctx.get("time_range"), original_request,
+            extra_query,
         ])) or (ctx.get("requirements") or "")
         if not query.strip():
             return []
         try:
             kb_ids = ctx.get("kb_ids") or None  # 关联知识库时限定检索范围
-            return self.rag.search(query=query, user_id=user_id, kb_ids=kb_ids) or []
+            sources = self.rag.search(query=query, user_id=user_id, kb_ids=kb_ids) or []
+            doc_type = str(ctx.get("document_type") or "").strip()
+            if doc_type:
+                try:
+                    norm_query = (f"{doc_type} 写作规范 公文格式" if
+                                  doc_type in task_parser.FORMAL_DOC_TYPES else
+                                  f"{doc_type} 写作规范 体例风格")
+                    norms = self.rag.search(
+                        query=norm_query, user_id=user_id,
+                        kb_ids=kb_ids, top_k=3,
+                    ) or []
+                    seen = {item.get("chunk_id") or (item.get("doc_id"), item.get("source"))
+                            for item in sources}
+                    for item in norms:
+                        key = item.get("chunk_id") or (item.get("doc_id"), item.get("source"))
+                        if key not in seen:
+                            sources.append(item)
+                            seen.add(key)
+                except Exception as e:
+                    logger.warning("[写作任务] 规范检索失败: %s", e)
+            return sources
         except Exception as e:
             logger.warning("[写作任务] RAG 检索失败: %s", e)
             return []

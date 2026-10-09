@@ -204,6 +204,8 @@ class SemanticWritingTaskService(WritingTaskService):
             for key in tuple(ctx.keys()):
                 if key in planned_context and key not in ("history", "missing_fields"):
                     ctx[key] = planned_context[key]
+            ctx["template_id"] = None
+            ctx["template_name"] = None
         else:
             it = self._interpret(message, ctx, has_draft=False)
             if it:
@@ -223,6 +225,7 @@ class SemanticWritingTaskService(WritingTaskService):
                 ctx["template_name"] = tmpl["name"]
         if kb_ids:
             ctx["kb_ids"] = [x for x in kb_ids if x]
+        self._complete_default_authority(ctx)
 
         missing = task_parser.compute_missing(ctx)
         self._push_history(ctx, "user", message)
@@ -271,7 +274,6 @@ class SemanticWritingTaskService(WritingTaskService):
         # as “参考/根据/材料”; the actual draft RAG path remains permission-scoped.
         materials = self._plan_materials(ctx, user_id, org_ctx)
         knowledge = self._plan_knowledge(user_id, org_ctx)
-        template = self._plan_template(doc_type, org_ctx)
 
         return {
             "doc_type": doc_type,
@@ -287,8 +289,8 @@ class SemanticWritingTaskService(WritingTaskService):
             "fields": fields,
             "materials": materials,
             "knowledge": knowledge,
-            "template_id": template.get("id") or "",
-            "template_name": template.get("name") or "",
+            "template_id": "",
+            "template_name": "",
             "scopes": org_ctx.get("scopes") or ["GLOBAL"],
             "kb_ids": [k["id"] for k in knowledge],
             "ai_actions": self._plan_actions(doc_type),

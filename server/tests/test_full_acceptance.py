@@ -313,6 +313,7 @@ class TestWritingTaskFlow:
         r = client.get(f"/api/v1/writing/tasks/{tid}/export", headers=user_a)
         assert r.status_code == 200
         assert r.content[:2] == b"PK"  # 真实 docx（zip）
+
         text = docx_text(r.content)
         assert "司法行政" in text or "工作总结" in text
 
@@ -323,6 +324,72 @@ class TestWritingTaskFlow:
             assert r.status_code == 200, f"v{no} 导出失败"
             assert r.content[:2] == b"PK"
             assert len(docx_text(r.content)) > 5
+
+    def test_one_sentence_speech_uses_smart_writing_without_template(self, client, user_a):
+        message = "给领导写一篇法治宣传活动致辞稿"
+        planned = client.post("/api/v1/writing/tasks/plan", headers=user_a,
+                              json={"message": message})
+        assert planned.status_code == 200, planned.text
+        plan = planned.json()
+        assert plan["doc_type"] == "致辞稿"
+        assert plan["template_id"] == ""
+        assert "致辞" in plan["title"]
+
+        planned_context = dict(plan["planned_context"])
+        planned_context["template_id"] = "suggested-but-not-selected"
+        created = client.post("/api/v1/writing/tasks", headers=user_a,
+                              json={"message": message,
+                                    "planned_context": planned_context})
+        assert created.status_code == 201, created.text
+        task = created.json()
+        assert task["task_context"]["template_id"] is None
+        drafted = client.post(f"/api/v1/writing/tasks/{task['task_id']}/draft",
+                              headers=user_a, json={"outline_only": False})
+        assert drafted.status_code == 200, drafted.text
+        content = drafted.json()["current_content"]
+        assert "各位领导" in content and "谢谢大家" in content
+        assert "一、总体要求" not in content
+        assert "二、实施步骤" not in content
+
+    def test_long_speech_sections_do_not_turn_into_a_scheme(self, client, user_a):
+        message = "给领导写一篇2000字法治宣传活动致辞稿"
+        planned = client.post("/api/v1/writing/tasks/plan", headers=user_a,
+                              json={"message": message})
+        assert planned.status_code == 200, planned.text
+        created = client.post("/api/v1/writing/tasks", headers=user_a,
+                              json={"message": message,
+                                    "planned_context": planned.json()["planned_context"]})
+        assert created.status_code == 201, created.text
+        task_id = created.json()["task_id"]
+        drafted = client.post(f"/api/v1/writing/tasks/{task_id}/draft",
+                              headers=user_a, json={"outline_only": False})
+        assert drafted.status_code == 200, drafted.text
+        payload = drafted.json()
+        assert payload["generation_mode"] == "sectioned"
+        assert all(not item["heading"] for item in payload["section_plan"])
+        assert "一、总体要求" not in payload["current_content"]
+        assert "谢谢大家" in payload["current_content"]
+
+    def test_unlisted_genre_keeps_model_type_and_uses_single_draft(self, client, user_a):
+        message = "写一篇方案发布会新闻稿"
+        planned = client.post("/api/v1/writing/tasks/plan", headers=user_a,
+                              json={"message": message})
+        assert planned.status_code == 200, planned.text
+        plan = planned.json()
+        assert plan["doc_type"] == "新闻稿"
+        assert plan["template_id"] == ""
+        created = client.post("/api/v1/writing/tasks", headers=user_a,
+                              json={"message": message,
+                                    "planned_context": plan["planned_context"]})
+        assert created.status_code == 201, created.text
+        task_id = created.json()["task_id"]
+        drafted = client.post(f"/api/v1/writing/tasks/{task_id}/draft",
+                              headers=user_a, json={"outline_only": False})
+        assert drafted.status_code == 200, drafted.text
+        payload = drafted.json()
+        assert payload.get("generation_mode") != "sectioned"
+        assert "发布活动" in payload["current_content"]
+        assert "一、总体要求" not in payload["current_content"]
 
     def test_save_manual_version(self, client, user_a):
         tid = client.post("/api/v1/writing/tasks", headers=user_a,

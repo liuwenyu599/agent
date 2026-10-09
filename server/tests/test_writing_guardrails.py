@@ -208,6 +208,7 @@ def test_clear_plan_uses_rule_fast_without_llm_or_material_search():
     assert result["doc_type"] == "通知"
     assert "社区矫正" in result["title"]
     assert result["materials"] == []
+    assert result["template_id"] == ""
 
 
 def test_official_export_keeps_red_header_separate_from_document_title():

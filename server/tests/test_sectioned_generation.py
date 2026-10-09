@@ -1,4 +1,9 @@
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
+from app.application.writing import task_parser
+from app.infrastructure.ai.mock import MockLLMGateway
+from app.application.writing.quality_gate import QualityGate
+from app.application.writing.async_task_service import AsyncWritingTaskService
+import asyncio
 
 
 def test_long_report_uses_sectioned_generation_without_explicit_word_target():
@@ -10,7 +15,13 @@ def test_long_report_uses_sectioned_generation_without_explicit_word_target():
     }) is False
     assert SectionedGenerationWritingTaskService._should_section({
         "document_type": "通知", "word_count_target": 2000,
-    }) is True
+    }) is False
+    assert SectionedGenerationWritingTaskService._should_section({
+        "document_type": "新闻稿", "word_count_target": 2000,
+    }) is False
+    assert SectionedGenerationWritingTaskService._fallback_plan({
+        "document_type": "新闻稿", "word_count_target": 2000,
+    }) == []
     assert SectionedGenerationWritingTaskService._should_section({
         "document_type": "工作总结", "word_count_target": 3000,
     }, outline_only=True) is False
@@ -73,3 +84,104 @@ def test_section_instruction_reserves_neighbor_content_and_structured_fields():
     assert "前文章节（禁止重复）：一、基本情况" in text
     assert "后续章节（内容留给后文，不要提前展开）：三、存在问题、四、下一步工作" in text
     assert "不得输出全文标题、主送机关、文号" in text
+
+
+def test_one_sentence_speech_is_not_a_plan_or_a_required_field_form():
+    parsed = task_parser.parse_message("给领导写一篇法治宣传活动致辞稿")
+    assert parsed["document_type"] == "致辞稿"
+    ctx = task_parser.empty_context()
+    task_parser.merge_context(ctx, parsed)
+    assert "主送对象" not in task_parser.compute_missing(ctx)
+    assert "发文机关（落款单位）" not in ctx["missing_fields"]
+
+    plan = SectionedGenerationWritingTaskService._fallback_plan(ctx)
+    assert all(not item["heading"] for item in plan)
+    assert "欢迎" in plan[0]["focus"]
+    assert "祝愿" in plan[-1]["focus"]
+    assert not any("实施步骤" in item["focus"] or "保障措施" in item["focus"] for item in plan)
+
+
+def test_speech_rejects_scheme_shaped_model_plan():
+    class Assistant:
+        def complete(self, *args, **kwargs):
+            return '[{"heading":"一、总体要求","focus":"明确工作目标","target_chars":600},' \
+                   '{"heading":"二、实施步骤","focus":"安排各阶段任务","target_chars":600},' \
+                   '{"heading":"三、保障措施","focus":"明确责任分工","target_chars":600}]'
+
+    svc = SectionedGenerationWritingTaskService.__new__(SectionedGenerationWritingTaskService)
+    svc.assistant = Assistant()
+    plan = svc._section_plan({"document_type": "致辞稿", "topic": "法治宣传活动",
+                              "word_count_target": 1800})
+    assert all(not item["heading"] for item in plan)
+    assert "欢迎" in plan[0]["focus"]
+
+
+def test_mock_sections_follow_distinct_foci_and_pass_repetition_gate():
+    ctx = {"document_type": "工作总结", "word_count_target": 2400}
+    plan = SectionedGenerationWritingTaskService._fallback_plan(ctx)
+    sections = [MockLLMGateway._writing_draft(
+        SectionedGenerationWritingTaskService._section_instruction(ctx, item, [], []))
+        for item in plan]
+    assert len(set(sections)) == len(sections)
+    assert QualityGate().evaluate("\n\n".join(sections), body_only=True)["level"] != "D"
+
+
+def test_explicit_speech_type_overrides_wrong_model_guess_in_planning():
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    svc.db = None
+    svc.rag = None
+
+    async def wrong_guess(*args, **kwargs):
+        return {"document_type": "方案", "topic": "法治宣传活动"}
+
+    svc._interpret_async = wrong_guess
+    svc._plan_knowledge = lambda *args, **kwargs: []
+    plan = asyncio.run(svc.plan_task_async("u1", "给领导写一篇法治宣传活动致辞稿"))
+    assert plan["source"] == "llm"
+    assert plan["doc_type"] == "致辞稿"
+    assert plan["template_id"] == ""
+
+
+def test_model_can_choose_an_unlisted_genre_despite_topic_keyword():
+    assert task_parser.explicit_document_type("写一篇方案发布会新闻稿") is None
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    svc.db = None
+    svc.rag = None
+
+    async def model_plan(*args, **kwargs):
+        return {"document_type": "新闻稿", "topic": "方案发布会", "title": "方案发布会举行"}
+
+    svc._interpret_async = model_plan
+    svc._plan_knowledge = lambda *args, **kwargs: []
+    plan = asyncio.run(svc.plan_task_async("u1", "写一篇方案发布会新闻稿"))
+    assert plan["doc_type"] == "新闻稿"
+    assert plan["title"] == "方案发布会举行"
+    assert plan["planned_context"]["recipient"] is None
+
+
+def test_unlisted_genre_drafting_does_not_inherit_official_document_outline():
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    instruction = svc._build_draft_instruction({
+        "document_type": "新闻稿", "topic": "方案发布会",
+        "history": [{"role": "user", "content": "写一篇方案发布会新闻稿"}],
+    }, outline_only=False)
+    assert "文种：新闻稿" in instruction
+    assert "用户原始需求：写一篇方案发布会新闻稿" in instruction
+    assert "正文按事项分条组织" not in instruction
+    assert "不套公文层级" in instruction
+
+
+def test_async_production_planner_keeps_speech_as_continuous_prose():
+    class Assistant:
+        async def acomplete(self, *args, **kwargs):
+            return '[{"heading":"","focus":"欢迎来宾并点明活动","target_chars":600},' \
+                   '{"heading":"","focus":"谈活动意义与实际体验","target_chars":600},' \
+                   '{"heading":"","focus":"表达期待并致谢","target_chars":600}]'
+
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    svc.assistant = Assistant()
+    ctx = {"document_type": "致辞稿", "topic": "法治宣传活动", "word_count_target": 1800}
+    plan = asyncio.run(svc._section_plan_async(ctx))
+    assert [item["focus"] for item in plan] == [
+        "欢迎来宾并点明活动", "谈活动意义与实际体验", "表达期待并致谢"]
+    assert all(item["heading"] == "" for item in plan)

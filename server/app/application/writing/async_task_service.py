@@ -15,7 +15,7 @@ from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.ops_task_service import LOCAL_OPERATIONS
 from app.application.writing.quality_gate import QualityGate
-from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
+from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService, _SPEECH_TYPES
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
 
@@ -159,6 +159,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
             for key in tuple(ctx.keys()):
                 if key in planned_context and key not in ("history", "missing_fields"):
                     ctx[key] = planned_context[key]
+            ctx["template_id"] = None
+            ctx["template_name"] = None
             # Strict literals can still be refreshed from the original sentence.
             literal = self._literal_overrides(message)
             changes = task_parser.merge_context(ctx, literal)
@@ -166,6 +168,14 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
             interpreted = await self._interpret_async(message, ctx, has_draft=False)
             if interpreted:
                 changes = self._merge_interpretation(ctx, interpreted)
+            else:
+                parsed = task_parser.parse_message(message)
+                if not task_parser.explicit_document_type(message):
+                    parsed.pop("document_type", None)
+                changes = task_parser.merge_context(ctx, parsed)
+        explicit_type = task_parser.explicit_document_type(message)
+        if explicit_type:
+            ctx["document_type"] = explicit_type
 
         if not ctx.get("title"):
             derived = task_parser.build_title(ctx)
@@ -178,6 +188,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                 ctx["template_name"] = tmpl["name"]
         if kb_ids:
             ctx["kb_ids"] = [x for x in kb_ids if x]
+        self._complete_default_authority(ctx)
 
         missing = task_parser.compute_missing(ctx)
         self._push_history(ctx, "user", message)
@@ -197,20 +208,23 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     async def plan_task_async(self, user_id: str, message: str) -> Dict[str, Any]:
         ctx = task_parser.empty_context()
         literal_plan = task_parser.parse_message(message)
-        task_parser.merge_context(ctx, literal_plan)
-        has_clear_core = bool(
-            ctx.get("document_type") and
-            (ctx.get("topic") or ctx.get("title") or task_parser.build_title(ctx))
-        )
-        if has_clear_core:
-            source = "rule_fast"
+        interpreted = await self._interpret_async(message, ctx, has_draft=False)
+        if interpreted:
+            self._merge_interpretation(ctx, interpreted)
+            source = "llm"
         else:
-            interpreted = await self._interpret_async(message, ctx, has_draft=False)
-            if interpreted:
-                self._merge_interpretation(ctx, interpreted)
-                source = "llm"
-            else:
-                source = "rule"
+            source = "rule"
+        # Explicit document wording and dates win over model guesses; the model fills only gaps.
+        literal_keys = ("time_range", "word_count_target",
+                        "document_number_enabled", "document_number", "document_date")
+        task_parser.merge_context(ctx, {k: literal_plan[k] for k in literal_keys
+                                        if k in literal_plan})
+        explicit_type = task_parser.explicit_document_type(message)
+        if explicit_type:
+            ctx["document_type"] = explicit_type
+        for key in ("topic", "title", "recipient", "authority"):
+            if not ctx.get(key) and literal_plan.get(key):
+                ctx[key] = literal_plan[key]
 
         if not ctx.get("title"):
             derived = task_parser.build_title(ctx)
@@ -237,7 +251,6 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         materials = self._plan_materials(ctx, user_id, org_ctx) \
             if any(cue in message for cue in material_cues) else []
         knowledge = self._plan_knowledge(user_id, org_ctx)
-        template = self._plan_template(doc_type, org_ctx)
         return {
             "doc_type": doc_type,
             "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
@@ -252,8 +265,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
             "fields": fields,
             "materials": materials,
             "knowledge": knowledge,
-            "template_id": template.get("id") or "",
-            "template_name": template.get("name") or "",
+            "template_id": "",
+            "template_name": "",
             "scopes": org_ctx.get("scopes") or ["GLOBAL"],
             "kb_ids": [k["id"] for k in knowledge],
             "ai_actions": self._plan_actions(doc_type),
@@ -474,15 +487,20 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         if not self.assistant:
             return self._fallback_plan(ctx)
         total = int(ctx.get("word_count_target") or 2200)
+        original_request = next((str(item.get("content") or "").strip()
+                                 for item in ctx.get("history") or []
+                                 if item.get("role") == "user" and item.get("content")), "")
         prompt = (
             "为一篇司法行政机关正式材料规划一级章节。只返回 JSON 数组，不要正文、Markdown 或解释。"
-            "数组 3-6 项，每项字段必须为 heading、focus、target_chars。heading 必须使用"
-            "‘一、…’‘二、…’格式；focus 用一句话说明本节只写什么；target_chars 为本节目标字数。"
+            "数组 3-6 项，每项字段必须为 heading、focus、target_chars。"
+            "报告、方案等可用‘一、…’格式；致辞稿、讲话稿、发言稿和主持词的 heading 必须为空，"
+            "正文按自然段推进。focus 用一句话说明本节只写什么；target_chars 为本节目标字数。"
             "章节之间职责不能重叠，目标字数合计应接近全文目标。\n"
-            f"文种：{ctx.get('document_type') or '报告'}\n"
+            f"文种：{ctx.get('document_type') or '正式材料'}\n"
             f"主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
             f"用途：{ctx.get('purpose') or ''}\n"
             f"时间范围：{ctx.get('time_range') or ''}\n全文目标字数：{total}"
+            f"\n用户原始需求：{original_request}"
         )
         import json
         try:
@@ -498,9 +516,16 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                     chars = int(item.get("target_chars") or 0)
                 except (TypeError, ValueError):
                     chars = 0
-                if heading and focus and re.match(r"^[一二三四五六七八九十]+、", heading):
+                if focus:
                     plan.append({"heading": heading[:80], "focus": focus[:240],
                                  "target_chars": max(300, min(chars or total // 4, max(1200, total)))})
+            speech = any(x in str(ctx.get("document_type") or "") for x in _SPEECH_TYPES)
+            if speech and any(
+                item["heading"] or any(bad in item["focus"] for bad in
+                    ("总体要求", "实施步骤", "保障措施", "责任分工", "工作方案"))
+                for item in plan
+            ):
+                return self._fallback_plan(ctx)
             if 3 <= len(plan) <= 6 and self._plan_meets_length(plan, total):
                 return plan
         except Exception:
@@ -510,8 +535,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     async def _generate_one_section_async(self, ctx: Dict[str, Any], section: Dict[str, Any],
                                           index: int, plan: List[Dict[str, Any]], user_id: str,
                                           attachment_ctx: str, template) -> Tuple[str, List[Dict]]:
-        previous = [x["heading"] for x in plan[:index]]
-        following = [x["heading"] for x in plan[index + 1:]]
+        previous = [x["heading"] or x["focus"] for x in plan[:index]]
+        following = [x["heading"] or x["focus"] for x in plan[index + 1:]]
         instruction = self._section_instruction(ctx, section, previous, following)
         sources = self._retrieve(ctx, user_id, extra_query=f"{section['heading']} {section['focus']}")
         candidate = self._normalize_section(

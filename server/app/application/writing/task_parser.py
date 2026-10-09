@@ -1,7 +1,7 @@
 """写作任务上下文解析（规则解析，不依赖 LLM，绝不虚构字段）。
 
-从用户自然语言中抽取结构化任务要素；解析不出的字段保持 None，
-由 missing_fields 显式列出，交给对话逐步补全。
+从用户自然语言中抽取结构化任务要素；解析不出的事实字段保持 None。
+missing_fields 仅供提示补充，不阻断一句话直接起草。
 """
 import re
 from typing import Any, Dict, List, Optional
@@ -17,12 +17,28 @@ DOC_TYPE_KEYWORDS = [
     ("请示", ["请示"]),
     ("报告", ["报告"]),
     ("函", ["函件", "公函", "函"]),
-    ("讲话稿", ["讲话稿", "讲话", "发言稿"]),
+    ("致辞稿", ["致辞稿", "致辞"]),
+    ("讲话稿", ["讲话稿", "讲话", "发言稿", "发言"]),
     ("方案", ["工作方案", "实施方案", "方案"]),
     ("意见", ["指导意见", "实施意见", "意见"]),
     ("通报", ["通报"]),
     ("会议纪要", ["会议纪要", "纪要"]),
 ]
+FORMAL_DOC_TYPES = {"通知", "请示", "报告", "情况报告", "工作报告", "函", "方案", "意见", "通报"}
+
+
+def explicit_document_type(message: str) -> Optional[str]:
+    """Only override model genre when the user names a known form as the requested output.
+
+    A keyword inside a topic (e.g. 方案 in '方案发布会新闻稿') is not the genre.
+    Unknown forms remain the model's decision instead of being coerced into this list.
+    """
+    message = (message or "").strip()
+    for dtype, keywords in DOC_TYPE_KEYWORDS:
+        for keyword in sorted(keywords, key=len, reverse=True):
+            if re.search(re.escape(keyword) + r"(?:稿)?(?=$|[，。；,;\n]|\s*(?:给|面向|用于|字|左右|以上|以下))", message):
+                return dtype
+    return None
 
 # 需要文号的概率较高的正式文种（仅用于 missing 提示，不自动开启）
 DOCNUM_TYPICAL = {"通知", "请示", "报告", "函", "通报", "意见"}
@@ -70,7 +86,7 @@ TITLE_RE = re.compile(
     r"标题\s*(?:是|为|改成|改为|换成|写成|填|设为|用|取|定为)?\s*[：:]?\s*"
     r"([^\s，。；：:\n]{4,60})"
 )
-TOPIC_ABOUT_RE = re.compile(r"关于(?:开展|加强|做好|规范|推进)?([^，。；的\n]{2,30}?)(?:的)?(通知|请示|报告|方案|意见|通报|函|总结|讲话)")
+TOPIC_ABOUT_RE = re.compile(r"关于(?:开展|加强|做好|规范|推进)?([^，。；的\n]{2,30}?)(?:的)?(通知|请示|报告|方案|意见|通报|函|总结|讲话|致辞|发言)")
 
 # 修改意图（相对当前文档），区别于新起草
 REVISE_HINTS = ["改", "扩写", "润色", "精简", "缩写", "补充", "增加", "删除", "去掉",
@@ -144,7 +160,7 @@ def parse_message(message: str) -> Dict[str, Any]:
         upd["topic"] = m.group(1).strip()
     elif upd.get("document_type") and "topic" not in upd:
         # “帮我写一份2026年度司法行政工作总结” → 主题取文种前的修饰语
-        m2 = re.search(r"(?:写|起草|拟)(?:一份|个|篇)?([^，。；\n]{2,30}?)("
+        m2 = re.search(r"(?:写|起草|拟)(?:一份|一篇|一个|个|篇)?([^，。；\n]{2,30}?)("
                        + "|".join(k for _, ks in DOC_TYPE_KEYWORDS for k in ks) + ")", msg)
         if m2:
             t = re.sub(r"^20\d{2}年度?", "", m2.group(1)).strip()
@@ -250,7 +266,7 @@ def compute_missing(ctx: Dict[str, Any]) -> List[str]:
             missing.append("时间范围（哪个年度/阶段）")
         if not ctx.get("key_facts"):
             missing.append("主要工作内容/年度数据或重点成果")
-    else:
+    elif dt in FORMAL_DOC_TYPES:
         if not ctx.get("recipient"):
             missing.append("主送对象")
         if not ctx.get("authority"):
@@ -278,6 +294,12 @@ def build_title(ctx: Dict[str, Any]) -> Optional[str]:
     tr = ctx.get("time_range")
     if dt == "工作总结" and topic:
         return f"{tr or ''}{topic}工作总结"
-    if topic and dt:
+    if dt == "致辞稿" and topic:
+        return f"在{topic}上的致辞"
+    if dt == "讲话稿" and topic:
+        return f"在{topic}上的讲话"
+    if topic and dt in FORMAL_DOC_TYPES:
         return f"关于{topic}的{dt}"
+    if topic and dt:
+        return f"{topic}{dt}"
     return None

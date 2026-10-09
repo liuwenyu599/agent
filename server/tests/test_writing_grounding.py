@@ -1,5 +1,6 @@
 from app.application.writing.calculation_guard import verify_and_fix_calculations
 from app.application.writing.grounded_task_service import GroundedWritingTaskService
+from unittest.mock import patch
 
 
 def test_natural_per_person_month_amount_is_repaired():
@@ -65,3 +66,42 @@ def test_production_service_keeps_grounded_behavior():
     # The public production service may add stricter layers (ops routing / QualityGate retries),
     # but it must continue to inherit all grounded-writing behavior rather than bypass it.
     assert issubclass(task_service.WritingTaskService, GroundedWritingTaskService)
+
+
+def test_speech_does_not_copy_a_scheme_as_style_exemplar():
+    class WrongFormRag:
+        def search_examples(self, **kwargs):
+            return [{"title": "司法行政工作实施方案", "content": "一、总体要求\n二、实施步骤"}]
+
+    svc = GroundedWritingTaskService.__new__(GroundedWritingTaskService)
+    svc.rag = WrongFormRag()
+    assert svc._example_style_block("文种：致辞稿\n主题：法治宣传活动", "u1") == ""
+
+
+def test_draft_retrieves_topic_and_norms_with_same_knowledge_scope():
+    calls = []
+
+    class Rag:
+        def search(self, **kwargs):
+            calls.append(kwargs)
+            return [{"chunk_id": "fact", "content": "活动材料"}] if len(calls) == 1 else [
+                {"chunk_id": "norm", "content": "致辞写作规范"}]
+
+    svc = GroundedWritingTaskService.__new__(GroundedWritingTaskService)
+    svc.rag = Rag()
+    ctx = {"document_type": "致辞稿", "topic": "法治宣传活动",
+           "history": [{"role": "user", "content": "给领导写一篇法治宣传活动致辞稿"}],
+           "kb_ids": ["kb-allowed"]}
+    sources = svc._retrieve(ctx, "u1")
+    assert [item["chunk_id"] for item in sources] == ["fact", "norm"]
+    assert "给领导写一篇法治宣传活动致辞稿" in calls[0]["query"]
+    assert "写作规范" in calls[1]["query"]
+    assert all(call["kb_ids"] == ["kb-allowed"] for call in calls)
+
+
+def test_style_adapter_keeps_live_kb_excerpt():
+    with patch.dict("os.environ", {"WRITING_STYLE_ADAPTER": "enabled"}):
+        block = _Svc()._example_style_block("社区矫正工作情况报告", "u1")
+    assert "同文种范文原文摘录" in block
+    assert "强化统筹协调" in block
+    assert "结构与行文风格参考" not in block

@@ -620,7 +620,7 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                 Column(Modifier.weight(1f)) {
                     Text("格式方案（可选）", fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold, color = Ink)
-                    Text("先选择或设计公文模板的结构、格式与写作要求；不选择则由系统自动匹配。",
+                    Text("只有主动选择后才套用模板；直接写作由系统按需求组织内容。",
                         fontSize = 11.5.sp, color = Muted, lineHeight = 17.sp)
                 }
                 Text("选择 / 设计 →", fontSize = 12.sp, color = Primary)
@@ -659,7 +659,7 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                         Icon(Icons.Default.AutoAwesome, null, tint = AiIndigo,
                             modifier = Modifier.size(Dimens.iconSm))
                         Spacer(Modifier.width(Dimens.space2))
-                        Text("文种、材料、可依据资料与模板由我自动组织",
+                        Text("说一句需求即可，文种、结构和参考资料由我组织",
                             fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
                     }
                     Spacer(Modifier.width(Dimens.space3))
@@ -696,7 +696,7 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                         "理解任务语义与写作目标",
                         "识别文种、报送对象与使用场景",
                         "匹配可参考材料与知识来源（受科室权限约束）",
-                        "确定模板并组织左栏任务上下文",
+                        "组织写作结构与任务上下文",
                     ).forEachIndexed { i, s ->
                         Row(Modifier.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically) {
@@ -1042,7 +1042,7 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
 
         if (vm.task.missingFields.isNotEmpty()) {
             Spacer(Modifier.height(Dimens.space3))
-            ContextBlock(title = "还需要的信息", tint = Warn) {
+            ContextBlock(title = "可补充的信息（不影响起草）", tint = Warn) {
                 vm.task.missingFields.forEach {
                     Text("· $it", fontSize = 12.sp, color = Warn, lineHeight = 18.sp)
                 }

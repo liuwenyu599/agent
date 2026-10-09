@@ -16,12 +16,20 @@ from fastapi import HTTPException
 from app.application.writing.quality_gate import QualityGate
 from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_service import _sse
+from app.core.timeutil import now_local
 
 _LONG_DOC_TYPES = {
     "报告", "工作报告", "工作情况报告", "工作总结", "总结", "方案", "实施方案",
-    "工作方案", "规划", "意见", "调研报告", "汇报材料",
+    "工作方案", "调研报告",
 }
+_SPEECH_TYPES = ("致辞", "讲话", "发言", "主持词")
 _DEFAULT_SECTIONS = {
+    "讲话稿": [
+        ("", "面向听众自然开场，点明活动场合、主题和来宾，表达欢迎或感谢"),
+        ("", "结合本次主题说明背景、意义和与听众有关的实际经历"),
+        ("", "围绕主题谈具体体会、共同愿景或倡议，保持现场讲话语气"),
+        ("", "自然收束，表达祝愿、感谢或期待，适合现场口头宣读"),
+    ],
     "工作总结": [
         ("一、工作开展情况", "概括阶段工作主线、推进过程和主要完成情况"),
         ("二、主要做法和成效", "按重点工作提炼做法、机制和有依据的成效"),
@@ -52,7 +60,9 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             return False
         target = int(ctx.get("word_count_target") or 0)
         doc_type = str(ctx.get("document_type") or "").strip()
-        return target >= 1800 or (doc_type in _LONG_DOC_TYPES and target == 0)
+        # Unknown forms still draft normally. A report skeleton is not a safe fallback for them.
+        sectionable = doc_type in _LONG_DOC_TYPES or any(x in doc_type for x in _SPEECH_TYPES)
+        return sectionable and (target >= 1800 or (doc_type in _LONG_DOC_TYPES and target == 0))
 
     @staticmethod
     def _fallback_plan(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -64,7 +74,12 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         标题与层次交给模型按文种体例自行决定。
         """
         doc_type = str(ctx.get("document_type") or "")
-        key = "方案" if "方案" in doc_type else ("工作总结" if "总结" in doc_type else "报告")
+        key = ("讲话稿" if any(x in doc_type for x in _SPEECH_TYPES)
+               else "方案" if "方案" in doc_type
+               else "工作总结" if "总结" in doc_type
+               else "报告" if doc_type in _LONG_DOC_TYPES else None)
+        if key is None:
+            return []
         items = _DEFAULT_SECTIONS[key]
         total = int(ctx.get("word_count_target") or 2200)
         per = max(350, total // len(items))
@@ -88,20 +103,24 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         if not self.assistant:
             return self._fallback_plan(ctx)
         total = int(ctx.get("word_count_target") or 2200)
+        original_request = next((str(item.get("content") or "").strip()
+                                 for item in ctx.get("history") or []
+                                 if item.get("role") == "user" and item.get("content")), "")
         prompt = (
             "为一篇司法行政机关正式材料规划章节。只返回 JSON 数组，不要正文、Markdown 或解释。"
             "数组 3-6 项，每项字段为 heading、focus、target_chars。\n"
             "heading 是本节的小标题，**由你按该文种的体例自行决定用什么形式**："
-            "报告、方案等可用「一、××」「（一）××」；讲话稿、发言稿、主持词等连续行文体例"
+            "报告、方案等可用「一、××」「（一）××」；致辞稿、讲话稿、发言稿、主持词等连续行文体例"
             "请把 heading 留空字符串，表示本节直接接续上文写、不要插入小标题。"
             "切勿把所有文种一律套用「一、二、三」。\n"
             "focus 用一句话说明本节只写什么（写内容要求，不要写标题格式）；"
             "target_chars 为本节目标字数。章节之间职责不能重叠，目标字数合计应接近全文目标。\n"
-            f"文种：{ctx.get('document_type') or '报告'}\n"
+            f"文种：{ctx.get('document_type') or '正式材料'}\n"
             f"主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
             f"用途：{ctx.get('purpose') or ''}\n"
             f"时间范围：{ctx.get('time_range') or ''}\n"
             f"全文目标字数：{total}"
+            f"\n用户原始需求：{original_request}"
         )
         try:
             raw = self.assistant.complete(
@@ -126,6 +145,13 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
                         "focus": focus[:240],
                         "target_chars": max(300, min(chars or total // 4, max(1200, total))),
                     })
+            speech = any(x in str(ctx.get("document_type") or "") for x in _SPEECH_TYPES)
+            if speech and any(
+                item["heading"] or any(bad in item["focus"] for bad in
+                    ("总体要求", "实施步骤", "保障措施", "责任分工", "工作方案"))
+                for item in plan
+            ):
+                return self._fallback_plan(ctx)
             if 3 <= len(plan) <= 6 and self._plan_meets_length(plan, total):
                 return plan
         except Exception:
@@ -136,6 +162,7 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
     def _section_instruction(ctx: Dict[str, Any], section: Dict[str, Any],
                              previous_headings: List[str], next_headings: List[str]) -> str:
         key_facts = "；".join(str(x) for x in (ctx.get("key_facts") or [])[:12])
+        speech = any(x in str(ctx.get("document_type") or "") for x in _SPEECH_TYPES)
         # heading 为空 = 本节不加小标题、接续上文写（讲话稿/发言稿等连续行文体例）
         heading = str(section.get("heading") or "").strip()
         heading_line = (
@@ -148,6 +175,9 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             f"全文文种：{ctx.get('document_type') or '正式材料'}\n"
             f"全文主题：{ctx.get('topic') or ctx.get('title') or ''}\n"
             f"全文用途：{ctx.get('purpose') or ''}\n"
+            f"当前日期：{now_local().year}年{now_local().month}月{now_local().day}日。"
+            "只作为本次时间背景，不照搬旧范文日期。\n"
+            f"用户原始需求：{next((str(x.get('content') or '') for x in ctx.get('history') or [] if x.get('role') == 'user'), '')}\n"
             + heading_line
             + f"本节职责：{section['focus']}\n"
             f"本节目标字数：约 {section['target_chars']} 字\n"
@@ -158,8 +188,9 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             # 讲话稿/发言稿按自然段推进才是它们的体例。
             + ("输出直接从本节正文开始，不要另起章节标题。" if not heading
                else "输出必须从当前章节标题开始，随后写完整正式段落。")
-            + ("\n本节内部按需组织层次：事项较多时可用「（一）」「1．」「（1）」分层，"
-               "内容连贯的场合直接写成连贯段落即可，不要为了分层而分层。" if not heading
+            + ("\n保持现场讲话语气，使用连贯自然段，不列任务清单或小标题。" if speech
+               else "\n本节内部按需组织层次：事项较多时可用「（一）」「1．」「（1）」分层，"
+                    "内容连贯的场合直接写成连贯段落即可，不要为了分层而分层。" if not heading
                else "\n涉及多个事项时用“（一）”“1．”“（1）”组织本节层级，"
                     "事项超过 3 条不得写成连续叙述段落。")
             + "\n不得输出全文标题、主送机关、文号、发文机关署名或成文日期；"
@@ -196,8 +227,8 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
     def _generate_one_section(self, ctx: Dict[str, Any], section: Dict[str, Any],
                               index: int, plan: List[Dict[str, Any]], user_id: str,
                               attachment_ctx: str, template) -> Tuple[str, List[Dict]]:
-        previous = [x["heading"] for x in plan[:index]]
-        following = [x["heading"] for x in plan[index + 1:]]
+        previous = [x["heading"] or x["focus"] for x in plan[:index]]
+        following = [x["heading"] or x["focus"] for x in plan[index + 1:]]
         instruction = self._section_instruction(ctx, section, previous, following)
         sources = self._retrieve(
             ctx, user_id,

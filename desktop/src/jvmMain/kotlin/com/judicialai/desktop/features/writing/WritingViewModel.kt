@@ -422,10 +422,12 @@ class WritingViewModel(
                 is ApiResult.Ok -> {
                     r.data?.let { d ->
                         applyResponse(d)
-                        d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     entryInput = ""
+                    busy = false
+                    AppState.writingGenerating = false
+                    if (hasTask) draft()
+                    return@launch
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -451,6 +453,7 @@ class WritingViewModel(
         planning = true
         status = null
         planError = null
+        messages = messages + TaskChatMessage("user", text)
         activeJob = scope.launch {
             val planned = runCatching { repo.plan(text) }.getOrNull()
             val specResult = when (planned) {
@@ -468,10 +471,12 @@ class WritingViewModel(
                 is ApiResult.Ok -> {
                     r.data?.let { d ->
                         applyResponse(d)
-                        d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     entryInput = ""
+                    busy = false
+                    AppState.writingGenerating = false
+                    if (hasTask) draft()
+                    return@launch
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -512,8 +517,6 @@ class WritingViewModel(
                 is ApiResult.Ok -> {
                     r.data?.let { d ->
                         applyResponse(d)
-                        d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                     }
                     busy = false
                     status = null

@@ -1,7 +1,7 @@
 """Grounded writing service: exemplar imitation + deterministic calculation checks.
 
 - RAG facts remain evidence sources.
-- Style exemplars are compact structured cards (top_k=1), never full historical articles.
+- Style exemplars are permission-scoped cards and bounded excerpts, never full articles.
 - Exemplar retrieval explicitly prefixes the detected document type so same-type examples rank first.
 - Arithmetic is verified by Python after generation/revision.
 - Explicit literal values are protected deterministically after semantic routing.
@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, Iterator, List, Optional
 
 from fastapi import HTTPException
@@ -25,8 +26,8 @@ def style_adapter_active() -> bool:
     """风格是否已经蒸馏到模型权重里。
 
     这是一道**运行期开关**，目的很直白：训练是可以选择不做的事。
-    配了这个变量说明模型本身已经会这套写法，推理时就不再灌那张 1100 字风格卡
-    （灌了等于把学过的东西再说一遍，白占上下文）；不配则退回今天的行为，
+    配了这个变量说明模型本身已经会这套写法，推理时就不再灌抽象风格卡，
+    但仍检索当前知识库的同文种范文摘录；不配则保留风格卡，
     一字不变。所以「训了」和「没训」共用同一套代码，只差一个环境变量，
     不会出现训到一半、adapter 撤了之后质量突然塌掉的中间态。
     """
@@ -57,11 +58,17 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         same-type matching deterministic at the query-contract level.
         """
         raw = (message or "").strip()
-        parsed = task_parser.parse_message(raw)
-        doc_type = str(parsed.get("document_type") or "").strip()
+        doc_type = GroundedWritingTaskService._requested_type(raw)
         if not doc_type:
             return raw
         return f"文种：{doc_type}\n同文种范文优先：{doc_type}\n{raw}"
+
+    @staticmethod
+    def _requested_type(message: str) -> str:
+        explicit = re.search(r"(?m)^(?:全文)?文种[：:]\s*([^\n。；]+)", message or "")
+        if explicit:
+            return explicit.group(1).strip()
+        return str(task_parser.explicit_document_type(message) or "").strip()
 
     def _interpret(self, message: str, ctx: Dict[str, Any], has_draft: bool = False):
         result = super()._interpret(message, ctx, has_draft=has_draft)
@@ -104,7 +111,6 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
                 fields.append({"label": label, "value": str(value)})
 
         knowledge = self._plan_knowledge(user_id, org_ctx)
-        template = self._plan_template(doc_type, org_ctx)
         return {
             "doc_type": doc_type,
             "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
@@ -119,8 +125,8 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             "fields": fields,
             "materials": [],
             "knowledge": knowledge,
-            "template_id": template.get("id") or "",
-            "template_name": template.get("name") or "",
+            "template_id": "",
+            "template_name": "",
             "scopes": org_ctx.get("scopes") or ["GLOBAL"],
             "kb_ids": [k["id"] for k in knowledge],
             "ai_actions": self._plan_actions(doc_type),
@@ -142,26 +148,35 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         人名、日期与文号。但必须让模型看到原文——只给抽象的写法摘要时，
         模型无从获得本单位的实际表述，产出会退化成通用套话。
         """
-        if style_adapter_active():
-            # 风格已经在权重里了，再塞范文只是白占上下文。
-            # 留着这段返回值是为了让「撤卡」成为一个可回滚的运行期开关，
-            # 而不是改代码：哪天 adapter 不想要了，删掉环境变量就回到原路。
-            return ""
         if not self.rag:
             return ""
         try:
             examples = self.rag.search_examples(
                 query=self._exemplar_query(query),
                 user_id=user_id,
-                top_k=self._EXCERPT_TOP_K,
+                top_k=max(8, self._EXCERPT_TOP_K),
                 max_chars=2500,
             ) or []
         except Exception:
             examples = []
+        # A semantically nearby work plan is a harmful style exemplar for a speech.
+        # Keep only matching speech forms; otherwise let the model write without an exemplar.
+        requested_type = self._requested_type(query)
+        if any(kind in requested_type for kind in ("致辞", "讲话", "发言")):
+            examples = [ex for ex in examples if any(
+                kind in str(ex.get("title") or "")
+                for kind in ("致辞", "讲话", "发言")
+            )]
+        elif requested_type:
+            examples.sort(key=lambda ex: requested_type not in str(ex.get("title") or ""))
+        examples = examples[:self._EXCERPT_TOP_K]
         if not examples:
             return ""
 
-        cards = compact_style_examples(examples, max_chars=self._STYLE_CARD_CHARS)
+        # The adapter can replace the abstract style card, but live KB excerpts still
+        # anchor the draft to this task's document type and current local practice.
+        cards = ("" if style_adapter_active() else
+                 compact_style_examples(examples, max_chars=self._STYLE_CARD_CHARS))
         excerpts = self._excerpt_block(examples, self._EXCERPT_CHARS)
         parts = []
         if cards:
