@@ -11,7 +11,7 @@ import java.io.File
  */
 @Serializable
 data class ServerConfig(
-    val baseUrl: String = "http://127.0.0.1:8000",
+    val baseUrl: String = "http://10.128.85.133:8000",
     val connectTimeoutMillis: Long = 10_000,
     val requestTimeoutMillis: Long = 120_000,
 ) {
