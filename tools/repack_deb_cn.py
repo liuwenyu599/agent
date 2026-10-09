@@ -81,7 +81,13 @@ def rewrite_control(data: bytes) -> bytes:
     src = tarfile.open(fileobj=io.BytesIO(plain))
 
     out = io.BytesIO()
-    with tarfile.open(fileobj=out, mode="w") as dst:
+    # ⚠️ 必须显式 format=GNU_FORMAT，不能用默认的 PAX。
+    # PAX 会为每个条目写一个 `x` 类型的扩展头（././@PaxHeader），
+    # 而老版本 dpkg-deb（麒麟 V10 / Ubuntu 18.04 基线）不认这种头，
+    # 报「不支持的 PAX tar 头部类型 'x'」并带连「断开的管道」，
+    # 表现为「软件包无法安装或移除」。jpackage 原生产出用的是 GNU 格式。
+    with tarfile.open(fileobj=out, mode="w",
+                      format=tarfile.GNU_FORMAT) as dst:
         for member in src.getmembers():
             payload = src.extractfile(member).read() if member.isreg() else None
             if member.name == "./control":
@@ -136,7 +142,13 @@ def rewrite_data(data: bytes) -> bytes:
 
     renamed = desktop_fixed = 0
     out = io.BytesIO()
-    with tarfile.open(fileobj=out, mode="w") as dst:
+    # ⚠️ 必须显式 format=GNU_FORMAT，不能用默认的 PAX。
+    # PAX 会为每个条目写一个 `x` 类型的扩展头（././@PaxHeader），
+    # 而老版本 dpkg-deb（麒麟 V10 / Ubuntu 18.04 基线）不认这种头，
+    # 报「不支持的 PAX tar 头部类型 'x'」并带连「断开的管道」，
+    # 表现为「软件包无法安装或移除」。jpackage 原生产出用的是 GNU 格式。
+    with tarfile.open(fileobj=out, mode="w",
+                      format=tarfile.GNU_FORMAT) as dst:
         for member in src.getmembers():
             name = member.name
             # 目录前缀改名（含 .desktop 文件名本身）
@@ -204,13 +216,59 @@ def main() -> int:
             out.append(b"\n")
 
     open(dst_path, "wb").write(b"".join(out))
+    verify(dst_path)
     print(f"\n完成: {dst_path}")
-    print(f"  压缩格式: gzip（**关键**）——jpackage 默认输出 .tar.zst，")
-    print(f"          而 dpkg < 1.21.18（如麒麟 V10 / Ubuntu 18.04 基线）")
-    print(f"          不认 zstd，会报「不支持的 PAX tar 头部类型 'x'」")
+    print(f"  压缩格式: gzip —— 老 dpkg 不认 zstd")
+    print(f"  tar 格式 : GNU（无 PAX 扩展头）—— 老 dpkg-deb 会拒x 类型头")
     print(f"  Package 保持 ASCII: {OLD_PKG}（dpkg 强制，不可中文）")
     print(f"  安装目录: {NEW_DIR}")
     print(f"  菜单显示名: {NEW_PKG_CN}")
+
+
+def verify(path: str) -> None:
+    """产物自检：把「装不上」的两个已知成因挡在交付之前。
+
+    这两项都是**装得上但完全看不出问题**的类型——包能传过去、能双击、
+    dpkg 才在解压阶段失败。靠人工看日志发现得太晚，所以写进脚本。
+    """
+    raw = open(path, "rb").read()
+    if raw[:8] != b"!<arch>\n":
+        raise SystemExit("自检失败：不是合法的 ar 归档")
+    off = 8
+    members = {}
+    while off + 60 <= len(raw):
+        hdr = raw[off:off + 60]
+        name = hdr[0:16].decode("ascii").strip().rstrip("/")
+        try:
+            size = int(hdr[48:58].decode("ascii").strip())
+        except ValueError:
+            break
+        members[name] = (off + 60, size)
+        off += 60 + size + (size % 2)
+    if off != len(raw):
+        raise SystemExit(f"自检失败：归档长度不符（累计 {off} vs 实际 {len(raw)}）")
+
+    leftover = [n for n in members if n.endswith(".zst")]
+    if leftover:
+        raise SystemExit(f"自检失败：残留 zstd 成员 {leftover}，老 dpkg 无法解压")
+
+    for name in ("control.tar.gz", "data.tar.gz"):
+        if name not in members:
+            raise SystemExit(f"自检失败：缺少 {name}")
+        blob = raw[members[name][0]:members[name][0] + members[name][1]]
+        if blob[:2] != b"\x1f\x8b":
+            raise SystemExit(f"自检失败：{name} 魔数不是 gzip（1f 8b），实际 {blob[:2]!r}")
+        plain = gzip.decompress(blob)
+        # 用tarfile 解析真实条目，而不是逐512字节扫 typeflag——
+        # 后者会把 ELF/jar 等二进制内容里恰好等于 b'x'/b'g' 的字节误判成扩展头。
+        with tarfile.open(fileobj=io.BytesIO(plain)) as tf:
+            bad = [x.name for x in tf.getmembers() if x.type in ("x", "g")]
+        if bad:
+            raise SystemExit(
+                f"自检失败：{name} 含 PAX/GNU 扩展头 {bad[:3]}，"
+                f"老版本 dpkg-deb 会报「不支持的 PAX tar 头部类型 'x'」"
+            )
+    print("  [自检] ar 结构 OK | gzip 魔数 OK | 无 .zst |无 PAX/GNU 扩展头")
     return 0
 
 
