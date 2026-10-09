@@ -1,33 +1,45 @@
 """PPT 中文字体默认值。
 
-## 为什么不能硬编码「微软雅黑」
+## 字体名写进 pptx 后由谁解析
 
-pptx 里的字体名最终由**打开它的软件**（PowerPoint / WPS）解析，服务端容器
-本身有没有这个字体并不影响客户端显示。所以真正需要满足的是：
+必须先分清三条链路，否则很容易改错方向：
 
-  · Windows 客户端（Office / WPS）——有 微软雅黑、SimHei
-  · 麒麟客户端（WPS）——**没有微软雅黑**，但有 SimHei（黑体，WPS 自带）
+1. **工作台预览（主场景）** —— 后端 `PPTService.preview_document` 用
+   `soffice --headless --convert-to pdf` 再 `pdftoppm -png` 逐页转图，
+   客户端只看 PNG，**从不打开 pptx**。渲染发生在 `justice-api` 容器内，
+   所以**只要该容器装了字体就够，与客户端机器无关**。
+2. **导出 pptx 给用户自行打开** —— 字体由用户机器的 WPS/Office 解析，
+   缺字体会回退到系统中文字体，观感可能变化但不影响可用性。
+3. **后端容器自己的字体** —— `deploy/Dockerfile` 第 29 行只装了
+   `fonts-noto-cjk`（注释即写明「LibreOffice 转换时中文字体渲染」），
+   **没有 SimHei / 微软雅黑**。
 
-原先 11 处硬编码「微软雅黑」，在麒麟 + 麒麟版 WPS 上会触发字体回退，
-公文观感走样。这里统一改为 SimHei（黑体）：两个平台的WPS 都自带，
-且同为中文黑体，观感与雅黑接近。
+## 为什么是 Noto Sans CJK SC
 
-## 为什么不做运行时探测
+必须**后端与国产客户端都有**，逐个排除：
 
-探测系统可用字体（fc-list）需要每个 worker 进程跑一次外部命令，
-而这里的取值只是**写进 pptx 的字符串**，最终由客户端解析——
-服务端探测出来的名字对客户端没有意义，反而引入缓存与超时复杂度。
-模板的 `font` 字段仍可由用户在「模板中心」里按需覆盖。
+| 字体 | Windows | 麒麟/统信 | 后端容器 |
+|---|---|---|---|
+| 微软雅黑 | 有 | **无** | **无** |
+| SimHei | 有 | 通常无 | **无**（Linux 无此商业字体） |
+| SimSun | 有 | 无 | 无 |
+| **Noto Sans CJK SC** | 需另装 | **标配** | **已装**（fonts-noto-cjk） |
+
+结论：`Noto Sans CJK SC` 是唯一同时覆盖「后端渲染」与「国产客户端」的选项。
+Windows 侧未装时会回退到系统中文字体——但预览走第 1 条链路（后端渲染），
+Windows 客户端看到的同样是后端渲好的 PNG，故回退影响面很小。
+
+模板的 `font` 字段仍可由用户在「模板中心」按需覆盖为仿宋/宋体等。
 """
 
-# 中文字体默认值。写进 pptx 后由客户端的 WPS/Office 解析并回退。
-DEFAULT_CJK_FONT = "SimHei"
+# 写进 pptx 的字体名，由后端容器与客户端的字体环境共同解析。
+DEFAULT_CJK_FONT = "Noto Sans CJK SC"
 
-# 供文档/前端展示用的可选字体（模板 font 字段的下拉建议）
+# 模板 font 字段的建议选项（按国产化环境的可用性排序）
 SUGGESTED_CJK_FONTS = (
-    "SimHei",           # 黑体，Windows/麒麟 WPS 均有
-    "Microsoft YaHei",  # 微软雅黑，仅 Windows
-    "Noto Sans CJK SC",  # 思源黑体，Linux 常见
-    "FangSong_GB2312",  # 仿宋，公文常用
-    "SimSun",           # 宋体
+    "Noto Sans CJK SC",   # 后端已装、国产 OS 标配（默认）
+    "WenQuanYi Micro Hei",  # 国产 OS 常见
+    "Source Han Sans SC",   # 思源黑体，部分版本预装
+    "FangSong_GB2312",      # 仿宋，公文常用（需目标机装有）
+    "SimSun",               # 宋体，仅 Windows
 )
