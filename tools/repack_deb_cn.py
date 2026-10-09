@@ -27,6 +27,7 @@ jpackage 有三处名称，且**不能都改成中文**：
 ----
     python tools/repack_deb_cn.py <输入deb> <输出deb>
 """
+import gzip
 import io
 import sys
 import tarfile
@@ -118,7 +119,13 @@ def rewrite_control(data: bytes) -> bytes:
                 member.size = len(payload)
             dst.addfile(member, io.BytesIO(payload) if payload is not None else None)
 
-    return zstandard.ZstdCompressor(level=3).compress(out.getvalue())
+    # **必须用 gzip 而非 zstd**：dpkg < 1.21.18（麒麟 V10 / Ubuntu 18.04 基线）
+    # 不认 zstd 压缩的 tar 成员，会报「不支持的 PAX tar 头部类型 'x'」
+    # 且报「断开的管道」，与包内容无关，纯粹是压缩格式不兼容。
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6, mtime=0) as gz:
+        gz.write(out.getvalue())
+    return buf.getvalue()
 
 
 def rewrite_data(data: bytes) -> bytes:
@@ -162,7 +169,10 @@ def rewrite_data(data: bytes) -> bytes:
                         src.extractfile(member) if member.isreg() else None)
 
     print(f"  改名条目: {renamed}  .desktop 重写: {desktop_fixed}")
-    return zstandard.ZstdCompressor(level=1).compress(out.getvalue())
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode='wb', compresslevel=6, mtime=0) as gz:
+        gz.write(out.getvalue())
+    return buf.getvalue()
 
 
 def main() -> int:
@@ -176,16 +186,16 @@ def main() -> int:
     out = [b"!<arch>\n"]
     for name, hdr, data in members:
         if name.startswith("control.tar"):
-            print("control.tar.zst:")
+            print("control.tar.zst -> control.tar.gz:")
             new = rewrite_control(data)
             print(f"  {len(data):,} -> {len(new):,} 字节")
-            out.append(ar_header(name, len(new)))
+            out.append(ar_header("control.tar.gz", len(new)))
             out.append(new)
         elif name.startswith("data.tar"):
-            print("data.tar.zst:（需重新压缩，104MB 约 1–2 分钟）")
+            print("data.tar.zst -> data.tar.gz:（需重新压缩，104MB 约 2–4 分钟）")
             new = rewrite_data(data)
             print(f"  {len(data):,} -> {len(new):,} 字节")
-            out.append(ar_header(name, len(new)))
+            out.append(ar_header("data.tar.gz", len(new)))
             out.append(new)
         else:
             out.append(hdr)
@@ -195,6 +205,9 @@ def main() -> int:
 
     open(dst_path, "wb").write(b"".join(out))
     print(f"\n完成: {dst_path}")
+    print(f"  压缩格式: gzip（**关键**）——jpackage 默认输出 .tar.zst，")
+    print(f"          而 dpkg < 1.21.18（如麒麟 V10 / Ubuntu 18.04 基线）")
+    print(f"          不认 zstd，会报「不支持的 PAX tar 头部类型 'x'」")
     print(f"  Package 保持 ASCII: {OLD_PKG}（dpkg 强制，不可中文）")
     print(f"  安装目录: {NEW_DIR}")
     print(f"  菜单显示名: {NEW_PKG_CN}")
