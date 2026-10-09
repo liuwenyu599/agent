@@ -25,7 +25,7 @@
 ; ===========================================================================
 
 #define MyAppName      "云法智办"
-#define MyAppVersion   "1.1.0"   ; ⚠ 必须与 desktop/build.gradle.kts 的 packageVersion 保持一致
+#define MyAppVersion   "1.1.1"   ; ⚠ 必须与 desktop/build.gradle.kts 的 packageVersion 保持一致
 
 ; 可由命令行覆盖：iscc /DMyAppExeName="Other.exe"
 #ifndef MyAppExeName
