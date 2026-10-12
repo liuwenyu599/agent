@@ -29,6 +29,7 @@ jpackage 有三处名称，且**不能都改成中文**：
 """
 import gzip
 import io
+import re
 import sys
 import tarfile
 import time
@@ -163,7 +164,7 @@ def _new_maint_script(which: str) -> str:
     return head + body + "\nexit 0\n"
 
 
-def rewrite_control(data: bytes) -> bytes:
+def rewrite_control(data: bytes, new_version: str = "") -> bytes:
     """改 control.tar.zst 里的 ./control 与四个维护脚本。"""
     plain = zstandard.ZstdDecompressor().decompress(data)
     src = tarfile.open(fileobj=io.BytesIO(plain))
@@ -188,6 +189,17 @@ def rewrite_control(data: bytes) -> bytes:
                 )
                 # 麒麟 V10 基于 Ubuntu 18/20，没有 t64 后缀包名
                 text = text.replace("libpng16-16t64", "libpng16-16")
+                # ★ 版本号改写：dpkg 认不出「同版本覆盖安装」，
+                #   对方装过 1.1.1 后必须版本号不同才装得上新版。
+                #   jar 里查过 1.1.1 出现 0 次（版本号只存在于 control），
+                #   所以这一步**不需要重跑 Gradle**，只重跑本脚本即可换版本。
+                if new_version:
+                    before_ver = text
+                    text = re.sub(r"(?m)^Version:.*$", f"Version: {new_version}",
+                                  text)
+                    if text == before_ver:
+                        raise SystemExit("control 里没找到 Version: 行，改版本失败")
+                    print(f"  control: 版本号 -> {new_version}")
                 print(f"  control: {'有改动' if text != before else '无改动'}")
                 payload = text.encode("utf-8")
                 member.size = len(payload)
@@ -296,10 +308,18 @@ def rewrite_data(data: bytes) -> bytes:
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    argv = sys.argv[1:]
+    # 用法: repack_deb_cn.py <in> <out> [--version 1.1.2-1]
+    # ⚠ 不要在剥离 --version 之前校验参数个数，否则带 --version 会被误判为用法错误。
+    new_version = ""
+    if "--version" in argv:
+        i = argv.index("--version")
+        new_version = argv[i + 1]
+        del argv[i:i + 2]
+    if len(argv) != 2:
         print(__doc__)
         return 2
-    src_path, dst_path = sys.argv[1], sys.argv[2]
+    src_path, dst_path = argv
     raw = open(src_path, "rb").read()
     members = read_ar(raw)
 
@@ -307,7 +327,7 @@ def main() -> int:
     for name, hdr, data in members:
         if name.startswith("control.tar"):
             print("control.tar.zst -> control.tar.gz:")
-            new = rewrite_control(data)
+            new = rewrite_control(data, new_version)
             print(f"  {len(data):,} -> {len(new):,} 字节")
             out.append(ar_header("control.tar.gz", len(new)))
             out.append(new)
@@ -324,7 +344,7 @@ def main() -> int:
             out.append(b"\n")
 
     open(dst_path, "wb").write(b"".join(out))
-    verify(dst_path)
+    verify(dst_path, new_version)
     print(f"\n完成: {dst_path}")
     print(f"  压缩格式: gzip —— 老 dpkg 不认 zstd")
     print(f"  tar 格式 : GNU（无 PAX 扩展头）—— 老 dpkg-deb 会拒x 类型头")
@@ -333,7 +353,7 @@ def main() -> int:
     print(f"  菜单显示名: {NEW_PKG_CN}")
 
 
-def verify(path: str) -> None:
+def verify(path: str, expect_version: str = "") -> None:
     """产物自检：把「装不上」的两个已知成因挡在交付之前。
 
     这两项都是**装得上但完全看不出问题**的类型——包能传过去、能双击、
@@ -378,6 +398,18 @@ def verify(path: str) -> None:
             )
     print("  [自检] ar 结构 OK | gzip 魔数 OK | 无 .zst |无 PAX/GNU 扩展头")
     _verify_shortcut(raw, members)
+    if expect_version:
+        cplain = gzip.decompress(
+            raw[members["control.tar.gz"][0]:
+                members["control.tar.gz"][0] + members["control.tar.gz"][1]])
+        with tarfile.open(fileobj=io.BytesIO(cplain)) as ctf:
+            ctrl = ctf.extractfile("./control").read().decode("utf-8")
+        m = re.search(r"(?m)^Version:\s*(\S+)", ctrl)
+        got = m.group(1) if m else "?"
+        if got != expect_version:
+            raise SystemExit(
+                f"自检失败：control 里的 Version 是 {got}，期望 {expect_version}")
+        print(f"  [自检] 版本号: {got}（可用于覆盖安装旧版）")
     return 0
 
 
