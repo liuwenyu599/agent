@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -120,9 +122,9 @@ private const val Pending = "待补充"
 /**
  * 智能写作（v4.0）
  *
- * 三段式：一句话入口 → AI 规划本次写作环境 → 三栏工作台。
+ * 三段式：一句话入口 → AI 规划本次写作环境 → 四栏工作台。
  * 左栏是「任务上下文」（任务卡可人工修订 + 材料 + 可依据资料 + 模板），不是只读参数表；
- * 中栏是真正的文档工作台；右栏是 AI 助手（正在做什么 / 建议操作 / 对话 / 引用资料）。
+ * 中栏是真正的文档工作台；右侧分别为选中段落建议与 AI 助手。
  * 界面不出现「全局公共知识库」「本科室知识库」这类系统实现语言。
  *
  * 模板中心「使用模板 → 生成」也会进入本工作台：
@@ -185,17 +187,50 @@ fun WritingScreen() {
                 if (!vm.hasTask) {
                     TaskEntryScreen(vm)
                 } else {
-                    Row(
-                        Modifier.fillMaxSize().padding(Dimens.space4),
-                        horizontalArrangement = Arrangement.spacedBy(Dimens.space4),
-                    ) {
-                        if (vm.spec != null) {
-                            SpecPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                    BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val wide = maxWidth >= 1300.dp
+                        var showContext by remember { mutableStateOf(true) }
+                        var showDocument by remember { mutableStateOf(true) }
+                        var showSuggestions by remember { mutableStateOf(true) }
+                        var showAssistant by remember(wide) { mutableStateOf(wide) }
+                        Row(
+                            Modifier.fillMaxSize().padding(Dimens.space4),
+                            horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                        ) {
+                        if (showContext) {
+                            Column(Modifier.width(245.dp).fillMaxHeight()) {
+                                WritingColumnHeader("任务上下文") { showContext = false }
+                                if (vm.spec != null) SpecPanel(vm, Modifier.weight(1f))
+                                else TaskPanel(vm, Modifier.weight(1f))
+                            }
                         } else {
-                            TaskPanel(vm, Modifier.width(300.dp).fillMaxHeight())
+                            CollapsedWritingColumn("任务") { showContext = true }
                         }
-                        EditorPanel(vm, Modifier.weight(1f).fillMaxHeight())
-                        AssistantPanel(vm, Modifier.width(330.dp).fillMaxHeight())
+                        if (showDocument) {
+                            Column(Modifier.weight(1f).fillMaxHeight()) {
+                                WritingColumnHeader("文档正文") { showDocument = false }
+                                EditorPanel(vm, Modifier.weight(1f))
+                            }
+                        } else {
+                            CollapsedWritingColumn("正文") { showDocument = true }
+                        }
+                        if (showSuggestions) {
+                            Column(Modifier.width(285.dp).fillMaxHeight()) {
+                                WritingColumnHeader("逐段建议") { showSuggestions = false }
+                                ParagraphSuggestionPanel(vm, Modifier.weight(1f))
+                            }
+                        } else {
+                            CollapsedWritingColumn("建议") { showSuggestions = true }
+                        }
+                        if (showAssistant) {
+                            Column(Modifier.width(285.dp).fillMaxHeight()) {
+                                WritingColumnHeader("助手对话") { showAssistant = false }
+                                AssistantPanel(vm, Modifier.weight(1f))
+                            }
+                        } else {
+                            CollapsedWritingColumn("对话") { showAssistant = true }
+                        }
+                        }
                     }
                 }
             }
@@ -236,6 +271,22 @@ fun WritingScreen() {
     // 图片识别结果弹窗（视觉模型识别文本，可查看 / 一键插入正文）
     if (vm.imageResults.isNotEmpty()) {
         ImageRecognizeDialog(vm)
+    }
+}
+
+@Composable
+private fun WritingColumnHeader(title: String, onCollapse: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(bottom = Dimens.space1),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 11.sp, color = Muted, modifier = Modifier.weight(1f))
+        AppLinkButton("收起", onClick = onCollapse)
+    }
+}
+
+@Composable
+private fun CollapsedWritingColumn(title: String, onExpand: () -> Unit) {
+    TextButton(onClick = onExpand, modifier = Modifier.width(42.dp).fillMaxHeight()) {
+        Text("展\n开\n$title", fontSize = 11.sp, color = Primary, lineHeight = 17.sp)
     }
 }
 
@@ -457,7 +508,11 @@ private fun FormattedBodyEditor(
 ) {
     var editIdx by remember { mutableStateOf<Int?>(null) }
     var editText by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { vm.markParagraphEditing(false) } }
     val lines = remember(vm.content) { vm.content.split('\n') }
+    val paragraphStates = remember(vm.paragraphs) {
+        vm.paragraphs.associateBy { it["line_index"].int() }
+    }
     // 尾部独立落款按结构排版；正文内的同名引用仍保留原段落。
     val (signatureIndex, dateIndex) = remember(lines, vm.task.authority) {
         val nonBlankIndices = lines.indices.filter { lines[it].isNotBlank() }
@@ -492,6 +547,7 @@ private fun FormattedBodyEditor(
             vm.content = cur.joinToString("\n")
         }
         editIdx = null
+        vm.markParagraphEditing(false)
     }
 
     LazyColumn(
@@ -510,6 +566,7 @@ private fun FormattedBodyEditor(
                     OutlinedTextField(
                         value = editText,
                         onValueChange = { editText = it },
+                        enabled = !vm.suggestionBusy,
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontSize = 16.sp, fontFamily = FontFamily.Serif,
@@ -528,22 +585,46 @@ private fun FormattedBodyEditor(
                         Text("清空后点完成 = 删除此段；用 **文字** 可加粗",
                             fontSize = 10.5.sp, color = Muted2)
                         Spacer(Modifier.weight(1f))
-                        AppLinkButton("取消", onClick = { editIdx = null })
+                        AppLinkButton("取消", onClick = {
+                            editIdx = null
+                            vm.markParagraphEditing(false)
+                        })
                         Spacer(Modifier.width(Dimens.space3))
                         AppLinkButton("完成", onClick = { commit() })
                     }
                 }
             } else {
-                Box(
-                    Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(Dimens.radiusXs))
-                        .clickable(enabled = !vm.busy) {
-                            editIdx = i
-                            editText = raw
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Box(
+                        Modifier.weight(1f)
+                            .clip(RoundedCornerShape(Dimens.radiusXs))
+                            .clickable(enabled = !vm.busy && !vm.suggestionBusy) {
+                                editIdx = i
+                                editText = raw
+                                vm.markParagraphEditing(true)
+                            }
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    ) {
+                        FormattedLine(raw)
+                    }
+                    if (raw.isNotBlank()) {
+                        val state = paragraphStates[i]?.get("status").str()
+                        val marker = when (state) {
+                            "pending" -> "⚡"
+                            "accepted" -> "✓"
+                            "rejected" -> "✗"
+                            else -> "✎"
                         }
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                ) {
-                    FormattedLine(raw)
+                        val markerColor = when (state) {
+                            "pending" -> Warn
+                            "accepted" -> EmeraldInk
+                            else -> Muted
+                        }
+                        TextButton(onClick = { vm.selectParagraph(i) }, enabled = !vm.busy,
+                            modifier = Modifier.width(32.dp)) {
+                            Text(marker, color = markerColor, fontSize = 14.sp)
+                        }
+                    }
                 }
             }
         }
@@ -947,11 +1028,11 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                 enabled = !vm.busy, loading = vm.busy, fill = true)
         } else {
             Spacer(Modifier.height(Dimens.space2))
-            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+            AppButton("基于当前稿继续生成", onClick = { vm.draft() },
                 kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
                 icon = Icons.Default.Refresh, fill = true)
             Spacer(Modifier.height(Dimens.space1))
-            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+            Text("会以当前稿为基础生成新版本；差异过大时保留原稿",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
         if (vm.busy) {
@@ -1075,11 +1156,11 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
                 kind = AppButtonKind.SECONDARY, enabled = !vm.busy, fill = true)
         } else {
             Spacer(Modifier.height(Dimens.space2))
-            AppButton("继续生成（按当前参数再出一版）", onClick = { vm.draft() },
+            AppButton("基于当前稿继续生成", onClick = { vm.draft() },
                 kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
                 icon = Icons.Default.Refresh, fill = true)
             Spacer(Modifier.height(Dimens.space1))
-            Text("每次生成自动保存为新版本，旧版本可在右侧「依据 → 历史版本」查看/回退",
+            Text("会以当前稿为基础生成新版本；差异过大时保留原稿",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
         if (vm.busy) {
@@ -1129,19 +1210,19 @@ private fun TaskField(label: String, value: String, onSync: (String) -> Unit) {
 
 // ---------------- 中栏：文档工作台 ----------------
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
     Column(modifier) {
         // 文档工具条
-        Row(
+        Column(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(Dimens.radiusLg))
                 .background(Surface)
                 .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
                 .padding(horizontal = Dimens.space4, vertical = Dimens.space3),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.fillMaxWidth()) {
                 Text(vm.task.title.ifBlank { "未命名文档" }, fontSize = 14.5.sp,
                     fontWeight = FontWeight.SemiBold, color = Ink, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
@@ -1155,24 +1236,27 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.width(Dimens.space3))
-            if (vm.busy) {
-                AppButton("取消生成", onClick = { vm.cancelAndReset() },
-                    kind = AppButtonKind.DANGER)
-                Spacer(Modifier.width(Dimens.space2))
-            }
-            if (vm.hasDraft) {
-                AppButton("继续生成", onClick = { vm.draft() },
-                    kind = AppButtonKind.AI, enabled = !vm.busy,
-                    icon = Icons.Default.Refresh)
-                Spacer(Modifier.width(Dimens.space2))
-                AppButton("保存版本", onClick = { vm.saveVersion() },
-                    kind = AppButtonKind.SECONDARY, enabled = !vm.busy)
-                Spacer(Modifier.width(Dimens.space2))
-                AppButton("导出 Word", onClick = {
-                    pickSaveFile("${vm.task.title.ifBlank { "公文" }}.docx")
-                        ?.let { vm.export(true, it) }
-                }, kind = AppButtonKind.PRIMARY, enabled = !vm.busy)
+            if (vm.busy || vm.hasDraft) {
+                Spacer(Modifier.height(Dimens.space2))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                    if (vm.busy) {
+                        AppButton("取消生成", onClick = { vm.cancelAndReset() },
+                            kind = AppButtonKind.DANGER)
+                    }
+                    if (vm.hasDraft) {
+                        AppButton("基于当前稿继续生成", onClick = { vm.draft() },
+                            kind = AppButtonKind.AI, enabled = !vm.busy,
+                            icon = Icons.Default.Refresh)
+                        AppButton("保存版本", onClick = { vm.saveVersion() },
+                            kind = AppButtonKind.SECONDARY,
+                            enabled = !vm.busy && !vm.suggestionBusy)
+                        AppButton("导出 Word", onClick = {
+                            pickSaveFile("${vm.task.title.ifBlank { "公文" }}.docx")
+                                ?.let { vm.export(true, it) }
+                        }, kind = AppButtonKind.PRIMARY, enabled = !vm.busy)
+                    }
+                }
             }
         }
 
@@ -1266,6 +1350,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 OutlinedTextField(
                     value = vm.content,
                     onValueChange = { vm.content = it },
+                    enabled = !vm.suggestionBusy,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = 16.sp, fontFamily = FontFamily.Serif,
@@ -1292,6 +1377,92 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 items = listOf(versionText to Muted, stateText to stateColor),
             )
         }
+    }
+}
+
+// ---------------- 逐段建议：只对当前选中的正文行生效 ----------------
+
+@Composable
+private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
+    var details by remember { mutableStateOf(false) }
+    Column(
+        modifier.fillMaxHeight()
+            .clip(RoundedCornerShape(Dimens.radiusLg))
+            .background(Surface)
+            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
+            .padding(Dimens.space4),
+    ) {
+        Text("选中一段，查看 AI 建议", fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold, color = Ink)
+        Spacer(Modifier.height(Dimens.space3))
+        val selected = vm.selectedParagraph
+        if (selected == null) {
+            Text("点击正文右侧的 ✎，建议会显示在这里。", fontSize = 12.sp,
+                color = Muted, lineHeight = 18.sp)
+            return@Column
+        }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Text("原文", fontSize = 11.sp, color = Muted)
+            Text(selected["content"].str(), fontSize = 12.sp, color = Ink,
+                lineHeight = 19.sp)
+            Spacer(Modifier.height(Dimens.space3))
+            if (vm.suggestionBusy) {
+                AiWorkingRow("正在为这一段生成建议…")
+            } else {
+                val state = vm.selectedSuggestion?.get("status").str()
+                when (state) {
+                    "pending" -> {
+                        Text("建议（可直接修改）", fontSize = 11.sp, color = Muted)
+                        OutlinedTextField(
+                            value = vm.suggestionText,
+                            onValueChange = { vm.suggestionText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 12.sp, color = Ink, lineHeight = 19.sp),
+                        )
+                        if (vm.suggestionText == selected["content"].str()) {
+                            Text("AI 认为本段可保留原文。", fontSize = 11.sp, color = Muted)
+                        }
+                    }
+                    "accepted" -> Text("已采纳；这段已更新。", fontSize = 12.sp,
+                        color = EmeraldInk)
+                    "rejected" -> Text("已拒绝；原文保持不变。", fontSize = 12.sp,
+                        color = Muted)
+                    else -> Text("尚无建议。", fontSize = 12.sp, color = Muted)
+                }
+                Spacer(Modifier.height(Dimens.space3))
+                AppLinkButton(if (details) "收起详情" else "看详情", onClick = { details = !details })
+                if (details) {
+                    Text("本次建议只作用于选中的一段；采纳后会生成新版本。" +
+                        "如正文已被手动修改，请先保存版本再继续。",
+                        fontSize = 11.sp, color = Muted, lineHeight = 17.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(Dimens.space3))
+        OutlinedTextField(
+            value = vm.suggestionInstruction,
+            onValueChange = { vm.suggestionInstruction = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("补充要求：例如更简洁", fontSize = 11.sp) },
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = Ink),
+            singleLine = true,
+        )
+        Spacer(Modifier.height(Dimens.space2))
+        val pending = vm.selectedSuggestion?.get("status").str() == "pending"
+        if (pending) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                AppButton("✓ 接受", onClick = { vm.acceptSuggestion() },
+                    kind = AppButtonKind.PRIMARY,
+                    enabled = vm.suggestionReady && vm.suggestionText.isNotBlank() &&
+                        !vm.suggestionText.contains('\n'))
+                AppButton("✗ 拒绝", onClick = { vm.rejectSuggestion() },
+                    kind = AppButtonKind.SECONDARY, enabled = vm.suggestionReady)
+            }
+            Spacer(Modifier.height(Dimens.space2))
+        }
+        AppLinkButton(if (pending) "重新建议" else "为这段生成建议",
+            onClick = { vm.suggestParagraph(regenerate = true) })
     }
 }
 

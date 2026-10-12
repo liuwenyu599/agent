@@ -1029,7 +1029,8 @@ class WritingTaskService:
         self.db.flush()
         doc_id, ver = self._snapshot(
             t, user_id,
-            note="V1 AI 初稿" if t.version_no == 0 else f"V{t.version_no + 1} 继续生成")
+            note="V1 AI 初稿" if t.version_no == 0 else f"V{t.version_no + 1} 继续生成",
+            commit=False)
         t.document_id = doc_id
         t.version_no = ver
         t.updated_at = now_local()
@@ -1605,7 +1606,7 @@ class WritingTaskService:
             system_prompt=system, attachment_context=attachment_ctx,
         ) or ""
 
-    def _snapshot(self, t, user_id: str, note: str):
+    def _snapshot(self, t, user_id: str, note: str, *, commit: bool = True):
         """把当前内容写入 documents 版本链，返回 (document_id, version_no)。"""
         from app.application.documents.dto import DocumentCreateRequest, DocumentSaveRequest
         from app.application.documents.service import DocumentService
@@ -1613,7 +1614,8 @@ class WritingTaskService:
         ctx = t.context or {}
         if t.document_id:
             doc = svc.save_version(t.document_id, user_id, DocumentSaveRequest(
-                content=t.current_content, title=ctx.get("title"), note=note))
+                content=t.current_content, title=ctx.get("title"), note=note),
+                commit=commit)
             return doc["id"], doc["current_version"]
         doc = svc.create_document(user_id, DocumentCreateRequest(
             title=ctx.get("title") or "未命名文档",
@@ -1623,5 +1625,5 @@ class WritingTaskService:
             document_date=ctx.get("document_date"),
             session_id=t.session_id,
             note=note,
-        ))
+        ), commit=commit)
         return doc["id"], doc["current_version"]

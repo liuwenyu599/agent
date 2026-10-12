@@ -17,4 +17,5 @@ from app.infrastructure.database.models import (  # noqa: F401
     user_preference,
     workflow,
     writing_task,
+    writing_suggestion,
 )

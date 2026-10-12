@@ -9,23 +9,28 @@ import re
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy import select, update
 
 from app.application.writing import task_parser
 from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.ops_task_service import LOCAL_OPERATIONS
+from app.application.writing.paragraph_suggestions import ParagraphSuggestionMixin
 from app.application.writing.quality_gate import QualityGate
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService, _SPEECH_TYPES
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
+from app.infrastructure.database.models.writing_suggestion import WritingSuggestionModel
+from app.infrastructure.database.models.writing_task import WritingTaskModel
 
 
-class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
+class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWritingTaskService):
     """Final production writing service for ASGI routes."""
 
     def __init__(self, db, assistant=None, rag=None, attachments=None):
         super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
         self.interpreter = AsyncWritingIntentInterpreter(assistant) if assistant else None
+        self._draft_memory_cache: dict[tuple[str, str], str] = {}
 
     # ---------------------------------------------------- 起草提示 + 训练留痕
 
@@ -60,6 +65,22 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
         """
         base = self._draft_system(user_id, template)
         card = self._example_style_block(instruction, user_id)
+        # Only accepted edits from the current user and document type influence tone.
+        current_task = self.db.get(WritingTaskModel, prompt_snapshot.current_task())
+        doc_type = (str((current_task.context or {}).get("document_type") or "")
+                    if current_task and current_task.user_id == user_id else
+                    task_parser.explicit_document_type(instruction) or "")
+        cache_key = (user_id, doc_type)
+        if cache_key not in self._draft_memory_cache:
+            self._draft_memory_cache[cache_key] = self._accepted_style_memory(user_id, doc_type)
+        card += self._draft_memory_cache[cache_key]
+        if current_task and current_task.user_id == user_id and current_task.current_content:
+            base += (
+                "\n\n【继续生成的稳定性约束】这是同一篇文稿的下一版。保留现有文稿的主题、"
+                "文种、事实、对象、章节顺序和已写好的有效段落；只修正表达、补足明确缺口。"
+                "不要另起一篇风格或结构完全不同的稿。\n【当前稿】\n"
+                + current_task.current_content[:5000]
+            )
         self._record_prompt(base, card, instruction, sources, attachment_ctx, user_id,
                             kind="draft")
         return base + card
@@ -583,6 +604,7 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
     async def draft_async(self, task_id: str, user_id: str,
                           outline_only: bool = False) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        expected_state = (task.current_content, task.version_no)
         prompt_snapshot.enter_task(
             task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         ctx = dict(task.context or {})
@@ -601,7 +623,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
             if not assembled:
                 raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
             payload = self._finalize_draft(
-                task, ctx, assembled, self._merge_sources(source_groups), user_id)
+                task, ctx, assembled, self._merge_sources(source_groups), user_id,
+                expected_state=expected_state)
             payload["generation_mode"] = "sectioned"
             payload["section_plan"] = plan
             payload["reply"] = "长文已按章节分别检索、生成并组装。" + payload["reply"]
@@ -615,15 +638,64 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
         text, retry_reason = await self._regenerate_if_needed_async(
             instruction, sources, attachment_ctx, user_id, template, text, ctx)
-        payload = self._finalize_draft(task, ctx, text, sources, user_id)
+        payload = self._finalize_draft(task, ctx, text, sources, user_id,
+                                       expected_state=expected_state)
         if retry_reason:
             payload["reply"] = retry_reason + payload["reply"]
         return payload
+
+    def _finalize_draft(self, task, ctx, text, sources, user_id,
+                        expected_state=None):
+        """Reject a completely different continuation before changing the saved document."""
+        if expected_state is not None:
+            # A conditional no-op update obtains a row lock until the version save
+            # commits, so a concurrent save cannot slip between check and write.
+            expected_content, expected_version = expected_state
+            result = self.db.execute(update(WritingTaskModel).where(
+                WritingTaskModel.id == task.id,
+                WritingTaskModel.user_id == user_id,
+                WritingTaskModel.current_content == expected_content,
+                WritingTaskModel.version_no == expected_version,
+            ).values(updated_at=WritingTaskModel.updated_at))
+            if result.rowcount != 1:
+                self.db.rollback()
+                raise HTTPException(status_code=409,
+                                    detail="生成期间正文已变化，未覆盖新版本，请刷新后重试")
+            self.db.refresh(task)
+
+        if task.current_content:
+            old_lines = set(task.current_content.splitlines())
+            new_lines = set(text.splitlines())
+            accepted = self.db.scalars(select(WritingSuggestionModel.final_content).where(
+                WritingSuggestionModel.task_id == task.id,
+                WritingSuggestionModel.user_id == user_id,
+                WritingSuggestionModel.status == "accepted",
+                WritingSuggestionModel.final_content.is_not(None),
+            )).all()
+            if any(line in old_lines and line not in new_lines for line in accepted):
+                raise HTTPException(status_code=422,
+                                    detail="新稿丢失了已采纳的逐段修改，未替换当前版本")
+        old = re.sub(r"\s+", "", task.current_content or "")
+        new = re.sub(r"\s+", "", text or "")
+        if len(old) >= 120:
+            def grams(value: str) -> set[str]:
+                value = value[:8000]
+                return {value[i:i + 4] for i in range(max(0, len(value) - 3))}
+
+            old_grams, new_grams = grams(old), grams(new)
+            overlap = (len(old_grams & new_grams) / max(1, min(len(old_grams), len(new_grams))))
+            if len(new) < len(old) * 0.55 or overlap < 0.18:
+                raise HTTPException(
+                    status_code=422,
+                    detail="新稿与当前稿差异过大，未替换已保存版本。请用逐段建议修改具体段落，或新建任务重新起草。",
+                )
+        return super()._finalize_draft(task, ctx, text, sources, user_id)
 
     async def draft_stream_async(self, task_id: str, user_id: str,
                                  outline_only: bool = False) -> AsyncIterator[str]:
         try:
             task = self._get_owned(task_id, user_id)
+            expected_state = (task.current_content, task.version_no)
             prompt_snapshot.enter_task(
                 task_id, user_id, session_id=getattr(task, "session_id", "") or "")
             ctx = dict(task.context or {})
@@ -641,7 +713,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                     yield _sse({"type": "delta", "text": text + "\n\n"})
                 payload = self._finalize_draft(
                     task, ctx, "\n\n".join(sections).strip(),
-                    self._merge_sources(source_groups), user_id)
+                    self._merge_sources(source_groups), user_id,
+                    expected_state=expected_state)
                 payload["generation_mode"] = "sectioned"
                 payload["section_plan"] = plan
                 payload["reply"] = "长文已按章节分别检索、生成并组装。" + payload["reply"]
@@ -664,7 +737,8 @@ class AsyncWritingTaskService(SectionedGenerationWritingTaskService):
                 return
             text, retry_reason = await self._regenerate_if_needed_async(
                 instruction, sources, attachment_ctx, user_id, template, text, ctx)
-            payload = self._finalize_draft(task, ctx, text, sources, user_id)
+            payload = self._finalize_draft(task, ctx, text, sources, user_id,
+                                           expected_state=expected_state)
             if retry_reason:
                 payload["reply"] = retry_reason + payload["reply"]
             yield _sse({"type": "done", "data": payload})

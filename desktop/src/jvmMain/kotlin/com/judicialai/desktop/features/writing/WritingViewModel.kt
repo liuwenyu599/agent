@@ -110,6 +110,7 @@ class WritingViewModel(
 
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
+    private var draftPreviousContent: String? = null
 
     /**
      * 跨页面恢复任务（切回本页时按 [AppState.pendingWritingTaskId] 拉回任务上下文）的协程句柄。
@@ -212,10 +213,165 @@ class WritingViewModel(
      */
     private var serverContent: String = ""
 
+    /** Server-backed line anchors; only the selected line is ever offered to the model. */
+    var paragraphs by mutableStateOf(listOf<JsonObject>())
+        private set
+    var selectedLineIndex by mutableStateOf<Int?>(null)
+        private set
+    var selectedSuggestion by mutableStateOf<JsonObject?>(null)
+        private set
+    var suggestionText by mutableStateOf("")
+    var suggestionInstruction by mutableStateOf("")
+    var suggestionBusy by mutableStateOf(false)
+        private set
+    var paragraphEditing by mutableStateOf(false)
+        private set
+    private var suggestionOperation = 0
+    fun markParagraphEditing(editing: Boolean) { paragraphEditing = editing }
+    val selectedParagraph: JsonObject?
+        get() = paragraphs.firstOrNull { it["line_index"].int() == selectedLineIndex }
+    val suggestionReady: Boolean
+        get() = content == serverContent && !busy && !suggestionBusy && !paragraphEditing
+
+    private suspend fun loadParagraphs(id: String): Boolean {
+        val expectedContent = serverContent
+        val expectedVersion = versionNo
+        when (val r = repo.paragraphs(id)) {
+            is ApiResult.Ok -> {
+                if (task.taskId != id || serverContent != expectedContent ||
+                    versionNo != expectedVersion || r.data?.get("version_no").int() != versionNo) {
+                    return false
+                }
+                paragraphs = r.data?.get("items").arr().mapNotNull { it.obj() }.orEmpty()
+                val previousSuggestion = selectedSuggestion
+                val editedText = suggestionText
+                val nextSuggestion = selectedParagraph?.get("suggestion").obj()
+                val preserveEdit = previousSuggestion?.get("id").str() ==
+                    nextSuggestion?.get("id").str() &&
+                    nextSuggestion?.get("status").str() == "pending" &&
+                    editedText != previousSuggestion?.get("proposed_content").str()
+                selectedSuggestion = nextSuggestion
+                if (!preserveEdit) suggestionText = nextSuggestion?.get("proposed_content").str()
+                return true
+            }
+            is ApiResult.Err -> if (r.status != 404) status = r.message
+        }
+        return false
+    }
+
+    fun refreshParagraphs() {
+        val id = task.taskId ?: return
+        scope.launch { loadParagraphs(id) }
+    }
+
+    fun selectParagraph(index: Int) {
+        selectedLineIndex = index
+        selectedSuggestion = selectedParagraph?.get("suggestion").obj()
+        suggestionText = selectedSuggestion?.get("proposed_content").str()
+        suggestionInstruction = ""
+        if (selectedParagraph == null) {
+            val id = task.taskId ?: return
+            scope.launch {
+                if (loadParagraphs(id) && selectedLineIndex == index &&
+                    selectedParagraph != null && selectedSuggestion == null) suggestParagraph()
+            }
+        } else if (selectedSuggestion == null) suggestParagraph()
+    }
+
+    fun suggestParagraph(regenerate: Boolean = false) {
+        val id = task.taskId ?: return
+        val requestedLineIndex = selectedLineIndex
+        val pid = selectedParagraph?.get("id").str()
+        if (pid.isNullOrBlank()) {
+            refreshParagraphs()
+            return
+        }
+        if (!suggestionReady) {
+            status = "请先保存当前手工修改，再获取该段建议"
+            return
+        }
+        suggestionBusy = true
+        val operation = ++suggestionOperation
+        scope.launch {
+            when (val r = repo.suggestParagraph(id, pid, suggestionInstruction, regenerate)) {
+                is ApiResult.Ok -> {
+                    if (suggestionOperation == operation && task.taskId == id &&
+                        selectedLineIndex == requestedLineIndex &&
+                        selectedParagraph?.get("id").str() == pid) {
+                        selectedSuggestion = r.data
+                        suggestionText = r.data?.get("proposed_content").str()
+                    }
+                    if (suggestionOperation == operation && task.taskId == id) refreshParagraphs()
+                }
+                is ApiResult.Err -> if (suggestionOperation == operation && task.taskId == id)
+                    status = r.message
+            }
+            if (suggestionOperation == operation) suggestionBusy = false
+        }
+    }
+
+    fun acceptSuggestion() {
+        val id = task.taskId ?: return
+        val suggestionId = selectedSuggestion?.get("id").str()
+        if (suggestionId.isNullOrBlank() || !suggestionReady) return
+        val expectedContent = content
+        val expectedServerContent = serverContent
+        val expectedVersion = versionNo
+        suggestionBusy = true
+        val operation = ++suggestionOperation
+        scope.launch {
+            when (val r = repo.acceptSuggestion(id, suggestionId, suggestionText)) {
+                is ApiResult.Ok -> {
+                    if (suggestionOperation == operation && task.taskId == id) {
+                        if (content == expectedContent && serverContent == expectedServerContent &&
+                            versionNo == expectedVersion) {
+                            r.data?.let { applyResponse(it) }
+                            status = if (r.data?.get("content_changed").bool())
+                                "已只替换选中段，其他正文保持不变"
+                            else "原文无需修改，已记录采纳"
+                            if (!r.data?.get("content_changed").bool()) refreshParagraphs()
+                        } else {
+                            status = "建议已在服务器采纳；本地有新编辑，请先处理本地内容再刷新任务"
+                        }
+                    }
+                }
+                is ApiResult.Err -> if (suggestionOperation == operation && task.taskId == id)
+                    status = r.message
+            }
+            if (suggestionOperation == operation) suggestionBusy = false
+        }
+    }
+
+    fun rejectSuggestion() {
+        val id = task.taskId ?: return
+        val suggestionId = selectedSuggestion?.get("id").str()
+        if (suggestionId.isNullOrBlank() || !suggestionReady) return
+        val requestedLineIndex = selectedLineIndex
+        suggestionBusy = true
+        val operation = ++suggestionOperation
+        scope.launch {
+            when (val r = repo.rejectSuggestion(id, suggestionId)) {
+                is ApiResult.Ok -> {
+                    if (suggestionOperation == operation && task.taskId == id) {
+                        if (selectedLineIndex == requestedLineIndex) {
+                            selectedSuggestion = r.data?.get("suggestion").obj()
+                        }
+                        status = "已拒绝建议，原文未更改"
+                        refreshParagraphs()
+                    }
+                }
+                is ApiResult.Err -> if (suggestionOperation == operation && task.taskId == id)
+                    status = r.message
+            }
+            if (suggestionOperation == operation) suggestionBusy = false
+        }
+    }
+
     // ---------------- 状态装载 ----------------
 
     private fun applyResponse(d: JsonObject) {
         val id = d["task_id"].str().ifBlank { task.taskId }
+        val previousTaskId = task.taskId
         // 记录到全局：切到别的页面再切回时（ViewModel 重建、状态清零）
         // 按此 id 调 GET /writing/tasks/{id} 恢复任务
         if (!id.isNullOrBlank()) AppState.pendingWritingTaskId = id
@@ -246,11 +402,20 @@ class WritingViewModel(
                 if (role.isBlank() || text.isBlank()) null else TaskChatMessage(role, text)
             }
         }
+        val nextVersion = d["version_no"].int()
         d["current_content"].str().takeIf { it.isNotBlank() }?.let {
+            val shouldRefresh = it != serverContent || nextVersion != versionNo || id != previousTaskId
             content = it
             serverContent = it
+            versionNo = nextVersion
+            if (shouldRefresh) {
+                paragraphs = emptyList()
+                selectedSuggestion = null
+                suggestionText = ""
+                refreshParagraphs()
+            }
         }
-        versionNo = d["version_no"].int()
+        versionNo = nextVersion
         taskStatus = d["status"].str().ifBlank { taskStatus }
         d["references"].arr().map { it.str() }.filter { it.isNotBlank() }
             .takeIf { it.isNotEmpty() }?.let { references = it }
@@ -279,6 +444,8 @@ class WritingViewModel(
     fun cancelGeneration() {
         activeJob?.cancel()
         activeJob = null
+        draftPreviousContent?.let { content = it }
+        draftPreviousContent = null
         busy = false
         planning = false
         AppState.writingGenerating = false
@@ -651,27 +818,33 @@ class WritingViewModel(
     // ---------------- 起草 / 继续生成 / 修改 ----------------
 
     /**
-     * 起草初稿；已有正文时即「继续生成」：按当前参数重新起草并沉淀为新版本（v2/v3…）。
+     * 起草初稿；已有正文时生成以当前稿为锚点的新版本。
      * 优先走 SSE 流式接口：正文边生成边在中栏上屏；
      * 服务端未部署流式接口（HTTP 404）时自动回退为一次性生成。
      */
     fun draft(outlineOnly: Boolean = false) {
         val id = task.taskId ?: return
         if (busy) return
+        if (hasDraft && content != serverContent) {
+            status = "请先保存当前手工修改，再基于这版继续生成"
+            return
+        }
         busy = true
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
-        // 服务端语义是「按当前参数整篇重新起草，旧正文自动归档为 v{n+1}」
+        // 服务端语义是「按当前稿继续生成，旧正文自动归档为 v{n+1}」
         // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
         // 不是「在旧文后面续写」。所以开流前必须先清空编辑器：
         // 否则 content += delta 会把新一版直接拼在上一版下面，界面上出现 v1+v2 连体。
-        // 旧内容并未丢失——服务端已把它存进历史版本，可随时查看/回退。
+        // 保留一份本地旧内容：若新稿因差异过大被拒或网络失败，立即恢复。
         // 注意：这里**不动** serverContent，让 content 与它保持不一致，
         // 期间 refreshTask() 就不会拿服务端的旧正文把正在流的这一版盖掉。
+        draftPreviousContent = content
         content = ""
         activeJob = scope.launch {
             var streamed = false
+            var saved = false
             val r = repo.draftStream(id, outlineOnly) { delta ->
                 streamed = true
                 content += delta
@@ -679,6 +852,7 @@ class WritingViewModel(
             when {
                 r is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
+                    saved = true
                     d["reply"].str().takeIf { it.isNotBlank() }
                         ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                 }
@@ -687,6 +861,7 @@ class WritingViewModel(
                     when (val r2 = repo.draft(id, outlineOnly)) {
                         is ApiResult.Ok -> r2.data?.let { d ->
                             applyResponse(d)
+                            saved = true
                             d["reply"].str().takeIf { it.isNotBlank() }
                                 ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
                         }
@@ -695,6 +870,11 @@ class WritingViewModel(
                 }
                 r is ApiResult.Err -> fail(r.message)
             }
+            if (!saved) {
+                draftPreviousContent?.let { content = it }
+                if (status.isNullOrBlank()) fail("生成未返回可保存的正文，请重试")
+            }
+            draftPreviousContent = null
             busy = false
             AppState.writingGenerating = false
         }
@@ -822,7 +1002,7 @@ class WritingViewModel(
 
     fun saveVersion(note: String? = null) {
         val id = task.taskId ?: return
-        if (busy || !hasDraft) return
+        if (busy || suggestionBusy || !hasDraft) return
         busy = true
         scope.launch {
             when (val r = repo.saveVersion(id, content, note)) {
@@ -947,6 +1127,8 @@ class WritingViewModel(
     }
 
     fun newTask() {
+        suggestionOperation++
+        suggestionBusy = false
         // 用户明确放弃当前任务：清掉跨页面恢复标记与上次失败原因，切回页面不应再恢复它
         AppState.pendingWritingTaskId = null
         AppState.writingLastError = null
@@ -957,6 +1139,12 @@ class WritingViewModel(
         task = WritingTaskState()
         content = ""
         serverContent = ""
+        paragraphs = emptyList()
+        selectedLineIndex = null
+        selectedSuggestion = null
+        suggestionText = ""
+        suggestionInstruction = ""
+        paragraphEditing = false
         versionNo = 0
         taskStatus = "collecting"
         messages = emptyList()

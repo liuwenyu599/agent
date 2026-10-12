@@ -98,7 +98,7 @@ class DocumentService:
 
     # ---------- 写入 ----------
 
-    def create_document(self, user_id: str, req) -> dict:
+    def create_document(self, user_id: str, req, *, commit: bool = True) -> dict:
         doc = MyDocumentModel(
             user_id=user_id,
             title=req.title or "未命名文档",
@@ -116,11 +116,14 @@ class DocumentService:
             quality=req.quality, content_check=req.content_check,
             note=req.note or "初始版本", created_by=user_id,
         ))
-        self.db.commit()
-        self.db.refresh(doc)
+        if commit:
+            self.db.commit()
+            self.db.refresh(doc)
+        else:
+            self.db.flush()
         return self.get_document(doc.id, user_id)
 
-    def save_version(self, doc_id: str, user_id: str, req) -> dict:
+    def save_version(self, doc_id: str, user_id: str, req, *, commit: bool = True) -> dict:
         doc = self._get_owned(doc_id, user_id)
         new_no = (doc.current_version or 0) + 1
         latest = self._latest_version(doc)
@@ -136,7 +139,10 @@ class DocumentService:
         if req.status:
             doc.status = req.status
         doc.updated_at = now_local()
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return self.get_document(doc.id, user_id)
 
     def rename_document(self, doc_id: str, user_id: str, title: str) -> dict:

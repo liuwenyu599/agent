@@ -80,6 +80,15 @@ class TaskTrainingRequest(BaseModel):
     final_content: str
 
 
+class ParagraphSuggestRequest(BaseModel):
+    instruction: str = ""
+    regenerate: bool = False
+
+
+class ParagraphAcceptRequest(BaseModel):
+    final_content: str
+
+
 @router.post("", status_code=201)
 async def create_task(req: TaskCreateRequest,
                       user: User = Depends(get_current_user),
@@ -113,6 +122,35 @@ def get_task(task_id: str,
              user: User = Depends(get_current_user),
              svc: WritingTaskService = Depends(get_task_service)):
     return svc.get_task(task_id, user.id)
+
+
+@router.get("/{task_id}/paragraphs")
+def list_paragraphs(task_id: str,
+                    user: User = Depends(get_current_user),
+                    svc: WritingTaskService = Depends(get_task_service)):
+    return svc.list_paragraphs(task_id, user.id)
+
+
+@router.post("/{task_id}/paragraphs/{paragraph_id}/suggest")
+async def suggest_paragraph(task_id: str, paragraph_id: str, req: ParagraphSuggestRequest,
+                            user: User = Depends(get_current_user),
+                            svc: WritingTaskService = Depends(get_task_service)):
+    return await svc.suggest_paragraph_async(
+        task_id, user.id, paragraph_id, req.instruction, req.regenerate)
+
+
+@router.post("/{task_id}/suggestions/{suggestion_id}/accept")
+def accept_paragraph_suggestion(task_id: str, suggestion_id: str, req: ParagraphAcceptRequest,
+                                user: User = Depends(get_current_user),
+                                svc: WritingTaskService = Depends(get_task_service)):
+    return svc.accept_paragraph_suggestion(task_id, user.id, suggestion_id, req.final_content)
+
+
+@router.post("/{task_id}/suggestions/{suggestion_id}/reject")
+def reject_paragraph_suggestion(task_id: str, suggestion_id: str,
+                                user: User = Depends(get_current_user),
+                                svc: WritingTaskService = Depends(get_task_service)):
+    return svc.reject_paragraph_suggestion(task_id, user.id, suggestion_id)
 
 
 @router.patch("/{task_id}")

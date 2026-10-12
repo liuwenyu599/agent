@@ -49,6 +49,36 @@ class WritingRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    suspend fun paragraphs(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.paragraphs(id))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun suggestParagraph(
+        id: String, paragraphId: String, instruction: String, regenerate: Boolean,
+    ): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.paragraphSuggest(id, paragraphId),
+            mapOf("instruction" to instruction, "regenerate" to regenerate), timeoutMs = 180_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun acceptSuggestion(
+        id: String, suggestionId: String, finalContent: String,
+    ): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.suggestionAccept(id, suggestionId),
+            mapOf("final_content" to finalContent))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun rejectSuggestion(id: String, suggestionId: String): ApiResult<JsonObject?> =
+        when (val r = api.post(Endpoints.WritingTasks.suggestionReject(id, suggestionId), emptyMap<String, Any>())) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
     /** PATCH /writing/tasks/{id} 同步用户手改的结构化字段 */
     suspend fun patchContext(id: String, patch: Map<String, Any?>): ApiResult<JsonObject?> =
         when (val r = api.put(Endpoints.WritingTasks.item(id), mapOf("context" to patch))) {

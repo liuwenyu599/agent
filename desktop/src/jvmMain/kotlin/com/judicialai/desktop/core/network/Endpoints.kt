@@ -68,6 +68,13 @@ object Endpoints {
         /** 流式起草（SSE）：正文边生成边推，最后推 done 携带权威结果 */
         fun draftStream(id: String) = "/writing/tasks/$id/draft/stream"
         fun revise(id: String) = "/writing/tasks/$id/revise"
+        fun paragraphs(id: String) = "/writing/tasks/$id/paragraphs"
+        fun paragraphSuggest(id: String, paragraphId: String) =
+            "/writing/tasks/$id/paragraphs/$paragraphId/suggest"
+        fun suggestionAccept(id: String, suggestionId: String) =
+            "/writing/tasks/$id/suggestions/$suggestionId/accept"
+        fun suggestionReject(id: String, suggestionId: String) =
+            "/writing/tasks/$id/suggestions/$suggestionId/reject"
         /** 上传图片并由视觉模型（Qwen2.5-VL 等）识别为文本，绑定到任务会话 */
         fun images(id: String) = "/writing/tasks/$id/images"
         fun versions(id: String) = "/writing/tasks/$id/versions"
