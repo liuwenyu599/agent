@@ -30,6 +30,11 @@ _DEFAULT_SECTIONS = {
         ("", "围绕主题谈具体体会、共同愿景或倡议，保持现场讲话语气"),
         ("", "自然收束，表达祝愿、感谢或期待，适合现场口头宣读"),
     ],
+    "主持词": [
+        ("", "宣布会议开始，说明会议名称、时间和参加人员"),
+        ("", "按议程串联各环节，介绍发言单位和议题"),
+        ("", "小结会议成效并提出贯彻要求，自然收束"),
+    ],
     "工作总结": [
         ("一、工作开展情况", "概括阶段工作主线、推进过程和主要完成情况"),
         ("二、主要做法和成效", "按重点工作提炼做法、机制和有依据的成效"),
@@ -60,9 +65,17 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
             return False
         target = int(ctx.get("word_count_target") or 0)
         doc_type = str(ctx.get("document_type") or "").strip()
-        # Unknown forms still draft normally. A report skeleton is not a safe fallback for them.
-        sectionable = doc_type in _LONG_DOC_TYPES or any(x in doc_type for x in _SPEECH_TYPES)
-        return sectionable and (target >= 1800 or (doc_type in _LONG_DOC_TYPES and target == 0))
+        # 未知文种照常起草：报告骨架不是安全的兜底。
+        is_speech = any(x in doc_type for x in _SPEECH_TYPES)
+        # 讲话类（致辞/讲话/发言/主持词）**无条件走分段**，不看字数。
+        # 连续行文体例是文种属性，与篇幅无关：一篇 600 字的会前表态同样
+        # 不能被拆出「一、二、三」小标题。曾经的 `target >= 1800` 门槛会让
+        # 真实短发言稿（多为 800~1500 字）绕过本分支、落入通用起草路径，
+        # 于是出来的是文件味而不是讲话味——这正是「简单的还可以、发言稿用不上」
+        # 的根因。字数门槛只对报告/方案类有意义（短报告无需分节）。
+        if is_speech:
+            return True
+        return doc_type in _LONG_DOC_TYPES and (target >= 1800 or target == 0)
 
     @staticmethod
     def _fallback_plan(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -74,15 +87,29 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         标题与层次交给模型按文种体例自行决定。
         """
         doc_type = str(ctx.get("document_type") or "")
-        key = ("讲话稿" if any(x in doc_type for x in _SPEECH_TYPES)
-               else "方案" if "方案" in doc_type
-               else "工作总结" if "总结" in doc_type
-               else "报告" if doc_type in _LONG_DOC_TYPES else None)
+        # 主持词不是致辞：前者串联议程，后者向来宾致意。共用一套计划会互相串味。
+        if "主持词" in doc_type:
+            key = "主持词"
+        elif any(x in doc_type for x in _SPEECH_TYPES):
+            key = "讲话稿"
+        else:
+            key = ("方案" if "方案" in doc_type
+                   else "工作总结" if "总结" in doc_type
+                   else "报告" if doc_type in _LONG_DOC_TYPES else None)
         if key is None:
             return []
         items = _DEFAULT_SECTIONS[key]
         total = int(ctx.get("word_count_target") or 2200)
-        per = max(350, total // len(items))
+        # 短稿不该被硬拆成 4 节：800 字发言稿分4 节每节只有 200 字，
+        # 切得太碎反而破坏「连续行文」的连贯感（讲话是顺着讲的，不是分段念的）。
+        # 讲话类按篇幅缩到 3 节，其余文种维持 4 节。
+        is_speech = key in ("讲话稿", "主持词")
+        if is_speech and total < 1200:
+            items = items[:3]
+        # 下限不能用固定 350：短稿分 3~4 节时 350×N 会把全文强行拉长近一倍，
+        # 产出「说不到那么长还硬撑」的水文。下限取 min(350, 平均的一半)，
+        # 保证「下限不超过实际平均」——total 偏小时按实际均分，偏大时保底有内容可写。
+        per = max(min(350, total // len(items) // 2), total // len(items))
         return [
             # heading 置空 = 不要小标题；focus 保留该节应覆盖的内容。
             {"heading": "", "focus": focus, "target_chars": per}

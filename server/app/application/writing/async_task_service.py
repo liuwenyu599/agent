@@ -15,13 +15,26 @@ from app.application.writing import task_parser
 from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.ops_task_service import LOCAL_OPERATIONS
-from app.application.writing.paragraph_suggestions import ParagraphSuggestionMixin
+from app.application.writing.paragraph_suggestions import ParagraphSuggestionMixin, content_hash
 from app.application.writing.quality_gate import QualityGate
+from app.application.writing.agent_graph.graph import WritingAgentGraph
+from app.application.writing.agent_graph.persistence import AgentRunStore
+from app.application.writing.agent_graph.routing import (
+    classify_writing_route,
+    graph_enabled_for_user,
+)
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService, _SPEECH_TYPES
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
+from app.core.config import settings
 from app.infrastructure.database.models.writing_suggestion import WritingSuggestionModel
 from app.infrastructure.database.models.writing_task import WritingTaskModel
+
+
+def _http_error_message(detail: Any) -> str:
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("detail") or "生成失败，请重试")
+    return str(detail)
 
 
 class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWritingTaskService):
@@ -64,7 +77,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         除了这一次函数调用没有任何额外开销。
         """
         base = self._draft_system(user_id, template)
-        card = self._example_style_block(instruction, user_id)
+        style = self._example_style_block(instruction, user_id)
         # Only accepted edits from the current user and document type influence tone.
         current_task = self.db.get(WritingTaskModel, prompt_snapshot.current_task())
         doc_type = (str((current_task.context or {}).get("document_type") or "")
@@ -73,17 +86,56 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         cache_key = (user_id, doc_type)
         if cache_key not in self._draft_memory_cache:
             self._draft_memory_cache[cache_key] = self._accepted_style_memory(user_id, doc_type)
-        card += self._draft_memory_cache[cache_key]
+        memory = self._draft_memory_cache[cache_key]
         if current_task and current_task.user_id == user_id and current_task.current_content:
-            base += (
-                "\n\n【继续生成的稳定性约束】这是同一篇文稿的下一版。保留现有文稿的主题、"
-                "文种、事实、对象、章节顺序和已写好的有效段落；只修正表达、补足明确缺口。"
-                "不要另起一篇风格或结构完全不同的稿。\n【当前稿】\n"
-                + current_task.current_content[:5000]
+            rule = (
+                "\n\n【继续生成】沿用当前稿的主题、文种、事实、对象和已采纳段落；"
+                "只修正表达并补足明确缺口。下面是当前稿首尾摘录，勿另起无关文稿。\n"
             )
+            # QwenGateway._shrink_system cuts an oversized system prompt from the
+            # front. Keep feedback, exemplar boundaries and the current draft in
+            # its 8192-token system allowance instead of letting it cut the tail.
+            budget = max(1200, int((settings.MODEL_CTX_LIMIT - 512) * 0.75 * 0.5))
+            space = max(0, budget - len(base) - len(memory) - len(rule))
+            excerpt_budget = min(1200, space // 3)
+            style = self._bounded_style(style, space - excerpt_budget)
+            excerpt_budget = min(1200, max(0, budget - len(base) - len(memory)
+                                           - len(rule) - len(style)))
+            excerpt = self._head_tail(current_task.current_content, excerpt_budget)
+            if excerpt:
+                base += rule + excerpt
+        card = style + memory
         self._record_prompt(base, card, instruction, sources, attachment_ctx, user_id,
                             kind="draft")
         return base + card
+
+    @staticmethod
+    def _head_tail(content: str, limit: int) -> str:
+        if limit < 80:
+            return ""
+        if len(content) <= limit:
+            return content
+        headings = [line.strip()[:60] for line in content.splitlines() if re.match(
+            r"^\s*(?:[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\d+[、.．])",
+            line)]
+        outline = ""
+        if headings:
+            outline = "\n【章节线索】" + "；".join(headings)[:limit // 4]
+        marker = "\n……\n"
+        remaining = limit - len(marker) - len(outline)
+        front = remaining // 2
+        back = remaining - front
+        return content[:front] + outline + marker + content[-back:]
+
+    @staticmethod
+    def _bounded_style(card: str, limit: int) -> str:
+        if len(card) <= limit:
+            return card
+        if limit < 100:
+            return ""
+        marker = "\n（范文已节选）\n"
+        tail = min(150, (limit - len(marker)) // 3)
+        return card[:limit - len(marker) - tail] + marker + card[-tail:]
 
     async def _interpret_async(self, message: str, ctx: Dict[str, Any],
                                has_draft: bool = False):
@@ -292,12 +344,59 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         }
 
     # --------------------------------------------------------------- revisions
+    def _assert_revision_client_base(self, task, version, digest) -> None:
+        if (version is None or digest is None or
+                version != (task.version_no or 0) or
+                digest != content_hash(self._to_dict(task)["current_content"])):
+            raise HTTPException(status_code=409,
+                                detail="正文已变化或客户端版本过旧，请刷新后重试")
+
+    def _claim_revision_state(self, task, user_id: str, expected_state) -> None:
+        # Lightweight service tests use an in-memory task stand-in. Persisted
+        # production tasks always take the conditional SQL update below.
+        if not getattr(task, "id", None):
+            if (getattr(task, "current_content", None), getattr(task, "version_no", None)) \
+                    != expected_state:
+                raise HTTPException(status_code=409,
+                                    detail="修改期间正文已变化，未覆盖新版本，请刷新后重试")
+            return
+        expected_content, expected_version = expected_state
+        result = self.db.execute(update(WritingTaskModel).where(
+            WritingTaskModel.id == task.id,
+            WritingTaskModel.user_id == user_id,
+            WritingTaskModel.current_content == expected_content,
+            WritingTaskModel.version_no == expected_version,
+        ).values(updated_at=WritingTaskModel.updated_at))
+        if result.rowcount != 1:
+            self.db.rollback()
+            raise HTTPException(status_code=409,
+                                detail="修改期间正文已变化，未覆盖新版本，请刷新后重试")
+        self.db.refresh(task)
+
+    def _supersede_pending_suggestions(self, task_id: str, user_id: str) -> bool:
+        pending = self.db.scalars(select(WritingSuggestionModel).where(
+            WritingSuggestionModel.task_id == task_id,
+            WritingSuggestionModel.user_id == user_id,
+            WritingSuggestionModel.status == "pending",
+        )).all()
+        for row in pending:
+            row.status = "superseded"
+            self._event(row, "supersede")
+        return bool(pending)
+
     async def patch_section_async(self, task_id: str, user_id: str, target: str,
                                   instruction: str, mode: str = "revise", operation: str = "patch_section",
-                                  position: str = "after", end_target: Optional[str] = None) -> Dict[str, Any]:
+                                  position: str = "after", end_target: Optional[str] = None,
+                                  current_override: Optional[str] = None,
+                                  client_base_version: Optional[int] = None,
+                                  client_base_hash: Optional[str] = None) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        if current_override is not None:
+            self._assert_revision_client_base(task, client_base_version, client_base_hash)
+        expected_state = (task.current_content, task.version_no)
         ctx = dict(task.context or {})
-        current = self._canonicalize_body((task.current_content or "").strip(), ctx)
+        current = self._canonicalize_body(
+            (current_override if current_override is not None else task.current_content or "").strip(), ctx)
         if not current:
             raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
         resolved = self._local_span(current, target, operation, position, end_target)
@@ -320,7 +419,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             prompt, sources, attachment_ctx, user_id)).strip()
         if not replacement and operation != "delete_range":
             raise HTTPException(status_code=502, detail="模型未返回局部修改内容，请重试")
-        if operation == "patch_section" and replacement == fragment:
+        if (operation == "patch_section" and replacement == fragment and
+                current == (task.current_content or "").strip()):
             return {**self._to_dict(task),
                     "reply": "目标片段核对后没有产生实际文字变化，因此未创建新版本。",
                     "content_changed": False, "context_changes": [],
@@ -353,17 +453,26 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 quality["level"] = "B"
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        self._claim_revision_state(task, user_id, expected_state)
         task.context = ctx
         task.current_content = revised
         self.db.flush()
-        _, version = self._snapshot(task, user_id, note=f"AI 局部修改：{instruction[:30]}")
+        document_id, version = self._snapshot(
+            task, user_id, note=f"AI 局部修改：{instruction[:30]}", commit=False)
+        task.document_id = document_id
         task.version_no = version
         task.updated_at = now_local()
+        suggestions_reset = (
+            self._supersede_pending_suggestions(task_id, user_id)
+            if getattr(task, "id", None) else False
+        )
         self.db.commit()
         summary = self._revision_diff(current, revised)
         verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
         reply = (f"“{target}”已完成{verb}。"
                  + self._revise_reply(version, summary, citation_warnings, instruction))
+        if suggestions_reset:
+            reply += " 原有逐段建议已失效，请按新稿重新获取建议。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
                 "postprocess_events": events, "context_changes": [],
@@ -371,21 +480,29 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 "operation": operation, "patch_target": target}
 
     async def revise_async(self, task_id: str, user_id: str, instruction: str,
-                           mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
+                           mode: str = "revise", selection: Optional[str] = None,
+                           current_override: Optional[str] = None,
+                           client_base_version: Optional[int] = None,
+                           client_base_hash: Optional[str] = None) -> Dict[str, Any]:
         if selection and selection.strip():
             return await self.patch_section_async(
-                task_id, user_id, target=selection, instruction=instruction, mode=mode)
+                task_id, user_id, target=selection, instruction=instruction, mode=mode,
+                current_override=current_override,
+                client_base_version=client_base_version,
+                client_base_hash=client_base_hash)
         task = self._get_owned(task_id, user_id)
-        current = (task.current_content or "").strip()
+        if current_override is not None:
+            self._assert_revision_client_base(task, client_base_version, client_base_hash)
+        expected_state = (task.current_content, task.version_no)
+        current = (current_override if current_override is not None else task.current_content or "").strip()
         if not current:
             raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
         ctx = dict(task.context or {})
         literal = self._literal_overrides(instruction)
+        literal_changes = []
         if literal:
-            task_parser.merge_context(ctx, literal)
+            literal_changes = task_parser.merge_context(ctx, literal)
             task_parser.compute_missing(ctx)
-            task.context = ctx
-            self.db.commit()
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
         prompt = self._build_revise_prompt(current, instruction, mode_desc, None, ctx)
         sources = self._retrieve(ctx, user_id, extra_query=instruction)
@@ -394,13 +511,24 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         if not revised.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
         revised = self._canonicalize_body(revised, ctx)
-        if revised.strip() == current:
+        changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
+        task_parser.compute_missing(ctx)
+        context_changes = list(dict.fromkeys([*literal_changes, *changes]))
+        if revised.strip() == current and current == (task.current_content or "").strip():
+            self._claim_revision_state(task, user_id, expected_state)
+            if context_changes:
+                task.context = ctx
+                task.updated_at = now_local()
+                self.db.commit()
+                return {**self._to_dict(task),
+                        "reply": "任务信息已更新：" + "；".join(context_changes) + "。正文未改，未生成新版本。",
+                        "content_changed": False, "context_changes": context_changes}
+            self.db.rollback()
+            self.db.refresh(task)
             return {**self._to_dict(task),
                     "reply": "对照您的要求检查了当前文档，没有需要实际改动的地方，正文保持原样，也未生成新版本。",
                     "content_changed": False, "context_changes": []}
 
-        changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
-        task_parser.compute_missing(ctx)
         revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
         revised = self._canonicalize_body(revised, ctx)
         revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
@@ -423,21 +551,30 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             ctx["document_date"] = doc_date
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        self._claim_revision_state(task, user_id, expected_state)
         task.context = ctx
         task.current_content = revised
         self.db.flush()
-        _, version = self._snapshot(task, user_id, note=f"AI 修改：{instruction[:30]}")
+        document_id, version = self._snapshot(
+            task, user_id, note=f"AI 修改：{instruction[:30]}", commit=False)
+        task.document_id = document_id
         task.version_no = version
         task.updated_at = now_local()
+        suggestions_reset = (
+            self._supersede_pending_suggestions(task_id, user_id)
+            if getattr(task, "id", None) else False
+        )
         self.db.commit()
         reply = f"已按您的要求修改当前文档（{mode_desc.split('：')[0]}），保存为 v{version}。"
+        if suggestions_reset:
+            reply += " 原有逐段建议已失效，请按新稿重新获取建议。"
         if citation_warnings:
             reply += f"系统同时移除了 {len(citation_warnings)} 处无法核实的具体文号，请确认资料来源后再补回。"
-        if changes:
-            reply += "任务信息同步更新：" + "；".join(changes) + "。"
+        if context_changes:
+            reply += "任务信息同步更新：" + "；".join(context_changes) + "。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
                 "quality": quality, "content_check": content_check,
-                "postprocess_events": events, "context_changes": changes,
+                "postprocess_events": events, "context_changes": context_changes,
                 "references": references}
 
     # ----------------------------------------------------------- draft/retries
@@ -604,6 +741,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
     async def draft_async(self, task_id: str, user_id: str,
                           outline_only: bool = False) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        agent_graph = self._prepare_agent_graph(task, user_id, outline_only)
+        if agent_graph is not None:
+            return await agent_graph.execute()
         expected_state = (task.current_content, task.version_no)
         prompt_snapshot.enter_task(
             task_id, user_id, session_id=getattr(task, "session_id", "") or "")
@@ -695,6 +835,21 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                                  outline_only: bool = False) -> AsyncIterator[str]:
         try:
             task = self._get_owned(task_id, user_id)
+            agent_graph = self._prepare_agent_graph(task, user_id, outline_only)
+            if agent_graph is not None:
+                yield _sse({
+                    "type": "run", "run_id": agent_graph.run.id, "route": "agent",
+                })
+                async for event_type, data in agent_graph.stream():
+                    if event_type == "delta":
+                        yield _sse({"type": "delta", **data})
+                    elif event_type == "done":
+                        yield _sse({"type": "done", "data": data})
+                    else:
+                        yield _sse({"type": event_type, **data})
+                return
+            if graph_enabled_for_user(settings, user_id):
+                yield _sse({"type": "run", "run_id": "", "route": "fast"})
             expected_state = (task.current_content, task.version_no)
             prompt_snapshot.enter_task(
                 task_id, user_id, session_id=getattr(task, "session_id", "") or "")
@@ -743,9 +898,80 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 payload["reply"] = retry_reason + payload["reply"]
             yield _sse({"type": "done", "data": payload})
         except HTTPException as exc:
-            yield _sse({"type": "error", "message": str(exc.detail)})
+            yield _sse({"type": "error", "message": _http_error_message(exc.detail)})
         except Exception as exc:
             yield _sse({"type": "error", "message": f"生成中断：{exc}"})
+
+    # ------------------------------------------------------ agent orchestration
+    def _prepare_agent_graph(self, task, user_id: str,
+                             outline_only: bool) -> Optional[WritingAgentGraph]:
+        if not graph_enabled_for_user(settings, user_id):
+            return None
+        ctx = dict(task.context or {})
+        attachment_ctx = self._attachment_context(task, ctx)
+        route = classify_writing_route(ctx, outline_only, bool(attachment_ctx))
+        if settings.WRITING_AGENT_GRAPH_COMPLEX_ONLY and route != "agent":
+            return None
+        store = AgentRunStore(self.db)
+        initial_state = {
+            "task_id": task.id,
+            "user_id": user_id,
+            "context": ctx,
+            "outline_only": outline_only,
+            "base_version": int(task.version_no or 0),
+            "base_content": task.current_content or "",
+            "repair_round": 0,
+        }
+        active = store.active_for_task(task.id, user_id)
+        if active and (
+            active.base_version != int(task.version_no or 0)
+            or active.base_content_hash != content_hash(task.current_content or "")
+        ):
+            store.fail_run(
+                active, "STALE_BASE", "正文已变化，旧的智能体运行不能继续", recoverable=False)
+        run, _created = store.get_or_create(
+            task_id=task.id,
+            user_id=user_id,
+            route="agent",
+            base_version=int(task.version_no or 0),
+            base_content=task.current_content or "",
+            initial_state=initial_state,
+        )
+        return WritingAgentGraph(self, store, run)
+
+    def get_agent_run(self, task_id: str, user_id: str, run_id: str) -> Dict[str, Any]:
+        self._get_owned(task_id, user_id)
+        store = AgentRunStore(self.db)
+        return store.public_dict(store.get_owned(run_id, task_id, user_id))
+
+    async def resume_agent_run_async(self, task_id: str, user_id: str,
+                                     run_id: str) -> Dict[str, Any]:
+        task = self._get_owned(task_id, user_id)
+        store = AgentRunStore(self.db)
+        run = store.get_owned(run_id, task_id, user_id)
+        if run.status == "completed":
+            return {
+                "run": store.public_dict(run),
+                "data": dict((run.state_json or {}).get("result") or {}),
+            }
+        if run.status == "cancelled":
+            raise HTTPException(status_code=409, detail="该运行已取消，不能恢复")
+        if run.status == "failed":
+            raise HTTPException(status_code=409, detail="该运行已终止，请重新生成")
+        if (run.base_version != int(task.version_no or 0)
+                or run.base_content_hash != content_hash(task.current_content or "")):
+            store.fail_run(run, "STALE_BASE", "正文已变化，不能恢复旧运行", recoverable=False)
+            raise HTTPException(status_code=409, detail="正文已变化，不能恢复旧运行")
+        result = await WritingAgentGraph(self, store, run).execute()
+        return {"run": store.public_dict(run), "data": result}
+
+    def cancel_agent_run(self, task_id: str, user_id: str,
+                         run_id: str) -> Dict[str, Any]:
+        self._get_owned(task_id, user_id)
+        store = AgentRunStore(self.db)
+        run = store.get_owned(run_id, task_id, user_id)
+        store.cancel(run)
+        return store.public_dict(run)
 
     # ---------------------------------------------------------------- chat ops
     async def chat_async(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:

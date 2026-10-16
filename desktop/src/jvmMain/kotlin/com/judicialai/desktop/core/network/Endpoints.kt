@@ -67,6 +67,11 @@ object Endpoints {
         fun draft(id: String) = "/writing/tasks/$id/draft"
         /** 流式起草（SSE）：正文边生成边推，最后推 done 携带权威结果 */
         fun draftStream(id: String) = "/writing/tasks/$id/draft/stream"
+        fun agentRun(id: String, runId: String) = "/writing/tasks/$id/agent-runs/$runId"
+        fun agentRunResume(id: String, runId: String) =
+            "/writing/tasks/$id/agent-runs/$runId/resume"
+        fun agentRunCancel(id: String, runId: String) =
+            "/writing/tasks/$id/agent-runs/$runId/cancel"
         fun revise(id: String) = "/writing/tasks/$id/revise"
         fun paragraphs(id: String) = "/writing/tasks/$id/paragraphs"
         fun paragraphSuggest(id: String, paragraphId: String) =

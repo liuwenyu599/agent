@@ -188,17 +188,22 @@ fun WritingScreen() {
                     TaskEntryScreen(vm)
                 } else {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
-                        val wide = maxWidth >= 1300.dp
+                        // 四栏的固定宽度合计 240+300+250=790，加间距与外边距约 850。
+                        // 阈值曾是 1300，导致 1366 宽的屏扣掉窗口边框后常常摸不到、
+                        // 四栏退化成三栏。1180 才是「四栏挤得下正文仍可读」的真实下限。
+                        val wide = maxWidth >= 1180.dp
                         var showContext by remember { mutableStateOf(true) }
                         var showDocument by remember { mutableStateOf(true) }
                         var showSuggestions by remember { mutableStateOf(true) }
-                        var showAssistant by remember(wide) { mutableStateOf(wide) }
+                        // 首次组合时按窗口宽度决定初值（窄屏先收起助手栏），之后完全交给用户。
+                        // 写成 remember(wide) 会让窗口每被拖动一次就重置一次折叠状态。
+                        var showAssistant by remember { mutableStateOf(wide) }
                         Row(
                             Modifier.fillMaxSize().padding(Dimens.space4),
                             horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
                         ) {
                         if (showContext) {
-                            Column(Modifier.width(245.dp).fillMaxHeight()) {
+                            Column(Modifier.width(240.dp).fillMaxHeight()) {
                                 WritingColumnHeader("任务上下文") { showContext = false }
                                 if (vm.spec != null) SpecPanel(vm, Modifier.weight(1f))
                                 else TaskPanel(vm, Modifier.weight(1f))
@@ -207,7 +212,8 @@ fun WritingScreen() {
                             CollapsedWritingColumn("任务") { showContext = true }
                         }
                         if (showDocument) {
-                            Column(Modifier.weight(1f).fillMaxHeight()) {
+                            // 正文是主对象，四栏并存时也不能被压成窄条：给它 420.dp 下限。
+                            Column(Modifier.weight(1f).widthIn(min = 420.dp).fillMaxHeight()) {
                                 WritingColumnHeader("文档正文") { showDocument = false }
                                 EditorPanel(vm, Modifier.weight(1f))
                             }
@@ -215,7 +221,7 @@ fun WritingScreen() {
                             CollapsedWritingColumn("正文") { showDocument = true }
                         }
                         if (showSuggestions) {
-                            Column(Modifier.width(285.dp).fillMaxHeight()) {
+                            Column(Modifier.width(300.dp).fillMaxHeight()) {
                                 WritingColumnHeader("逐段建议") { showSuggestions = false }
                                 ParagraphSuggestionPanel(vm, Modifier.weight(1f))
                             }
@@ -223,7 +229,7 @@ fun WritingScreen() {
                             CollapsedWritingColumn("建议") { showSuggestions = true }
                         }
                         if (showAssistant) {
-                            Column(Modifier.width(285.dp).fillMaxHeight()) {
+                            Column(Modifier.width(250.dp).fillMaxHeight()) {
                                 WritingColumnHeader("助手对话") { showAssistant = false }
                                 AssistantPanel(vm, Modifier.weight(1f))
                             }

@@ -21,6 +21,27 @@ HTTP_LATENCY = Histogram(
     ("method",),
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 180, 300),
 )
+WRITING_AGENT_RUNS = Counter(
+    "judicial_ai_writing_agent_runs_total",
+    "Writing agent runs by route and terminal status",
+    ("route", "status"),
+)
+WRITING_AGENT_NODE_LATENCY = Histogram(
+    "judicial_ai_writing_agent_node_duration_seconds",
+    "Writing agent node duration",
+    ("node",),
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 180, 300),
+)
+WRITING_AGENT_TOOL_CALLS = Counter(
+    "judicial_ai_writing_agent_tool_calls_total",
+    "Writing agent tool calls by tool and status",
+    ("tool", "status"),
+)
+WRITING_AGENT_REPAIRS = Counter(
+    "judicial_ai_writing_agent_repairs_total",
+    "Writing agent targeted repair attempts",
+    ("outcome",),
+)
 
 
 async def prometheus_middleware(request: Request, call_next):

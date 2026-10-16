@@ -111,6 +111,7 @@ class WritingViewModel(
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
     private var draftPreviousContent: String? = null
+    private var currentAgentRunId: String? = null
 
     /**
      * 跨页面恢复任务（切回本页时按 [AppState.pendingWritingTaskId] 拉回任务上下文）的协程句柄。
@@ -434,16 +435,21 @@ class WritingViewModel(
     // ---------------- 取消生成 / 返回模板 ----------------
 
     /**
-     * 取消本次生成：立即结束本地等待，界面恢复可操作。
-     * 服务端若仍在生成会在后台收尾，其结果不再写回当前界面（协程已取消）。
+     * 取消本次生成：立即结束本地等待，并通知服务端终止对应智能体运行。
      *
      * 注意：这里**不写 [status]**。取消是用户主动操作、不是失败，
      * 写 status 会被按提示条/错误框渲染；协程取消后 ApiClient 会上抛
      * CancellationException 正常收尾，不会再走 fail()。
      */
     fun cancelGeneration() {
+        val taskId = task.taskId
+        val runId = currentAgentRunId
         activeJob?.cancel()
         activeJob = null
+        currentAgentRunId = null
+        if (taskId != null && !runId.isNullOrBlank()) {
+            scope.launch { repo.cancelAgentRun(taskId, runId) }
+        }
         draftPreviousContent?.let { content = it }
         draftPreviousContent = null
         busy = false
@@ -845,10 +851,27 @@ class WritingViewModel(
         activeJob = scope.launch {
             var streamed = false
             var saved = false
-            val r = repo.draftStream(id, outlineOnly) { delta ->
-                streamed = true
-                content += delta
-            }
+            val r = repo.draftStream(
+                id,
+                outlineOnly,
+                onDelta = { delta ->
+                    streamed = true
+                    content += delta
+                },
+                onProgress = { progress ->
+                    when (progress.type) {
+                        "run" -> currentAgentRunId = progress.runId.takeIf { it.isNotBlank() }
+                        "stage" -> if (progress.status == "running" && progress.label.isNotBlank()) {
+                            status = if (progress.key == "repair")
+                                "${progress.label}（第 ${progress.repairRound.coerceAtLeast(1)} 轮）"
+                            else progress.label
+                        }
+                        "quality" -> if (progress.qualityLevel == "D") {
+                            status = "校验发现 ${progress.issueCount} 项硬伤，正在定向修复"
+                        }
+                    }
+                },
+            )
             when {
                 r is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
@@ -873,8 +896,11 @@ class WritingViewModel(
             if (!saved) {
                 draftPreviousContent?.let { content = it }
                 if (status.isNullOrBlank()) fail("生成未返回可保存的正文，请重试")
+            } else {
+                status = null
             }
             draftPreviousContent = null
+            currentAgentRunId = null
             busy = false
             AppState.writingGenerating = false
         }
@@ -887,11 +913,16 @@ class WritingViewModel(
     fun revise(instruction: String, mode: String) {
         val id = task.taskId ?: return
         if (busy || !hasDraft) return
+        val submittedContent = content
+        val submittedVersion = versionNo
+        val submittedServerContent = serverContent
         busy = true
         AppState.writingGenerating = true
         AppState.writingLastError = null
         activeJob = scope.launch {
-            when (val r = repo.revise(id, instruction, mode, content)) {
+            when (val r = repo.revise(
+                id, instruction, mode, submittedContent,
+                submittedVersion, submittedServerContent)) {
                 is ApiResult.Ok -> r.data?.let { d ->
                     applyResponse(d)
                     d["reply"].str().takeIf { it.isNotBlank() }
@@ -1003,12 +1034,18 @@ class WritingViewModel(
     fun saveVersion(note: String? = null) {
         val id = task.taskId ?: return
         if (busy || suggestionBusy || !hasDraft) return
+        val submittedContent = content
+        val submittedVersion = versionNo
+        val submittedServerContent = serverContent
         busy = true
         scope.launch {
-            when (val r = repo.saveVersion(id, content, note)) {
+            when (val r = repo.saveVersion(
+                id, submittedContent, note, submittedVersion, submittedServerContent)) {
                 is ApiResult.Ok -> {
                     r.data?.let { applyResponse(it) }
-                    status = "已保存版本 v$versionNo"
+                    status = if (r.data?.get("suggestions_reset").bool())
+                        "已保存版本 v$versionNo；原逐段建议已失效，请重新获取"
+                    else "已保存版本 v$versionNo"
                     refreshVersions()
                 }
                 is ApiResult.Err -> fail(r.message)

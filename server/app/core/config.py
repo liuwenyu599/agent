@@ -98,6 +98,20 @@ class Settings:
         self.WRITING_AI_FORMAT_CHECK = os.getenv("WRITING_AI_FORMAT_CHECK", "false").lower() == "true"
         self.WRITING_RETRY_MAX = int(os.getenv("WRITING_RETRY_MAX", "1"))
         self.WRITING_AUTO_SAVE_DRAFT = os.getenv("WRITING_AUTO_SAVE_DRAFT", "true").lower() == "true"
+        self.WRITING_AGENT_GRAPH_ENABLED = _bool(
+            os.getenv("WRITING_AGENT_GRAPH_ENABLED"), False)
+        self.WRITING_AGENT_GRAPH_COMPLEX_ONLY = _bool(
+            os.getenv("WRITING_AGENT_GRAPH_COMPLEX_ONLY"), True)
+        self.WRITING_AGENT_MAX_TOOL_ROUNDS = max(
+            1, int(os.getenv("WRITING_AGENT_MAX_TOOL_ROUNDS", "4")))
+        self.WRITING_AGENT_MAX_REPAIR_ROUNDS = max(
+            0, int(os.getenv("WRITING_AGENT_MAX_REPAIR_ROUNDS", "2")))
+        self.WRITING_AGENT_RUN_TIMEOUT_SECONDS = max(
+            30, int(os.getenv("WRITING_AGENT_RUN_TIMEOUT_SECONDS", "300")))
+        self.WRITING_AGENT_ROLLOUT_PERCENT = max(
+            0, min(100, int(os.getenv("WRITING_AGENT_ROLLOUT_PERCENT", "0"))))
+        self.WRITING_AGENT_TRACE_RETENTION_DAYS = max(
+            1, int(os.getenv("WRITING_AGENT_TRACE_RETENTION_DAYS", "180")))
 
         # Embedding / 向量检索。生产基线使用 bge-m3(1024d)，避免默认 512d 模型与既有索引静默错配。
         self.EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "auto")  # auto|bge|mock|http

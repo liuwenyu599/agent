@@ -12,6 +12,7 @@ from app.application.templates.builtin_data import BUILTIN_TEMPLATES
 from app.application.writing.async_task_service import AsyncWritingTaskService
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
 from app.application.writing import task_parser
+from app.application.writing.agent_graph.routing import classify_writing_route
 
 
 OFFICIAL_GENRES = (
@@ -51,6 +52,12 @@ def test_one_sentence_request_keeps_model_genre_and_skips_template(genre):
     ) or SectionedGenerationWritingTaskService._fallback_plan(
         {"document_type": genre, "word_count_target": 2000}
     )
+    # Agent admission is based on task complexity, never a closed genre enum.
+    assert classify_writing_route(
+        {"document_type": genre, "word_count_target": 1800},
+        outline_only=False,
+        has_attachments=False,
+    ) == "agent"
 
 
 @pytest.mark.parametrize("prompt,genre", [

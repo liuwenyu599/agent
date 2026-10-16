@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -276,3 +276,286 @@ def test_paragraph_routes_are_wired_to_the_async_service():
         app.dependency_overrides.pop(get_current_user, None)
         db.close()
         engine.dispose()
+
+
+def test_continuation_prompt_keeps_feedback_and_both_ends_within_8k_budget(monkeypatch):
+    from app.core.config import settings
+
+    db, task = setup_task()
+    task.current_content = "开头示例" + "甲" * 2400 + "乙" * 2400 + "结尾示例"
+    db.commit()
+    svc = AsyncWritingTaskService(db)
+    monkeypatch.setattr(settings, "MODEL_CTX_LIMIT", 8192)
+    monkeypatch.setattr(svc, "_draft_system", lambda *_args: "基准" * 350)
+    monkeypatch.setattr(svc, "_example_style_block", lambda *_args: "范文" * 600)
+    monkeypatch.setattr(svc, "_accepted_style_memory", lambda *_args: "采纳偏好" * 75)
+    prompt_snapshot.enter_task(task.id, "user-1")
+
+    prompt = svc._draft_prompt("继续生成", [], None, "user-1")
+
+    system_budget = int((8192 - 512) * 0.75 * 0.5)
+    assert len(prompt) <= system_budget
+    assert "采纳偏好" in prompt
+    assert "开头示例" in prompt
+    assert "结尾示例" in prompt
+
+
+def test_feedback_lookup_is_cached_within_one_generation_request(monkeypatch):
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    calls = []
+    monkeypatch.setattr(svc, "_accepted_style_memory",
+                        lambda *_args: calls.append(1) or "已采纳偏好")
+    prompt_snapshot.enter_task(task.id, "user-1")
+    svc._draft_prompt("继续生成", [], None, "user-1")
+    svc._draft_prompt("继续生成", [], None, "user-1")
+    assert calls == [1]
+
+
+def test_continuation_excerpt_preserves_middle_section_headings():
+    content = ("一、开头\n" + "甲" * 1200 + "\n二、中间任务\n" +
+               "乙" * 1200 + "\n三、结尾安排\n" + "丙" * 1200)
+    excerpt = AsyncWritingTaskService._head_tail(content, 600)
+    assert len(excerpt) <= 600
+    assert "一、开头" in excerpt
+    assert "二、中间任务" in excerpt
+    assert "三、结尾安排" in excerpt
+    assert "丙" in excerpt
+
+
+def test_revise_rejects_a_stale_client_body_before_any_write(monkeypatch):
+    from app.application.writing.paragraph_suggestions import content_hash
+    from app.interfaces.writing_tasks import TaskReviseRequest, task_revise
+
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    old_display = svc._to_dict(task)["current_content"]
+    task.current_content = "另一客户端已保存的新正文。"
+    task.version_no = 1
+    db.commit()
+
+    async def no_ai(*_args, **_kwargs):
+        return svc._to_dict(task)
+
+    monkeypatch.setattr(svc, "revise_async", no_ai)
+    req = TaskReviseRequest(
+        instruction="润色", current_content=old_display,
+        base_version=0, base_content_hash=content_hash(old_display),
+    )
+    user = type("User", (), {"id": "user-1"})()
+    with pytest.raises(HTTPException) as error:
+        # The conflict is raised before the first await; avoid a Windows event
+        # loop here, which requires socketpair access in restricted CI runners.
+        task_revise(task.id, req, user, svc).send(None)
+    assert error.value.status_code == 409
+    assert task.current_content == "另一客户端已保存的新正文。"
+
+
+def test_revise_passes_manual_text_without_precommitting(monkeypatch):
+    from app.application.writing.paragraph_suggestions import content_hash
+    from app.interfaces.writing_tasks import TaskReviseRequest, task_revise
+
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    saved = task.current_content
+    captured = {}
+
+    async def observe(*_args, **kwargs):
+        captured.update(kwargs)
+        assert task.current_content == saved
+        return {"current_content": saved}
+
+    monkeypatch.setattr(svc, "revise_async", observe)
+    req = TaskReviseRequest(
+        instruction="润色", current_content="用户刚编辑的正文。",
+        base_version=0, base_content_hash=content_hash(svc._to_dict(task)["current_content"]),
+    )
+    user = type("User", (), {"id": "user-1"})()
+    with pytest.raises(StopIteration) as done:
+        task_revise(task.id, req, user, svc).send(None)
+    assert done.value.value["current_content"] == saved
+    assert captured["current_override"] == "用户刚编辑的正文。"
+    assert captured["client_base_version"] == 0
+    db.expire_all()
+    assert db.get(WritingTaskModel, task.id).current_content == saved
+
+
+def test_revision_claim_rejects_intervening_write_and_preserves_it():
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    before = (task.current_content, task.version_no)
+    task.current_content = "另一请求保存的正文。"
+    task.version_no = 1
+    db.commit()
+    with pytest.raises(HTTPException) as error:
+        svc._claim_revision_state(task, "user-1", before)
+    assert error.value.status_code == 409
+    db.expire_all()
+    assert db.get(WritingTaskModel, task.id).current_content == "另一请求保存的正文。"
+
+
+def test_revision_supersedes_pending_suggestions_with_events():
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    row = WritingSuggestionModel(
+        user_id="user-1", task_id=task.id, paragraph_id="paragraph",
+        line_index=1, document_type="通知", base_version=0,
+        base_content_hash="old", original_content="坚持依法办理。",
+        proposed_content="坚持依法依规办理。", instruction="润色", status="pending",
+    )
+    db.add(row)
+    db.commit()
+    assert svc._supersede_pending_suggestions(task.id, "user-1")
+    db.commit()
+    assert row.status == "superseded"
+    assert db.scalar(select(WritingSuggestionEventModel).where(
+        WritingSuggestionEventModel.suggestion_id == row.id)).action == "supersede"
+
+
+def test_revise_saves_manual_edit_atomically_and_invalidates_old_suggestions(monkeypatch):
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    row = WritingSuggestionModel(
+        user_id="user-1", task_id=task.id, paragraph_id="paragraph",
+        line_index=1, document_type="通知", base_version=0,
+        base_content_hash="old", original_content="坚持依法办理。",
+        proposed_content="坚持依法依规办理。", instruction="润色", status="pending",
+    )
+    db.add(row)
+    db.commit()
+    manual = task.current_content.replace("按时完成。", "人工补充的安排。")
+
+    async def revise_text(*_args, **_kwargs):
+        assert task.current_content != manual  # No write before the model returns.
+        return manual.replace("坚持依法办理。", "坚持依法依规办理。")
+
+    monkeypatch.setattr(svc, "_llm_revise_async", revise_text)
+    monkeypatch.setattr(svc, "_retrieve", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(svc, "_attachment_context", lambda *_args: "")
+    from app.application.writing.paragraph_suggestions import content_hash
+    with pytest.raises(StopIteration) as done:
+        svc.revise_async(
+            task.id, "user-1", "润色", current_override=manual,
+            client_base_version=0,
+            client_base_hash=content_hash(svc._to_dict(task)["current_content"]),
+        ).send(None)
+    result = done.value.value
+    assert "人工补充的安排" in result["current_content"]
+    assert result["version_no"] == 1
+    assert result["document_id"]
+    assert row.status == "superseded"
+    assert "重新获取建议" in result["reply"]
+
+
+def test_revise_does_not_overwrite_a_change_while_model_runs(monkeypatch):
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+
+    async def concurrent_change(*_args, **_kwargs):
+        db.execute(update(WritingTaskModel).where(WritingTaskModel.id == task.id).values(
+            current_content="另一请求刚保存的正文。", version_no=1))
+        db.commit()
+        return "模型刚生成的旧版修改。"
+
+    monkeypatch.setattr(svc, "_llm_revise_async", concurrent_change)
+    monkeypatch.setattr(svc, "_retrieve", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(svc, "_attachment_context", lambda *_args: "")
+    with pytest.raises(HTTPException) as error:
+        svc.revise_async(task.id, "user-1", "润色").send(None)
+    assert error.value.status_code == 409
+    db.expire_all()
+    assert db.get(WritingTaskModel, task.id).current_content == "另一请求刚保存的正文。"
+
+
+def test_service_rechecks_client_base_after_route_check():
+    from app.application.writing.paragraph_suggestions import content_hash
+
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    old = svc._to_dict(task)["current_content"]
+    task.current_content = "路由检查之后另一请求更新的正文。"
+    task.version_no = 1
+    db.commit()
+    with pytest.raises(HTTPException) as error:
+        svc.revise_async(
+            task.id, "user-1", "润色", current_override=old,
+            client_base_version=0, client_base_hash=content_hash(old),
+        ).send(None)
+    assert error.value.status_code == 409
+    assert task.current_content == "路由检查之后另一请求更新的正文。"
+
+
+def test_manual_save_checks_base_and_invalidates_pending_suggestions():
+    from app.application.writing.paragraph_suggestions import content_hash
+    from app.interfaces.writing_tasks import TaskSaveRequest, save_version
+
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    user = type("User", (), {"id": "user-1"})()
+    old = svc._to_dict(task)["current_content"]
+    row = WritingSuggestionModel(
+        user_id="user-1", task_id=task.id, paragraph_id="paragraph",
+        line_index=1, document_type="通知", base_version=0,
+        base_content_hash=content_hash(task.current_content),
+        original_content="坚持依法办理。",
+        proposed_content="坚持依法依规办理。", instruction="润色", status="pending",
+    )
+    db.add(row)
+    db.commit()
+
+    saved = save_version(task.id, TaskSaveRequest(
+        content=old + "\n人工补充。", base_version=0,
+        base_content_hash=content_hash(old)), user, svc)
+    assert saved["suggestions_reset"] is True
+    assert row.status == "superseded"
+    assert saved["version_no"] == 1
+    with pytest.raises(HTTPException) as error:
+        save_version(task.id, TaskSaveRequest(
+            content="旧版客户端覆盖", base_version=0,
+            base_content_hash=content_hash(old)), user, svc)
+    assert error.value.status_code == 409
+    assert "人工补充" in task.current_content
+
+
+def test_failed_model_does_not_commit_unsaved_manual_edits(monkeypatch):
+    from app.application.writing.paragraph_suggestions import content_hash
+
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    original = task.current_content
+
+    async def fail_model(*_args, **_kwargs):
+        raise HTTPException(status_code=502, detail="模型不可用")
+
+    monkeypatch.setattr(svc, "_llm_revise_async", fail_model)
+    monkeypatch.setattr(svc, "_retrieve", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(svc, "_attachment_context", lambda *_args: "")
+    with pytest.raises(HTTPException) as error:
+        svc.revise_async(
+            task.id, "user-1", "润色", current_override="用户未保存的编辑",
+            client_base_version=0, client_base_hash=content_hash(
+                svc._to_dict(task)["current_content"]),
+        ).send(None)
+    assert error.value.status_code == 502
+    db.expire_all()
+    assert db.get(WritingTaskModel, task.id).current_content == original
+
+
+def test_metadata_only_revision_saves_title_without_new_body_version(monkeypatch):
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db)
+    original = task.current_content
+
+    async def same_body(*_args, **_kwargs):
+        return original
+
+    monkeypatch.setattr(svc, "_llm_revise_async", same_body)
+    monkeypatch.setattr(svc, "_retrieve", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(svc, "_attachment_context", lambda *_args: "")
+    with pytest.raises(StopIteration) as done:
+        svc.revise_async(task.id, "user-1", "标题改成关于加强普法宣传的通知").send(None)
+    result = done.value.value
+    assert result["content_changed"] is False
+    assert result["version_no"] == 0
+    assert result["task_context"]["title"] == "关于加强普法宣传的通知"
+    assert "任务信息已更新" in result["reply"]

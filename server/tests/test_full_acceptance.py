@@ -13,6 +13,7 @@ F. 版本 docx 导出：可编辑、带格式、内容正确
 G. 格式校验：规则 CRUD、无规则 AI 校验、权限、跨用户隔离
 H. 写作任务隔离与边界：404、空草稿修改冲突、训练样本
 """
+import hashlib
 import io
 import json
 import os
@@ -439,9 +440,16 @@ class TestWritingTaskFlow:
     def test_save_manual_version(self, client, user_a):
         tid = client.post("/api/v1/writing/tasks", headers=user_a,
                           json={"message": "写一份通知"}).json()["task_id"]
-        client.post(f"/api/v1/writing/tasks/{tid}/draft", headers=user_a, json={})
+        drafted = client.post(
+            f"/api/v1/writing/tasks/{tid}/draft", headers=user_a, json={}).json()
+        base_content = drafted["current_content"]
         r = client.post(f"/api/v1/writing/tasks/{tid}/versions", headers=user_a,
-                        json={"content": "人工修改后的全文。", "note": "手动"})
+                        json={
+                            "content": "人工修改后的全文。", "note": "手动",
+                            "base_version": drafted["version_no"],
+                            "base_content_hash": hashlib.sha256(
+                                base_content.encode("utf-8")).hexdigest(),
+                        })
         assert r.status_code == 200
         assert r.json()["version_no"] == 2
 

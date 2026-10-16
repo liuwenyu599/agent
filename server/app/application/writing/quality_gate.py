@@ -86,6 +86,11 @@ class QualityGate:
         min_chars = MIN_BODY_CHARS
         if "函" in document_type:
             min_chars = 200
+        # 讲话类（致辞/讲话/发言/主持词）体裁天生短，且用户往往不给字数。
+        # 用 800 这个「报告级」下限去卡它，会把一篇合适的 600 字会前表态
+        # 判成"偏短"——而偏短本是 B 级提示，不该在这种文种上无端触发。
+        elif any(k in document_type for k in ("致辞", "讲话", "发言", "主持词")):
+            min_chars = 300
         if word_count_target:
             min_chars = max(100, int(word_count_target * 0.8))
         if char_count < min_chars:

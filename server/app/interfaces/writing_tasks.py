@@ -6,7 +6,7 @@
 """
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -69,11 +69,15 @@ class TaskReviseRequest(BaseModel):
     mode: str = "revise"
     selection: Optional[str] = None
     current_content: Optional[str] = None
+    base_version: Optional[int] = None
+    base_content_hash: Optional[str] = None
 
 
 class TaskSaveRequest(BaseModel):
     content: str
     note: Optional[str] = None
+    base_version: Optional[int] = None
+    base_content_hash: Optional[str] = None
 
 
 class TaskTrainingRequest(BaseModel):
@@ -186,16 +190,46 @@ async def task_draft_stream(task_id: str, req: TaskDraftRequest,
     )
 
 
+@router.get("/{task_id}/agent-runs/{run_id}")
+def get_agent_run(task_id: str, run_id: str,
+                  user: User = Depends(get_current_user),
+                  svc: WritingTaskService = Depends(get_task_service)):
+    """查询本人的写作智能体运行摘要，不返回提示词或正文中间态。"""
+    return svc.get_agent_run(task_id, user.id, run_id)
+
+
+@router.post("/{task_id}/agent-runs/{run_id}/resume")
+async def resume_agent_run(task_id: str, run_id: str,
+                           user: User = Depends(get_current_user),
+                           svc: WritingTaskService = Depends(get_task_service)):
+    return await svc.resume_agent_run_async(task_id, user.id, run_id)
+
+
+@router.post("/{task_id}/agent-runs/{run_id}/cancel")
+def cancel_agent_run(task_id: str, run_id: str,
+                     user: User = Depends(get_current_user),
+                     svc: WritingTaskService = Depends(get_task_service)):
+    return svc.cancel_agent_run(task_id, user.id, run_id)
+
+
 @router.post("/{task_id}/revise")
 async def task_revise(task_id: str, req: TaskReviseRequest,
                       user: User = Depends(get_current_user),
                       svc: WritingTaskService = Depends(get_task_service)):
     if req.current_content is not None:
+        from app.application.writing.paragraph_suggestions import content_hash
+
         task = svc._get_owned(task_id, user.id)
-        task.current_content = req.current_content
-        svc.db.commit()
+        displayed = svc._to_dict(task)["current_content"]
+        if (req.base_version is None or req.base_content_hash is None or
+                req.base_version != (task.version_no or 0) or
+                req.base_content_hash != content_hash(displayed)):
+            raise HTTPException(status_code=409, detail="正文已变化或客户端版本过旧，请刷新后重试")
     return await svc.revise_async(
-        task_id, user.id, req.instruction, req.mode, req.selection)
+        task_id, user.id, req.instruction, req.mode, req.selection,
+        current_override=req.current_content,
+        client_base_version=req.base_version,
+        client_base_hash=req.base_content_hash)
 
 
 _IMAGE_RECOGNIZE_PROMPT = (
@@ -275,7 +309,13 @@ async def upload_task_images(task_id: str,
 def save_version(task_id: str, req: TaskSaveRequest,
                  user: User = Depends(get_current_user),
                  svc: WritingTaskService = Depends(get_task_service)):
-    return svc.save_version(task_id, user.id, req.content, req.note)
+    task = svc._get_owned(task_id, user.id)
+    svc._assert_revision_client_base(task, req.base_version, req.base_content_hash)
+    svc._claim_revision_state(task, user.id, (task.current_content, task.version_no))
+    reset = svc._supersede_pending_suggestions(task_id, user.id)
+    result = svc.save_version(task_id, user.id, req.content, req.note)
+    result["suggestions_reset"] = reset
+    return result
 
 
 @router.get("/{task_id}/versions")

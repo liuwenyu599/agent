@@ -621,6 +621,10 @@ class FormatCheckEngine:
 
         return issues
 
+    def check_text_rules(self, text: str, rules: Optional[List[Dict]] = None) -> List[Dict]:
+        """Apply active content rules to generated text without requiring a file."""
+        return self._content_rule_check(text, None, rules)
+
     # ================= AI 辅助判断 =================
     def _ai_check(self, text: str, rules: List[Dict],
                   numbered_text: Optional[str] = None) -> Optional[List[Dict]]:

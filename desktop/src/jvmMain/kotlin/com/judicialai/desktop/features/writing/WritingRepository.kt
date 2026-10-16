@@ -6,11 +6,30 @@ import com.judicialai.desktop.core.network.Endpoints
 import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.items
+import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.features.chat.model.ChatAttachment
 import kotlinx.serialization.json.JsonObject
 import java.io.File
+import java.security.MessageDigest
+
+private fun contentHash(content: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(content.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+data class WritingAgentProgress(
+    val type: String,
+    val runId: String = "",
+    val route: String = "",
+    val key: String = "",
+    val label: String = "",
+    val status: String = "",
+    val qualityLevel: String = "",
+    val issueCount: Int = 0,
+    val repairRound: Int = 0,
+)
 
 /**
  * 智能写作工作台数据访问（/writing/tasks 系列接口）。
@@ -110,6 +129,7 @@ class WritingRepository(private val api: ApiClient) {
     suspend fun draftStream(
         id: String, outlineOnly: Boolean = false,
         onDelta: (String) -> Unit,
+        onProgress: (WritingAgentProgress) -> Unit = {},
     ): ApiResult<JsonObject?> {
         var done: JsonObject? = null
         var streamError: String? = null
@@ -121,6 +141,18 @@ class WritingRepository(private val api: ApiClient) {
                 "delta" -> onDelta(ev["text"].str())
                 "done" -> done = ev["data"].obj()
                 "error" -> streamError = ev["message"].str().ifBlank { "生成失败，请重试" }
+                "run", "stage", "quality" -> onProgress(WritingAgentProgress(
+                    type = ev["type"].str(),
+                    runId = ev["run_id"].str(),
+                    route = ev["route"].str(),
+                    key = ev["key"].str(),
+                    label = ev["label"].str(),
+                    status = ev["status"].str(),
+                    qualityLevel = ev["level"].str(),
+                    issueCount = ev["issue_count"].int(),
+                    repairRound = ev["repair_round"].int().takeIf { it > 0 }
+                        ?: ev["attempt"].int(),
+                ))
             }
         }
         done?.let { return ApiResult.Ok(it) }
@@ -129,15 +161,25 @@ class WritingRepository(private val api: ApiClient) {
         return ApiResult.Err(null, "生成中断，请重试")
     }
 
+    suspend fun cancelAgentRun(id: String, runId: String): ApiResult<JsonObject?> =
+        when (val r = api.post(
+            Endpoints.WritingTasks.agentRunCancel(id, runId), emptyMap<String, Any?>())) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
     /** POST /writing/tasks/{id}/revise 修改当前文档（核心：作用于 currentContent） */
     suspend fun revise(
         id: String, instruction: String, mode: String,
-        currentContent: String, selection: String? = null,
+        currentContent: String, baseVersion: Int, baseContent: String,
+        selection: String? = null,
     ): ApiResult<JsonObject?> =
         when (val r = api.post(Endpoints.WritingTasks.revise(id), buildMap<String, Any?> {
             put("instruction", instruction)
             put("mode", mode)
             put("current_content", currentContent)
+            put("base_version", baseVersion)
+            put("base_content_hash", contentHash(baseContent))
             if (!selection.isNullOrBlank()) put("selection", selection)
         }, timeoutMs = 300_000)) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
@@ -165,9 +207,14 @@ class WritingRepository(private val api: ApiClient) {
         }
 
     /** POST /writing/tasks/{id}/versions 保存当前编辑为新版本 */
-    suspend fun saveVersion(id: String, content: String, note: String?): ApiResult<JsonObject?> =
+    suspend fun saveVersion(
+        id: String, content: String, note: String?,
+        baseVersion: Int, baseContent: String,
+    ): ApiResult<JsonObject?> =
         when (val r = api.post(Endpoints.WritingTasks.versions(id), buildMap<String, Any?> {
             put("content", content)
+            put("base_version", baseVersion)
+            put("base_content_hash", contentHash(baseContent))
             if (!note.isNullOrBlank()) put("note", note)
         })) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
