@@ -45,8 +45,14 @@ class AgentRunStore:
         """Release runs whose worker disappeared without updating terminal state."""
         from app.core.config import settings
 
-        cutoff = now_local() - timedelta(
-            seconds=settings.WRITING_AGENT_RUN_TIMEOUT_SECONDS)
+        # A node refreshes updated_at at its durable boundary, while one healthy
+        # model call may occupy the full MODEL_TIMEOUT.  Keep that call's grace
+        # period outside the run timeout before another worker may take ownership.
+        stale_after_seconds = (
+            settings.WRITING_AGENT_RUN_TIMEOUT_SECONDS
+            + max(0, settings.MODEL_TIMEOUT)
+        )
+        cutoff = now_local() - timedelta(seconds=stale_after_seconds)
         conditions = [
             WritingAgentRunModel.status == "running",
             WritingAgentRunModel.updated_at < cutoff,

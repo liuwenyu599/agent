@@ -218,7 +218,7 @@ def test_agent_run_store_reuses_one_active_run_and_persists_steps():
         db.close()
 
 
-def test_agent_run_store_recovers_a_stale_running_worker(monkeypatch):
+def test_agent_run_store_reclaims_only_after_run_and_model_timeouts(monkeypatch):
     from app.core.config import settings
     from app.core.timeutil import now_local
     from app.infrastructure.database import Base, SessionLocal, engine
@@ -232,6 +232,7 @@ def test_agent_run_store_recovers_a_stale_running_worker(monkeypatch):
         user = db.scalars(select(UserModel)).first()
         assert user is not None
         monkeypatch.setattr(settings, "WRITING_AGENT_RUN_TIMEOUT_SECONDS", 30)
+        monkeypatch.setattr(settings, "MODEL_TIMEOUT", 20)
         task = WritingTaskModel(user_id=user.id, context={}, current_content="", version_no=0)
         db.add(task)
         db.commit()
@@ -249,6 +250,12 @@ def test_agent_run_store_recovers_a_stale_running_worker(monkeypatch):
         run.updated_at = now_local() - timedelta(seconds=31)
         db.commit()
 
+        assert store.claim(run) is False
+        db.refresh(run)
+        assert run.status == "running"
+
+        run.updated_at = now_local() - timedelta(seconds=51)
+        db.commit()
         assert store.claim(run) is True
         db.refresh(run)
         assert run.status == "running"
