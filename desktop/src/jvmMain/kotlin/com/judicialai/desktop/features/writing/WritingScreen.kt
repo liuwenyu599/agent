@@ -130,6 +130,7 @@ private const val Pending = "待补充"
  * 模板中心「使用模板 → 生成」也会进入本工作台：
  * 携带模板绑定与已填要素，创建任务后自动起草。
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun WritingScreen() {
     val vm = remember {
@@ -183,59 +184,115 @@ fun WritingScreen() {
             if (vm.restoring) {
                 WritingProgressLine("正在取回上次未完成的写作任务…")
             }
+            vm.agentProgress?.takeIf { it.isNotBlank() }?.let {
+                WritingProgressLine(it)
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (!vm.hasTask) {
                     TaskEntryScreen(vm)
                 } else {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
-                        // 四栏的固定宽度合计 240+300+250=790，加间距与外边距约 850。
-                        // 阈值曾是 1300，导致 1366 宽的屏扣掉窗口边框后常常摸不到、
-                        // 四栏退化成三栏。1180 才是「四栏挤得下正文仍可读」的真实下限。
-                        val wide = maxWidth >= 1180.dp
-                        var showContext by remember { mutableStateOf(true) }
+                        val roomy = maxWidth >= 1320.dp
+                        val medium = maxWidth >= 980.dp
+                        val contextWidth = if (roomy) 240.dp else 210.dp
+                        val suggestionWidth = if (roomy) 300.dp else 260.dp
+                        val assistantWidth = if (roomy) 250.dp else 230.dp
+                        var showContext by remember { mutableStateOf(medium) }
                         var showDocument by remember { mutableStateOf(true) }
-                        var showSuggestions by remember { mutableStateOf(true) }
-                        // 首次组合时按窗口宽度决定初值（窄屏先收起助手栏），之后完全交给用户。
-                        // 写成 remember(wide) 会让窗口每被拖动一次就重置一次折叠状态。
-                        var showAssistant by remember { mutableStateOf(wide) }
-                        Row(
-                            Modifier.fillMaxSize().padding(Dimens.space4),
-                            horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
-                        ) {
-                        if (showContext) {
-                            Column(Modifier.width(240.dp).fillMaxHeight()) {
-                                WritingColumnHeader("任务上下文") { showContext = false }
-                                if (vm.spec != null) SpecPanel(vm, Modifier.weight(1f))
-                                else TaskPanel(vm, Modifier.weight(1f))
-                            }
-                        } else {
-                            CollapsedWritingColumn("任务") { showContext = true }
+                        var showSuggestions by remember { mutableStateOf(maxWidth >= 1080.dp) }
+                        var showAssistant by remember { mutableStateOf(roomy) }
+                        val widthBucket = when {
+                            maxWidth < 980.dp -> 0
+                            maxWidth < 1080.dp -> 1
+                            maxWidth < 1320.dp -> 2
+                            else -> 3
                         }
-                        if (showDocument) {
-                            // 正文是主对象，四栏并存时也不能被压成窄条：给它 420.dp 下限。
-                            Column(Modifier.weight(1f).widthIn(min = 420.dp).fillMaxHeight()) {
-                                WritingColumnHeader("文档正文") { showDocument = false }
-                                EditorPanel(vm, Modifier.weight(1f))
+
+                        // 只在跨过宽度档位时收拢栏目，避免用户拖动窗口的每个像素都重置选择。
+                        // 缩到最窄档时始终保留正文，防止四栏全部收起后留下空白工作区。
+                        LaunchedEffect(widthBucket) {
+                            when (widthBucket) {
+                                0 -> {
+                                    showContext = false
+                                    showSuggestions = false
+                                    showAssistant = false
+                                    showDocument = true
+                                }
+                                1 -> {
+                                    showSuggestions = false
+                                    showAssistant = false
+                                }
+                                2 -> showAssistant = false
                             }
-                        } else {
-                            CollapsedWritingColumn("正文") { showDocument = true }
                         }
-                        if (showSuggestions) {
-                            Column(Modifier.width(300.dp).fillMaxHeight()) {
-                                WritingColumnHeader("逐段建议") { showSuggestions = false }
-                                ParagraphSuggestionPanel(vm, Modifier.weight(1f))
+
+                        fun openContext() {
+                            showContext = true
+                            if (maxWidth < 980.dp) {
+                                showSuggestions = false
+                                showAssistant = false
                             }
-                        } else {
-                            CollapsedWritingColumn("建议") { showSuggestions = true }
                         }
-                        if (showAssistant) {
-                            Column(Modifier.width(250.dp).fillMaxHeight()) {
-                                WritingColumnHeader("助手对话") { showAssistant = false }
-                                AssistantPanel(vm, Modifier.weight(1f))
+                        fun openSuggestions() {
+                            showSuggestions = true
+                            if (maxWidth < 1180.dp) showAssistant = false
+                            if (maxWidth < 900.dp) showContext = false
+                        }
+                        fun openAssistant() {
+                            showAssistant = true
+                            if (maxWidth < 1320.dp) showContext = false
+                            if (maxWidth < 980.dp) showSuggestions = false
+                        }
+
+                        Column(Modifier.fillMaxSize().padding(Dimens.space4)) {
+                            FlowRow(
+                                Modifier.fillMaxWidth().padding(bottom = Dimens.space2),
+                                horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                                verticalArrangement = Arrangement.spacedBy(Dimens.space1),
+                            ) {
+                                FilterChip("任务上下文", selected = showContext, onClick = {
+                                    if (showContext) showContext = false else openContext()
+                                })
+                                FilterChip("文档正文", selected = showDocument, onClick = {
+                                    showDocument = !showDocument
+                                })
+                                FilterChip("逐段建议", selected = showSuggestions, onClick = {
+                                    if (showSuggestions) showSuggestions = false else openSuggestions()
+                                })
+                                FilterChip("助手对话", selected = showAssistant, onClick = {
+                                    if (showAssistant) showAssistant = false else openAssistant()
+                                })
                             }
-                        } else {
-                            CollapsedWritingColumn("对话") { showAssistant = true }
-                        }
+                            Row(
+                                Modifier.weight(1f).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Dimens.space2),
+                            ) {
+                                if (showContext) {
+                                    Column(Modifier.width(contextWidth).fillMaxHeight()) {
+                                        WritingColumnHeader("任务上下文") { showContext = false }
+                                        if (vm.spec != null) SpecPanel(vm, Modifier.weight(1f))
+                                        else TaskPanel(vm, Modifier.weight(1f))
+                                    }
+                                }
+                                if (showDocument) {
+                                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                                        WritingColumnHeader("文档正文") { showDocument = false }
+                                        EditorPanel(vm, Modifier.weight(1f))
+                                    }
+                                }
+                                if (showSuggestions) {
+                                    Column(Modifier.width(suggestionWidth).fillMaxHeight()) {
+                                        WritingColumnHeader("逐段建议") { showSuggestions = false }
+                                        ParagraphSuggestionPanel(vm, Modifier.weight(1f))
+                                    }
+                                }
+                                if (showAssistant) {
+                                    Column(Modifier.width(assistantWidth).fillMaxHeight()) {
+                                        WritingColumnHeader("助手对话") { showAssistant = false }
+                                        AssistantPanel(vm, Modifier.weight(1f))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -286,13 +343,6 @@ private fun WritingColumnHeader(title: String, onCollapse: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically) {
         Text(title, fontSize = 11.sp, color = Muted, modifier = Modifier.weight(1f))
         AppLinkButton("收起", onClick = onCollapse)
-    }
-}
-
-@Composable
-private fun CollapsedWritingColumn(title: String, onExpand: () -> Unit) {
-    TextButton(onClick = onExpand, modifier = Modifier.width(42.dp).fillMaxHeight()) {
-        Text("展\n开\n$title", fontSize = 11.sp, color = Primary, lineHeight = 17.sp)
     }
 }
 

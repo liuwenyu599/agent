@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 
 import pytest
 
@@ -217,6 +218,56 @@ def test_agent_run_store_reuses_one_active_run_and_persists_steps():
         db.close()
 
 
+def test_agent_run_store_recovers_a_stale_running_worker(monkeypatch):
+    from app.core.config import settings
+    from app.core.timeutil import now_local
+    from app.infrastructure.database import Base, SessionLocal, engine
+    from app.infrastructure.database.models.identity import UserModel
+    from app.infrastructure.database.models.writing_task import WritingTaskModel
+    from sqlalchemy import select
+
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        user = db.scalars(select(UserModel)).first()
+        assert user is not None
+        monkeypatch.setattr(settings, "WRITING_AGENT_RUN_TIMEOUT_SECONDS", 30)
+        task = WritingTaskModel(user_id=user.id, context={}, current_content="", version_no=0)
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        store = AgentRunStore(db)
+        run, _ = store.get_or_create(
+            task_id=task.id,
+            user_id=user.id,
+            route="agent",
+            base_version=0,
+            base_content="",
+            initial_state={"task_id": task.id, "user_id": user.id},
+        )
+        store.start(run)
+        run.updated_at = now_local() - timedelta(seconds=31)
+        db.commit()
+
+        assert store.claim(run) is True
+        db.refresh(run)
+        assert run.status == "running"
+        assert run.error_code is None
+
+        reused, created = store.get_or_create(
+            task_id=task.id,
+            user_id=user.id,
+            route="agent",
+            base_version=0,
+            base_content="",
+            initial_state={"task_id": task.id, "user_id": user.id},
+        )
+        assert created is False
+        assert reused.id == run.id
+    finally:
+        db.close()
+
+
 def test_planner_enriches_a_fuzzy_request_without_a_closed_genre_list():
     from app.infrastructure.database import Base, SessionLocal, engine
     from app.infrastructure.database.models.identity import UserModel
@@ -282,6 +333,64 @@ def test_planner_enriches_a_fuzzy_request_without_a_closed_genre_list():
         assert result["context"]["title"] == "法治宣传活动开场暖场词"
         assert result["context"]["recipient"] == "参加活动的干部群众"
         assert result["context"]["authority"] == "白云区司法局"
+    finally:
+        db.close()
+
+
+def test_research_uses_the_latest_user_request():
+    from app.infrastructure.database import Base, SessionLocal, engine
+    from app.infrastructure.database.models.identity import UserModel
+    from app.infrastructure.database.models.writing_task import WritingTaskModel
+    from sqlalchemy import select
+
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        user = db.scalars(select(UserModel)).first()
+        assert user is not None
+        context = {
+            "document_type": "讲话稿",
+            "history": [
+                {"role": "user", "content": "先写一份旧主题材料"},
+                {"role": "assistant", "content": "好的"},
+                {"role": "user", "content": "改为面向社区群众的法治宣传讲话稿"},
+            ],
+        }
+        task = WritingTaskModel(user_id=user.id, context=context, current_content="", version_no=0)
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        model = _ScriptedToolModel([
+            {"role": "assistant", "content": "资料足够", "tool_calls": []},
+        ])
+
+        class FakeService:
+            assistant = model
+
+            @staticmethod
+            def _retrieve(*_args, **_kwargs):
+                return []
+
+        state = {
+            "task_id": task.id,
+            "user_id": user.id,
+            "context": context,
+            "repair_round": 0,
+        }
+        store = AgentRunStore(db)
+        run, _ = store.get_or_create(
+            task_id=task.id,
+            user_id=user.id,
+            route="agent",
+            base_version=0,
+            base_content="",
+            initial_state=state,
+        )
+
+        asyncio.run(WritingAgentGraph(FakeService(), store, run)._research(state))
+
+        request = json.loads(model.messages[0][1]["content"])["原始需求"]
+        assert request == "改为面向社区群众的法治宣传讲话稿"
     finally:
         db.close()
 
@@ -427,7 +536,7 @@ def test_production_service_admits_only_complex_tasks_when_flagged(monkeypatch):
         db.close()
 
 
-def test_review_node_applies_the_current_users_active_content_rules():
+def test_review_node_keeps_user_content_rules_advisory():
     from app.infrastructure.database import Base, SessionLocal, engine
     from app.infrastructure.database.models.format_check import FormatRuleModel
     from app.infrastructure.database.models.identity import UserModel
@@ -478,9 +587,9 @@ def test_review_node_applies_the_current_users_active_content_rules():
 
         result = asyncio.run(WritingAgentGraph(FakeService(), store, run)._review(state))
 
-        assert result["quality_level"] == "D"
+        assert result["quality_level"] == "B"
         assert any(
-            issue["source"] == "user_rule" and issue["severity"] == "critical"
+            issue["source"] == "user_rule" and issue["severity"] == "review"
             for issue in result["quality_issues"]
         )
     finally:
@@ -489,6 +598,7 @@ def test_review_node_applies_the_current_users_active_content_rules():
 
 def test_real_async_writing_service_runs_complex_mock_task_through_graph(monkeypatch):
     from app.application.shared.async_writing_assistant import AsyncWritingAssistant
+    from app.application.writing import prompt_snapshot
     from app.application.writing.async_task_service import AsyncWritingTaskService
     from app.core.config import settings
     from app.infrastructure.ai.mock import MockLLMGateway
@@ -505,6 +615,14 @@ def test_real_async_writing_service_runs_complex_mock_task_through_graph(monkeyp
         monkeypatch.setattr(settings, "WRITING_AGENT_GRAPH_ENABLED", True)
         monkeypatch.setattr(settings, "WRITING_AGENT_ROLLOUT_PERCENT", 100)
         monkeypatch.setattr(settings, "WRITING_AGENT_GRAPH_COMPLEX_ONLY", True)
+        entered_tasks = []
+        real_enter_task = prompt_snapshot.enter_task
+
+        def capture_enter_task(task_id, user_id, session_id=""):
+            entered_tasks.append((task_id, user_id, session_id))
+            return real_enter_task(task_id, user_id, session_id=session_id)
+
+        monkeypatch.setattr(prompt_snapshot, "enter_task", capture_enter_task)
         task = WritingTaskModel(
             user_id=user.id,
             context={
@@ -529,6 +647,7 @@ def test_real_async_writing_service_runs_complex_mock_task_through_graph(monkeyp
         assert result["agent_run_id"]
         assert result["version_no"] == 1
         assert result["current_content"]
+        assert entered_tasks[0][:2] == (task.id, user.id)
         assert db.get(WritingTaskModel, task.id).current_content == result["current_content"]
         resumed = asyncio.run(service.resume_agent_run_async(
             task.id, user.id, result["agent_run_id"]))

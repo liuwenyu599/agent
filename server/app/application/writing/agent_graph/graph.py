@@ -218,8 +218,11 @@ class WritingAgentGraph:
                     schemas=self._search_schemas(),
                     max_rounds=settings.WRITING_AGENT_MAX_TOOL_ROUNDS,
                 )
-                request = next((str(item.get("content") or "") for item in ctx.get("history") or []
-                                if item.get("role") == "user"), "")
+                request = next((
+                    str(item.get("content") or "")
+                    for item in reversed(ctx.get("history") or [])
+                    if item.get("role") == "user" and item.get("content")
+                ), "")
                 messages = [
                     {"role": "system", "content": (
                         "你是资料检索智能体。根据写作任务判断是否需要补充检索。"
@@ -329,9 +332,7 @@ class WritingAgentGraph:
             mapped_rule_issues = [
                 {
                     "source": "user_rule",
-                    "severity": (
-                        "critical" if issue.get("severity") == "error" else "review"
-                    ),
+                    "severity": "review",
                     "message": str(issue.get("suggestion") or issue.get("expected") or "规则校验未通过"),
                 }
                 for issue in rule_issues
@@ -341,9 +342,7 @@ class WritingAgentGraph:
                 *mapped_rule_issues,
                 *list(content_check.get("issues") or []),
             ]
-            user_rule_level = "D" if any(
-                issue["severity"] == "critical" for issue in mapped_rule_issues
-            ) else ("B" if mapped_rule_issues else "A")
+            user_rule_level = "B" if mapped_rule_issues else "A"
             content_level = "B" if content_check.get("issues") else "A"
             quality["level"] = merge_level(
                 str(quality.get("level") or "D"), user_rule_level, content_level)

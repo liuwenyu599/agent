@@ -127,6 +127,8 @@ class WritingViewModel(
     var versionNo by mutableStateOf(0)
         private set
     var status by mutableStateOf<String?>(null)
+    var agentProgress by mutableStateOf<String?>(null)
+        private set
     var taskStatus by mutableStateOf("collecting")
         private set
 
@@ -424,6 +426,7 @@ class WritingViewModel(
     }
 
     private fun fail(msg: String) {
+        agentProgress = null
         status = msg
         busy = false
         AppState.writingGenerating = false
@@ -447,6 +450,7 @@ class WritingViewModel(
         activeJob?.cancel()
         activeJob = null
         currentAgentRunId = null
+        agentProgress = null
         if (taskId != null && !runId.isNullOrBlank()) {
             scope.launch { repo.cancelAgentRun(taskId, runId) }
         }
@@ -589,6 +593,7 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
+        agentProgress = null
         messages = messages + TaskChatMessage("user", text)
         activeJob = scope.launch {
             when (val r = repo.createTask(text)) {
@@ -839,6 +844,7 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
+        agentProgress = null
         // 服务端语义是「按当前稿继续生成，旧正文自动归档为 v{n+1}」
         // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
         // 不是「在旧文后面续写」。所以开流前必须先清空编辑器：
@@ -862,12 +868,12 @@ class WritingViewModel(
                     when (progress.type) {
                         "run" -> currentAgentRunId = progress.runId.takeIf { it.isNotBlank() }
                         "stage" -> if (progress.status == "running" && progress.label.isNotBlank()) {
-                            status = if (progress.key == "repair")
+                            agentProgress = if (progress.key == "repair")
                                 "${progress.label}（第 ${progress.repairRound.coerceAtLeast(1)} 轮）"
                             else progress.label
                         }
                         "quality" -> if (progress.qualityLevel == "D") {
-                            status = "校验发现 ${progress.issueCount} 项硬伤，正在定向修复"
+                            agentProgress = "校验发现 ${progress.issueCount} 项硬伤，正在定向修复"
                         }
                     }
                 },
@@ -899,6 +905,7 @@ class WritingViewModel(
             } else {
                 status = null
             }
+            agentProgress = null
             draftPreviousContent = null
             currentAgentRunId = null
             busy = false
@@ -1191,6 +1198,7 @@ class WritingViewModel(
         entryInput = ""
         chatInput = ""
         status = null
+        agentProgress = null
         versionPreview = null
         imageResults = emptyList()
         recognizingImages = false

@@ -41,10 +41,34 @@ class AgentRunStore:
     def _active_key(task_id: str, user_id: str) -> str:
         return f"{user_id}:{task_id}"
 
+    def recover_stale_running(self, run_id: Optional[str] = None) -> int:
+        """Release runs whose worker disappeared without updating terminal state."""
+        from app.core.config import settings
+
+        cutoff = now_local() - timedelta(
+            seconds=settings.WRITING_AGENT_RUN_TIMEOUT_SECONDS)
+        conditions = [
+            WritingAgentRunModel.status == "running",
+            WritingAgentRunModel.updated_at < cutoff,
+        ]
+        if run_id:
+            conditions.append(WritingAgentRunModel.id == run_id)
+        result = self.db.execute(update(WritingAgentRunModel).where(
+            *conditions,
+        ).values(
+            status="interrupted",
+            error_code="STALE_WORKER_RECOVERED",
+            error_message="上一次生成进程已中断，系统将从最近完成阶段恢复",
+            updated_at=now_local(),
+        ))
+        self.db.commit()
+        return int(result.rowcount or 0)
+
     def get_or_create(self, *, task_id: str, user_id: str, route: str,
                       base_version: int, base_content: str,
                       initial_state: dict[str, Any]) -> tuple[WritingAgentRunModel, bool]:
         self.cleanup_expired_traces()
+        self.recover_stale_running()
         key = self._active_key(task_id, user_id)
         active = self.db.scalars(select(WritingAgentRunModel).where(
             WritingAgentRunModel.active_key == key,
@@ -146,6 +170,7 @@ class AgentRunStore:
 
     def claim(self, run: WritingAgentRunModel) -> bool:
         """Atomically claim a queued/interrupted run across workers."""
+        self.recover_stale_running(run.id)
         result = self.db.execute(update(WritingAgentRunModel).where(
             WritingAgentRunModel.id == run.id,
             WritingAgentRunModel.status.in_(("queued", "interrupted")),

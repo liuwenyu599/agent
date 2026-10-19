@@ -741,12 +741,12 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
     async def draft_async(self, task_id: str, user_id: str,
                           outline_only: bool = False) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        prompt_snapshot.enter_task(
+            task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         agent_graph = self._prepare_agent_graph(task, user_id, outline_only)
         if agent_graph is not None:
             return await agent_graph.execute()
         expected_state = (task.current_content, task.version_no)
-        prompt_snapshot.enter_task(
-            task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         ctx = dict(task.context or {})
         template = self._load_template(ctx.get("template_id"))
         attachment_ctx = self._attachment_context(task, ctx)
@@ -835,6 +835,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                                  outline_only: bool = False) -> AsyncIterator[str]:
         try:
             task = self._get_owned(task_id, user_id)
+            prompt_snapshot.enter_task(
+                task_id, user_id, session_id=getattr(task, "session_id", "") or "")
             agent_graph = self._prepare_agent_graph(task, user_id, outline_only)
             if agent_graph is not None:
                 yield _sse({
@@ -851,8 +853,6 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             if graph_enabled_for_user(settings, user_id):
                 yield _sse({"type": "run", "run_id": "", "route": "fast"})
             expected_state = (task.current_content, task.version_no)
-            prompt_snapshot.enter_task(
-                task_id, user_id, session_id=getattr(task, "session_id", "") or "")
             ctx = dict(task.context or {})
             template = self._load_template(ctx.get("template_id"))
             attachment_ctx = self._attachment_context(task, ctx)
@@ -947,6 +947,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
     async def resume_agent_run_async(self, task_id: str, user_id: str,
                                      run_id: str) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
+        prompt_snapshot.enter_task(
+            task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         store = AgentRunStore(self.db)
         run = store.get_owned(run_id, task_id, user_id)
         if run.status == "completed":
