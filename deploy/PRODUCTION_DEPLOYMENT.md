@@ -304,6 +304,9 @@ test -s "$PKG"
 
 rm -rf /opt/judicial_app.new
 mkdir -p /opt/judicial_app.new
+# ⚠ 此命令匹配“第 3 节 PowerShell tar”打法（包内含 judicial_app/ 顶层目录）。
+# 若改用仓库自带 pack_release.py（基于 git archive HEAD 的扁平包、无顶层目录），
+# 必须去掉 --strip-components=1，否则见本节约末尾警告。
 tar xzf "$PKG" -C /opt/judicial_app.new --strip-components=1
 
 test -f /opt/judicial_app.new/server/app/main.py
@@ -317,6 +320,14 @@ mv /opt/judicial_app.new /opt/judicial_app
 ```
 
 这里不复制任何生产 `.env`。
+
+> ⚠ **打包方式必须一致（否则解包错位）**：第 3 节的 PowerShell `tar -C D:\Projects judicial_app` 产出的包**带 `judicial_app/` 顶层目录**，故此处用 `--strip-components=1` 把它剥掉，使内容落在 `/opt/judicial_app.new/` 下。
+>
+> 若改用仓库自带 **`pack_release.py`**（基于 `git archive HEAD` 的**扁平包**，包内直接是 `server/`、`deploy/`…，**没有** `judicial_app/` 顶层目录），解包命令必须改为：
+> ```bash
+> tar xzf "$PKG" -C /opt/judicial_app.new   # 不带 --strip-components=1
+> ```
+> 否则 `--strip-components=1` 会把 `server/` 顶层也剥掉，导致文件落到 `/opt/judicial_app.new/server/...` 错位，后续 `docker build` 找不到 `deploy/Dockerfile`。两种方法**不可混用**——打包用哪种，解包就对应哪一种。
 
 ## 7. 在构建前检查关键修复已经进入源码
 
