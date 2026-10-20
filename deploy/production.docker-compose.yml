@@ -145,6 +145,13 @@ services:
       PPT_AGENT_WORKSPACE_DIR: ${PPT_AGENT_WORKSPACE_DIR:-}
       OCR_ENABLED: ${OCR_ENABLED:-false}
 
+      # ---- Draw.io MCP（PPT 视觉增强层，可选）----
+      # 启用：先把 deploy/drawio-mcp 的容器挂到 justice-net（见其 README），
+      #       再在此设 DRAWIO_MCP_URL=http://drawio-mcp:3001（base，客户端自动补 /mcp）。
+      # 留空 → 后端 DrawioService 自动判定未启用，PPT 流程图走本地原生渲染（零侵入）。
+      DRAWIO_MCP_URL: ${DRAWIO_MCP_URL:-}
+      DRAWIO_MCP_TIMEOUT: ${DRAWIO_MCP_TIMEOUT:-30}
+
       # ---- RAG ----
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
       EMBED_MODEL_PATH: ${EMBED_MODEL_PATH:-/data/justice/models/bge-small-zh-v1.5}

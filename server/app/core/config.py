@@ -25,7 +25,7 @@ class Settings:
 
         # Model Service（OpenAI 兼容，vLLM 等）
         self.MODEL_SERVICE_URL = os.getenv("MODEL_SERVICE_URL", "http://127.0.0.1:8001/v1")
-        self.MODEL_NAME = os.getenv("MODEL_NAME", "Qwen2.5-14B-Instruct")
+        self.MODEL_NAME = os.getenv("MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
         self.MODEL_API_KEY = os.getenv("MODEL_API_KEY", "")
         self.MODEL_TIMEOUT = int(os.getenv("MODEL_TIMEOUT", "300"))
         # 单个网关实例同时在途的模型请求上限。等待在 asyncio.Semaphore 上，不占 FastAPI worker thread。
@@ -43,7 +43,7 @@ class Settings:
         self.LONG_FORM_MODEL_NAME = os.getenv("LONG_FORM_MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
         self.LONG_FORM_MODEL_TIMEOUT = int(os.getenv("LONG_FORM_MODEL_TIMEOUT", "600"))
         self.VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", "")
-        self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen2.5-VL-7B-Instruct")
+        self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
         self.VISION_MODEL_API_KEY = os.getenv("VISION_MODEL_API_KEY", "")
         self.VISION_MODEL_TIMEOUT = int(os.getenv("VISION_MODEL_TIMEOUT", "180"))
         self.VISION_MAX_IMAGES = int(os.getenv("VISION_MAX_IMAGES", "4"))
@@ -51,10 +51,13 @@ class Settings:
 
         # PPT 助手专用模型
         self.PPT_MODEL_URL = os.getenv("PPT_MODEL_URL", "")
-        self.PPT_MODEL_NAME = os.getenv("PPT_MODEL_NAME", "DeepPresenter-9B")
+        self.PPT_MODEL_NAME = os.getenv("PPT_MODEL_NAME", self.MODEL_NAME)
         self.PPT_MODEL_API_KEY = os.getenv("PPT_MODEL_API_KEY", "")
         self.PPT_MODEL_TIMEOUT = int(os.getenv("PPT_MODEL_TIMEOUT", "300"))
-        self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "")
+        # PPTAgent 已退出生产链路。只有显式打开兼容开关才读取其地址；默认使用
+        # 本地原生 PPTX 渲染器，生成的文本框、形状和表格均可继续编辑。
+        self.PPT_AGENT_ENABLED = _bool(os.getenv("PPT_AGENT_ENABLED"), False)
+        self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "") if self.PPT_AGENT_ENABLED else ""
         self.PPT_AGENT_HEALTH_PATH = os.getenv("PPT_AGENT_HEALTH_PATH", "/")
         self.PPT_AGENT_API_KEY = os.getenv("PPT_AGENT_API_KEY", "")
         self.PPT_AGENT_STATUS_PATH = os.getenv("PPT_AGENT_STATUS_PATH", "/api/ppt/status/{task_id}")
@@ -98,6 +101,13 @@ class Settings:
         self.PPT_AGENT_SLIDE_GLOB = os.getenv("PPT_AGENT_SLIDE_GLOB", "slides/*.html")
         self.PPT_AGENT_STALL_TIMEOUT = int(os.getenv("PPT_AGENT_STALL_TIMEOUT", "1800"))
         self.PPT_AGENT_PROGRESS_INTERVAL = int(os.getenv("PPT_AGENT_PROGRESS_INTERVAL", "5"))
+
+        # Draw.io MCP（PPT 视觉增强层）
+        # 官方镜像 jgraph/drawio-mcp，Streamable HTTP 端点 /mcp，默认容器内端口 3001。
+        # 仅作「模型工具调用」后端代理：get_drawio_reference / search_shapes / create_diagram。
+        # 留空则 PPT 流程图仍走本地原生渲染，不依赖该服务（零侵入）。
+        self.DRAWIO_MCP_URL = os.getenv("DRAWIO_MCP_URL", "")
+        self.DRAWIO_MCP_TIMEOUT = int(os.getenv("DRAWIO_MCP_TIMEOUT", "30"))
 
         # 智能写作流水线
         self.WRITING_AUTO_QA = os.getenv("WRITING_AUTO_QA", "true").lower() == "true"

@@ -22,6 +22,10 @@ services:
     environment:
       # 容器内固定路径：数据 /data、模型 /models
       DATA_DIR: /data
+      # Draw.io MCP（PPT 视觉增强层，可选）：在 .env 设 DRAWIO_MCP_URL 即启用；
+      # 留空则 PPT 流程图走本地原生渲染（零侵入）。
+      DRAWIO_MCP_URL: ${DRAWIO_MCP_URL:-}
+      DRAWIO_MCP_TIMEOUT: ${DRAWIO_MCP_TIMEOUT:-30}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
