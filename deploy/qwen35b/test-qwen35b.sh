@@ -18,11 +18,12 @@ echo "===== 1) 模型列表探测 ====="
 curl -fsS --max-time 10 "$BASE_URL/v1/models" | head -c 400 || { echo "无法连接 $BASE_URL"; exit 1; }
 echo; echo
 
-echo "===== 2) 流式首 token 时延探测 ====="
-# 用流式输出观察首字节到达时间（不精确计时，仅作直观判断）
+echo "===== 2) 流式首 token 时延探测（已关闭思考）====="
+# 用流式输出观察首字节到达时间（不精确计时，仅作直观判断）。
+# 裸端点直连需显式传 chat_template_kwargs 关闭思考；后端生产路径已在 qwen.py 请求级默认关闭。
 curl -sN -X POST "$BASE_URL/v1/chat/completions" \
   -H 'Content-Type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"你好，请用一句话介绍你自己。\"}],\"stream\":true,\"max_tokens\":64}" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"你好，请用一句话介绍你自己。\"}],\"stream\":true,\"max_tokens\":64,\"chat_template_kwargs\":{\"enable_thinking\":false}}" \
   --max-time 120 | head -c 200
 echo; echo
 
@@ -36,11 +37,14 @@ import sys, time, urllib.request, json
 base, model, n, prompt = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 
 def chat():
+    # 裸端点直连：显式关闭思考，避免 35B 这类思考模型在正文里输出 CoT。
+    # 后端生产路径已在 qwen.py 的 long_form 网关默认带此参数。
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 512,
         "temperature": 0.3,
+        "chat_template_kwargs": {"enable_thinking": False},
     }).encode()
     req = urllib.request.Request(
         base + "/v1/chat/completions",
@@ -61,6 +65,11 @@ for i in range(1, n + 1):
         msg = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
         print(f"输出字数(近似): {len(msg)}   usage={usage}")
+        # 思考泄漏检测：若正文混入了 CoT，说明 enable_thinking 没生效
+        leak = ("here's a thinking process" in msg.lower()
+                or "<think>" in msg.lower() or "思考过程" in msg)
+        if leak:
+            print("⚠ 警告：检测到思考内容泄漏到正文，enable_thinking=false 未生效，请检查模型/框架版本")
         print(msg)
     except Exception as e:
         print("请求失败:", e)

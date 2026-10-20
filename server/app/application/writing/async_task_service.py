@@ -27,6 +27,8 @@ from app.application.writing.sectioned_generation_service import SectionedGenera
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
 from app.core.config import settings
+from app.infrastructure.ai import get_long_form_gateway
+from app.application.shared.async_writing_assistant import AsyncWritingAssistant
 from app.infrastructure.database.models.writing_suggestion import WritingSuggestionModel
 from app.infrastructure.database.models.writing_task import WritingTaskModel
 
@@ -44,6 +46,15 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
         self.interpreter = AsyncWritingIntentInterpreter(assistant) if assistant else None
         self._draft_memory_cache: dict[tuple[str, str], str] = {}
+        # 长文正文生成专用 assistant：配置 LONG_FORM_MODEL_URLS 后路由到独立模型（如 35B），
+        # 规划 / 意图理解 / 工具调用仍用主模型（self.assistant）。未配置时为 None，回退主模型。
+        long_form_gw = get_long_form_gateway()
+        self.long_form_assistant = AsyncWritingAssistant(long_form_gw) if long_form_gw else None
+
+    @property
+    def _draft_assistant(self):
+        """正文生成统一使用的 assistant：优先长文模型，未配置则主模型。"""
+        return self.long_form_assistant or self.assistant
 
     # ---------------------------------------------------- 起草提示 + 训练留痕
 
@@ -167,14 +178,14 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
     async def _llm_draft_async(self, instruction: str, sources, attachment_ctx, user_id,
                                template: Optional[Dict[str, Any]] = None) -> str:
-        if not self.assistant:
+        if not self._draft_assistant:
             raise HTTPException(status_code=503, detail="模型服务不可用")
         system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
         system += (
             "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计。凡正文必须给出由多个数字推导的结果，"
             "应确保运算关系明确且结果精确；最终文本还会由程序做确定性复核。"
         )
-        return await self.assistant.achat(
+        return await self._draft_assistant.achat(
             message=instruction, history=[], sources=sources, user_role="user",
             system_prompt=system, attachment_context=attachment_ctx,
         ) or ""
@@ -880,7 +891,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             sources = self._retrieve(ctx, user_id)
             system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
             parts: List[str] = []
-            async for delta in self.assistant.achat_stream(
+            async for delta in self._draft_assistant.achat_stream(
                 message=instruction, history=[], sources=sources, user_role="user",
                 system_prompt=system, attachment_context=attachment_ctx):
                 if delta:

@@ -16,6 +16,15 @@
 # 关键参数（310P 缺一不可）:
 #   --enforce-eager / --mamba-ssm-cache-dtype float16 / --no-enable-prefix-caching
 #   TP 默认 4；不指定 --quantization（W8A8 由权重 config.json 自动识别）
+#
+# ⚠ 关于「思考(Thinking)」关闭：Qwen3.6-35B-A3B 是原生思考模型，若不关闭会在正文中输出
+#   CoT（形如 "Here's a thinking process..."），既浪费 token 又拖慢速度。关闭方式：
+#   1) 生产路径（后端）：已在 server 的 long_form 网关默认带 chat_template_kwargs:{enable_thinking:false}
+#      （见 qwen.py 的 extra_body + ai/__init__.py get_long_form_gateway）。无需改本脚本。
+#   2) 裸端点直连（无后端）：用 test-qwen35b.sh 的 curl 已带该参数验证；若要让本容器对所有直连
+#      默认关闭思考，可在 vllm serve 加 --chat-template 指向关闭思考的 jinja 模板（默认未启用，
+#      以免模板与 Qwen3.6 结构差异导致容器启动失败——这是比「思考没关」更严重的故障）。
+#      优先级：优先依赖后端请求级关闭；裸端点关闭属可选增强。
 set -euo pipefail
 
 CONTAINER_NAME="${CONTAINER_NAME:-justice-qwen35b-w8a8}"

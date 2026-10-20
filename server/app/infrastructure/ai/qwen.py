@@ -35,7 +35,8 @@ class QwenGateway:
                  model: Optional[str] = None,
                  api_key: Optional[str] = None, timeout: Optional[int] = None,
                  ctx_limit: Optional[int] = None,
-                 max_concurrency: Optional[int] = None) -> None:
+                 max_concurrency: Optional[int] = None,
+                 extra_body: Optional[Dict[str, Any]] = None) -> None:
         if api_urls is not None:
             raw_urls = api_urls
         elif api_url is not None:
@@ -63,6 +64,9 @@ class QwenGateway:
             else getattr(settings, "MODEL_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY)
         )
         self.max_concurrency = max(1, int(configured_concurrency))
+        # 透传到每次 chat/completions 请求的额外字段（如关闭思考模型的
+        # {"chat_template_kwargs": {"enable_thinking": False}}）。长文网关用它关掉 35B 的思考。
+        self.extra_body = dict(extra_body) if extra_body else {}
         try:
             self.repetition_penalty = float(
                 os.getenv("MODEL_REPETITION_PENALTY", str(_DEFAULT_REPETITION_PENALTY)))
@@ -149,7 +153,7 @@ class QwenGateway:
 
     def _base_payload(self, messages: List[Dict[str, str]],
                       temperature: float, max_tokens: int) -> Dict[str, Any]:
-        return {
+        payload = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
@@ -157,6 +161,9 @@ class QwenGateway:
             "top_p": 0.9,
             "repetition_penalty": self.repetition_penalty,
         }
+        if self.extra_body:
+            payload.update(self.extra_body)
+        return payload
 
     def _endpoint_order(self) -> List[str]:
         now = time.monotonic()

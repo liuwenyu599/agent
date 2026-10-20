@@ -9,7 +9,7 @@ MODEL_SERVICE_URLS / PPT_MODEL_URLS 可配置逗号分隔的同模型副本；�
 兼容原单 endpoint 变量。负载分配与失败切换由 QwenGateway 统一处理。
 """
 import os
-from typing import List
+from typing import List, Optional
 
 from app.application.ports import LLMGateway
 from app.core.config import settings
@@ -22,6 +22,8 @@ _vision_gateway: LLMGateway = None
 _vision_loaded = False
 _ppt_gateway: LLMGateway = None
 _ppt_loaded = False
+_long_form_gateway: LLMGateway = None
+_long_form_loaded = False
 
 
 def _endpoint_urls(env_name: str, fallback: str) -> List[str]:
@@ -77,6 +79,36 @@ def get_vision_gateway() -> LLMGateway:
     return _vision_gateway
 
 
+def get_long_form_gateway() -> Optional[LLMGateway]:
+    """长文生成专用模型网关（可选）。
+
+    仅当 LONG_FORM_MODEL_URLS 配置时返回独立网关；否则返回 None，调用方回退主模型。
+    长文网关默认关闭思考（enable_thinking=false），避免 35B 这类思考模型在正文里输出 CoT。
+    """
+    global _long_form_gateway, _long_form_loaded
+    if _long_form_loaded:
+        return _long_form_gateway
+    _long_form_loaded = True
+    urls = _endpoint_urls("LONG_FORM_MODEL_URLS", "")
+    if not urls or not urls[0]:
+        return None
+    if os.getenv("AI_PROVIDER", "auto") == "mock":
+        from app.infrastructure.ai.mock import MockLLMGateway
+        _long_form_gateway = MockLLMGateway()
+    else:
+        from app.infrastructure.ai.qwen import QwenGateway
+        _long_form_gateway = QwenGateway(
+            api_urls=urls,
+            model=settings.LONG_FORM_MODEL_NAME,
+            timeout=settings.LONG_FORM_MODEL_TIMEOUT,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+    logger.info("[AI网关] 长文适配器: %s (%s, endpoints=%s)",
+                type(_long_form_gateway).__name__, _long_form_gateway.model_name,
+                getattr(_long_form_gateway, "endpoint_count", 1))
+    return _long_form_gateway
+
+
 def get_ppt_gateway() -> LLMGateway:
     """PPT 助手专用模型网关（DeepPresenter-9B，OpenAI 兼容）。
 
@@ -110,8 +142,11 @@ def get_ppt_gateway() -> LLMGateway:
 def reset_gateway() -> None:
     """测试用：重置缓存的网关实例。"""
     global _gateway, _vision_gateway, _vision_loaded, _ppt_gateway, _ppt_loaded
+    global _long_form_gateway, _long_form_loaded
     _gateway = None
     _vision_gateway = None
     _vision_loaded = False
     _ppt_gateway = None
     _ppt_loaded = False
+    _long_form_gateway = None
+    _long_form_loaded = False

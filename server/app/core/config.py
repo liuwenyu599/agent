@@ -35,6 +35,13 @@ class Settings:
         self.MODEL_CTX_LIMIT = int(os.getenv("MODEL_CTX_LIMIT", "16384"))
         self.MODEL_HEALTH_TIMEOUT = int(os.getenv("MODEL_HEALTH_TIMEOUT", "5"))
         self.MODEL_FAILOVER_COOLDOWN = int(os.getenv("MODEL_FAILOVER_COOLDOWN", "15"))
+        # 长文生成专用模型（可选）。配置后，写作台「长文正文生成」路由到该模型（如 35B 评估实例），
+        # 而规划 / 意图理解 / 工具调用仍走主模型（MODEL_SERVICE_URLS）。留空则长文仍走主模型，
+        # 行为与历史完全一致，零侵入。长文网关默认关闭思考（enable_thinking=false），避免 35B 这类
+        # 思考模型在正文里输出 CoT，既省 token 又提速。
+        self.LONG_FORM_MODEL_URLS = os.getenv("LONG_FORM_MODEL_URLS", "")
+        self.LONG_FORM_MODEL_NAME = os.getenv("LONG_FORM_MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
+        self.LONG_FORM_MODEL_TIMEOUT = int(os.getenv("LONG_FORM_MODEL_TIMEOUT", "600"))
         self.VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", "")
         self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen2.5-VL-7B-Instruct")
         self.VISION_MODEL_API_KEY = os.getenv("VISION_MODEL_API_KEY", "")
