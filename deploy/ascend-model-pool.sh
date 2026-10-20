@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# ⚠ DEPRECATED（2026-10-20）：模型服务已统一改为 Compose 管理，见
+#   deploy/model-pool/docker-compose.yml（35B 多模态主模型 + 14B 应急回滚）。
+#   本脚本（second-14b / ppt-replica 裸进程副本）不再推荐使用，保留仅作历史参考。
+#   PPT 副本需求请评估是否仍需要（35B MoE 激活参数小、速度快，副本必要性下降）。
 set -euo pipefail
 
 # Ascend multi-instance launcher for backlog item 8.

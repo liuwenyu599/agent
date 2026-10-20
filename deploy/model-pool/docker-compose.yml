@@ -1,0 +1,271 @@
+# =============================================================================
+# 云法智办 · 模型池 Compose（昇腾 310P ×8，替代原 shell nohup 管理方式）
+#
+# 背景：原来 14B 主模型 / VL 视觉模型 / 35B 评估实例分别由 start_services.sh、
+#       ascend-model-pool.sh、setup-qwen35b.sh 等裸进程/裸 docker run 管理，
+#       占卡关系不可见、重启无保障。本文件把模型服务统一 compose 化。
+#
+# 目标拓扑（8 卡，davinci0~7）：
+#   davinci0,1  → qwen35b-main    :8010  Qwen3.6-35B-A3B-W8A8（多模态 MoE）
+#                                       ★ 一套模型同时接管：文本写作/问答（MODEL_*）
+#                                         图片理解与 OCR（VISION_*）、长文（LONG_FORM_*）
+#                                         原 Qwen2.5-14B 文本模型与 Qwen2.5-VL-7B 视觉模型退役
+#   davinci5,6  → DeepPresenter-9B :8004  PPT 栈，独立 compose 见 deploy/pptagent/
+#   davinci7    → qwen14b-rollback :8003  （仅 profile=rollback 时启动，应急回退用）
+#   davinci2,3  → qwen38-27b-trial :8011  新一代 27B 多模态（profile=trial，待下载试用）
+#   davinci4    → qwen-flash-next-trial :8012 轻量多模态（profile=trial，待下载试用）
+#   （试用与回滚按需启用；全开时 8 卡占满）
+#
+# ⚠ 上线前必须 `npu-smi info` 核实占卡：35B 要的 0,1 若还被旧 14B 裸进程占用，
+#   先停旧进程（stop_services.sh 只停 8000/8001；裸 vllm 用 lsof -ti:8003 杀）。
+#
+# 用法：
+#   cd deploy/model-pool
+#   cp .env.example .env          # 首次，按注释修改 HOST_MODEL_DIR 等
+#   docker compose up -d          # 起 35B 主服务（约 5~15 分钟加载权重）
+#   curl -s http://127.0.0.1:8010/v1/models
+#   # 试用新模型（权重下载到位后，见文件末尾两节）：
+#   docker compose --profile trial up -d qwen38-27b-trial qwen-flash-next-trial
+#   # 应急回滚（可选，占 davinci7）：
+#   docker compose --profile rollback up -d
+#
+# 35B 参数来自已在真机验证可跑的版本（速度/质量均已验收），勿随意改动；
+# 各 flag 的含义见同目录 README.md。
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # Qwen3.6-35B-A3B-W8A8 —— 多模态主模型（文本 + 视觉 + 长文三链路共用）
+  # ==========================================================================
+  qwen35b-main:
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen35b-w8a8
+    privileged: true
+    restart: unless-stopped
+    shm_size: 16g
+    cgroup: host
+    ports:
+      - "${QWEN35B_PORT:-8010}:8010"
+    environment:
+      # 可见芯片（Ascend RT 读取本变量做可见性过滤）
+      - ASCEND_RT_VISIBLE_DEVICES=${QWEN35B_DEVICES:-0,1}
+      # 离线内网：禁止 vLLM 启动时联网去 ModelScope/HF 拉权重
+      - VLLM_USE_MODELSCOPE=False
+      # 显存碎片整理阈值（W8A8 ~35GB，双卡 86GB 余量充足，可不设）
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      # 模型根目录只读挂载（与 deploy/pptagent 的 HOST_MODEL_DIR 保持一致）
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      # NPU 驱动四件套（310P 容器内跑 vllm-ascend 必需）
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      # ⚠ 换卡必须同步修改此处列表 + 上面 ASCEND_RT_VISIBLE_DEVICES，两处保持一致
+      - /dev/davinci0
+      - /dev/davinci1
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${QWEN35B_MODEL_PATH:-/models/qwen35b-a3b-w8a8/models/Eco-Tech--Qwen3.6-35B-A3B-w8a8/snapshots/master}
+      --host 0.0.0.0
+      --port 8010
+      --served-model-name Qwen3.6-35B-A3B-W8A8
+      --tensor-parallel-size 2
+      --dtype float16
+      --quantization ascend
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.90
+      --additional-config '{"ascend_compilation_config": {"enable_npugraph_ex":false}}'
+      --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1,8]}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+      --trust-remote-code
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Qwen2.5-14B-Instruct —— 应急回滚实例（默认不启动，不占卡）
+  # 仅当 35B 上线后出现写作质量/稳定性问题需要切回 14B 时使用：
+  #   1. docker compose --profile rollback up -d      # 起 14B（davinci7）
+  #   2. 后端 .env：MODEL_SERVICE_URL(S) 改回 http://10.128.85.133:8003/v1，
+  #      MODEL_NAME 改回 Qwen2.5-14B-Instruct，VISION_* 按需恢复 VL-7B
+  #   3. 重启 justice-api
+  # 权重要求：${HOST_MODEL_DIR}/Qwen2.5-14B-Instruct 存在（裸机时代在
+  #   $HOME/Qwen2.5-14B-Instruct，迁移到 /data/models 下才能容器化）
+  # ==========================================================================
+  qwen14b-rollback:
+    profiles: ["rollback"]
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen14b-rollback
+    privileged: true
+    restart: unless-stopped
+    shm_size: 8g
+    cgroup: host
+    ports:
+      - "${QWEN14B_PORT:-8003}:8003"
+    environment:
+      - ASCEND_RT_VISIBLE_DEVICES=7
+      - VLLM_USE_MODELSCOPE=False
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      - /dev/davinci7
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${QWEN14B_MODEL_PATH:-/models/Qwen2.5-14B-Instruct}
+      --host 0.0.0.0
+      --port 8003
+      --served-model-name Qwen2.5-14B-Instruct
+      --tensor-parallel-size 1
+      --dtype bfloat16
+      --gpu-memory-utilization 0.90
+      --max-model-len 16384
+      --max-num-seqs 2
+      --enforce-eager
+      --trust-remote-code
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ==========================================================================
+  # 试用模型 A：新一代 27B 多模态（profile=trial，权重下载到位后才启用）
+  #
+  # 来源：外部建议（2026-10-20）——比 35B 更新的多模态模型，先试用再决定去留。
+  # 启用前准备：
+  #   1. 权重下载到 ${HOST_MODEL_DIR}/<目录>（27B BF16 ≈ 54GB；W8A8 ≈ 27GB）
+  #   2. .env 填 QWEN38_27B_MODEL_PATH / QWEN38_27B_MODEL_NAME
+  #   3. docker compose --profile trial up -d qwen38-27b-trial
+  #   4. 验收：python3 deploy/qwen35b/compare_14b_vs_35b.py（把 35B 列换成它）
+  # 与 35B 的差异：
+  #   - 默认 BF16 + TP=2（davinci2,3）；若下载的是 W8A8 量化版，
+  #     在 .env 设 QWEN38_27B_EXTRA_ARGS=--quantization ascend（BF16 版严禁加）
+  #   - dtype 按权重实际精度配（BF16 权重→bfloat16，W8A8→float16）
+  # ==========================================================================
+  qwen38-27b-trial:
+    profiles: ["trial"]
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen38-27b-trial
+    privileged: true
+    restart: unless-stopped
+    shm_size: 16g
+    cgroup: host
+    ports:
+      - "${QWEN38_27B_PORT:-8011}:8011"
+    environment:
+      - ASCEND_RT_VISIBLE_DEVICES=${QWEN38_27B_DEVICES:-2,3}
+      - VLLM_USE_MODELSCOPE=False
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      # ⚠ 换卡必须同步修改此处列表 + 上面 ASCEND_RT_VISIBLE_DEVICES，两处保持一致
+      - /dev/davinci2
+      - /dev/davinci3
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${QWEN38_27B_MODEL_PATH:-/models/PLACEHOLDER-qwen38-27b}
+      --host 0.0.0.0
+      --port 8011
+      --served-model-name ${QWEN38_27B_MODEL_NAME:-Qwen3.8-27B}
+      --tensor-parallel-size ${QWEN38_27B_TP:-2}
+      --dtype ${QWEN38_27B_DTYPE:-bfloat16}
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.90
+      --additional-config '{"ascend_compilation_config": {"enable_npugraph_ex":false}}'
+      --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1,8]}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+      --trust-remote-code
+      ${QWEN38_27B_EXTRA_ARGS:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ==========================================================================
+  # 试用模型 B：qwen-flash-next 轻量多模态（profile=trial）
+  #
+  # 来源：外部建议（2026-10-20）——flash 系通常激活参数小、响应快，
+  # 适合承接高频短任务（意图理解/问答/PPT 大纲），给 35B 主模型分流减压。
+  # 启用前准备同试用模型 A：下载权重 → .env 填路径/模型名 → trial profile 启动。
+  # 默认 TP=1 占 davinci4；若权重实际较大需 TP=2，改用 davinci4+7 并同步
+  # devices 列表与 ASCEND_RT_VISIBLE_DEVICES（7 与回滚实例互斥，二选一）。
+  # ==========================================================================
+  qwen-flash-next-trial:
+    profiles: ["trial"]
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen-flash-next-trial
+    privileged: true
+    restart: unless-stopped
+    shm_size: 8g
+    cgroup: host
+    ports:
+      - "${QWEN_FLASH_PORT:-8012}:8012"
+    environment:
+      - ASCEND_RT_VISIBLE_DEVICES=${QWEN_FLASH_DEVICES:-4}
+      - VLLM_USE_MODELSCOPE=False
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      - /dev/davinci4
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${QWEN_FLASH_MODEL_PATH:-/models/PLACEHOLDER-qwen-flash-next}
+      --host 0.0.0.0
+      --port 8012
+      --served-model-name ${QWEN_FLASH_MODEL_NAME:-Qwen-Flash-Next}
+      --tensor-parallel-size ${QWEN_FLASH_TP:-1}
+      --dtype ${QWEN_FLASH_DTYPE:-bfloat16}
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.90
+      --additional-config '{"ascend_compilation_config": {"enable_npugraph_ex":false}}'
+      --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1,8]}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+      --trust-remote-code
+      ${QWEN_FLASH_EXTRA_ARGS:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"

@@ -198,3 +198,13 @@ val structure = t["structure"].arr().map { it.str() }.filter { it.isNotBlank() }
 | `552344e` | feat(desktop): Inno Setup 中文安装包「云法智办」 |
 
 **⚠️ 后端改动（`09818d8` / `77a5bee`）需重启后端才生效**，uvicorn 不带 `--reload` 不会加载新代码。
+
+---
+
+## 模型池 Compose 化与试用计划（2026-10-20，外部建议）
+
+- [x] `deploy/model-pool/docker-compose.yml`：35B 多模态主模型（davinci0,1、:8010，一套接管文本/视觉/长文）+ 14B 回滚实例（profile=rollback）
+- [ ] **35B 生产切换**：停 14B(:8003)/VL(:8002) 裸进程腾卡 → compose up → 后端 `.env` 三套网关指 8010 → smoke_test 验收（步骤见 `deploy/model-pool/README.md` 第 3 节）
+- [ ] **下载试用两个新多模态模型**（云门建议 2026-10-20）：新一代 27B 与 qwen-flash-next，compose 已留 `profile=trial` 坑位（davinci2,3 :8011 / davinci4 :8012，`.env` 填路径即启用）；用 `deploy/qwen35b/compare_14b_vs_35b.py` 同任务对比后决定扶正谁
+- [ ] **PPT 试 drawio MCP + 本地模型调用**（云门建议）：让本地模型经 drawio MCP 画图表型 PPT 页，作为 DeepPresenter-9B/PPTAgent 之外的备选渲染通道。先做技术验证（MCP 客户端接在哪、drawio→pptx/pdf 转换链），通过再排期
+- [ ] flash-next 若响应快：评估承接意图理解/问答/PPT 大纲等高频短任务，给 35B 分流（需新增对应网关配置或路由）

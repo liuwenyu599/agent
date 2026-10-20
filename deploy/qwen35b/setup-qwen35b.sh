@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# ⚠ DEPRECATED（2026-10-20）：35B 实例已改为 Compose 管理，见
+#   deploy/model-pool/docker-compose.yml（qwen35b-main，davinci0,1，TP=2，:8010）。
+#   本脚本的启动参数为早期评估版本，其结论（TP=4、enforce-eager、
+#   mamba-ssm-cache-dtype、no-enable-prefix-caching、不指定 --quantization）
+#   **已被真机验证版取代**，保留仅作历史参考，不要再用于生产启动。
+#   本目录 check-qwen35b.sh / test-qwen35b.sh 仍可用于验收 compose 起的实例
+#   （用环境变量把端口指到 8010 即可）。
 #
 # setup-qwen35b.sh — 在昇腾 310P 上拉起 Qwen3.6-35B-A3B-W8A8 评估实例（不替换生产 14B）
 #
