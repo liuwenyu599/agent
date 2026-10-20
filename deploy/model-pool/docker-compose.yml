@@ -158,6 +158,10 @@ services:
   #   - 默认 BF16 + TP=2（davinci2,3）；若下载的是 W8A8 量化版，
   #     在 .env 设 QWEN38_27B_EXTRA_ARGS=--quantization ascend（BF16 版严禁加）
   #   - dtype 按权重实际精度配（BF16 权重→bfloat16，W8A8→float16）
+  #   - ⚠ 社区 W8A8 常把 linear bias 存成 FP16，会被静态量化内核
+  #     aclnnQuantMatmulWeightNz 拒掉（"Bias dtype should be INT32"）。
+  #     遇此错先查 config.json 的 quantization_config：BF16 就删量化参数；
+  #     真 W8A8 须用 msmodelslim 重新量化为合规格式。
   # ==========================================================================
   qwen38-27b-trial:
     profiles: ["trial"]

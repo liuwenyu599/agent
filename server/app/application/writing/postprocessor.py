@@ -276,21 +276,41 @@ OUTLINE_DEGENERATION_PHRASES = [
 _HEADING_LINE_RE = re.compile(
     r"^(一|二|三|四|五|六|七|八|九|十)+、|^（(一|二|三|四|五|六|七|八|九|十)+）")
 
+# 纯标题行的字数上限：超过即视为「段旨句+正文」连写段——这是通知/方案类公文的
+# 标准写法（每节就一大段），不能把长行当标题。段旨句标题通常 ≤15 字。
+_HEADING_LINE_MAX_CHARS = 15
+# 非标题行正文字符总量下限：低于此值才认定「只有骨架没有正文」。
+_OUTLINE_MIN_BODY_CHARS = 150
+
 
 def detect_outline_degeneration(text: str) -> Optional[str]:
     """提纲式退化检测：只有章节骨架、正文被「略/仅保留思路」式占位顶替。
 
     与占位符检测（××、待补充）不同：这里针对的是模型整节不写的退化形态。
+
+    结构比检测须同时满足两个条件才判退化：短标题行占全部行过半，且非标题行
+    几乎没有实质内容。曾因把「（一）段旨句。正文……」连写长行误计为标题，
+    拦下过合格的通知类公文（章节标题虚高、总行数又少，比例轻易过半）。
     """
     hits = [p for p in OUTLINE_DEGENERATION_PHRASES if p in text]
     if hits:
         return "正文出现占位说明：" + "、".join(hits[:2])
-    # 结构比检测：章节标题行占全部行数过半，说明只有骨架没有内容
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     if len(lines) >= 6:
-        headings = sum(1 for l in lines if _HEADING_LINE_RE.match(l))
-        if headings >= 4 and headings / len(lines) > 0.5:
-            return f"章节标题 {headings} 行占全部 {len(lines)} 行过半，只有提纲没有正文"
+        heading_idx = {
+            i for i, line in enumerate(lines)
+            if _HEADING_LINE_RE.match(line) and len(line) <= _HEADING_LINE_MAX_CHARS
+        }
+        headings = len(heading_idx)
+        body_chars = sum(
+            len(line) for i, line in enumerate(lines) if i not in heading_idx
+        )
+        if (headings >= 4 and headings / len(lines) > 0.5
+                and body_chars < _OUTLINE_MIN_BODY_CHARS):
+            return (
+                f"章节标题 {headings} 行占全部 {len(lines)} 行过半，"
+                f"正文仅 {body_chars} 字，只有提纲没有正文"
+            )
     return None
 
 
