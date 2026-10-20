@@ -43,7 +43,6 @@ services:
     privileged: true
     restart: unless-stopped
     shm_size: 16g
-    cgroup: host
     ports:
       - "${QWEN35B_PORT:-8010}:8010"
     environment:
@@ -109,7 +108,6 @@ services:
     privileged: true
     restart: unless-stopped
     shm_size: 8g
-    cgroup: host
     ports:
       - "${QWEN14B_PORT:-8003}:8003"
     environment:
@@ -168,7 +166,6 @@ services:
     privileged: true
     restart: unless-stopped
     shm_size: 16g
-    cgroup: host
     ports:
       - "${QWEN38_27B_PORT:-8011}:8011"
     environment:
@@ -228,7 +225,6 @@ services:
     privileged: true
     restart: unless-stopped
     shm_size: 8g
-    cgroup: host
     ports:
       - "${QWEN_FLASH_PORT:-8012}:8012"
     environment:
