@@ -1,0 +1,183 @@
+# =============================================================================
+# 智慧司法办公平台 · 生产编排（银河麒麟 V10 / ARM64）【受版本管理的模板】
+#
+# 本文件 = 服务器 /opt/justice-office/deploy/docker-compose.yml 的版本化副本。
+# 以前是服务器上手改，容易漂移/重复；现在以此为准，改这里 → 打包 → 覆盖服务器。
+# 配对文件：deploy/production.env.example（cp 成 .env 后填密码/密钥/模型地址）。
+#
+# ── Compose 全景图（避免「哪个 compose 是哪个」搞混）──────────────────────────
+#   deploy/production.docker-compose.yml  ← 本文件：生产 API + PostgreSQL
+#                                            (justice-api / justice-db / justice-migrate)
+#   deploy/docker-compose.yml             ← 开发/单机：SQLite + judicial-ai-api（非生产）
+#   deploy/model-pool/docker-compose.yml  ← 模型服务池：35B 主 / 27B·flash 试用 / 14B 回滚
+#   deploy/pptagent/docker-compose.yml    ← PPT 助手栈：DeepPresenter-9B（独立）
+#   一套完整生产 = 本文件(API+DB) + model-pool(模型) + pptagent(PPT)。
+#
+# 部署流程：
+#   1. cp production.env.example .env，填 POSTGRES_PASSWORD / SECRET_KEY / 模型地址
+#   2. 预先 docker load 导入 ARM64 镜像（镜像 tag 见下，rebuild 时同步改 api+migrate）
+#   3. docker compose up -d
+#   4. docker compose ps
+#
+# 启动顺序：PostgreSQL healthy → Alembic migration 成功 → FastAPI 启动
+# 注意：生产不现场构建镜像；Alembic 仅由 migrate 服务跑一次；API worker 不迁移。
+# =============================================================================
+
+services:
+
+  db:
+    image: postgres:15-alpine
+    container_name: justice-db
+    restart: unless-stopped
+    platform: linux/arm64
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-justice}
+      POSTGRES_USER: ${POSTGRES_USER:-justice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: Asia/Shanghai
+      LANG: C.UTF-8
+
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-justice} -d ${POSTGRES_DB:-justice}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+    networks:
+      - justice-net
+
+
+  # ---------------------------------------------------------------------------
+  # 数据库迁移：每次 up 跑一次 upgrade，成功退出(0)后 API 才允许启动。
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: justice-office-server:20261009-151218-e2e2665
+    container_name: justice-migrate
+    restart: "no"
+    platform: linux/arm64
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-justice}:${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-justice}
+      DB_AUTO_MIGRATE: "false"
+      TZ: Asia/Shanghai
+
+    command:
+      [
+        "python",
+        "-m",
+        "app.migrations.migrator",
+        "upgrade"
+      ]
+
+    networks:
+      - justice-net
+
+
+  api:
+    image: justice-office-server:20261009-151218-e2e2665
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    container_name: justice-api
+    restart: unless-stopped
+    platform: linux/arm64
+
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+    environment:
+
+      # ---- 数据库 ----
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-justice}:${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-justice}
+      # 生产禁止每个 worker 自动 Alembic；迁移统一由 migrate 服务执行。
+      DB_AUTO_MIGRATE: "false"
+
+      # ---- 安全 ----
+      SECRET_KEY: ${SECRET_KEY:?请在 .env 中设置 SECRET_KEY}
+      ACCESS_TOKEN_EXPIRE_HOURS: ${ACCESS_TOKEN_EXPIRE_HOURS:-12}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+
+      # ---- 数据与日志 ----
+      DATA_DIR: /data/justice
+      LOG_DIR: /data/justice/logs
+
+      # ---- AI 推理服务 ----
+      # ⚠ 模型地址必须填宿主机 LAN IP：容器内 127.0.0.1 是容器自身 loopback，够不到
+      #    宿主机上的 vllm。默认值 127.0.0.1:8001 仅作占位，生产务必在 .env 覆盖。
+      # 35B 主模型由 deploy/model-pool 的 qwen35b-main 提供（宿主发布 :8010）。
+      MODEL_SERVICE_URL: ${MODEL_SERVICE_URL:-http://127.0.0.1:8001/v1}
+      # 多端点（逗号分隔）+ 网关级负载/熔断；配了走复数，未配回退上面单端点。
+      MODEL_SERVICE_URLS: ${MODEL_SERVICE_URLS:-}
+      MODEL_MAX_CONCURRENCY: ${MODEL_MAX_CONCURRENCY:-4}
+      MODEL_NAME: ${MODEL_NAME:-Qwen3.6-35B-A3B-W8A8}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_TIMEOUT: ${MODEL_TIMEOUT:-300}
+      MODEL_CTX_LIMIT: ${MODEL_CTX_LIMIT:-16384}
+      AI_PROVIDER: ${AI_PROVIDER:-auto}
+      # 视觉：35B 本身多模态，VISION_* 指向同一 8010 即由 35B 接管图片理解；
+      #      留空则回退 OCR 文本通道（多模态不生效）。
+      VISION_MODEL_URL: ${VISION_MODEL_URL:-}
+      VISION_MODEL_NAME: ${VISION_MODEL_NAME:-}
+      # 长文正文生成：显式路由到 35B（带 enable_thinking=false 双保险）；
+      #      留空则静默回退主模型（主模型=35B 时内容仍对，但无显式关思考）。
+      LONG_FORM_MODEL_URLS: ${LONG_FORM_MODEL_URLS:-}
+      LONG_FORM_MODEL_NAME: ${LONG_FORM_MODEL_NAME:-}
+      LONG_FORM_MODEL_TIMEOUT: ${LONG_FORM_MODEL_TIMEOUT:-300}
+      PPT_MODEL_URL: ${PPT_MODEL_URL:-}
+      PPT_MODEL_NAME: ${PPT_MODEL_NAME:-}
+      PPT_AGENT_URL: ${PPT_AGENT_URL:-}
+      PPT_AGENT_SUBMIT_PATH: ${PPT_AGENT_SUBMIT_PATH:-/gradio_api/run/send_message}
+      PPT_AGENT_TOTAL_TIMEOUT: ${PPT_AGENT_TOTAL_TIMEOUT:-1800}
+      PPT_AGENT_WORKSPACE_DIR: ${PPT_AGENT_WORKSPACE_DIR:-}
+      OCR_ENABLED: ${OCR_ENABLED:-false}
+
+      # ---- RAG ----
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      EMBED_MODEL_PATH: ${EMBED_MODEL_PATH:-/data/justice/models/bge-small-zh-v1.5}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_SCORE_THRESHOLD: ${RAG_SCORE_THRESHOLD:-0.5}
+
+      # ---- 写作 ----
+      WRITING_AUTO_QA: ${WRITING_AUTO_QA:-true}
+      DOC_NUMBER_DEFAULT_DAIZI: ${DOC_NUMBER_DEFAULT_DAIZI:-云司}
+
+      # ---- 服务 ----
+      HOST: 0.0.0.0
+      PORT: "8000"
+      TZ: Asia/Shanghai
+
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/data/justice
+      - /opt/justice-ppt/workspace:/data/pptagent:ro
+      - /home/lcode/bge-m3:/models/bge-m3:ro
+      - /usr/share/fonts/truetype/chinese:/usr/share/fonts/truetype/chinese:ro
+      - /usr/share/fonts/gb-cjk:/usr/share/fonts/gb-cjk:ro
+      - /home/lcode/bge-reranker-v2-m3:/home/lcode/bge-reranker-v2-m3:ro
+    networks:
+      - justice-net
+
+
+networks:
+  justice-net:
+    driver: bridge
+
+
+volumes:
+  pg-data:
