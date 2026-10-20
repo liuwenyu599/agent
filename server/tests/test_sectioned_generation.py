@@ -159,6 +159,26 @@ def test_model_keeps_requested_genre_despite_topic_keyword():
     assert plan["planned_context"]["recipient"] is None
 
 
+def test_plan_fields_expose_word_count_target_from_instruction():
+    """用户指令里的「800字」必须进规划字段（卡片可见），否则用户以为字数没生效。"""
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    svc.db = None
+    svc.rag = None
+
+    async def model_plan(*args, **kwargs):
+        return {"document_type": "通知", "topic": "社区矫正教育帮扶工作"}
+
+    svc._interpret_async = model_plan
+    svc._plan_knowledge = lambda *args, **kwargs: []
+    plan = asyncio.run(svc.plan_task_async(
+        "u1",
+        "写一份800字的社区矫正教育帮扶工作通知，要求包含标题、主送机关、工作目标、"
+        "主要任务（分3条）、工作要求、落款。"))
+    assert plan["planned_context"]["word_count_target"] == 800
+    labels = {f["label"]: f["value"] for f in plan["fields"]}
+    assert labels.get("字数目标") == "800"
+
+
 def test_unlisted_genre_drafting_does_not_inherit_official_document_outline():
     svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     instruction = svc._build_draft_instruction({

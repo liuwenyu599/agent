@@ -324,7 +324,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         fields: List[Dict[str, str]] = []
         for key, label in (("document_type", "文种"), ("recipient", "报送对象"),
                            ("authority", "发文机关"), ("time_range", "时间范围"),
-                           ("purpose", "用途"), ("topic", "主题")):
+                           ("purpose", "用途"), ("topic", "主题"),
+                           ("word_count_target", "字数目标")):
             value = ctx.get(key)
             if value:
                 fields.append({"label": label, "value": str(value)})
