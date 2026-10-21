@@ -867,6 +867,11 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
     def r_process(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
+        diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
+        if diagram_xml:
+            from app.application.ppt.drawio_native import render_diagram
+            render_diagram(slide, diagram_xml, lx(.06), ly(.23), lx(.88), ly(.64), FONT)
+            return slide
         steps = ((s.get("blocks") or {}).get("process") or s["points"])[:5]
         n = max(len(steps), 1)
         cw = 0.88 / n
@@ -1739,8 +1744,16 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     sw, sh = prs.slide_width, prs.slide_height
     for ns, lay, s in new_slides:
         try:
-            _fill_learned_slide(ns, lay, s, colors, font, sw, sh, prs)
+            diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
+            payload = {**s, "points": [], "blocks": {}} if diagram_xml else s
+            _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs)
+            if diagram_xml:
+                from app.application.ppt.drawio_native import render_diagram
+                render_diagram(ns, diagram_xml, int(sw * .06), int(sh * .23),
+                               int(sw * .88), int(sh * .64), font)
         except Exception as e:
+            if (s.get("blocks") or {}).get("drawio_xml"):
+                raise
             logger.warning("页面填充失败: %s", e)
     buf = io.BytesIO()
     prs.save(buf)

@@ -175,6 +175,7 @@ def test_plan_fields_expose_word_count_target_from_instruction():
         "写一份800字的社区矫正教育帮扶工作通知，要求包含标题、主送机关、工作目标、"
         "主要任务（分3条）、工作要求、落款。"))
     assert plan["planned_context"]["word_count_target"] == 800
+    assert plan["planned_context"]["planning_completed"] is True
     labels = {f["label"]: f["value"] for f in plan["fields"]}
     assert labels.get("字数目标") == "800"
 

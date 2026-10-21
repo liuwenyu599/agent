@@ -66,13 +66,49 @@ def _effective_font_name(p, run) -> Optional[str]:
     name = _run_font_name(run)
     if name:
         return name
+    for style in (run.style, p.style):
+        for _ in range(10):
+            if style is None:
+                break
+            rpr = style.element.rPr
+            rfonts = rpr.rFonts if rpr is not None else None
+            name = (rfonts.get(qn('w:eastAsia')) if rfonts is not None else None) or style.font.name
+            if name:
+                return name
+            style = style.base_style
+    return None
+
+
+def _effective_run_font_pt(p, run) -> Optional[float]:
+    if run.font.size is not None:
+        return float(run.font.size.pt)
+    return _style_font_pt(run.style) or _style_font_pt(p.style)
+
+
+def _effective_bold(p, run) -> bool:
+    if run.bold is not None:
+        return bool(run.bold)
+    for style in (run.style, p.style):
+        for _ in range(10):
+            if style is None:
+                break
+            if style.font.bold is not None:
+                return bool(style.font.bold)
+            style = style.base_style
+    return False
+
+
+def _paragraph_property(p, name):
+    value = getattr(p.paragraph_format, name)
+    if value is not None:
+        return value
     style = p.style
     for _ in range(10):
         if style is None:
             break
-        name = style.font.name
-        if name:
-            return name
+        value = getattr(style.paragraph_format, name)
+        if value is not None:
+            return value
         style = style.base_style
     return None
 
@@ -282,7 +318,8 @@ class FormatCheckEngine:
         title_para = nonempty[0] if nonempty else None
         for rule in rule_map.get("title", []):
             if title_para is not None:
-                issues.extend(self._check_paragraph(title_para, 0, rule, "第1段（标题）"))
+                idx = paragraphs.index(title_para)
+                issues.extend(self._check_paragraph(title_para, idx, rule, f"第{idx + 1}段（标题）"))
 
         # ---- 正文 / 标题层级 ----
         body_rules = rule_map.get("body", [])
@@ -387,9 +424,8 @@ class FormatCheckEngine:
     def _check_paragraph(self, p, idx: int, rule: Dict, location: str) -> List[Dict]:
         issues = []
         checks = rule.get("checks", {})
-        # 取该段落第一个非空 run 作为代表（公文通常同段字体一致）
-        run = next((r for r in p.runs if r.text.strip()), None)
-        pf = p.paragraph_format
+        # Word 同一段可含多个文字块，逐块检查，避免首块合规掩盖后续混排。
+        runs = [r for r in p.runs if r.text.strip()]
 
         def add(element, kind, cur, expected, suggestion):
             issues.append({
@@ -403,27 +439,33 @@ class FormatCheckEngine:
                 "fix_hint": {"type": "paragraph", "field": kind, "value": expected},
             })
 
-        if "font_name" in checks and run is not None:
-            cur = _effective_font_name(p, run)
-            if not _same_font_family(cur, checks["font_name"]):
+        if "font_name" in checks and runs:
+            mismatches = [_effective_font_name(p, r) for r in runs
+                          if not _same_font_family(_effective_font_name(p, r), checks["font_name"])]
+            if mismatches:
+                cur = mismatches[0]
                 add("字体", "font_name", cur, checks["font_name"],
                     f"应将字体设置为「{checks['font_name']}」。")
 
-        if "font_size_pt" in checks and run is not None:
-            cur = _effective_font_pt(p)
-            if cur is None or abs(cur - float(checks["font_size_pt"])) > 0.5:
+        if "font_size_pt" in checks and runs:
+            sizes = [_effective_run_font_pt(p, r) for r in runs]
+            mismatches = [size for size in sizes
+                          if size is None or abs(size - float(checks["font_size_pt"])) > 0.5]
+            if mismatches:
+                cur = mismatches[0]
                 add("字号", "font_size_pt", cur, float(checks["font_size_pt"]),
                     f"应将字号调整为{_fmt_value('font_size_pt', float(checks['font_size_pt']))}。")
 
-        if "bold" in checks and run is not None:
-            cur = bool(run.bold)
-            if cur != bool(checks["bold"]):
+        if "bold" in checks and runs:
+            mismatches = [_effective_bold(p, r) for r in runs
+                          if _effective_bold(p, r) != bool(checks["bold"])]
+            if mismatches:
+                cur = mismatches[0]
                 add("加粗", "bold", cur, bool(checks["bold"]),
                     "应设置为加粗。" if checks["bold"] else "不应加粗。")
 
         if "alignment" in checks:
-            expected_align = _ALIGN_MAP.get(checks["alignment"])
-            cur_align = p.alignment
+            cur_align = _paragraph_property(p, "alignment")
             # 未显式设置对齐时 Word 默认左对齐
             cur_key = _ALIGN_NAME.get(cur_align, "left")
             if cur_key != checks["alignment"]:
@@ -431,7 +473,8 @@ class FormatCheckEngine:
                     f"应设置为{_ALIGN_CN.get(checks['alignment'], checks['alignment'])}。")
 
         if "line_spacing_pt" in checks:
-            cur = pf.line_spacing.pt if hasattr(pf.line_spacing, 'pt') and pf.line_spacing else None
+            spacing = _paragraph_property(p, "line_spacing")
+            cur = spacing.pt if hasattr(spacing, 'pt') else None
             expected = float(checks["line_spacing_pt"])
             if cur is None or abs(cur - expected) > 0.5:
                 add("行距", "line_spacing_pt", cur, expected,
@@ -458,8 +501,8 @@ class FormatCheckEngine:
 
         for key, label in (("space_before_pt", "段前间距"), ("space_after_pt", "段后间距")):
             if key in checks:
-                cur_val = getattr(pf, "space_before" if "before" in key else "space_after")
-                cur_pt = cur_val.pt if cur_val else None
+                cur_val = _paragraph_property(p, "space_before" if "before" in key else "space_after")
+                cur_pt = cur_val.pt if cur_val is not None else 0.0
                 expected = float(checks[key])
                 if cur_pt is None or abs(cur_pt - expected) > 0.5:
                     add(label, key, cur_pt, expected,

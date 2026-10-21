@@ -11,6 +11,14 @@ import json
 import httpx
 import pytest
 
+NATIVE_XML = '''<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="a" value="受理" vertex="1" parent="1" style="rounded=1;fillColor=#E8F0FA;">
+<mxGeometry x="0" y="0" width="150" height="70" as="geometry"/></mxCell>
+<mxCell id="b" value="审核" vertex="1" parent="1" style="rhombus;">
+<mxGeometry x="250" y="0" width="150" height="70" as="geometry"/></mxCell>
+<mxCell id="edge" edge="1" parent="1" source="a" target="b"/>
+</root></mxGraphModel>'''
+
 from app.application.ppt.drawio_service import DrawioService
 from app.infrastructure.drawio.mcp_client import DrawioMcpClient, DrawioMcpError
 
@@ -110,6 +118,61 @@ class TestDrawioService:
         assert svc.create_diagram(xml="<x/>") is None
         assert svc.health() is False
 
+
+def test_drawio_native_export_contains_editable_nodes_and_connector():
+    import io
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from app.application.ppt.ppt_engine import build_pptx, DEFAULT_COLORS, DEFAULT_LAYOUTS
+
+    outline = {"title": "业务流程", "slides": [{
+        "type": "process", "title": "业务流程", "points": [],
+        "blocks": {"drawio_xml": NATIVE_XML},
+    }]}
+    data = build_pptx(outline, {"colors": DEFAULT_COLORS, "layouts": DEFAULT_LAYOUTS})
+    presentation = Presentation(io.BytesIO(data))
+    slide = presentation.slides[0]
+    assert {"受理", "审核"} <= {shape.text for shape in slide.shapes if shape.has_text_frame}
+    assert sum(shape.shape_type == MSO_SHAPE_TYPE.LINE for shape in slide.shapes) == 1
+    assert not any(shape.shape_type == MSO_SHAPE_TYPE.PICTURE for shape in slide.shapes)
+    assert all(shape.left >= 0 and shape.top >= 0 for shape in slide.shapes)
+    node = next(shape for shape in slide.shapes if shape.has_text_frame and shape.text == "受理")
+    node.text = "已修改"
+    output = io.BytesIO()
+    presentation.save(output)
+    assert any(shape.has_text_frame and shape.text == "已修改"
+               for shape in Presentation(io.BytesIO(output.getvalue())).slides[0].shapes)
+
+
+@pytest.mark.parametrize("xml", [
+    '<!DOCTYPE x [<!ENTITY x "value">]><mxGraphModel/>',
+    NATIVE_XML.replace('width="150"', 'width="NaN"'),
+    NATIVE_XML.replace('target="b"', 'target="missing"'),
+    NATIVE_XML.replace('style="rhombus;"', 'style="shape=image;image=http://example.com/image.png;"'),
+])
+def test_drawio_native_rejects_unsupported_diagrams(xml):
+    from app.application.ppt.drawio_native import parse_diagram
+    with pytest.raises(ValueError):
+        parse_diagram(xml)
+
+
+def test_drawio_native_generation_uses_mcp_and_validates_before_return(monkeypatch):
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    calls = []
+    monkeypatch.setattr(svc, "get_reference", lambda: calls.append("reference") or "mxCell reference")
+
+    class Assistant:
+        def complete(self, messages, **_kwargs):
+            calls.append("model")
+            assert "mxCell reference" in messages[-1]["content"]
+            return json.dumps({"xml": NATIVE_XML}, ensure_ascii=False)
+
+    result = svc.generate_native_diagram(Assistant(), {"title": "审批流程"})
+    assert calls == ["reference", "model"]
+    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+    assert result["blocks"]["process"] == ["受理", "审核"]
+
+class TestDrawioServiceConfigured:
     def test_enabled_returns_text(self, monkeypatch):
         monkeypatch.setattr(
             "app.application.ppt.drawio_service.settings.DRAWIO_MCP_URL",

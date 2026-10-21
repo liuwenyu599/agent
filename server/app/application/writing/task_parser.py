@@ -149,6 +149,9 @@ def empty_context() -> Dict[str, Any]:
         "template_id": None,      # 关联写作模板（用户显式选择）
         "template_name": None,
         "kb_ids": [],             # 关联知识库（限定检索范围；空=全部可访问库）
+        # /plan 已经由 AI 完成语义规划；复杂链路据此避免对同一句话重复规划。
+        "planning_completed": False,
+        "planning_request_hash": None,
         "missing_fields": [],
     }
 

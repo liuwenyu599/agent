@@ -273,6 +273,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             ctx["kb_ids"] = [x for x in kb_ids if x]
         self._complete_default_authority(ctx)
 
+        if interpreted:
+            ctx["planning_completed"] = True
+            ctx["planning_request_hash"] = content_hash(message)
         missing = task_parser.compute_missing(ctx)
         self._push_history(ctx, "user", message)
         task = WritingTaskModel(
@@ -313,6 +316,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             if derived:
                 ctx["title"] = derived
         task_parser.compute_missing(ctx)
+        ctx["planning_completed"] = bool(interpreted)
+        ctx["planning_request_hash"] = content_hash(message)
 
         try:
             from app.application.organization.service import OrganizationService

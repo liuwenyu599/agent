@@ -277,7 +277,9 @@ fun WritingScreen() {
                                 if (showDocument) {
                                     Column(Modifier.weight(1f).fillMaxHeight()) {
                                         WritingColumnHeader("文档正文") { showDocument = false }
-                                        EditorPanel(vm, Modifier.weight(1f))
+                                        EditorPanel(vm, Modifier.weight(1f), onOpenSuggestions = {
+                                            openSuggestions()
+                                        })
                                     }
                                 }
                                 if (showSuggestions) {
@@ -561,6 +563,7 @@ private fun MarkdownText(text: String) {
 private fun FormattedBodyEditor(
     vm: WritingViewModel,
     modifier: Modifier = Modifier,
+    onOpenSuggestions: () -> Unit = {},
 ) {
     var editIdx by remember { mutableStateOf<Int?>(null) }
     var editText by remember { mutableStateOf("") }
@@ -676,7 +679,10 @@ private fun FormattedBodyEditor(
                             "accepted" -> EmeraldInk
                             else -> Muted
                         }
-                        TextButton(onClick = { vm.selectParagraph(i) }, enabled = !vm.busy,
+                        TextButton(onClick = {
+                            onOpenSuggestions()
+                            vm.selectParagraph(i)
+                        }, enabled = !vm.busy && !vm.suggestionBusy,
                             modifier = Modifier.width(32.dp)) {
                             Text(marker, color = markerColor, fontSize = 14.sp)
                         }
@@ -1268,7 +1274,11 @@ private fun TaskField(label: String, value: String, onSync: (String) -> Unit) {
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
+private fun EditorPanel(
+    vm: WritingViewModel,
+    modifier: Modifier,
+    onOpenSuggestions: () -> Unit = {},
+) {
     Column(modifier) {
         // 文档工具条
         Column(
@@ -1422,6 +1432,7 @@ private fun EditorPanel(vm: WritingViewModel, modifier: Modifier) {
                 FormattedBodyEditor(
                     vm = vm,
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    onOpenSuggestions = onOpenSuggestions,
                 )
             }
             Spacer(Modifier.height(Dimens.space3))

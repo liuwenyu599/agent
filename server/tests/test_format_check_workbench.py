@@ -212,6 +212,56 @@ def test_body_font_rule_uses_paragraph_style_and_font_family(env):
                    for issue in res["issues"])
 
 
+def test_mixed_runs_cannot_hide_font_or_size_errors(env):
+    db, svc, tmp = env
+    doc = Document()
+    doc.add_paragraph("标题")
+    body = doc.add_paragraph()
+    good = body.add_run("前半段格式正确。")
+    good.font.name = "仿宋"
+    good.font.size = Pt(16)
+    bad = body.add_run("后半段字体字号错误。")
+    bad.font.name = "宋体"
+    bad.font.size = Pt(12)
+    path = tmp / "mixed-runs.docx"
+    doc.save(path)
+    result = svc.engine.check_file(path, path.name, [{
+        "target": "body", "checks": {"font_name": "仿宋", "font_size_pt": 16},
+    }], use_ai=False)
+    assert {issue["element"] for issue in result["issues"]} == {"字体", "字号"}
+    assert all(issue["paragraph_index"] == 1 for issue in result["issues"])
+
+
+def test_title_after_blank_paragraph_keeps_correct_fix_location(env):
+    db, svc, tmp = env
+    doc = Document()
+    doc.add_paragraph("")
+    title = doc.add_paragraph("标题")
+    title.runs[0].font.size = Pt(12)
+    path = tmp / "leading-blank.docx"
+    doc.save(path)
+    result = svc.engine.check_file(path, path.name, [{
+        "target": "title", "checks": {"font_size_pt": 22},
+    }], use_ai=False)
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["paragraph_index"] == 1
+
+
+def test_recheck_uses_new_and_edited_personal_rules(env):
+    db, svc, tmp = env
+    checked = _check(svc, _make_docx(tmp / "new-rule.docx"))
+    rule = _rule(db, name="个人新规则", checks={"font_size_pt": 20}, is_default=False)
+    result = svc.recheck(checked["id"], ADMIN)
+    assert rule.id in {item["id"] for item in result["rules_used"]}
+    assert any(issue["element"] == "字号" and issue["expected"] == "20磅"
+               for issue in result["issues"])
+    rule.checks = {"font_size_pt": 24}
+    svc.rules.update(rule)
+    result = svc.recheck(checked["id"], ADMIN)
+    assert any(issue["element"] == "字号" and issue["expected"] == "24磅"
+               and issue["id"] not in result["resolved_ids"] for issue in result["issues"])
+
+
 def test_ai_issues_are_merged_and_counted(env):
     """勾选 AI 时：AI 审校结果与规则结果合并，ai_issue_count 正确。"""
     db, svc, tmp = env
@@ -500,17 +550,53 @@ def test_compile_rule_rejects_unrecognisable_description(env):
 
 
 def test_compile_rule_reports_ai_failure(env):
-    """AI 不可用 → 503；返回垃圾 → 502。都要有明确文案，不能静默空返回。"""
+    """AI 失败时，明确写出的硬格式仍应识别，避免规则按钮看似失效。"""
     db, svc, tmp = env
     svc.engine.assistant = _Assistant(None)
-    with pytest.raises(AppError) as e:
-        svc.compile_rule(_CompileReq("body", "正文三号字"), ADMIN)
-    assert e.value.status_code == 502
+    out = svc.compile_rule(_CompileReq(
+        "body", "正文用仿宋小三号，固定行距28磅，首行缩进2字符，两端对齐"), ADMIN)
+    assert out["checks"] == {
+        "font_name": "仿宋", "font_size_pt": 15.0, "alignment": "justify",
+        "line_spacing_pt": 28.0, "first_line_indent_chars": 2.0,
+    }
+    assert out["recognition"] == "literal"
 
     svc.engine.assistant = _Assistant("这不是 JSON")
-    with pytest.raises(AppError) as e:
-        svc.compile_rule(_CompileReq("body", "正文三号字"), ADMIN)
-    assert e.value.status_code == 502
+    out = svc.compile_rule(_CompileReq("page", "上边距3.7厘米，下边距3.5厘米"), ADMIN)
+    assert out["checks"] == {"top_margin_cm": 3.7, "bottom_margin_cm": 3.5}
+
+
+def test_compile_rule_literal_items_complete_partial_ai_result(env):
+    db, svc, tmp = env
+    svc.engine.assistant = _Assistant(json.dumps({
+        "name": "正文格式", "checks": {"font_name": "仿宋"},
+    }, ensure_ascii=False))
+    out = svc.compile_rule(_CompileReq(
+        "body", "正文仿宋三号，固定行距28磅，首行缩进2字符，两端对齐"), ADMIN)
+    assert out["checks"] == {
+        "font_name": "仿宋", "font_size_pt": 16.0, "alignment": "justify",
+        "line_spacing_pt": 28.0, "first_line_indent_chars": 2.0,
+    }
+
+
+def test_compile_rule_reports_requirements_outside_selected_target(env):
+    db, svc, tmp = env
+    svc.engine.assistant = _Assistant(json.dumps({
+        "checks": {"font_size_pt": 16},
+        "unsupported": ["上边距请在页面设置规则中配置"],
+    }, ensure_ascii=False))
+    output = svc.compile_rule(_CompileReq("body", "正文三号，上边距3.7厘米"), ADMIN)
+    assert output["checks"]["font_size_pt"] == 16
+    assert output["warnings"] == ["上边距请在页面设置规则中配置"]
+
+
+def test_negated_font_instruction_does_not_override_ai_interpretation(env):
+    db, svc, tmp = env
+    svc.engine.assistant = _Assistant(json.dumps({
+        "checks": {"font_name": "黑体", "font_size_pt": 16},
+    }, ensure_ascii=False))
+    output = svc.compile_rule(_CompileReq("body", "不要仿宋，正文改为黑体三号"), ADMIN)
+    assert output["checks"] == {"font_name": "黑体", "font_size_pt": 16.0}
 
 
 def test_compile_rule_rejects_bad_target(env):

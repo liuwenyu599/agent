@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, TypedDict
 
 from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
+from langgraph.config import get_stream_writer
 
 from app.application.format_check.check_engine import FormatCheckEngine
 from app.application.writing.agent_graph.persistence import AgentRunStore, json_digest
@@ -15,6 +16,7 @@ from app.application.writing.agent_graph.tools import BoundedToolExecutor, ToolE
 from app.application.writing.content_check import ContentChecker
 from app.application.writing.quality_gate import merge_level
 from app.application.writing import task_parser
+from app.application.writing.paragraph_suggestions import content_hash
 from app.core.config import settings
 from app.core.monitoring import (
     WRITING_AGENT_NODE_LATENCY,
@@ -147,11 +149,17 @@ class WritingAgentGraph:
                 for item in reversed(ctx.get("history") or [])
                 if item.get("role") == "user" and item.get("content")
             ), "")
-            if request:
+            # 前端的一句话入口已经调用 /plan，由 AI 直接理解原话并把结果写进
+            # planned_context。复杂链路复用该结果，避免开始写作前再等一次同样的模型调用。
+            already_planned = (ctx.get("planning_completed")
+                               and ctx.get("planning_request_hash") == content_hash(request))
+            if request and not already_planned:
                 interpreted = await self.service._interpret_async(
                     request, ctx, has_draft=False)
                 if interpreted:
                     self.service._merge_interpretation(ctx, interpreted)
+                    ctx["planning_completed"] = True
+                    ctx["planning_request_hash"] = content_hash(request)
                 ctx["document_type"] = task_parser.resolved_document_type(
                     request, ctx.get("document_type"))
             if not ctx.get("title"):
@@ -208,7 +216,20 @@ class WritingAgentGraph:
 
             tool_model = self.service.assistant
             tool_complete = getattr(tool_model, "acomplete_with_tools", None)
-            if callable(tool_complete):
+            request = next((
+                str(item.get("content") or "")
+                for item in reversed(ctx.get("history") or [])
+                if item.get("role") == "user" and item.get("content")
+            ), "")
+            grounding_cues = (
+                "依据", "根据", "结合", "引用", "法规", "政策", "案例", "数据",
+                "文号", "统计", "材料", "范文", "知识库", "附件",
+            )
+            needs_model_search = bool(ctx.get("kb_ids")) or any(
+                cue in request for cue in grounding_cues)
+            # 普通长文已有一次确定性检索，无需再让模型先决定“要不要检索”。
+            # 有明确资料/知识库要求时才开放多轮工具调用。
+            if callable(tool_complete) and needs_model_search:
                 executor = BoundedToolExecutor(
                     model=tool_model,
                     tools={
@@ -218,11 +239,6 @@ class WritingAgentGraph:
                     schemas=self._search_schemas(),
                     max_rounds=settings.WRITING_AGENT_MAX_TOOL_ROUNDS,
                 )
-                request = next((
-                    str(item.get("content") or "")
-                    for item in reversed(ctx.get("history") or [])
-                    if item.get("role") == "user" and item.get("content")
-                ), "")
                 messages = [
                     {"role": "system", "content": (
                         "你是资料检索智能体。根据写作任务判断是否需要补充检索。"
@@ -277,6 +293,7 @@ class WritingAgentGraph:
 
     async def _writer(self, state: WritingAgentState):
         async def work():
+            emit = get_stream_writer()
             ctx = dict(state.get("context") or {})
             user_id = str(state["user_id"])
             task = self.service._get_owned(str(state["task_id"]), user_id)
@@ -291,14 +308,29 @@ class WritingAgentGraph:
                         ctx, section, index, plan, user_id, attachment_ctx, template)
                     sections.append(text)
                     groups.append(sources)
+                    emit({"text": text + "\n\n"})
                 candidate = "\n\n".join(sections).strip()
                 sources = _merge_sources(groups)
             else:
                 instruction = self.service._build_draft_instruction(
                     ctx, bool(state.get("outline_only")), template)
                 sources = list(state.get("sources") or [])
-                candidate = self.service._clean_markdown(await self.service._llm_draft_async(
-                    instruction, sources, attachment_ctx, user_id, template=template))
+                assistant = getattr(self.service, "_draft_assistant", None)
+                if callable(getattr(assistant, "achat_stream", None)):
+                    system = self.service._draft_prompt(
+                        instruction, sources, attachment_ctx, user_id, template)
+                    parts = []
+                    async for delta in assistant.achat_stream(
+                        message=instruction, history=[], sources=sources, user_role="user",
+                        system_prompt=system, attachment_context=attachment_ctx,
+                    ):
+                        if delta:
+                            parts.append(delta)
+                            emit({"text": delta})
+                    candidate = self.service._clean_markdown("".join(parts))
+                else:
+                    candidate = self.service._clean_markdown(await self.service._llm_draft_async(
+                        instruction, sources, attachment_ctx, user_id, template=template))
                 candidate, _ = await self.service._regenerate_if_needed_async(
                     instruction, sources, attachment_ctx, user_id, template, candidate, ctx)
             if not candidate.strip():
@@ -495,9 +527,17 @@ class WritingAgentGraph:
             yield "done", attached_result
             return
         aggregate = self.initial_state()
+        writer_streamed = False
         try:
             async with asyncio.timeout(settings.WRITING_AGENT_RUN_TIMEOUT_SECONDS):
-                async for update in self.graph.astream(aggregate, stream_mode="updates"):
+                async for mode, update in self.graph.astream(
+                    aggregate, stream_mode=["updates", "custom"],
+                ):
+                    if mode == "custom":
+                        if isinstance(update, dict) and update.get("text"):
+                            writer_streamed = True
+                            yield "delta", {"text": update["text"]}
+                        continue
                     for node, output in update.items():
                         aggregate.update(output or {})
                         yield "stage", {
@@ -517,7 +557,7 @@ class WritingAgentGraph:
                                 "label": STAGE_LABELS[next_node], "status": "running",
                                 "attempt": self._attempt(next_node, aggregate),
                             }
-                        if node == "writer" and aggregate.get("candidate"):
+                        if node == "writer" and aggregate.get("candidate") and not writer_streamed:
                             yield "delta", {"text": aggregate["candidate"]}
                         if node == "review":
                             yield "quality", {

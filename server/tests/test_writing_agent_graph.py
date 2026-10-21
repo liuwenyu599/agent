@@ -27,6 +27,59 @@ def test_complexity_router_keeps_simple_requests_on_fast_path():
     assert route == "fast"
 
 
+def test_template_only_request_keeps_streaming_fast_path():
+    assert classify_writing_route({
+        "document_type": "通知",
+        "word_count_target": 800,
+        "template_id": "selected-template",
+        "history": [{"role": "user", "content": "写一份800字通知"}],
+    }) == "fast"
+
+
+def test_complexity_router_uses_latest_user_requirement():
+    assert classify_writing_route({
+        "history": [
+            {"role": "user", "content": "请依据法规写一份材料"},
+            {"role": "assistant", "content": "已了解"},
+            {"role": "user", "content": "不用引用资料，写一份简短通知"},
+        ],
+        "word_count_target": 600,
+    }) == "fast"
+
+
+@pytest.mark.parametrize("same_request", [True, False])
+def test_agent_planner_reuses_ai_plan_only_for_unchanged_request(same_request):
+    from types import SimpleNamespace
+    from app.application.writing.paragraph_suggestions import content_hash
+
+    request = "写一份志愿服务倡议书"
+    calls = []
+
+    async def interpret(*_args, **_kwargs):
+        calls.append(request)
+        return None
+
+    async def durable(_node, _state, work):
+        return await work()
+
+    graph = WritingAgentGraph.__new__(WritingAgentGraph)
+    graph.service = SimpleNamespace(
+        _interpret_async=interpret,
+        _complete_default_authority=lambda _ctx: None,
+        _should_section=lambda *_args: False,
+    )
+    graph._durable = durable
+    context = {
+        "document_type": "倡议书", "title": "志愿服务倡议书",
+        "planning_completed": True,
+        "planning_request_hash": content_hash(request if same_request else "另一个旧需求"),
+        "history": [{"role": "user", "content": request}],
+    }
+    output = asyncio.run(graph._planner({"context": context}))
+    assert len(calls) == (0 if same_request else 1)
+    assert output["context"]["document_type"] == "倡议书"
+
+
 @pytest.mark.parametrize(
     "context,has_attachments",
     [
@@ -360,7 +413,7 @@ def test_research_uses_the_latest_user_request():
             "history": [
                 {"role": "user", "content": "先写一份旧主题材料"},
                 {"role": "assistant", "content": "好的"},
-                {"role": "user", "content": "改为面向社区群众的法治宣传讲话稿"},
+                {"role": "user", "content": "改为依据现行普法政策，面向社区群众写法治宣传讲话稿"},
             ],
         }
         task = WritingTaskModel(user_id=user.id, context=context, current_content="", version_no=0)
@@ -397,12 +450,13 @@ def test_research_uses_the_latest_user_request():
         asyncio.run(WritingAgentGraph(FakeService(), store, run)._research(state))
 
         request = json.loads(model.messages[0][1]["content"])["原始需求"]
-        assert request == "改为面向社区群众的法治宣传讲话稿"
+        assert request == context["history"][-1]["content"]
     finally:
         db.close()
 
 
-def test_langgraph_run_persists_once_and_is_idempotent():
+@pytest.mark.parametrize("use_streaming", [False, True])
+def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
     from app.infrastructure.database import Base, SessionLocal, engine
     from app.infrastructure.database.models.identity import UserModel
     from app.infrastructure.database.models.writing_task import WritingTaskModel
@@ -428,6 +482,21 @@ def test_langgraph_run_persists_once_and_is_idempotent():
 
             def __init__(self):
                 self.finalize_calls = 0
+                self.saw_first_delta = False
+
+            @property
+            def _draft_assistant(self):
+                return self if use_streaming else None
+
+            def _draft_prompt(self, *_args):
+                return "起草通知"
+
+            async def achat_stream(self, **_kwargs):
+                yield "一、工作安排\n"
+                # 后半稿仍在生成时，客户端已经应当收到第一批文字。
+                await asyncio.sleep(0.05)
+                assert self.saw_first_delta
+                yield "围绕群众需求开展法治宣传，明确责任分工。"
 
             def _should_section(self, *_args):
                 return False
@@ -490,7 +559,12 @@ def test_langgraph_run_persists_once_and_is_idempotent():
         service = FakeService()
         graph = WritingAgentGraph(service, store, run)
         async def collect_stream():
-            return [event async for event in graph.stream()]
+            collected = []
+            async for event in graph.stream():
+                if event[0] == "delta":
+                    service.saw_first_delta = True
+                collected.append(event)
+            return collected
 
         events = asyncio.run(collect_stream())
         first = next(data for kind, data in events if kind == "done")
@@ -501,6 +575,7 @@ def test_langgraph_run_persists_once_and_is_idempotent():
         assert any(kind == "stage" and data["key"] == "planner"
                    and data["status"] == "running" for kind, data in events)
         assert any(kind == "delta" and data["text"] for kind, data in events)
+        assert "".join(data["text"] for kind, data in events if kind == "delta") == first["current_content"]
         assert any(kind == "quality" and data["level"] == "A" for kind, data in events)
         assert service.finalize_calls == 1
         assert store.get_owned(run.id, task.id, user.id).status == "completed"

@@ -845,6 +845,57 @@ def test_ai_visual_chart_writes_blocks(client, accounts, fake_llm):
     assert out["blocks"]["chart"]["series"][0]["values"] == [120, 115]
 
 
+def test_ai_process_routes_to_drawio_when_configured(client, accounts, fake_llm, monkeypatch):
+    from app.application.ppt.drawio_service import DrawioService
+    monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
+    monkeypatch.setattr(DrawioService, "get_reference", lambda _self: "mxGraphModel reference")
+    xml = ('<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+           '<mxCell id="n1" value="受理" vertex="1" parent="1">'
+           '<mxGeometry x="0" y="0" width="160" height="80" as="geometry"/>'
+           '</mxCell></root></mxGraphModel>')
+    fake_llm._responder = lambda _messages: json.dumps({"xml": xml}, ensure_ascii=False)
+    response = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "process", "slide": {"id": "s1", "title": "办理流程", "points": ["受理"]},
+    }, headers=_hdr(accounts["a"]))
+    assert response.status_code == 200, response.text
+    assert response.json()["slide"]["blocks"]["drawio_xml"] == xml
+    assert "mxGraphModel reference" in fake_llm.last_prompt
+
+
+def test_ai_process_falls_back_when_drawio_is_unavailable(client, accounts, fake_llm, monkeypatch):
+    from app.application.ppt.drawio_service import DrawioService
+    monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
+    monkeypatch.setattr(DrawioService, "get_reference", lambda _self: None)
+    fake_llm._responder = lambda _messages: json.dumps({
+        "blocks": {"process": ["受理", "审核", "办结"]},
+    }, ensure_ascii=False)
+    response = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "process", "slide": {
+            "id": "s1", "title": "办理流程", "points": ["受理、审核、办结"],
+            "blocks": {"drawio_xml": "old diagram"},
+        },
+    }, headers=_hdr(accounts["a"]))
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["slide"]["id"] == "s1"
+    assert result["slide"]["blocks"] == {"process": ["受理", "审核", "办结"]}
+    assert result["warnings"] == ["图示增强服务暂不可用，已自动使用本地流程图生成。"]
+    assert len(fake_llm.calls) == 1
+
+
+def test_ai_process_invalid_drawio_output_does_not_trigger_fallback(client, accounts, fake_llm, monkeypatch):
+    from app.application.ppt.drawio_service import DrawioService
+    monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
+    monkeypatch.setattr(DrawioService, "get_reference", lambda _self: "mxGraphModel reference")
+    fake_llm._responder = lambda _messages: json.dumps({"xml": "invalid XML"})
+    response = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "process", "slide": {"id": "s1", "title": "办理流程", "points": ["受理"]},
+    }, headers=_hdr(accounts["a"]))
+    assert response.status_code == 502, response.text
+    assert "结构检查" in response.json()["detail"]
+    assert len(fake_llm.calls) == 1
+
+
 def test_ai_visual_timeline_sets_type(client, accounts, fake_llm):
     slide = {"id": "s1", "type": "content", "title": "工作进程"}
     fake_llm._responder = lambda m: json.dumps({"blocks": {"timeline": [

@@ -1589,8 +1589,22 @@ class PPTService:
 
     def ai_visual(self, body) -> dict:
         try:
-            return {"slide": ppt_engine.ai_generate_visual(
+            warnings = []
+            if body.kind == "process":
+                from app.application.ppt.drawio_service import DrawioService
+                drawio = DrawioService()
+                if drawio.enabled:
+                    diagram = drawio.generate_native_diagram(
+                        self._ppt_assistant(), body.slide, body.instruction)
+                    if diagram is not None:
+                        return {"slide": diagram}
+                    logger.warning("Draw.io MCP 暂不可用，回退本地流程图生成")
+                    warnings.append("图示增强服务暂不可用，已自动使用本地流程图生成。")
+            result: Dict[str, Any] = {"slide": ppt_engine.ai_generate_visual(
                 self._ppt_assistant(), body.kind, body.slide, body.instruction)}
+            if warnings:
+                result["warnings"] = warnings
+            return result
         except RuntimeError as e:
             raise AIServiceError(str(e))
 

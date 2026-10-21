@@ -95,6 +95,98 @@ _KEY_LABELS = {
 }
 _ALIGN_CN = {"left": "左对齐", "center": "居中", "right": "右对齐", "justify": "两端对齐"}
 
+_CN_FONT_SIZES = {
+    # 长名称在前，避免“小二号”先命中“二号”。
+    "小初": 36, "小一": 24, "小二": 18, "小三": 15, "小四": 12,
+    "小五": 9, "初号": 42, "一号": 26, "二号": 22, "三号": 16,
+    "四号": 14, "五号": 10.5,
+}
+
+
+def _checks_from_description(target: str, description: str) -> Dict:
+    """从白话里确定性提取常见规则，补齐 35B 偶发漏项。
+
+    AI 仍负责理解整句和复杂表达；这里仅复核用户明确写出的字体、字号、距离、
+    对齐等硬数值，作用与写作规划中的字数复核一致。
+    """
+    text = (description or "").strip()
+    checks: Dict = {}
+    if not text:
+        return checks
+    # 否定、范围和更正语句交给 AI 理解，避免把“不要仿宋”“不小于三号”
+    # 当成肯定的精确值。程序只补齐无歧义的字面格式。
+    if target not in {"content", "ppt", "general"} and any(
+        cue in text for cue in ("不要", "不用", "不得", "不使用", "不是", "改为",
+                                "不少于", "不小于", "不大于", "不超过", "至少", "最多")
+    ):
+        return checks
+
+    if target not in {"page", "general", "content", "ppt"}:
+        fonts = (
+            "方正小标宋简体", "方正小标宋", "小标宋", "仿宋_GB2312",
+            "楷体_GB2312", "思源黑体", "微软雅黑", "仿宋", "黑体", "楷体", "宋体",
+        )
+        font = next((name for name in fonts if name.lower() in text.lower()), None)
+        if font:
+            checks["font_name"] = font
+        size = next((pt for name, pt in _CN_FONT_SIZES.items() if name in text), None)
+        if size is None:
+            match = re.search(r"(?:字号|字大小|字体大小)[^\d]{0,5}(\d+(?:\.\d+)?)\s*磅", text)
+            size = float(match.group(1)) if match else None
+        if size is not None:
+            checks["font_size_pt"] = size
+        if "不加粗" in text or "不粗体" in text:
+            checks["bold"] = False
+        elif "加粗" in text or "粗体" in text:
+            checks["bold"] = True
+        for phrase, value in (("两端对齐", "justify"), ("分散对齐", "justify"),
+                              ("居中", "center"), ("右对齐", "right"),
+                              ("左对齐", "left")):
+            if phrase in text:
+                checks["alignment"] = value
+                break
+        numeric_patterns = {
+            "line_spacing_pt": r"(?:固定行距|行距(?:固定值)?)[^\d]{0,5}(\d+(?:\.\d+)?)\s*磅",
+            "first_line_indent_chars": r"首行缩进[^\d]{0,5}(\d+(?:\.\d+)?)\s*(?:个)?字符",
+            "right_indent_chars": r"右(?:侧)?缩进[^\d]{0,5}(\d+(?:\.\d+)?)\s*(?:个)?字符",
+            "space_before_pt": r"段前[^\d]{0,5}(\d+(?:\.\d+)?)\s*磅",
+            "space_after_pt": r"段后[^\d]{0,5}(\d+(?:\.\d+)?)\s*磅",
+        }
+        for key, pattern in numeric_patterns.items():
+            match = re.search(pattern, text)
+            if match:
+                checks[key] = float(match.group(1))
+    elif target == "page":
+        patterns = {
+            "top_margin_cm": r"上(?:边距)?[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+            "bottom_margin_cm": r"下(?:边距)?[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+            "left_margin_cm": r"左(?:边距)?[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+            "right_margin_cm": r"右(?:边距)?[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+            "page_width_cm": r"页(?:面)?宽[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+            "page_height_cm": r"页(?:面)?高[^\d]{0,4}(\d+(?:\.\d+)?)\s*(?:厘米|cm)",
+        }
+        for key, pattern in patterns.items():
+            match = re.search(pattern, text, re.I)
+            if match:
+                checks[key] = float(match.group(1))
+    elif target == "general":
+        if any(cue in text for cue in ("不得有多余空行", "不允许多余空行", "删除多余空行")):
+            checks["no_extra_blank_lines"] = True
+        if any(cue in text for cue in ("不得有行尾空格", "不允许行尾空格", "删除行尾空格")):
+            checks["no_trailing_spaces"] = True
+    elif target == "ppt":
+        match = re.search(r"每页(?:最多|不超过)[^\d]{0,4}(\d+)\s*字", text)
+        if match:
+            checks["max_chars_per_slide"] = int(match.group(1))
+        if "页数" in text:
+            checks["check_page_count"] = True
+        if "越界" in text or "超出页面" in text:
+            checks["check_cover_overflow"] = True
+        match = re.search(r"禁用字体\s*[：:]\s*([^。；;\n]+)", text)
+        if match:
+            checks["forbidden_fonts"] = [x.strip() for x in re.split(r"[、,，]", match.group(1)) if x.strip()]
+    return _sanitize_checks(target, checks)
+
 
 def _allowed_keys(target: str) -> set:
     if target == "page":
@@ -762,12 +854,12 @@ class FormatCheckService:
             mapped = (p - offset(p)) if p is not None else None
             old_keys.setdefault(match_key(it, mapped), it.get("id"))
 
-        # 复检沿用原检查项快照，但停用的规则立即退出复检范围。
-        # 老快照可能缺 severity（B5'），补兜底，避免新增问题一律变 error。
-        active_ids = {r.id for r in self.rules.list_for_check(user.id, None)}
-        rules = [{**r, "severity": (r.get("severity") or "error")}
-                 for r in (record.rule_snapshot or [])
-                 if isinstance(r, dict) and r.get("id") in active_ids]
+        # 复检使用当前个人规则：新增、编辑、停用立即生效。快照仅用于保留
+        # 本次实际执行的规则，不能让旧快照屏蔽后来新增或修改的检查项。
+        self.rules.ensure_user_defaults(user.id)
+        rules = [_rule_to_dict(r) for r in self.rules.list_for_check(user.id, None)
+                 if r.target != "ppt"]
+        record.rule_snapshot = rules
 
         doc_path = self._build_current_doc(record, applied)
         result = self.engine.check_file(doc_path, record.filename, rules, use_ai=True)
@@ -849,8 +941,6 @@ class FormatCheckService:
         target = (req.target or "").strip()
         if target not in VALID_RULE_TARGETS:
             raise AppError(400, f"target 必须是: {', '.join(VALID_RULE_TARGETS)}")
-        if self.engine.assistant is None:
-            raise AppError(503, "AI 服务不可用，无法自动转换校验项，请稍后再试")
         description = (req.description or "").strip()
         if not description:
             raise AppError(400, "请先填写校验要求描述")
@@ -904,29 +994,33 @@ class FormatCheckService:
 用户描述：{description}
 
 要求：
-1. 只输出一个 JSON 对象，格式为 {{"name": "简短规则名称", "checks": {{...}}}}，不要输出任何解释。
+1. 只输出一个 JSON 对象，格式为 {{"name": "简短规则名称", "checks": {{...}}, "unsupported": ["当前对象无法执行的具体要求"]}}，不要输出任何解释。
 2. checks 的键只能来自上面列出的校验项；值类型按说明（数值不带单位）。
-3. 描述中无法映射到这些校验项的要求，直接忽略，不要编造。"""
-        try:
-            reply = self.engine.assistant.complete(
-                [{"role": "system", "content": "你是严谨的公文格式规则配置助手，只输出 JSON。"},
-                 {"role": "user", "content": prompt}],
-                temperature=0.1, max_tokens=512,
-            )
-        except Exception as e:
-            logger.warning("规则校验项 AI 生成失败: %s", e)
-            raise AppError(502, f"AI 生成校验项失败：{e}")
-        if not reply:
-            raise AppError(502, "AI 未返回结果，请换个更具体的描述再试")
-        try:
-            parsed = loads_lenient(reply)
-        except LLMJsonError as e:
-            logger.warning("规则校验项 AI 返回内容无法解析：%s", e.message)
-            raise AppError(502, "AI 这次返回的内容格式不规范，请换个更具体的描述再试")
-        if not isinstance(parsed, dict):
-            raise AppError(502, "AI 这次返回的内容格式不规范，请换个更具体的描述再试")
-
+3. 逐项覆盖用户描述，无法映射的要求必须列入 unsupported，不能静默忽略。
+4. 若描述同时涉及其他对象（例如选了正文，却描述页边距），把这些要求列入 unsupported，并说明应选择的校验对象。"""
+        deterministic = _checks_from_description(target, description)
+        parsed: Dict = {}
+        if self.engine.assistant is not None:
+            try:
+                reply = self.engine.assistant.complete(
+                    [{"role": "system", "content": "你是严谨的公文格式规则配置助手，只输出 JSON。"},
+                     {"role": "user", "content": prompt}],
+                    temperature=0.1, max_tokens=1024,
+                )
+                parsed_value = loads_lenient(reply) if reply else {}
+                if isinstance(parsed_value, dict):
+                    parsed = parsed_value
+            except Exception as e:
+                # 明确的硬格式仍可由程序识别；只有两条路径都失败才向用户报错。
+                logger.warning("规则校验项 AI 生成失败，尝试使用明确格式项: %s", e)
         checks = _sanitize_checks(target, parsed.get("checks"))
+        for key, value in deterministic.items():
+            # AI 可能把用户说的“仿宋”规范成“仿宋_GB2312”；两者同族时保留
+            # 更具体的名称。数值和布尔硬约束仍以用户原话为准。
+            if (key == "font_name" and checks.get(key)
+                    and str(value) in str(checks[key])):
+                continue
+            checks[key] = value
         if not checks:
             raise AppError(
                 400,
@@ -936,12 +1030,23 @@ class FormatCheckService:
         name = (req.name or "").strip() or str(parsed.get("name") or "").strip()
         if not name:
             name = f"{label}格式规则"
+        unsupported = parsed.get("unsupported") or []
+        if not isinstance(unsupported, list):
+            unsupported = []
+        warnings = [str(item).strip()[:200] for item in unsupported[:10]
+                    if isinstance(item, str) and item.strip()]
+        raw_checks = parsed.get("checks") or {}
+        if isinstance(raw_checks, dict) and set(raw_checks) - _allowed_keys(target):
+            warnings.append("部分要求超出当前校验对象支持的范围，请拆分到对应对象后设置。")
         return {
             "name": name,
             "target": target,
             "checks": checks,
             "severity": "error",
             "summary": _summarize_checks(checks),
+            "warnings": warnings,
+            "recognition": "ai+literal" if parsed and deterministic else
+                           ("ai" if parsed else "literal"),
         }
 
     def create_rule(self, req, user: User) -> dict:

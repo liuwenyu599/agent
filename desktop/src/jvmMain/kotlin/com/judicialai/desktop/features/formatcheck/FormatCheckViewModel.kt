@@ -498,7 +498,12 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                         checksJson = checks,
                         description = form.description,
                     )
-                    status = "已根据描述生成校验项，请核对下方预览后保存"
+                    val warnings = o["warnings"].arr().map { it.str() }.filter { it.isNotBlank() }
+                    status = if (warnings.isEmpty()) {
+                        "已根据描述生成校验项，请核对下方预览后保存"
+                    } else {
+                        "已识别可执行校验项；以下要求尚未覆盖：" + warnings.joinToString("；")
+                    }
                 }
                 is ApiResult.Err -> fail("生成校验项失败", r.message)
             }

@@ -17,7 +17,7 @@ _CONSTRAINT_CUES = (
 
 
 def _original_request(context: Mapping[str, Any]) -> str:
-    for item in context.get("history") or []:
+    for item in reversed(context.get("history") or []):
         if isinstance(item, Mapping) and item.get("role") == "user" and item.get("content"):
             return str(item["content"])
     return str(context.get("requirements") or "")
@@ -35,12 +35,19 @@ def classify_writing_route(
         target = int(context.get("word_count_target") or 0)
     except (TypeError, ValueError):
         target = 0
-    if target >= 1800 or bool(context.get("kb_ids")) or bool(context.get("template_id")):
+    # 显式模板本身不等于复杂任务。快速链路同样会加载模板，而且可以立即流式
+    # 返回正文；只有长文、资料约束或多重限制才值得进入多智能体链路。
+    if target >= 1800 or bool(context.get("kb_ids")):
         return "agent"
     if has_attachments:
         return "agent"
     request = _original_request(context)
-    if any(cue in request for cue in _GROUNDING_CUES):
+    # “不用引用资料”是用户撤回检索要求，不能因为句中仍含“引用/资料”反向送入慢链路。
+    request_for_cues = re.sub(
+        r"不(?:用|要|需)(?:再)?(?:引用|依据|根据|结合|检索|查找)[^，。；\n]*",
+        "", request,
+    )
+    if any(cue in request_for_cues for cue in _GROUNDING_CUES):
         return "agent"
     constraint_hits = sum(1 for cue in _CONSTRAINT_CUES if cue in request)
     numeric_constraints = len(re.findall(r"\d+(?:\.\d+)?(?:%|字|页|项|个|万元|元)?", request))

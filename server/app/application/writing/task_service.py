@@ -1364,11 +1364,32 @@ class WritingTaskService:
                      "不得把历史范文中的旧时间移植到本稿。")
         # 关联模板：把模板的结构/写作指导/篇幅作为起草依据（模板内容由管理员/用户预先配置，非模型编造）
         if template:
-            parts.append(f"本任务关联写作模板「{template.get('name', '')}」，请遵循其要求。")
+            parts.append(
+                f"本任务显式选择了写作模板「{template.get('name', '')}」。"
+                "模板用于约束文种边界、必要组成和文风，不是逐项填空表。"
+                "应结合用户原话和本次材料重新组织内容；可按实际事项合并、拆分或改写"
+                "参考小标题，但不得遗漏模板明确要求的必要部分。"
+            )
             if template.get("writing_style"):
                 parts.append(f"模板文风：{template['writing_style']}。")
+            if template.get("writing_guide"):
+                parts.append("模板写作指导：" + str(template["writing_guide"])[:1200])
+            skeleton = template.get("body_skeleton") or template.get("structure") or []
+            if isinstance(skeleton, list):
+                sections = []
+                for item in skeleton[:12]:
+                    if isinstance(item, dict):
+                        sections.append(str(item.get("name") or "") + "：" + str(item.get("guide") or ""))
+                    elif isinstance(item, str):
+                        sections.append(item)
+                if sections:
+                    parts.append("模板章节要点：\n" + "\n".join(sections)[:1600])
             if template.get("content_template"):
-                parts.append("模板结构参考：\n" + str(template["content_template"])[:1500])
+                parts.append(
+                    "模板结构参考（只保留适合本任务的结构与规范句式，禁止照抄示例、"
+                    "占位内容或虚构缺失事实）：\n"
+                    + str(template["content_template"])[:1500]
+                )
         if ctx.get("document_type"):
             parts.append(f"文种：{ctx['document_type']}。")
         derived_title = ctx.get("title") or task_parser.build_title(ctx)
