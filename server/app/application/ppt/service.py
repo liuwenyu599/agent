@@ -1397,7 +1397,8 @@ class PPTService:
         return ppt_engine.template_to_dict(spec), None
 
     def _render_pptx_bytes(self, d: PPTDocument, outline: dict, template: Dict,
-                           base_pptx: Optional[bytes]) -> Tuple[bytes, str]:
+                           base_pptx: Optional[bytes],
+                           warnings: Optional[List[str]] = None) -> Tuple[bytes, str]:
         """渲染 pptx 字节：优先走 PPTAgent，失败一律回退本地 render_pptx。
 
         开关语义：
@@ -1416,7 +1417,7 @@ class PPTService:
         """
         def local_render() -> bytes:
             """本地渲染唯一的真源：回退永远回到这里。"""
-            return ppt_engine.render_pptx(outline, template, base_pptx=base_pptx)
+            return ppt_engine.render_pptx(outline, template, base_pptx=base_pptx, warnings=warnings)
 
         if not (settings.PPT_AGENT_URL or "").strip():
             logger.debug("PPTAgent 未配置（PPT_AGENT_URL 为空），走本地渲染")
@@ -1505,7 +1506,8 @@ class PPTService:
         return self.render_strict_template_pptx(d, outline, user_id)
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
-                          template_id: Optional[str]) -> str:
+                          template_id: Optional[str],
+                          warnings: Optional[List[str]] = None) -> str:
         """渲染 pptx 并落盘，更新文档状态。返回文件路径。
 
         无论走 AI 智能设计还是严格套模板，渲染前都执行同一套确定性净化；
@@ -1519,7 +1521,7 @@ class PPTService:
         template, trow = self._resolve_template(template_id or d.template_id, d.theme_id or "")
         outline = ppt_engine.resolve_slide_images(outline, self._user_images(user.id))
         data, renderer = self._render_pptx_bytes(
-            d, outline, template, self._tpl_base_bytes(trow))
+            d, outline, template, self._tpl_base_bytes(trow), warnings=warnings)
         fname = f"{uuid.uuid4().hex}.pptx"
         path = self.ppt_dir / "generated" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1547,8 +1549,9 @@ class PPTService:
         outline = ppt_engine.normalize_outline(body.outline) if body.outline else d.outline
         if not outline:
             raise AppError(400, "大纲为空")
-        self._render_and_store(d, outline, user, body.template_id)
-        return {"message": "已生成",
+        warnings: List[str] = []
+        self._render_and_store(d, outline, user, body.template_id, warnings=warnings)
+        return {"message": "已生成", "warnings": warnings,
                 "download_url": f"/api/v1/ppt/documents/{d.id}/download"}
 
     def export_document(self, doc_id: str, user: User) -> Tuple[Path, str]:

@@ -492,7 +492,27 @@ def outline_from_pptx(data: bytes) -> Dict:
 
 # ================= PPTX 构建 =================
 
-def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
+def _try_drawio_render(slide, data: Dict, box: tuple, font: str, warnings: list) -> bool:
+    """Roll back a failed diagram so the page can safely use its basic layout."""
+    original_shapes = {shape._element for shape in slide.shapes}
+    try:
+        from app.application.ppt.drawio_native import render_diagram
+        render_diagram(slide, data["blocks"]["drawio_xml"], *box, font)
+        return True
+    except Exception as exc:
+        for shape in list(slide.shapes):
+            if shape._element not in original_shapes:
+                shape._element.getparent().remove(shape._element)
+        message = f"页面「{data.get('title') or '流程图'}」图示渲染失败，已使用基础流程版式，请核对流程内容。"
+        warnings.append(message)
+        logger.warning("PPT 图示回退基础版式: %s", type(exc).__name__)
+        steps = (data.get("blocks") or {}).get("process") or data.get("points") or []
+        slide.notes_slide.notes_text_frame.text = message + "\n原流程内容：\n" + "\n".join(map(str, steps))
+        return False
+
+
+def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
+               warnings: Optional[List[str]] = None) -> bytes:
     """按模板渲染。template 为 template_to_dict 的结果。所有元素可编辑。
 
     base_pptx：用户上传的原始 pptx 字节。提供时以其为底版渲染——
@@ -504,6 +524,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.oxml.ns import qn
+
+    warnings = warnings if warnings is not None else []
 
     colors, layouts = template["colors"], template["layouts"]
     FONT = template.get("font") or DEFAULT_CJK_FONT
@@ -655,7 +677,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
 
     def notes(slide, note):
         if note:
-            slide.notes_slide.notes_text_frame.text = note
+            frame = slide.notes_slide.notes_text_frame
+            frame.text = "\n".join(part for part in (frame.text, note) if part)
 
     def numbered_points(slide, pts, x=0.06, y=0.26, w=0.86, size=17):
         """编号要点：彩色序号圆角块 + 文字。"""
@@ -869,8 +892,20 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
         page_header(slide, s["title"])
         diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
         if diagram_xml:
-            from app.application.ppt.drawio_native import render_diagram
-            render_diagram(slide, diagram_xml, lx(.06), ly(.23), lx(.88), ly(.64), FONT)
+            if _try_drawio_render(slide, s, (lx(.06), ly(.23), lx(.88), ly(.64)), FONT, warnings):
+                return slide
+            # A fallback must retain every supplied step, rather than silently
+            # truncating a richer diagram to the five-chevron layout below.
+            items = (s.get("blocks") or {}).get("process") or s.get("points") or []
+            rows = max(1, (len(items) + 1) // 2)
+            for index, value in enumerate(items):
+                column, row = divmod(index, rows)
+                text(slide, lx(.06 + column * .45), ly(.24 + row * .64 / rows),
+                     lx(.42), ly(.64 / rows), f"{index + 1}. {value}",
+                     14 if rows <= 8 else 11, False, DARK)
+            if not items:
+                text(slide, lx(.06), ly(.3), lx(.88), ly(.15),
+                     "该页图示暂无法显示，请核对原流程内容。", 16, False, GRAY)
             return slide
         steps = ((s.get("blocks") or {}).get("process") or s["points"])[:5]
         n = max(len(steps), 1)
@@ -1702,10 +1737,11 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs):
 
 
 def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
-                       layout_library: list) -> bytes:
+                       layout_library: list, warnings: Optional[List[str]] = None) -> bytes:
     """模板学习渲染：克隆模板页 → 清除示例内容 → 填充新内容。
     模板没有的页型自动降级到已有版式，不套用 DEFAULT_LAYOUTS。"""
     from pptx import Presentation
+    warnings = warnings if warnings is not None else []
     colors = template["colors"]
     font = template.get("font") or DEFAULT_CJK_FONT
     prs = Presentation(io.BytesIO(base_pptx))
@@ -1745,12 +1781,26 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     for ns, lay, s in new_slides:
         try:
             diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
+            template_shapes = []
+            if diagram_xml:
+                from copy import deepcopy
+                template_shapes = [deepcopy(shape._element) for shape in ns.shapes]
             payload = {**s, "points": [], "blocks": {}} if diagram_xml else s
             _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs)
             if diagram_xml:
-                from app.application.ppt.drawio_native import render_diagram
-                render_diagram(ns, diagram_xml, int(sw * .06), int(sh * .23),
-                               int(sw * .88), int(sh * .64), font)
+                if not _try_drawio_render(ns, s, (int(sw * .06), int(sh * .23),
+                                                int(sw * .88), int(sh * .64)), font, warnings):
+                    # Blank text regions stop being classified as text. Restore the
+                    # original layout before filling it with the fallback content.
+                    for shape in list(ns.shapes):
+                        _delete_shape(shape)
+                    for element in template_shapes:
+                        ns.shapes._spTree.insert_element_before(element, "p:extLst")
+                    # The learned layout consumes the original structured process/text blocks;
+                    # only the unusable XML is excluded. Other pages retain their own layouts.
+                    fallback = {**s, "blocks": {key: value for key, value in s["blocks"].items()
+                                              if key != "drawio_xml"}}
+                    _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs)
         except Exception as e:
             if (s.get("blocks") or {}).get("drawio_xml"):
                 raise
@@ -1760,12 +1810,13 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     return buf.getvalue()
 
 
-def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None) -> bytes:
+def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
+                warnings: Optional[List[str]] = None) -> bytes:
     """渲染总入口：有版式库+底版 → 模板学习渲染；否则 → 精修渲染（fallback）。"""
     library = template.get("layout_library") or []
     if base_pptx and library:
         try:
-            return build_pptx_learned(outline, template, base_pptx, library)
+            return build_pptx_learned(outline, template, base_pptx, library, warnings=warnings)
         except Exception as e:
             logger.warning("模板学习渲染失败，回退默认渲染: %s", e)
-    return build_pptx(outline, template, base_pptx=base_pptx)
+    return build_pptx(outline, template, base_pptx=base_pptx, warnings=warnings)

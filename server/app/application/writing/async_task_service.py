@@ -880,9 +880,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 for index, section in enumerate(plan):
                     text, sources = await self._generate_one_section_async(
                         ctx, section, index, plan, user_id, attachment_ctx, template)
+                    text = text.strip()
                     sections.append(text)
                     source_groups.append(sources)
-                    yield _sse({"type": "delta", "text": text + "\n\n"})
+                    yield _sse({"type": "delta", "text": ("\n\n" if index else "") + text})
                 payload = self._finalize_draft(
                     task, ctx, "\n\n".join(sections).strip(),
                     self._merge_sources(source_groups), user_id,

@@ -10,6 +10,30 @@ RESTORE = REPO_ROOT / "deploy" / "restore-drill.sh"
 POSTCHECK = REPO_ROOT / "deploy" / "postcheck-production.sh"
 
 
+def test_production_compose_passes_agent_flags_and_uses_one_image():
+    import yaml
+
+    spec = yaml.safe_load((REPO_ROOT / "deploy/production.docker-compose.yml").read_text(encoding="utf-8"))
+    defaults = {
+        "WRITING_AGENT_GRAPH_ENABLED": "false",
+        "WRITING_AGENT_ROLLOUT_PERCENT": "0",
+        "WRITING_AGENT_GRAPH_COMPLEX_ONLY": "true",
+        "WRITING_AGENT_MAX_TOOL_ROUNDS": "4",
+        "WRITING_AGENT_MAX_REPAIR_ROUNDS": "2",
+        "WRITING_AGENT_RUN_TIMEOUT_SECONDS": "300",
+        "WRITING_AGENT_TRACE_RETENTION_DAYS": "180",
+        "PPT_AGENT_ENABLED": "false",
+    }
+    env = spec["services"]["api"]["environment"]
+    sample = (REPO_ROOT / "deploy/production.env.example").read_text(encoding="utf-8")
+    for key, value in defaults.items():
+        assert env[key] == "${" + key + ":-" + value + "}"
+        assert f"{key}={value}" in sample
+    api_image = spec["services"]["api"]["image"]
+    assert api_image == spec["services"]["migrate"]["image"]
+    assert api_image.startswith("${SERVER_IMAGE:?")
+
+
 def test_sqlite_backup_includes_vector_index_and_restores(tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()

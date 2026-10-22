@@ -373,11 +373,12 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
                 text, sources = self._generate_one_section(
                     ctx, section, index, plan, user_id, attachment_ctx, template
                 )
+                text = text.strip()
                 sections.append(text)
                 source_groups.append(sources)
                 # Existing clients already understand delta; one complete chapter per delta avoids
                 # exposing half-generated text that may later fail its local quality retry.
-                yield _sse({"type": "delta", "text": text + "\n\n"})
+                yield _sse({"type": "delta", "text": ("\n\n" if index else "") + text})
             assembled = "\n\n".join(sections).strip()
             payload = self._finalize_draft(
                 task, ctx, assembled, self._merge_sources(source_groups), user_id

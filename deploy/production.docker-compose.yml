@@ -11,11 +11,11 @@
 #   deploy/docker-compose.yml             ← 开发/单机：SQLite + judicial-ai-api（非生产）
 #   deploy/model-pool/docker-compose.yml  ← 模型服务池：35B 主 / 27B·flash 试用 / 14B 回滚
 #   deploy/pptagent/docker-compose.yml    ← PPT 助手栈：DeepPresenter-9B（独立）
-#   一套完整生产 = 本文件(API+DB) + model-pool(模型) + pptagent(PPT)。
+#   当前生产 = 本文件(API+DB) + model-pool(35B)；Draw.io MCP 按需部署。
 #
 # 部署流程：
 #   1. cp production.env.example .env，填 POSTGRES_PASSWORD / SECRET_KEY / 模型地址
-#   2. 预先 docker load 导入 ARM64 镜像（镜像 tag 见下，rebuild 时同步改 api+migrate）
+#   2. 预先 docker load 导入 ARM64 镜像，在 .env 设置 SERVER_IMAGE（API 和迁移共用）
 #   3. docker compose up -d
 #   4. docker compose ps
 #
@@ -60,7 +60,7 @@ services:
   # 数据库迁移：每次 up 跑一次 upgrade，成功退出(0)后 API 才允许启动。
   # ---------------------------------------------------------------------------
   migrate:
-    image: justice-office-server:20261009-151218-e2e2665
+    image: ${SERVER_IMAGE:?请在 .env 中设置已构建的 SERVER_IMAGE 版本标签}
     container_name: justice-migrate
     restart: "no"
     platform: linux/arm64
@@ -87,7 +87,7 @@ services:
 
 
   api:
-    image: justice-office-server:20261009-151218-e2e2665
+    image: ${SERVER_IMAGE:?请在 .env 中设置已构建的 SERVER_IMAGE 版本标签}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
     container_name: justice-api
     restart: unless-stopped
@@ -139,8 +139,9 @@ services:
       LONG_FORM_MODEL_TIMEOUT: ${LONG_FORM_MODEL_TIMEOUT:-300}
       PPT_MODEL_URL: ${PPT_MODEL_URL:-}
       PPT_MODEL_NAME: ${PPT_MODEL_NAME:-}
+      PPT_AGENT_ENABLED: ${PPT_AGENT_ENABLED:-false}
       PPT_AGENT_URL: ${PPT_AGENT_URL:-}
-      PPT_AGENT_SUBMIT_PATH: ${PPT_AGENT_SUBMIT_PATH:-/gradio_api/run/send_message}
+      PPT_AGENT_SUBMIT_PATH: ${PPT_AGENT_SUBMIT_PATH:-/gradio_api/call/send_message}
       PPT_AGENT_TOTAL_TIMEOUT: ${PPT_AGENT_TOTAL_TIMEOUT:-1800}
       PPT_AGENT_WORKSPACE_DIR: ${PPT_AGENT_WORKSPACE_DIR:-}
       OCR_ENABLED: ${OCR_ENABLED:-false}
@@ -149,6 +150,7 @@ services:
       # 启用：先把 deploy/drawio-mcp 的容器挂到 justice-net（见其 README），
       #       再在此设 DRAWIO_MCP_URL=http://drawio-mcp:3001（base，客户端自动补 /mcp）。
       # 留空 → 后端 DrawioService 自动判定未启用，PPT 流程图走本地原生渲染（零侵入）。
+      # MCP 无鉴权，生产仅允许同一隔离网络内访问；3001 不发布到宿主机。
       DRAWIO_MCP_URL: ${DRAWIO_MCP_URL:-}
       DRAWIO_MCP_TIMEOUT: ${DRAWIO_MCP_TIMEOUT:-30}
 
@@ -160,6 +162,13 @@ services:
 
       # ---- 写作 ----
       WRITING_AUTO_QA: ${WRITING_AUTO_QA:-true}
+      WRITING_AGENT_GRAPH_ENABLED: ${WRITING_AGENT_GRAPH_ENABLED:-false}
+      WRITING_AGENT_ROLLOUT_PERCENT: ${WRITING_AGENT_ROLLOUT_PERCENT:-0}
+      WRITING_AGENT_GRAPH_COMPLEX_ONLY: ${WRITING_AGENT_GRAPH_COMPLEX_ONLY:-true}
+      WRITING_AGENT_MAX_TOOL_ROUNDS: ${WRITING_AGENT_MAX_TOOL_ROUNDS:-4}
+      WRITING_AGENT_MAX_REPAIR_ROUNDS: ${WRITING_AGENT_MAX_REPAIR_ROUNDS:-2}
+      WRITING_AGENT_RUN_TIMEOUT_SECONDS: ${WRITING_AGENT_RUN_TIMEOUT_SECONDS:-300}
+      WRITING_AGENT_TRACE_RETENTION_DAYS: ${WRITING_AGENT_TRACE_RETENTION_DAYS:-180}
       DOC_NUMBER_DEFAULT_DAIZI: ${DOC_NUMBER_DEFAULT_DAIZI:-云司}
 
       # ---- 服务 ----

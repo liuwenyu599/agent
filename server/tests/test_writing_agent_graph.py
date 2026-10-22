@@ -456,7 +456,11 @@ def test_research_uses_the_latest_user_request():
 
 
 @pytest.mark.parametrize("use_streaming", [False, True])
-def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
+@pytest.mark.parametrize("entry,mode", [
+    ("stream", "tokens"), ("stream", "sections"), ("stream", "repair"),
+    ("execute", "tokens"), ("execute", "sections"),
+])
+def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mode):
     from app.infrastructure.database import Base, SessionLocal, engine
     from app.infrastructure.database.models.identity import UserModel
     from app.infrastructure.database.models.writing_task import WritingTaskModel
@@ -483,6 +487,9 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
             def __init__(self):
                 self.finalize_calls = 0
                 self.saw_first_delta = False
+                self.writer_calls = 0
+                self.model_calls = 0
+                self.reviews = 0
 
             @property
             def _draft_assistant(self):
@@ -492,14 +499,23 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
                 return "起草通知"
 
             async def achat_stream(self, **_kwargs):
+                self.writer_calls += 1
                 yield "一、工作安排\n"
                 # 后半稿仍在生成时，客户端已经应当收到第一批文字。
                 await asyncio.sleep(0.05)
-                assert self.saw_first_delta
+                if entry == "stream":
+                    assert self.saw_first_delta
                 yield "围绕群众需求开展法治宣传，明确责任分工。"
 
             def _should_section(self, *_args):
-                return False
+                return mode == "sections"
+
+            async def _section_plan_async(self, _ctx):
+                return [{"heading": "安排"}, {"heading": "要求"}]
+
+            async def _generate_one_section_async(self, _ctx, _section, index, *_args):
+                self.writer_calls += 1
+                return f"  第{index + 1}节内容。\n", []
 
             async def _interpret_async(self, *_args, **_kwargs):
                 return None
@@ -524,7 +540,13 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
                 return "起草通知"
 
             async def _llm_draft_async(self, *_args, **_kwargs):
+                self.model_calls += 1
+                if mode == "repair" and (use_streaming or self.model_calls > 1):
+                    return "修复稿：围绕群众需求开展法治宣传，明确责任分工。"
                 return "一、工作安排\n围绕群众需求开展法治宣传，明确责任分工。"
+
+            def _retry_prompt(self, *_args):
+                return "只修复本轮质量问题"
 
             @staticmethod
             def _clean_markdown(value):
@@ -533,8 +555,10 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
             async def _regenerate_if_needed_async(self, *_args):
                 return _args[-2], None
 
-            @staticmethod
-            def _quality_result(_candidate, topic=""):
+            def _quality_result(self, _candidate, topic=""):
+                self.reviews += 1
+                if mode == "repair" and self.reviews <= 2:
+                    return {"level": "D", "issues": []}
                 return {"level": "A", "issues": []}
 
             def _finalize_draft(self, row, _ctx, text, _sources, _user_id,
@@ -566,17 +590,26 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming):
                 collected.append(event)
             return collected
 
-        events = asyncio.run(collect_stream())
-        first = next(data for kind, data in events if kind == "done")
+        events = asyncio.run(collect_stream()) if entry == "stream" else []
+        first = (next(data for kind, data in events if kind == "done")
+                 if entry == "stream" else asyncio.run(graph.execute()))
         second = asyncio.run(graph.execute())
 
         assert first == second
         assert first["generation_mode"] == "agent"
-        assert any(kind == "stage" and data["key"] == "planner"
-                   and data["status"] == "running" for kind, data in events)
-        assert any(kind == "delta" and data["text"] for kind, data in events)
-        assert "".join(data["text"] for kind, data in events if kind == "delta") == first["current_content"]
-        assert any(kind == "quality" and data["level"] == "A" for kind, data in events)
+        if entry == "stream":
+            assert any(kind == "stage" and data["key"] == "planner"
+                       and data["status"] == "running" for kind, data in events)
+            deltas = "".join(data["text"] for kind, data in events if kind == "delta")
+            assert deltas
+            if mode == "repair":
+                assert first["repair_rounds"] == 2
+                assert first["current_content"].startswith("修复稿：")
+                assert deltas == "一、工作安排\n围绕群众需求开展法治宣传，明确责任分工。"
+                assert service.writer_calls == (1 if use_streaming else 0)
+            else:
+                assert deltas == first["current_content"]
+            assert any(kind == "quality" and data["level"] == "A" for kind, data in events)
         assert service.finalize_calls == 1
         assert store.get_owned(run.id, task.id, user.id).status == "completed"
     finally:

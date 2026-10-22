@@ -306,9 +306,10 @@ class WritingAgentGraph:
                 for index, section in enumerate(plan):
                     text, sources = await self.service._generate_one_section_async(
                         ctx, section, index, plan, user_id, attachment_ctx, template)
+                    text = text.strip()
                     sections.append(text)
                     groups.append(sources)
-                    emit({"text": text + "\n\n"})
+                    emit({"text": ("\n\n" if index else "") + text})
                 candidate = "\n\n".join(sections).strip()
                 sources = _merge_sources(groups)
             else:

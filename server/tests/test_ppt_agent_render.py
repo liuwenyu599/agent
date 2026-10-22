@@ -146,6 +146,24 @@ def ctx():
 # ============================================================ (a) URL 为空 → 本地渲染
 
 
+def test_generate_reports_diagram_fallback_without_losing_export(monkeypatch, ctx):
+    from types import SimpleNamespace
+    svc, doc, user = ctx
+    monkeypatch.setattr(settings, "PPT_AGENT_URL", "")
+    source = {"title": "流程图导出", "slides": [{
+        "id": "flow", "type": "process", "title": "办理流程", "points": [],
+        "blocks": {"drawio_xml": "invalid XML", "process": ["受理", "审核"]},
+    }]}
+    result = svc.generate(SimpleNamespace(doc_id=doc.id, outline=source, template_id=None), user)
+    assert result["download_url"].endswith(f"/{doc.id}/download")
+    assert len(result["warnings"]) == 1
+    saved = svc.documents.get(doc.id)
+    assert Path(saved.file_path).is_file()
+    exported = Presentation(saved.file_path)
+    assert any("受理" in shape.text for slide in exported.slides
+               for shape in slide.shapes if shape.has_text_frame)
+
+
 def test_a_empty_url_uses_local_render(monkeypatch, ctx):
     """PPT_AGENT_URL 为空时必须完全走本地渲染，且不产生任何 HTTP 调用。"""
     svc, doc, user = ctx

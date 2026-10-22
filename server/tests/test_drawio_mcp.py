@@ -144,6 +144,58 @@ def test_drawio_native_export_contains_editable_nodes_and_connector():
                for shape in Presentation(io.BytesIO(output.getvalue())).slides[0].shapes)
 
 
+@pytest.mark.parametrize("learned", [False, True])
+@pytest.mark.parametrize("partial_failure", [False, True])
+def test_one_failed_diagram_keeps_other_pages_and_reports_fallback(monkeypatch, learned, partial_failure):
+    import io
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from app.application.ppt import ppt_engine
+    from app.application.ppt import drawio_native
+
+    if partial_failure:
+        def fail_after_adding_shape(slide, *_args):
+            slide.shapes.add_textbox(0, 0, Inches(1), Inches(1)).text = "未完成图形残片"
+            raise RuntimeError("simulated drawing failure")
+        monkeypatch.setattr(drawio_native, "render_diagram", fail_after_adding_shape)
+    steps = ["受理", "审核", *[f"流程环节{number}" for number in range(3, 9)]]
+    outline = {"title": "导出测试", "slides": [
+        {"type": "process", "title": "办理流程", "points": [], "note": "原演讲备注",
+         "blocks": {"drawio_xml": NATIVE_XML if partial_failure else "invalid XML",
+                    "process": steps}},
+        {"type": "content", "title": "工作要求", "points": ["其他页面应当完整导出"]},
+    ]}
+    template = {"colors": ppt_engine.DEFAULT_COLORS, "layouts": ppt_engine.DEFAULT_LAYOUTS}
+    warnings = []
+    if learned:
+        base = Presentation()
+        slide = base.slides.add_slide(base.slide_layouts[6])
+        title = slide.shapes.add_textbox(Inches(.5), Inches(.3), Inches(8), Inches(1))
+        title.text = "模板标题"
+        title.text_frame.paragraphs[0].runs[0].font.size = Pt(30)
+        body = slide.shapes.add_textbox(Inches(.5), Inches(2), Inches(8), Inches(4))
+        body.text = "模板示例正文"
+        body.text_frame.paragraphs[0].runs[0].font.size = Pt(16)
+        buffer = io.BytesIO()
+        base.save(buffer)
+        base_bytes = buffer.getvalue()
+        library = ppt_engine.analyze_template(base_bytes)["layouts"]
+        # A one-slide fixture is classified as a cover by position; bind it as
+        # the content layout whose title/body regions this export test exercises.
+        library[0]["detected_type"] = "content"
+        data = ppt_engine.build_pptx_learned(outline, template, base_bytes, library, warnings=warnings)
+    else:
+        data = ppt_engine.build_pptx(outline, template, warnings=warnings)
+    exported = Presentation(io.BytesIO(data))
+    assert len(exported.slides) == 2
+    text = "\n".join(shape.text for slide in exported.slides for shape in slide.shapes
+                     if shape.has_text_frame)
+    assert all(value in text for value in [*steps, "工作要求", "其他页面应当完整导出"]), text
+    assert "未完成图形残片" not in text
+    assert len(warnings) == 1 and "基础流程版式" in warnings[0]
+    assert "基础流程版式" in exported.slides[0].notes_slide.notes_text_frame.text
+
+
 @pytest.mark.parametrize("xml", [
     '<!DOCTYPE x [<!ENTITY x "value">]><mxGraphModel/>',
     NATIVE_XML.replace('width="150"', 'width="NaN"'),

@@ -3,12 +3,12 @@
 #
 # 作用：在 PPT 生成链路里，让「支持 tool-call 的本地模型（35B）」通过工具调用
 #       获取 draw.io 语法参考（get_drawio_reference）与形状样式（search_shapes），
-#       从而写出规范的 .drawio XML；后端再 headless 转 PNG 嵌进 PPTX。
+#       从而写出规范的 .drawio XML；后端再转换为可编辑 PPTX 形状和连线。
 #       官方镜像 jgraph/drawio-mcp 同一套与 https://mcp.draw.io/mcp 一致。
 #
 # 重要边界（务必先读）：
 #   - 本服务只产出「文本型工具结果」（语法参考 / 形状样式字符串），不产出 .pptx。
-#     .drawio XML → PNG 的转换由后端独立完成（python-pptx 原生 + 图转 PNG 嵌入），
+#     .drawio XML → PPTX 原生对象的转换由后端独立完成（drawio_native.py），
 #     不依赖 drawio-mcp。drawio-mcp 的 create_diagram 在非 MCP-Apps 宿主下会把
 #     XML/Mermaid 以「文本」形式返回，可作为渲染前的预览/校验，但不是必走路径。
 #   - 服务本身无鉴权；内网部署必须靠防火墙 / 反向代理 / 仅绑回环来控制可达范围。
@@ -17,7 +17,7 @@
 #
 # 用法：
 #   cd deploy/drawio-mcp && docker compose up -d
-#   # MCP 端点 = http://<宿主IP>:3001/mptest  （实际路径 /mcp）
+#   # MCP 端点 = http://<宿主IP>:3001/mcp
 #   健康检查：GET http://localhost:3001/health  → 200 ok
 #
 # 接入后端：在 API 容器的 .env 设 DRAWIO_MCP_URL=http://drawio-mcp:3001/mcp
