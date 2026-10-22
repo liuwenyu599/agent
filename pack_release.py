@@ -18,6 +18,7 @@ EXCLUDE_DIRS = (
     "server/data",
     "desktop/build",
     "deploy/offline",
+    "deliverables",  # 本地产物（pptx/html/md），不进生产部署包
 )
 EXCLUDE_NAMES = {"training/data/raw"}  # 断链符号链接，必须跳过
 
