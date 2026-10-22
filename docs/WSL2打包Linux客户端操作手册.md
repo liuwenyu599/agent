@@ -165,6 +165,16 @@ cat ~/JudicialAIDesktop/server.json
 curl -o /dev/null -s -w '%{http_code}\n' http://10.128.85.133:8000/docs
 ```
 
+写作台现在按服务端公文格式规则选择字体。目标麒麟机器上检查中文字体：
+
+```bash
+fc-match 'Noto Serif CJK SC'
+fc-match 'Noto Sans CJK SC'
+```
+
+若没有仿宋、楷体等公文字体，客户端会选用已安装的 Noto 中文字体；
+建议在目标机部署获许可的公文字体或系统提供的 Noto CJK 字体，并打开一份通知与导出 Word 对照检查。
+
 ---
 
 ## 排错速查

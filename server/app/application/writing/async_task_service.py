@@ -5,7 +5,10 @@ mature synchronous service chain so item-1..5/9..15 guarantees are not forked or
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -32,6 +35,8 @@ from app.application.shared.async_writing_assistant import AsyncWritingAssistant
 from app.infrastructure.database.models.writing_suggestion import WritingSuggestionModel
 from app.infrastructure.database.models.writing_task import WritingTaskModel
 
+logger = logging.getLogger(__name__)
+
 
 def _http_error_message(detail: Any) -> str:
     if isinstance(detail, dict):
@@ -55,6 +60,42 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
     def _draft_assistant(self):
         """正文生成统一使用的 assistant：优先长文模型，未配置则主模型。"""
         return self.long_form_assistant or self.assistant
+
+    async def _read_in_worker(self, method: str, *args, **kwargs):
+        """Run blocking RAG reads with a session owned by the worker thread."""
+        if not hasattr(self, "rag"):
+            # Lightweight test doubles built with __new__ provide their own read method.
+            return getattr(self, method)(*args, **kwargs)
+        if self.rag is None and method != "_draft_prompt":
+            return [] if method != "_example_style_block" else ""
+
+        def read():
+            from app.application.knowledge.rag_service import RagService
+            from app.infrastructure.database.session import SessionLocal
+
+            with SessionLocal() as db:
+                rag = (RagService(db, self.rag.embedder, self.rag.vector_store)
+                       if self.rag is not None else None)
+                worker = type(self)(db, assistant=self.assistant, rag=rag, attachments=None)
+                return getattr(worker, method)(*args, **kwargs)
+
+        started = time.perf_counter()
+        result = await asyncio.to_thread(read)
+        logger.info("[写作耗时] task=%s step=%s duration=%.3fs",
+                    prompt_snapshot.current_task(), method,
+                    time.perf_counter() - started)
+        return result
+
+    async def _retrieve_async(self, ctx, user_id, extra_query=""):
+        return await self._read_in_worker("_retrieve", ctx, user_id, extra_query=extra_query)
+
+    async def _plan_materials_async(self, ctx, user_id, org_ctx):
+        return await self._read_in_worker("_plan_materials", ctx, user_id, org_ctx)
+
+    async def _draft_prompt_async(self, instruction, sources, attachment_ctx, user_id,
+                                  template=None):
+        return await self._read_in_worker(
+            "_draft_prompt", instruction, sources, attachment_ctx, user_id, template)
 
     # ---------------------------------------------------- 起草提示 + 训练留痕
 
@@ -176,19 +217,30 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 pass
         return "暂时无法回答。请补充要讨论的问题或需要修改的具体内容。"
 
-    async def _llm_draft_async(self, instruction: str, sources, attachment_ctx, user_id,
-                               template: Optional[Dict[str, Any]] = None) -> str:
-        if not self._draft_assistant:
-            raise HTTPException(status_code=503, detail="模型服务不可用")
-        system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
+    async def _draft_model_system_async(self, instruction, sources, attachment_ctx,
+                                        user_id, template):
+        system = await self._draft_prompt_async(
+            instruction, sources, attachment_ctx, user_id, template)
         system += (
             "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计。凡正文必须给出由多个数字推导的结果，"
             "应确保运算关系明确且结果精确；最终文本还会由程序做确定性复核。"
         )
-        return await self._draft_assistant.achat(
+        return system
+
+    async def _llm_draft_async(self, instruction: str, sources, attachment_ctx, user_id,
+                               template: Optional[Dict[str, Any]] = None) -> str:
+        if not self._draft_assistant:
+            raise HTTPException(status_code=503, detail="模型服务不可用")
+        system = await self._draft_model_system_async(
+            instruction, sources, attachment_ctx, user_id, template)
+        started = time.perf_counter()
+        result = await self._draft_assistant.achat(
             message=instruction, history=[], sources=sources, user_role="user",
             system_prompt=system, attachment_context=attachment_ctx,
         ) or ""
+        logger.info("[写作耗时] task=%s model_draft %.3fs",
+                    prompt_snapshot.current_task(), time.perf_counter() - started)
+        return result
 
     async def _llm_revise_once_async(self, prompt: str, sources, attachment_ctx, user_id) -> str:
         if not self.assistant:
@@ -196,7 +248,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         agent = self._agent_prompt(user_id)
         from app.application.writing.task_service import REVISION_RULES
         system = (agent + "\n" if agent else "") + REVISION_RULES
-        card = self._example_style_block(prompt, user_id)
+        card = await self._read_in_worker("_example_style_block", prompt, user_id)
         self._record_prompt(system, card, prompt, sources, attachment_ctx, user_id, kind="revise")
         system += card
         system += (
@@ -235,6 +287,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                                 kb_ids: Optional[List[str]] = None,
                                 planned_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         from app.infrastructure.database.models.writing_task import WritingTaskModel
+        started = time.perf_counter()
 
         ctx = task_parser.empty_context()
         changes: List[str] = []
@@ -289,9 +342,12 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         self._push_history(ctx, "assistant", reply)
         task.context = ctx
         self.db.commit()
+        logger.info("[写作耗时] request=%s task=%s create %.3fs",
+                    content_hash(message)[:12], task.id, time.perf_counter() - started)
         return {**self._to_dict(task), "reply": reply, "content_changed": False}
 
     async def plan_task_async(self, user_id: str, message: str) -> Dict[str, Any]:
+        started = time.perf_counter()
         ctx = task_parser.empty_context()
         literal_plan = task_parser.parse_message(message)
         interpreted = await self._interpret_async(message, ctx, has_draft=False)
@@ -336,10 +392,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 fields.append({"label": label, "value": str(value)})
         # Preserve existing quick-plan policy: materials are searched only when explicitly useful.
         material_cues = ("参考", "结合", "根据", "依据", "材料", "范文", "案例", "政策", "文件")
-        materials = self._plan_materials(ctx, user_id, org_ctx) \
+        materials = await self._plan_materials_async(ctx, user_id, org_ctx) \
             if any(cue in message for cue in material_cues) else []
         knowledge = self._plan_knowledge(user_id, org_ctx)
-        return {
+        result = {
             "doc_type": doc_type,
             "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
             "audience": ctx.get("recipient") or "",
@@ -359,6 +415,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             "kb_ids": [k["id"] for k in knowledge],
             "ai_actions": self._plan_actions(doc_type),
         }
+        logger.info("[写作耗时] request=%s plan %.3fs source=%s",
+                    content_hash(message)[:12], time.perf_counter() - started, source)
+        return result
 
     # --------------------------------------------------------------- revisions
     def _assert_revision_client_base(self, task, version, digest) -> None:
@@ -430,7 +489,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         start, end, fragment = resolved
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
         prompt = self._local_prompt(fragment, instruction, mode_desc, operation)
-        sources = self._retrieve(ctx, user_id, extra_query=instruction)
+        sources = await self._retrieve_async(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
         replacement = "" if operation == "delete_range" else (await self._llm_revise_async(
             prompt, sources, attachment_ctx, user_id)).strip()
@@ -522,7 +581,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             task_parser.compute_missing(ctx)
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
         prompt = self._build_revise_prompt(current, instruction, mode_desc, None, ctx)
-        sources = self._retrieve(ctx, user_id, extra_query=instruction)
+        sources = await self._retrieve_async(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
         revised = await self._llm_revise_async(prompt, sources, attachment_ctx, user_id)
         if not revised.strip():
@@ -707,16 +766,30 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
     async def _generate_one_section_async(self, ctx: Dict[str, Any], section: Dict[str, Any],
                                           index: int, plan: List[Dict[str, Any]], user_id: str,
-                                          attachment_ctx: str, template) -> Tuple[str, List[Dict]]:
+                                          attachment_ctx: str, template,
+                                          on_delta=None) -> Tuple[str, List[Dict]]:
+        started = time.perf_counter()
         previous = [x["heading"] or x["focus"] for x in plan[:index]]
         following = [x["heading"] or x["focus"] for x in plan[index + 1:]]
         instruction = self._section_instruction(ctx, section, previous, following)
-        sources = self._retrieve(ctx, user_id, extra_query=f"{section['heading']} {section['focus']}")
+        sources = await self._retrieve_async(
+            ctx, user_id, extra_query=f"{section['heading']} {section['focus']}")
+        if on_delta is None:
+            first = await self._llm_draft_async(
+                instruction, sources, attachment_ctx, user_id, template=template)
+        else:
+            system = await self._draft_model_system_async(
+                instruction, sources, attachment_ctx, user_id, template)
+            parts = []
+            async for delta in self._draft_assistant.achat_stream(
+                message=instruction, history=[], sources=sources, user_role="user",
+                system_prompt=system, attachment_context=attachment_ctx):
+                if delta:
+                    parts.append(delta)
+                    on_delta(delta)
+            first = "".join(parts)
         candidate = self._normalize_section(
-            self._clean_markdown(await self._llm_draft_async(
-                instruction, sources, attachment_ctx, user_id, template=template)),
-            section["heading"],
-        )
+            self._clean_markdown(first), section["heading"])
         if self._section_is_short(candidate, section["target_chars"]):
             expanded = self._normalize_section(
                 self._clean_markdown(await self._llm_draft_async(
@@ -753,7 +826,30 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 "message": f"{section['heading']} 连续两次修复后仍未通过质量门，全文未保存。",
                 "section": section["heading"], "issues": quality.get("issues") or [],
             })
+        logger.info("[写作耗时] task=%s section=%d duration=%.3fs quality=%s",
+                    prompt_snapshot.current_task(), index + 1,
+                    time.perf_counter() - started, quality.get("level"))
         return candidate, sources
+
+    async def _generate_one_section_stream_async(self, *args, on_delta, **kwargs):
+        return await self._generate_one_section_async(
+            *args, on_delta=on_delta, **kwargs)
+
+    async def _generate_sections_async(self, ctx, plan, user_id, attachment_ctx,
+                                       template, start_index=0):
+        """Ordered sections; optional bounded concurrency after the first visible section."""
+        indexes = range(start_index, len(plan))
+        limit = settings.WRITING_SECTION_MAX_CONCURRENCY
+        if limit == 1:
+            return [await self._generate_one_section_async(
+                ctx, plan[index], index, plan, user_id, attachment_ctx, template)
+                for index in indexes]
+        semaphore = asyncio.Semaphore(limit)
+        async def generate(index):
+            async with semaphore:
+                return await self._generate_one_section_async(
+                    ctx, plan[index], index, plan, user_id, attachment_ctx, template)
+        return await asyncio.gather(*(generate(index) for index in indexes))
 
     async def draft_async(self, task_id: str, user_id: str,
                           outline_only: bool = False) -> Dict[str, Any]:
@@ -769,13 +865,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         attachment_ctx = self._attachment_context(task, ctx)
         if self._should_section(ctx, outline_only):
             plan = await self._section_plan_async(ctx)
-            sections: List[str] = []
-            source_groups: List[List[Dict]] = []
-            for index, section in enumerate(plan):
-                text, sources = await self._generate_one_section_async(
-                    ctx, section, index, plan, user_id, attachment_ctx, template)
-                sections.append(text)
-                source_groups.append(sources)
+            results = await self._generate_sections_async(
+                ctx, plan, user_id, attachment_ctx, template)
+            sections = [text for text, _sources in results]
+            source_groups = [sources for _text, sources in results]
             assembled = "\n\n".join(sections).strip()
             if not assembled:
                 raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
@@ -788,7 +881,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             return payload
 
         instruction = self._build_draft_instruction(ctx, outline_only, template)
-        sources = self._retrieve(ctx, user_id)
+        sources = await self._retrieve_async(ctx, user_id)
         text = self._clean_markdown(await self._llm_draft_async(
             instruction, sources, attachment_ctx, user_id, template=template))
         if not text.strip():
@@ -804,6 +897,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
     def _finalize_draft(self, task, ctx, text, sources, user_id,
                         expected_state=None):
         """Reject a completely different continuation before changing the saved document."""
+        started = time.perf_counter()
         if expected_state is not None:
             # A conditional no-op update obtains a row lock until the version save
             # commits, so a concurrent save cannot slip between check and write.
@@ -846,7 +940,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                     status_code=422,
                     detail="新稿与当前稿差异过大，未替换已保存版本。请用逐段建议修改具体段落，或新建任务重新起草。",
                 )
-        return super()._finalize_draft(task, ctx, text, sources, user_id)
+        result = super()._finalize_draft(task, ctx, text, sources, user_id)
+        logger.info("[写作耗时] task=%s final_check_save %.3fs",
+                    task.id, time.perf_counter() - started)
+        return result
 
     async def draft_stream_async(self, task_id: str, user_id: str,
                                  outline_only: bool = False) -> AsyncIterator[str]:
@@ -875,15 +972,50 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             attachment_ctx = self._attachment_context(task, ctx)
             if self._should_section(ctx, outline_only):
                 plan = await self._section_plan_async(ctx)
+                if not plan:
+                    raise HTTPException(status_code=502, detail="未能生成章节规划，请重试")
                 sections: List[str] = []
                 source_groups: List[List[Dict]] = []
-                for index, section in enumerate(plan):
-                    text, sources = await self._generate_one_section_async(
-                        ctx, section, index, plan, user_id, attachment_ctx, template)
-                    text = text.strip()
-                    sections.append(text)
-                    source_groups.append(sources)
-                    yield _sse({"type": "delta", "text": ("\n\n" if index else "") + text})
+                chunks: asyncio.Queue[Optional[str]] = asyncio.Queue()
+                def on_delta(delta: str) -> None:
+                    chunks.put_nowait(delta)
+                async def produce_first():
+                    try:
+                        return await self._generate_one_section_stream_async(
+                            ctx, plan[0], 0, plan, user_id, attachment_ctx,
+                            template, on_delta=on_delta)
+                    finally:
+                        chunks.put_nowait(None)
+                producer = asyncio.create_task(produce_first())
+                provisional = ""
+                try:
+                    while (chunk := await chunks.get()) is not None:
+                        provisional += chunk
+                        yield _sse({"type": "delta", "text": chunk})
+                    text, sources = await producer
+                finally:
+                    if not producer.done():
+                        producer.cancel()
+                text = text.strip()
+                if text != provisional:
+                    yield _sse({"type": "replace", "text": text})
+                sections.append(text)
+                source_groups.append(sources)
+                async def later_sections():
+                    if settings.WRITING_SECTION_MAX_CONCURRENCY == 1:
+                        for index in range(1, len(plan)):
+                            yield await self._generate_one_section_async(
+                                ctx, plan[index], index, plan, user_id,
+                                attachment_ctx, template)
+                    else:
+                        for result in await self._generate_sections_async(
+                            ctx, plan, user_id, attachment_ctx, template, start_index=1):
+                            yield result
+                async for later, later_sources in later_sections():
+                    later = later.strip()
+                    sections.append(later)
+                    source_groups.append(later_sources)
+                    yield _sse({"type": "delta", "text": "\n\n" + later})
                 payload = self._finalize_draft(
                     task, ctx, "\n\n".join(sections).strip(),
                     self._merge_sources(source_groups), user_id,
@@ -895,8 +1027,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 return
 
             instruction = self._build_draft_instruction(ctx, outline_only, template)
-            sources = self._retrieve(ctx, user_id)
-            system = self._draft_prompt(instruction, sources, attachment_ctx, user_id, template)
+            sources = await self._retrieve_async(ctx, user_id)
+            system = await self._draft_prompt_async(
+                instruction, sources, attachment_ctx, user_id, template)
             parts: List[str] = []
             async for delta in self._draft_assistant.achat_stream(
                 message=instruction, history=[], sources=sources, user_role="user",

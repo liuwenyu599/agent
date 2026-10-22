@@ -26,6 +26,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 import java.io.File
+import java.security.MessageDigest
+import java.util.logging.Logger
+
+private val writingTimeline = Logger.getLogger("WritingTimeline")
+private fun requestDigest(text: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(text.toByteArray(Charsets.UTF_8)).take(6)
+    .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 /** 工作台对话消息 */
 data class TaskChatMessage(val role: String, val content: String, val revisionSummary: String = "")
@@ -110,6 +117,7 @@ class WritingViewModel(
 
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
+    private var writingClickAtNanos: Long = 0
     private var draftPreviousContent: String? = null
     private var currentAgentRunId: String? = null
 
@@ -122,6 +130,8 @@ class WritingViewModel(
     private var restoreJob: Job? = null
 
     var task by mutableStateOf(WritingTaskState())
+        private set
+    var renderProfile by mutableStateOf<JsonObject?>(null)
         private set
     var content by mutableStateOf("")
     var versionNo by mutableStateOf(0)
@@ -397,6 +407,15 @@ class WritingViewModel(
             documentDate = ctx["document_date"].str(),
             missingFields = ctx["missing_fields"].arr().map { it.str() }.filter { it.isNotBlank() },
         )
+        if (id != previousTaskId && !id.isNullOrBlank()) {
+            renderProfile = null
+            scope.launch {
+                val profile = repo.renderProfile(id)
+                if (task.taskId == id && profile is ApiResult.Ok) {
+                    renderProfile = profile.data
+                }
+            }
+        }
         if (messages.isEmpty()) {
             messages = ctx["history"].arr().mapNotNull { item ->
                 val entry = item.obj() ?: return@mapNotNull null
@@ -624,6 +643,8 @@ class WritingViewModel(
     fun planAndStart() {
         val text = entryInput.trim()
         if (text.isBlank() || busy) return
+        writingClickAtNanos = System.nanoTime()
+        val requestId = requestDigest(text)
         isolateNewTask()
         busy = true
         AppState.writingGenerating = true
@@ -634,6 +655,7 @@ class WritingViewModel(
         messages = messages + TaskChatMessage("user", text)
         activeJob = scope.launch {
             val planned = runCatching { repo.plan(text) }.getOrNull()
+            writingTimeline.info("request=$requestId plan_ms=${(System.nanoTime() - writingClickAtNanos) / 1_000_000}")
             val specResult = when (planned) {
                 is ApiResult.Ok -> planned.data?.let { parseSpec(it) }
                 is ApiResult.Err -> {
@@ -647,6 +669,7 @@ class WritingViewModel(
             // 无论是否规划成功，都按用户的原话创建任务（不阻断写作）
             when (val r = repo.createTask(text, specResult)) {
                 is ApiResult.Ok -> {
+                    writingTimeline.info("request=$requestId create_ms=${(System.nanoTime() - writingClickAtNanos) / 1_000_000}")
                     val task = r.data ?: run {
                         fail("创建写作任务失败：服务端未返回任务")
                         return@launch
@@ -854,15 +877,27 @@ class WritingViewModel(
         // 期间 refreshTask() 就不会拿服务端的旧正文把正在流的这一版盖掉。
         draftPreviousContent = content
         content = ""
+        val draftStartedAt = System.nanoTime()
         activeJob = scope.launch {
             var streamed = false
+            var firstDeltaSeen = false
             var saved = false
             val r = repo.draftStream(
                 id,
                 outlineOnly,
                 onDelta = { delta ->
                     streamed = true
+                    if (!firstDeltaSeen) {
+                        firstDeltaSeen = true
+                        val totalMs = if (writingClickAtNanos > 0)
+                            (System.nanoTime() - writingClickAtNanos) / 1_000_000 else 0
+                        writingTimeline.info("task=$id first_text_ms=${(System.nanoTime() - draftStartedAt) / 1_000_000} click_to_text_ms=$totalMs")
+                    }
                     content += delta
+                },
+                onReplace = { replacement ->
+                    streamed = true
+                    content = replacement
                 },
                 onProgress = { progress ->
                     when (progress.type) {
@@ -903,6 +938,7 @@ class WritingViewModel(
                 draftPreviousContent?.let { content = it }
                 if (status.isNullOrBlank()) fail("生成未返回可保存的正文，请重试")
             } else {
+                writingTimeline.info("task=$id draft_done_ms=${(System.nanoTime() - draftStartedAt) / 1_000_000}")
                 status = null
             }
             agentProgress = null
@@ -1181,6 +1217,7 @@ class WritingViewModel(
         restoreJob = null
         restoring = false
         task = WritingTaskState()
+        renderProfile = null
         content = ""
         serverContent = ""
         paragraphs = emptyList()

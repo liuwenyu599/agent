@@ -199,14 +199,21 @@ class WritingAgentGraph:
         async def work():
             ctx = dict(state.get("context") or {})
             user_id = str(state["user_id"])
-            groups: list[list[dict[str, Any]]] = [self.service._retrieve(ctx, user_id)]
+            retrieve = getattr(self.service, "_retrieve_async", None)
+            groups: list[list[dict[str, Any]]] = [
+                await retrieve(ctx, user_id) if callable(retrieve)
+                else self.service._retrieve(ctx, user_id)
+            ]
 
             async def search(args: dict[str, Any], *, exemplar: bool = False):
                 query = str(args.get("query") or "").strip()[:200]
                 if not query:
                     return []
                 suffix = f"同类范文 体例 {query}" if exemplar else query
-                return _jsonable(self.service._retrieve(ctx, user_id, extra_query=suffix))
+                return _jsonable(
+                    await retrieve(ctx, user_id, extra_query=suffix)
+                    if callable(retrieve) else
+                    self.service._retrieve(ctx, user_id, extra_query=suffix))
 
             async def search_knowledge(args):
                 return await search(args)
@@ -301,15 +308,44 @@ class WritingAgentGraph:
             attachment_ctx = self.service._attachment_context(task, ctx)
             plan = list(state.get("section_plan") or [])
             if plan:
+                initial_sources = list(state.get("sources") or [])
                 sections: list[str] = []
-                groups: list[list[dict[str, Any]]] = [list(state.get("sources") or [])]
-                for index, section in enumerate(plan):
-                    text, sources = await self.service._generate_one_section_async(
-                        ctx, section, index, plan, user_id, attachment_ctx, template)
-                    text = text.strip()
-                    sections.append(text)
-                    groups.append(sources)
-                    emit({"text": ("\n\n" if index else "") + text})
+                groups: list[list[dict[str, Any]]] = [initial_sources]
+                stream_section = getattr(
+                    self.service, "_generate_one_section_stream_async", None)
+                if callable(stream_section):
+                    provisional: list[str] = []
+                    def on_delta(delta: str) -> None:
+                        provisional.append(delta)
+                        emit({"text": delta})
+                    first, first_sources = await stream_section(
+                        ctx, plan[0], 0, plan, user_id, attachment_ctx,
+                        template, on_delta=on_delta)
+                    if first.strip() != "".join(provisional):
+                        emit({"replace": first.strip()})
+                else:
+                    first, first_sources = await self.service._generate_one_section_async(
+                        ctx, plan[0], 0, plan, user_id, attachment_ctx, template)
+                    emit({"text": first.strip()})
+                sections.append(first.strip())
+                groups.append(first_sources)
+                async def later_sections():
+                    generate_sections = getattr(self.service, "_generate_sections_async", None)
+                    if (callable(generate_sections)
+                            and settings.WRITING_SECTION_MAX_CONCURRENCY > 1):
+                        for result in await generate_sections(
+                            ctx, plan, user_id, attachment_ctx, template, start_index=1):
+                            yield result
+                    else:
+                        for index in range(1, len(plan)):
+                            yield await self.service._generate_one_section_async(
+                                ctx, plan[index], index, plan, user_id,
+                                attachment_ctx, template)
+                async for later, later_sources in later_sections():
+                    later = later.strip()
+                    sections.append(later)
+                    groups.append(later_sources)
+                    emit({"text": "\n\n" + later})
                 candidate = "\n\n".join(sections).strip()
                 sources = _merge_sources(groups)
             else:
@@ -318,8 +354,11 @@ class WritingAgentGraph:
                 sources = list(state.get("sources") or [])
                 assistant = getattr(self.service, "_draft_assistant", None)
                 if callable(getattr(assistant, "achat_stream", None)):
-                    system = self.service._draft_prompt(
+                    prompt_async = getattr(self.service, "_draft_prompt_async", None)
+                    system = (await prompt_async(
                         instruction, sources, attachment_ctx, user_id, template)
+                        if callable(prompt_async) else self.service._draft_prompt(
+                            instruction, sources, attachment_ctx, user_id, template))
                     parts = []
                     async for delta in assistant.achat_stream(
                         message=instruction, history=[], sources=sources, user_role="user",
@@ -538,6 +577,9 @@ class WritingAgentGraph:
                         if isinstance(update, dict) and update.get("text"):
                             writer_streamed = True
                             yield "delta", {"text": update["text"]}
+                        elif isinstance(update, dict) and "replace" in update:
+                            writer_streamed = True
+                            yield "replace", {"text": update["replace"]}
                         continue
                     for node, output in update.items():
                         aggregate.update(output or {})

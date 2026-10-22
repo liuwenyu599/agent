@@ -68,6 +68,12 @@ class WritingRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    suspend fun renderProfile(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.renderProfile(id))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
     suspend fun paragraphs(id: String): ApiResult<JsonObject?> =
         when (val r = api.get(Endpoints.WritingTasks.paragraphs(id))) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
@@ -129,6 +135,7 @@ class WritingRepository(private val api: ApiClient) {
     suspend fun draftStream(
         id: String, outlineOnly: Boolean = false,
         onDelta: (String) -> Unit,
+        onReplace: (String) -> Unit = {},
         onProgress: (WritingAgentProgress) -> Unit = {},
     ): ApiResult<JsonObject?> {
         var done: JsonObject? = null
@@ -139,6 +146,7 @@ class WritingRepository(private val api: ApiClient) {
         ) { ev ->
             when (ev["type"].str()) {
                 "delta" -> onDelta(ev["text"].str())
+                "replace" -> onReplace(ev["text"].str())
                 "done" -> done = ev["data"].obj()
                 "error" -> streamError = ev["message"].str().ifBlank { "生成失败，请重试" }
                 "run", "stage", "quality" -> onProgress(WritingAgentProgress(

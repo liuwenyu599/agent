@@ -21,6 +21,7 @@ from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.domain.chat.entities import ChatSession
 from app.domain.identity.entities import User
+from app.domain.official_document_format import writing_preview_profile
 from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
 from app.infrastructure.database import get_db
 from app.infrastructure.database.models.chat import ChatAttachmentModel
@@ -42,6 +43,14 @@ def get_task_service(db: Session = Depends(get_db)) -> WritingTaskService:
         rag=RagService(db, get_embedder(), get_vector_store()),
         attachments=AttachmentService(db),
     )
+
+
+@router.get("/{task_id}/render-profile")
+def render_profile(task_id: str,
+                   user: User = Depends(get_current_user),
+                   svc: WritingTaskService = Depends(get_task_service)):
+    svc._get_owned(task_id, user.id)
+    return writing_preview_profile()
 
 
 class TaskCreateRequest(BaseModel):

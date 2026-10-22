@@ -4,6 +4,11 @@ from app.infrastructure.ai.mock import MockLLMGateway
 from app.application.writing.quality_gate import QualityGate
 from app.application.writing.async_task_service import AsyncWritingTaskService
 import asyncio
+import threading
+import time
+from types import SimpleNamespace
+
+import pytest
 
 
 def test_long_report_uses_sectioned_generation_without_explicit_word_target():
@@ -206,3 +211,186 @@ def test_async_production_planner_keeps_speech_as_continuous_prose():
     assert [item["focus"] for item in plan] == [
         "欢迎来宾并点明活动", "谈活动意义与实际体验", "表达期待并致谢"]
     assert all(item["heading"] == "" for item in plan)
+
+
+def test_async_retrieval_uses_worker_owned_session_without_blocking_loop(monkeypatch):
+    from app.application.knowledge.rag_service import RagService
+    from app.infrastructure.database import SessionLocal
+
+    main_thread = threading.get_ident()
+    outer = SessionLocal()
+    seen = []
+    def slow_search(worker, **_kwargs):
+        seen.append((worker.db is outer, threading.get_ident()))
+        time.sleep(0.08)
+        return [{"doc_id": "example", "content": "资料"}]
+    monkeypatch.setattr(RagService, "search", slow_search)
+    service = AsyncWritingTaskService(
+        outer, assistant=None,
+        rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+
+    async def exercise():
+        pending = asyncio.create_task(service._retrieve_async({"topic": "普法"}, "u1"))
+        await asyncio.sleep(0.01)
+        assert not pending.done()
+        await asyncio.sleep(0.01)  # The event loop remains responsive during slow_search.
+        return await pending
+
+    try:
+        assert asyncio.run(exercise())[0]["doc_id"] == "example"
+        assert seen == [(False, seen[0][1])]
+        assert seen[0][1] != main_thread
+    finally:
+        outer.close()
+
+
+def test_first_section_emits_tokens_before_completion_and_keeps_checked_result(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    finish = asyncio.Event()
+    first_seen = asyncio.Event()
+    emitted = []
+
+    class Assistant:
+        async def achat_stream(self, **_kwargs):
+            yield "首段正文"
+            await finish.wait()
+            yield "继续展开。"
+
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service.assistant = None
+    service.long_form_assistant = Assistant()
+    service._retrieve_async = AsyncMock(return_value=[])
+    service._draft_model_system_async = AsyncMock(return_value="写作规则")
+    service._section_is_short = lambda *_args: False
+    monkeypatch.setattr(QualityGate, "evaluate", lambda *_args, **_kwargs: {"level": "A"})
+
+    def on_delta(delta):
+        emitted.append(delta)
+        first_seen.set()
+
+    async def exercise():
+        pending = asyncio.create_task(service._generate_one_section_stream_async(
+            {"document_type": "报告"},
+            {"heading": "一、工作成效", "focus": "总结工作", "target_chars": 300},
+            0, [{"heading": "一、工作成效", "focus": "总结工作"}],
+            "u1", "", None, on_delta=on_delta))
+        await asyncio.wait_for(first_seen.wait(), 1)
+        assert emitted == ["首段正文"]
+        assert not pending.done()
+        finish.set()
+        return await pending
+
+    final, _ = asyncio.run(exercise())
+    assert final.startswith("一、工作成效")
+    assert "首段正文继续展开" in final
+
+
+def test_sectioned_sse_replaces_provisional_first_section_before_done(monkeypatch):
+    import json
+    from app.application.writing import async_task_service
+
+    monkeypatch.setattr(async_task_service, "graph_enabled_for_user",
+                        lambda *_args: False)
+    finish = asyncio.Event()
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    task = SimpleNamespace(current_content="", version_no=0, context={}, session_id="")
+    service._get_owned = lambda *_args: task
+    service._prepare_agent_graph = lambda *_args: None
+    service._load_template = lambda *_args: None
+    service._attachment_context = lambda *_args: None
+    service._should_section = lambda *_args: True
+    async def plan(_ctx):
+        return [{"heading": "一、", "focus": "先写"}, {"heading": "二、", "focus": "再写"}]
+    async def first(*_args, on_delta):
+        on_delta("未校验首段")
+        await finish.wait()
+        return "通过校验的首段", []
+    async def later(*_args):
+        return "第二段", []
+    service._section_plan_async = plan
+    service._generate_one_section_stream_async = first
+    service._generate_one_section_async = later
+    service._merge_sources = lambda groups: []
+    service._finalize_draft = lambda _task, _ctx, content, *_args, **_kwargs: {
+        "current_content": content, "reply": "完成"}
+
+    def decode(raw):
+        return json.loads(raw.removeprefix("data: ").strip())
+
+    async def collect():
+        stream = service.draft_stream_async("task-a", "user-a")
+        first_event = decode(await anext(stream))
+        assert first_event == {"type": "delta", "text": "未校验首段"}
+        finish.set()
+        return first_event, [decode(part) async for part in stream]
+
+    first_event, rest = asyncio.run(collect())
+    assert [event["type"] for event in rest] == ["replace", "delta", "done"]
+    assert rest[0]["text"] == "通过校验的首段"
+    assert rest[0]["text"] + rest[1]["text"] == rest[2]["data"]["current_content"]
+
+
+def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
+    import json
+    from app.application.writing import async_task_service
+
+    monkeypatch.setattr(async_task_service, "graph_enabled_for_user", lambda *_: False)
+    monkeypatch.setattr(async_task_service.settings, "WRITING_SECTION_MAX_CONCURRENCY", 1)
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    task = SimpleNamespace(current_content="", version_no=0, context={}, session_id="")
+    service._get_owned = lambda *_: task
+    service._prepare_agent_graph = lambda *_: None
+    service._load_template = lambda *_: None
+    service._attachment_context = lambda *_: None
+    service._should_section = lambda *_: True
+    async def plan(_ctx):
+        return [{"heading": str(i), "focus": str(i)} for i in range(3)]
+    async def first(*_args, on_delta):
+        on_delta("第一段")
+        return "第一段", []
+    finish_third = asyncio.Event()
+    async def later(_ctx, _section, index, *_args):
+        if index == 2:
+            await finish_third.wait()
+        return f"第{index + 1}段", []
+    service._section_plan_async = plan
+    service._generate_one_section_stream_async = first
+    service._generate_one_section_async = later
+    service._merge_sources = lambda _groups: []
+    service._finalize_draft = lambda _task, _ctx, content, *_args, **_kwargs: {
+        "current_content": content, "reply": "完成"}
+
+    async def exercise():
+        stream = service.draft_stream_async("task-a", "user-a")
+        first_event = json.loads((await anext(stream))[6:])
+        second_event = await asyncio.wait_for(anext(stream), 1)
+        assert first_event["text"] == "第一段"
+        assert json.loads(second_event[6:])["text"] == "\n\n第2段"
+        finish_third.set()
+        return [json.loads(event[6:]) async for event in stream]
+
+    rest = asyncio.run(exercise())
+    assert rest[-1]["type"] == "done"
+    assert rest[-1]["data"]["current_content"] == "第一段\n\n第2段\n\n第3段"
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_section_generation_respects_concurrency_limit_and_order(monkeypatch, limit):
+    from app.application.writing.async_task_service import settings
+    monkeypatch.setattr(settings, "WRITING_SECTION_MAX_CONCURRENCY", limit)
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    active = 0
+    maximum = 0
+    async def generate(_ctx, _section, index, *_args):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.02 if index == 0 else 0.005)
+        active -= 1
+        return str(index), []
+    service._generate_one_section_async = generate
+    result = asyncio.run(service._generate_sections_async(
+        {}, [{"heading": str(i)} for i in range(4)], "u", "", None))
+    assert [text for text, _sources in result] == ["0", "1", "2", "3"]
+    assert maximum == limit

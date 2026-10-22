@@ -222,11 +222,14 @@ class QwenGateway:
     async def _apost(self, payload: Dict[str, Any]) -> httpx.Response:
         failures: List[str] = []
         timeout = httpx.Timeout(self.timeout)
+        queued_at = time.monotonic()
         async with self._limiter():
+            logger.info("[模型耗时] 并发等待 %.3fs", time.monotonic() - queued_at)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 for url in self._endpoint_order():
                     self._acquire(url)
                     try:
+                        request_at = time.monotonic()
                         response = await client.post(
                             f"{url}/chat/completions",
                             headers=self._headers(),
@@ -238,6 +241,7 @@ class QwenGateway:
                             failures.append(f"{url}: HTTP {response.status_code} {detail}")
                             continue
                         response.raise_for_status()
+                        logger.info("[模型耗时] 非流式响应 %.3fs", time.monotonic() - request_at)
                         if url != self.api_url:
                             logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
                         return response
@@ -321,12 +325,15 @@ class QwenGateway:
         payload["stream"] = True
         failures: List[str] = []
         timeout = httpx.Timeout(self.timeout)
-
+        queued_at = time.monotonic()
         async with self._limiter():
+            logger.info("[模型耗时] 流式并发等待 %.3fs", time.monotonic() - queued_at)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 for url in self._endpoint_order():
                     self._acquire(url)
                     try:
+                        request_at = time.monotonic()
+                        first_chunk = True
                         async with client.stream(
                             "POST",
                             f"{url}/chat/completions",
@@ -361,6 +368,10 @@ class QwenGateway:
                                         finish_reason = choice["finish_reason"]
                                     delta = (choice.get("delta") or {}).get("content")
                                     if delta:
+                                        if first_chunk:
+                                            logger.info("[模型耗时] 流式首字 %.3fs",
+                                                        time.monotonic() - request_at)
+                                            first_chunk = False
                                         yield delta
                             if finish_reason == "length":
                                 logger.warning("[AI网关] 流式输出被 max_tokens 截断")

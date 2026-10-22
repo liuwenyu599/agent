@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -53,11 +54,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
@@ -390,7 +390,7 @@ private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
         if (body.isBlank()) {
             Text("（该版本无正文内容）", fontSize = 13.sp, color = Muted)
         } else {
-            MarkdownText(body)
+            MarkdownText(body, vm.renderProfile)
         }
     }
 }
@@ -465,8 +465,6 @@ private fun inlineMd(text: String): AnnotatedString = buildAnnotatedString {
     append(text.substring(last))
 }
 
-private val OrderedListRegex = Regex("^\\d+\\.\\s+.*")
-
 /**
  * 公文结构行识别：AI 输出经常是纯文本（不带 # 标记），
  * 「一、」「（一）」这类公文层级标题也要按标题样式渲染，
@@ -477,66 +475,44 @@ private val GwHeading2Regex = Regex("^（[一二三四五六七八九十]+）[^�
 private val SignoffDateRegex = Regex("20\\d{2}\\s*年\\s*\\d{1,2}\\s*月\\s*\\d{1,2}\\s*日")
 private val SignoffAuthorityRegex = Regex("[\\u4e00-\\u9fa5（）()]{2,25}(政府|办公厅|办公室|委员会|局|厅|部|署|所|处|院|中心)")
 
-/** 正文段首缩进两字符（14.5sp 正文 ≈ 29sp），即「段前空格」的视觉效果 */
-private val BodyParagraphStyle = ParagraphStyle(
-    textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
-)
-
 /**
  * 单行公文格式渲染：markdown 标题 / 公文层级标题 / 列表 / 分割线 / 表格行 /
  * 普通段落（段首缩进两字符 + 行内粗体）。预览与分块编辑共用这一套。
  */
 @Composable
-private fun FormattedLine(raw: String) {
+private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonObject? = null) {
     val s = raw.trim()
+    val role = when {
+        s.startsWith("# ") -> "title"
+        s.startsWith("## ") || GwHeading1Regex.matches(s) -> "heading1"
+        s.startsWith("### ") || GwHeading2Regex.matches(s) -> "heading2"
+        else -> "body"
+    }
+    val spec = profile.previewStyle(role)
+    val lineStyle = TextStyle(
+        fontSize = spec.size.sp,
+        fontFamily = PreviewFonts.family(spec.fontName),
+        fontWeight = if (spec.bold) FontWeight.Bold else FontWeight.Normal,
+        color = Ink,
+        lineHeight = spec.lineHeight.sp,
+        textIndent = TextIndent(firstLine = (spec.size * spec.firstLineChars).sp),
+    )
     when {
         s.isBlank() -> Spacer(Modifier.height(6.dp))
         s == "---" || s == "***" || s == "___" -> {
             Spacer(Modifier.height(4.dp)); Hairline(); Spacer(Modifier.height(4.dp))
         }
-        s.startsWith("### ") -> Text(
-            inlineMd(s.removePrefix("### ")), fontSize = 16.sp,
-            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
-            color = Ink, lineHeight = 28.8.sp)
-        s.startsWith("## ") -> Text(
-            inlineMd(s.removePrefix("## ")), fontSize = 16.sp,
-            fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = 28.8.sp)
-        s.startsWith("# ") -> Text(
-            inlineMd(s.removePrefix("# ")), fontSize = 22.sp,
-            fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
-            color = Ink, lineHeight = 34.sp,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-        GwHeading1Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.SansSerif,
-            fontWeight = FontWeight.Bold, color = Ink, lineHeight = 28.8.sp)
-        GwHeading2Regex.matches(s) -> Text(
-            inlineMd(s), fontSize = 16.sp, fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Normal, color = Ink, lineHeight = 28.8.sp)
-        s.startsWith("- ") || s.startsWith("* ") -> Row {
-            Text("•  ", fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink)
-            Text(inlineMd(s.substring(2)), fontSize = 16.sp,
-                fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.8.sp)
-        }
-        OrderedListRegex.matches(s) -> {
-            val idx = s.indexOf('.')
-            Row {
-                Text(s.substring(0, idx + 1) + "  ", fontSize = 16.sp,
-                    fontFamily = FontFamily.Serif, color = Ink)
-                Text(inlineMd(s.substring(idx + 1).trim()), fontSize = 16.sp,
-                    fontFamily = FontFamily.Serif, color = Ink, lineHeight = 28.8.sp)
+        else -> {
+            val shown = when {
+                s.startsWith("### ") -> s.removePrefix("### ")
+                s.startsWith("## ") -> s.removePrefix("## ")
+                s.startsWith("# ") -> s.removePrefix("# ")
+                s.startsWith("- ") || s.startsWith("* ") -> "•  " + s.substring(2)
+                else -> s
             }
+            Text(inlineMd(shown), modifier = Modifier.fillMaxWidth(), style = lineStyle,
+                textAlign = if (role == "title") TextAlign.Center else TextAlign.Start)
         }
-        s.startsWith("|") -> Text(s, fontSize = 12.5.sp, color = Ink2,
-            lineHeight = 20.sp)
-        else -> Text(
-            inlineMd(s),
-            style = androidx.compose.ui.text.TextStyle(
-                fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                color = Ink, lineHeight = 28.8.sp,
-                textIndent = TextIndent(firstLine = 32.sp, restLine = 0.sp),
-            ),
-        )
     }
 }
 
@@ -546,9 +522,9 @@ private fun FormattedLine(raw: String) {
  * 用于历史版本预览，让正文以带格式的方式呈现而不是裸 txt。
  */
 @Composable
-private fun MarkdownText(text: String) {
+private fun MarkdownText(text: String, profile: kotlinx.serialization.json.JsonObject? = null) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        text.split('\n').forEach { line -> FormattedLine(line) }
+        text.split('\n').forEach { line -> FormattedLine(line, profile) }
     }
 }
 
@@ -569,6 +545,8 @@ private fun FormattedBodyEditor(
     var editText by remember { mutableStateOf("") }
     DisposableEffect(Unit) { onDispose { vm.markParagraphEditing(false) } }
     val lines = remember(vm.content) { vm.content.split('\n') }
+    val profile = vm.renderProfile
+    val bodySpec = profile.previewStyle("body")
     val paragraphStates = remember(vm.paragraphs) {
         vm.paragraphs.associateBy { it["line_index"].int() }
     }
@@ -628,8 +606,9 @@ private fun FormattedBodyEditor(
                         enabled = !vm.suggestionBusy,
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                        color = Ink, lineHeight = 28.8.sp),
+                            fontSize = bodySpec.size.sp,
+                            fontFamily = PreviewFonts.family(bodySpec.fontName),
+                            color = Ink, lineHeight = bodySpec.lineHeight.sp),
                         shape = RoundedCornerShape(Dimens.radiusXs),
                         colors = TextFieldDefaults.outlinedTextFieldColors(
                             backgroundColor = SurfaceTonal,
@@ -664,7 +643,7 @@ private fun FormattedBodyEditor(
                             }
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     ) {
-                        FormattedLine(raw)
+                        FormattedLine(raw, profile)
                     }
                     if (raw.isNotBlank()) {
                         val state = paragraphStates[i]?.get("status").str()
@@ -692,14 +671,20 @@ private fun FormattedBodyEditor(
         }
         if (displaySignature.isNotBlank() || displayDate.isNotBlank()) {
             item {
-                Column(Modifier.fillMaxWidth().padding(top = 24.dp, end = 64.dp),
+                val signoff = profile.previewStyle("signature")
+                Column(Modifier.fillMaxWidth().padding(top = 24.dp,
+                    end = (signoff.size * signoff.rightIndentChars).dp),
                     horizontalAlignment = Alignment.End) {
                     if (displaySignature.isNotBlank()) Text(displaySignature,
-                        fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink,
-                        lineHeight = 28.8.sp, textAlign = TextAlign.Right)
+                        fontSize = profile.previewStyle("signature").size.sp,
+                        fontFamily = PreviewFonts.family(profile.previewStyle("signature").fontName),
+                        color = Ink, lineHeight = profile.previewStyle("signature").lineHeight.sp,
+                        textAlign = TextAlign.Right)
                     if (displayDate.isNotBlank()) Text(displayDate,
-                        fontSize = 16.sp, fontFamily = FontFamily.Serif, color = Ink,
-                        lineHeight = 28.8.sp, textAlign = TextAlign.Right)
+                        fontSize = profile.previewStyle("date").size.sp,
+                        fontFamily = PreviewFonts.family(profile.previewStyle("date").fontName),
+                        color = Ink, lineHeight = profile.previewStyle("date").lineHeight.sp,
+                        textAlign = TextAlign.Right)
                 }
             }
         }
@@ -1350,8 +1335,18 @@ private fun EditorPanel(
             return
         }
 
-        // 文档纸张
-        DocumentSurface(modifier = Modifier.weight(1f), padding = Dimens.space6) {
+        // A4 页面宽度按当前栏宽缩放；字号仍按后端规则显示。
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            val pageWidth = minOf(maxWidth, 794.dp)
+            val scale = pageWidth.value / 794f
+            val profile = vm.renderProfile
+            val leftInset = (profile.pageCm("left_margin_cm", 2.8f) * 37.8f * scale).dp
+            val rightInset = (profile.pageCm("right_margin_cm", 2.6f) * 37.8f * scale).dp
+            val topInset = (profile.pageCm("top_margin_cm", 3.7f) * 37.8f * scale).dp
+            val bottomInset = (profile.pageCm("bottom_margin_cm", 3.5f) * 37.8f * scale).dp
+        DocumentSurface(modifier = Modifier.width(pageWidth).fillMaxHeight(), padding = 0.dp,
+            pagePadding = PaddingValues(start = leftInset, end = rightInset,
+                top = topInset, bottom = bottomInset)) {
             // 正文默认就是「所见即所得」：按公文格式渲染（标题居中、
             // 一、（一）层级行加粗、正文段首缩进两字符、**粗体** 生效），
             // 点击任意段落就地修改，格式变化立刻可见；
@@ -1385,42 +1380,52 @@ private fun EditorPanel(
                     Text("排版视图", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold,
                         color = Primary)
                     Spacer(Modifier.width(Dimens.space3))
-                    Text("标题 22pt · 主送/正文 16pt · 固定行距 28.8pt · 首行缩进 2 字符",
+                    val bodyStyle = profile.previewStyle("body")
+                    val titleStyle = profile.previewStyle("title")
+                    Text("标题 ${titleStyle.size.toInt()}pt · 正文 ${bodyStyle.size.toInt()}pt · 行距 ${bodyStyle.lineHeight}pt · 首行缩进 ${bodyStyle.firstLineChars.toInt()} 字符",
                         fontSize = 11.sp, color = Muted)
                 }
                 Spacer(Modifier.height(Dimens.space5))
             }
             if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
-                Text(vm.task.documentNumber, fontSize = 14.sp,
+                val numberStyle = profile.previewStyle("document_number")
+                Text(vm.task.documentNumber, fontSize = numberStyle.size.sp,
+                    fontFamily = PreviewFonts.family(numberStyle.fontName),
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    color = Ink2, lineHeight = 22.sp)
+                    color = Ink2, lineHeight = numberStyle.lineHeight.sp)
                 Spacer(Modifier.height(Dimens.space3))
             }
             if (vm.task.title.isNotBlank()) {
-                Text(vm.task.title, fontSize = 22.sp, fontFamily = FontFamily.Serif,
+                val titleStyle = profile.previewStyle("title")
+                Text(vm.task.title, fontSize = titleStyle.size.sp,
+                    fontFamily = PreviewFonts.family(titleStyle.fontName),
                     fontWeight = FontWeight.Normal,
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    color = Ink, lineHeight = 34.sp)
+                    color = Ink, lineHeight = titleStyle.lineHeight.sp)
                 Spacer(Modifier.height(Dimens.space5))
             }
             if (vm.task.recipient.isNotBlank()) {
+                val recipientStyle = profile.previewStyle("recipient")
                 Text(
                     vm.task.recipient.trimEnd('：', ':') + "：",
-                    fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                    color = Ink, lineHeight = 28.8.sp,
+                    fontSize = recipientStyle.size.sp,
+                    fontFamily = PreviewFonts.family(recipientStyle.fontName),
+                    color = Ink, lineHeight = recipientStyle.lineHeight.sp,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(Dimens.space3))
             }
             if (sourceMode) {
+                val bodyStyle = profile.previewStyle("body")
                 OutlinedTextField(
                     value = vm.content,
                     onValueChange = { vm.content = it },
                     enabled = !vm.suggestionBusy,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 16.sp, fontFamily = FontFamily.Serif,
-                        color = Ink, lineHeight = 28.8.sp),
+                        fontSize = bodyStyle.size.sp,
+                        fontFamily = PreviewFonts.family(bodyStyle.fontName),
+                        color = Ink, lineHeight = bodyStyle.lineHeight.sp),
                     shape = RoundedCornerShape(Dimens.radiusMd),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         backgroundColor = Surface,
@@ -1443,6 +1448,7 @@ private fun EditorPanel(
                 left = "字数：约 ${vm.content.length} 字",
                 items = listOf(versionText to Muted, stateText to stateColor),
             )
+        }
         }
     }
 }

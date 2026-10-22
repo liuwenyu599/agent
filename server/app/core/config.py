@@ -129,6 +129,9 @@ class Settings:
             0, min(100, int(os.getenv("WRITING_AGENT_ROLLOUT_PERCENT", "0"))))
         self.WRITING_AGENT_TRACE_RETENTION_DAYS = max(
             1, int(os.getenv("WRITING_AGENT_TRACE_RETENTION_DAYS", "180")))
+        # 单卡默认逐节生成；确认目标机吞吐收益后最多开放两节并发。
+        self.WRITING_SECTION_MAX_CONCURRENCY = max(
+            1, min(2, int(os.getenv("WRITING_SECTION_MAX_CONCURRENCY", "1"))))
 
         # Embedding / 向量检索。生产基线使用 bge-m3(1024d)，避免默认 512d 模型与既有索引静默错配。
         self.EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "auto")  # auto|bge|mock|http

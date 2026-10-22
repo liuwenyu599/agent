@@ -544,6 +544,24 @@ def test_official_export_uses_shared_format_for_structural_paragraphs():
         assert p.paragraph_format.first_line_indent == Pt(0)
 
 
+def test_writing_preview_profile_uses_export_rules_and_checks_owner():
+    from types import SimpleNamespace
+    from app.domain.official_document_format import format_checks
+    from app.interfaces.writing_tasks import render_profile
+
+    class OwnedService:
+        def _get_owned(self, task_id, user_id):
+            assert (task_id, user_id) == ("task-a", "user-a")
+            return object()
+
+    result = render_profile("task-a", SimpleNamespace(id="user-a"), OwnedService())
+    assert result["page"]["width_cm"] == 21.0
+    assert result["page"]["left_margin_cm"] == format_checks("page")["left_margin_cm"]
+    for role in ("title", "body", "heading1", "heading2", "signature", "date"):
+        assert result["styles"][role] == format_checks(role)
+    assert result["styles"]["recipient"]["first_line_indent_chars"] == 0
+
+
 def test_render_docx_extracts_only_standalone_trailing_signoff():
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from app.application.writing.task_service import WritingTaskService

@@ -517,6 +517,13 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
                 self.writer_calls += 1
                 return f"  第{index + 1}节内容。\n", []
 
+            async def _generate_one_section_stream_async(self, _ctx, _section,
+                                                          index, *_args, on_delta):
+                self.writer_calls += 1
+                on_delta("  第1节内容。\n")
+                await asyncio.sleep(0.02)
+                return "第1节内容。", []
+
             async def _interpret_async(self, *_args, **_kwargs):
                 return None
 
@@ -602,11 +609,20 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
                        and data["status"] == "running" for kind, data in events)
             deltas = "".join(data["text"] for kind, data in events if kind == "delta")
             assert deltas
+            visible = ""
+            for kind, data in events:
+                if kind == "delta":
+                    visible += data["text"]
+                elif kind == "replace":
+                    visible = data["text"]
             if mode == "repair":
                 assert first["repair_rounds"] == 2
                 assert first["current_content"].startswith("修复稿：")
                 assert deltas == "一、工作安排\n围绕群众需求开展法治宣传，明确责任分工。"
                 assert service.writer_calls == (1 if use_streaming else 0)
+            elif mode == "sections":
+                assert any(kind == "replace" for kind, _data in events)
+                assert visible == first["current_content"]
             else:
                 assert deltas == first["current_content"]
             assert any(kind == "quality" and data["level"] == "A" for kind, data in events)

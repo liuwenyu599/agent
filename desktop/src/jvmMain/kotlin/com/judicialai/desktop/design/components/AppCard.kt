@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -123,6 +124,7 @@ fun AppCardOutline(
 fun DocumentSurface(
     modifier: Modifier = Modifier,
     padding: Dp = Dimens.space8,
+    pagePadding: PaddingValues? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(Dimens.radiusMd)
@@ -135,7 +137,7 @@ fun DocumentSurface(
         Column(
             Modifier.fillMaxWidth()
                 .border(1.dp, LineSubtle, shape)
-                .padding(padding),
+                .padding(pagePadding ?: PaddingValues(padding)),
             content = content,
         )
     }

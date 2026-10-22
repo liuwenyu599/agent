@@ -94,3 +94,24 @@ def format_checks(target: str) -> dict:
     if target in {"signature", "date"}:
         checks["first_line_indent_chars"] = 0
     return checks
+
+
+def writing_preview_profile() -> dict:
+    """Editor preview values derived from the same rules used by DOCX export."""
+    page = format_checks("page")
+    body = format_checks("body")
+    return {
+        "profile": "GBT_RULES",
+        "page": {"width_cm": 21.0, "height_cm": 29.7, **page},
+        "styles": {
+            "title": format_checks("title"),
+            "document_number": {"font_name": body["font_name"],
+                                "font_size_pt": 14, "alignment": "center"},
+            "recipient": {**body, "first_line_indent_chars": 0},
+            "body": body,
+            "heading1": format_checks("heading1"),
+            "heading2": format_checks("heading2"),
+            "signature": format_checks("signature"),
+            "date": format_checks("date"),
+        },
+    }
