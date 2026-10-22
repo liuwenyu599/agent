@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
@@ -540,6 +541,9 @@ private fun FormattedBodyEditor(
     vm: WritingViewModel,
     modifier: Modifier = Modifier,
     onOpenSuggestions: () -> Unit = {},
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp,
+    header: @Composable () -> Unit = {},
 ) {
     var editIdx by remember { mutableStateOf<Int?>(null) }
     var editText by remember { mutableStateOf("") }
@@ -591,6 +595,10 @@ private fun FormattedBodyEditor(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
+        item {
+            Spacer(Modifier.height(topInset))
+            header()
+        }
         itemsIndexed(lines, key = { index, _ -> index }) { i, raw ->
             if (i == signatureIndex || i == dateIndex) return@itemsIndexed
             if (editIdx == i) {
@@ -694,6 +702,7 @@ private fun FormattedBodyEditor(
                     fontSize = 13.sp, color = Muted)
             }
         }
+        item { Spacer(Modifier.height(bottomInset)) }
     }
 }
 
@@ -1346,7 +1355,7 @@ private fun EditorPanel(
             val bottomInset = (profile.pageCm("bottom_margin_cm", 3.5f) * 37.8f * scale).dp
         DocumentSurface(modifier = Modifier.width(pageWidth).fillMaxHeight(), padding = 0.dp,
             pagePadding = PaddingValues(start = leftInset, end = rightInset,
-                top = topInset, bottom = bottomInset)) {
+                top = 0.dp, bottom = 0.dp)) {
             // 正文默认就是「所见即所得」：按公文格式渲染（标题居中、
             // 一、（一）层级行加粗、正文段首缩进两字符、**粗体** 生效），
             // 点击任意段落就地修改，格式变化立刻可见；
@@ -1387,6 +1396,7 @@ private fun EditorPanel(
                 }
                 Spacer(Modifier.height(Dimens.space5))
             }
+            val documentHeader: @Composable () -> Unit = {
             if (vm.task.documentNumberEnabled && vm.task.documentNumber.isNotBlank()) {
                 val numberStyle = profile.previewStyle("document_number")
                 Text(vm.task.documentNumber, fontSize = numberStyle.size.sp,
@@ -1415,7 +1425,9 @@ private fun EditorPanel(
                 )
                 Spacer(Modifier.height(Dimens.space3))
             }
+            }
             if (sourceMode) {
+                documentHeader()
                 val bodyStyle = profile.previewStyle("body")
                 OutlinedTextField(
                     value = vm.content,
@@ -1438,6 +1450,9 @@ private fun EditorPanel(
                     vm = vm,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     onOpenSuggestions = onOpenSuggestions,
+                    topInset = topInset,
+                    bottomInset = bottomInset,
+                    header = documentHeader,
                 )
             }
             Spacer(Modifier.height(Dimens.space3))

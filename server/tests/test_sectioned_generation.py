@@ -213,6 +213,44 @@ def test_async_production_planner_keeps_speech_as_continuous_prose():
     assert all(item["heading"] == "" for item in plan)
 
 
+def test_short_speech_streams_without_a_second_model_plan():
+    import json
+    from unittest.mock import AsyncMock
+
+    class Assistant:
+        async def achat_stream(self, **_kwargs):
+            yield "各位来宾，"
+            yield "欢迎参加法治宣传活动。"
+
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service.assistant = Assistant()
+    service.long_form_assistant = None
+    task = SimpleNamespace(current_content="", version_no=0, session_id="", context={
+        "document_type": "致辞稿", "word_count_target": 800,
+        "topic": "法治宣传活动", "history": [{"role": "user", "content": "写一篇800字致辞稿"}],
+    })
+    service._get_owned = lambda *_: task
+    service._prepare_agent_graph = lambda *_: None
+    service._load_template = lambda *_: None
+    service._attachment_context = lambda *_: None
+    service._section_plan_async = AsyncMock(side_effect=AssertionError("短稿不应另做章节规划"))
+    service._retrieve_async = AsyncMock(return_value=[])
+    service._draft_prompt_async = AsyncMock(return_value="写作规则")
+    service._regenerate_if_needed_async = AsyncMock(side_effect=lambda *_args: (_args[-2], None))
+    service._finalize_draft = lambda _task, _ctx, content, *_args, **_kwargs: {
+        "current_content": content, "reply": "完成"}
+
+    async def collect():
+        return [json.loads(event[6:]) async for event in
+                service.draft_stream_async("task-a", "user-a")]
+
+    events = asyncio.run(collect())
+    assert [event["type"] for event in events] == ["stage", "stage", "delta", "delta", "done"]
+    assert events[2]["text"] == "各位来宾，"
+    assert "致辞" in service._build_draft_instruction(task.context, False, None)
+    service._section_plan_async.assert_not_awaited()
+
+
 def test_async_retrieval_uses_worker_owned_session_without_blocking_loop(monkeypatch):
     from app.application.knowledge.rag_service import RagService
     from app.infrastructure.database import SessionLocal
@@ -302,7 +340,10 @@ def test_sectioned_sse_replaces_provisional_first_section_before_done(monkeypatc
     service._should_section = lambda *_args: True
     async def plan(_ctx):
         return [{"heading": "一、", "focus": "先写"}, {"heading": "二、", "focus": "再写"}]
-    async def first(*_args, on_delta):
+    async def first(_ctx, _section, index, *_args, on_delta):
+        if index:
+            on_delta("第二段")
+            return "第二段", []
         on_delta("未校验首段")
         await finish.wait()
         return "通过校验的首段", []
@@ -320,6 +361,8 @@ def test_sectioned_sse_replaces_provisional_first_section_before_done(monkeypatc
 
     async def collect():
         stream = service.draft_stream_async("task-a", "user-a")
+        assert decode(await anext(stream))["type"] == "stage"
+        assert decode(await anext(stream))["type"] == "stage"
         first_event = decode(await anext(stream))
         assert first_event == {"type": "delta", "text": "未校验首段"}
         finish.set()
@@ -346,23 +389,23 @@ def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
     service._should_section = lambda *_: True
     async def plan(_ctx):
         return [{"heading": str(i), "focus": str(i)} for i in range(3)]
-    async def first(*_args, on_delta):
-        on_delta("第一段")
-        return "第一段", []
     finish_third = asyncio.Event()
-    async def later(_ctx, _section, index, *_args):
+    async def first(_ctx, _section, index, *_args, on_delta):
         if index == 2:
             await finish_third.wait()
-        return f"第{index + 1}段", []
+        text = "第一段" if index == 0 else f"第{index + 1}段"
+        on_delta(text)
+        return text, []
     service._section_plan_async = plan
     service._generate_one_section_stream_async = first
-    service._generate_one_section_async = later
     service._merge_sources = lambda _groups: []
     service._finalize_draft = lambda _task, _ctx, content, *_args, **_kwargs: {
         "current_content": content, "reply": "完成"}
 
     async def exercise():
         stream = service.draft_stream_async("task-a", "user-a")
+        assert json.loads((await anext(stream))[6:])["type"] == "stage"
+        assert json.loads((await anext(stream))[6:])["type"] == "stage"
         first_event = json.loads((await anext(stream))[6:])
         second_event = await asyncio.wait_for(anext(stream), 1)
         assert first_event["text"] == "第一段"
@@ -373,6 +416,38 @@ def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
     rest = asyncio.run(exercise())
     assert rest[-1]["type"] == "done"
     assert rest[-1]["data"]["current_content"] == "第一段\n\n第2段\n\n第3段"
+
+
+def test_stream_disconnect_waits_for_section_producer_cleanup():
+    import json
+
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    task = SimpleNamespace(current_content="", version_no=0, context={}, session_id="")
+    service._get_owned = lambda *_: task
+    service._prepare_agent_graph = lambda *_: None
+    service._load_template = lambda *_: None
+    service._attachment_context = lambda *_: None
+    service._should_section = lambda *_: True
+    async def plan(_ctx):
+        return [{"heading": "一、", "focus": "首节"}]
+    service._section_plan_async = plan
+    cleaned = asyncio.Event()
+    async def first(*_args, on_delta):
+        try:
+            on_delta("首字")
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+    service._generate_one_section_stream_async = first
+
+    async def exercise():
+        stream = service.draft_stream_async("task-a", "user-a")
+        while json.loads((await anext(stream))[6:])["type"] != "delta":
+            pass
+        await stream.aclose()
+        assert cleaned.is_set()
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("limit", [1, 2])

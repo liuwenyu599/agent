@@ -520,9 +520,9 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
             async def _generate_one_section_stream_async(self, _ctx, _section,
                                                           index, *_args, on_delta):
                 self.writer_calls += 1
-                on_delta("  第1节内容。\n")
+                on_delta(f"  第{index + 1}节内容。\n")
                 await asyncio.sleep(0.02)
-                return "第1节内容。", []
+                return f"第{index + 1}节内容。", []
 
             async def _interpret_async(self, *_args, **_kwargs):
                 return None
@@ -622,6 +622,9 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
                 assert service.writer_calls == (1 if use_streaming else 0)
             elif mode == "sections":
                 assert any(kind == "replace" for kind, _data in events)
+                assert service.writer_calls == 2
+                assert any(kind == "delta" and data["text"].startswith("\n\n")
+                           for kind, data in events)
                 assert visible == first["current_content"]
             else:
                 assert deltas == first["current_content"]

@@ -971,51 +971,58 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             template = self._load_template(ctx.get("template_id"))
             attachment_ctx = self._attachment_context(task, ctx)
             if self._should_section(ctx, outline_only):
+                yield _sse({"type": "stage", "key": "planner", "label": "正在安排正文结构", "status": "running"})
                 plan = await self._section_plan_async(ctx)
                 if not plan:
                     raise HTTPException(status_code=502, detail="未能生成章节规划，请重试")
+                yield _sse({"type": "stage", "key": "writer", "label": "正在生成正文", "status": "running"})
                 sections: List[str] = []
                 source_groups: List[List[Dict]] = []
-                chunks: asyncio.Queue[Optional[str]] = asyncio.Queue()
-                def on_delta(delta: str) -> None:
-                    chunks.put_nowait(delta)
-                async def produce_first():
+                stream_count = (len(plan) if settings.WRITING_SECTION_MAX_CONCURRENCY == 1
+                                else 1)
+                for index in range(stream_count):
+                    section = plan[index]
+                    chunks: asyncio.Queue[Optional[str]] = asyncio.Queue()
+                    def on_delta(delta: str) -> None:
+                        chunks.put_nowait(delta)
+                    async def produce_section():
+                        try:
+                            return await self._generate_one_section_stream_async(
+                                ctx, section, index, plan, user_id, attachment_ctx,
+                                template, on_delta=on_delta)
+                        finally:
+                            chunks.put_nowait(None)
+                    producer = asyncio.create_task(produce_section())
+                    provisional = ""
+                    prefix = "\n\n" if index else ""
+                    first_chunk = True
                     try:
-                        return await self._generate_one_section_stream_async(
-                            ctx, plan[0], 0, plan, user_id, attachment_ctx,
-                            template, on_delta=on_delta)
+                        while (chunk := await chunks.get()) is not None:
+                            provisional += chunk
+                            yield _sse({"type": "delta", "text":
+                                        (prefix if first_chunk else "") + chunk})
+                            first_chunk = False
+                        text, sources = await producer
                     finally:
-                        chunks.put_nowait(None)
-                producer = asyncio.create_task(produce_first())
-                provisional = ""
-                try:
-                    while (chunk := await chunks.get()) is not None:
-                        provisional += chunk
-                        yield _sse({"type": "delta", "text": chunk})
-                    text, sources = await producer
-                finally:
-                    if not producer.done():
-                        producer.cancel()
-                text = text.strip()
-                if text != provisional:
-                    yield _sse({"type": "replace", "text": text})
-                sections.append(text)
-                source_groups.append(sources)
-                async def later_sections():
-                    if settings.WRITING_SECTION_MAX_CONCURRENCY == 1:
-                        for index in range(1, len(plan)):
-                            yield await self._generate_one_section_async(
-                                ctx, plan[index], index, plan, user_id,
-                                attachment_ctx, template)
-                    else:
-                        for result in await self._generate_sections_async(
-                            ctx, plan, user_id, attachment_ctx, template, start_index=1):
-                            yield result
-                async for later, later_sources in later_sections():
-                    later = later.strip()
-                    sections.append(later)
-                    source_groups.append(later_sources)
-                    yield _sse({"type": "delta", "text": "\n\n" + later})
+                        if not producer.done():
+                            producer.cancel()
+                        # Wait for the gateway stream's context manager to exit so a
+                        # disconnected client does not retain a model semaphore slot.
+                        await asyncio.gather(producer, return_exceptions=True)
+                    text = text.strip()
+                    sections.append(text)
+                    source_groups.append(sources)
+                    if text != provisional or (first_chunk and prefix):
+                        yield _sse({"type": "replace", "text":
+                                    "\n\n".join(sections)})
+                if stream_count < len(plan):
+                    for later, later_sources in await self._generate_sections_async(
+                        ctx, plan, user_id, attachment_ctx, template,
+                        start_index=stream_count):
+                        later = later.strip()
+                        sections.append(later)
+                        source_groups.append(later_sources)
+                        yield _sse({"type": "delta", "text": "\n\n" + later})
                 payload = self._finalize_draft(
                     task, ctx, "\n\n".join(sections).strip(),
                     self._merge_sources(source_groups), user_id,
@@ -1027,7 +1034,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 return
 
             instruction = self._build_draft_instruction(ctx, outline_only, template)
+            yield _sse({"type": "stage", "key": "research", "label": "正在查找参考资料", "status": "running"})
             sources = await self._retrieve_async(ctx, user_id)
+            yield _sse({"type": "stage", "key": "writer", "label": "正在生成正文", "status": "running"})
             system = await self._draft_prompt_async(
                 instruction, sources, attachment_ctx, user_id, template)
             parts: List[str] = []

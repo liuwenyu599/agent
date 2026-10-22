@@ -67,14 +67,11 @@ class SectionedGenerationWritingTaskService(StructuredFieldWritingTaskService):
         doc_type = str(ctx.get("document_type") or "").strip()
         # 未知文种照常起草：报告骨架不是安全的兜底。
         is_speech = any(x in doc_type for x in _SPEECH_TYPES)
-        # 讲话类（致辞/讲话/发言/主持词）**无条件走分段**，不看字数。
-        # 连续行文体例是文种属性，与篇幅无关：一篇 600 字的会前表态同样
-        # 不能被拆出「一、二、三」小标题。曾经的 `target >= 1800` 门槛会让
-        # 真实短发言稿（多为 800~1500 字）绕过本分支、落入通用起草路径，
-        # 于是出来的是文件味而不是讲话味——这正是「简单的还可以、发言稿用不上」
-        # 的根因。字数门槛只对报告/方案类有意义（短报告无需分节）。
+        # 短篇现场材料用带文种约束的单次流式起草，避免先等一次完整 JSON
+        # 章节规划。长篇仍分节，以便逐节检索和质量检查。未给字数时沿用
+        # 长篇路径，避免把用户期望的完整讲话压成短稿。
         if is_speech:
-            return True
+            return target == 0 or target > 1200
         return doc_type in _LONG_DOC_TYPES and (target >= 1800 or target == 0)
 
     @staticmethod

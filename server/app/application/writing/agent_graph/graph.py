@@ -313,31 +313,38 @@ class WritingAgentGraph:
                 groups: list[list[dict[str, Any]]] = [initial_sources]
                 stream_section = getattr(
                     self.service, "_generate_one_section_stream_async", None)
-                if callable(stream_section):
-                    provisional: list[str] = []
-                    def on_delta(delta: str) -> None:
-                        provisional.append(delta)
-                        emit({"text": delta})
-                    first, first_sources = await stream_section(
-                        ctx, plan[0], 0, plan, user_id, attachment_ctx,
-                        template, on_delta=on_delta)
-                    if first.strip() != "".join(provisional):
-                        emit({"replace": first.strip()})
-                else:
-                    first, first_sources = await self.service._generate_one_section_async(
-                        ctx, plan[0], 0, plan, user_id, attachment_ctx, template)
-                    emit({"text": first.strip()})
-                sections.append(first.strip())
-                groups.append(first_sources)
+                stream_count = (len(plan) if settings.WRITING_SECTION_MAX_CONCURRENCY == 1
+                                else 1)
+                for index in range(stream_count):
+                    prefix = "\n\n" if index else ""
+                    if callable(stream_section):
+                        provisional: list[str] = []
+                        def on_delta(delta: str) -> None:
+                            emit({"text": (prefix if not provisional else "") + delta})
+                            provisional.append(delta)
+                        text, section_sources = await stream_section(
+                            ctx, plan[index], index, plan, user_id, attachment_ctx,
+                            template, on_delta=on_delta)
+                        sections.append(text.strip())
+                        groups.append(section_sources)
+                        if text.strip() != "".join(provisional) or (prefix and not provisional):
+                            emit({"replace": "\n\n".join(sections)})
+                    else:
+                        text, section_sources = await self.service._generate_one_section_async(
+                            ctx, plan[index], index, plan, user_id, attachment_ctx, template)
+                        sections.append(text.strip())
+                        groups.append(section_sources)
+                        emit({"text": prefix + text.strip()})
                 async def later_sections():
                     generate_sections = getattr(self.service, "_generate_sections_async", None)
                     if (callable(generate_sections)
                             and settings.WRITING_SECTION_MAX_CONCURRENCY > 1):
                         for result in await generate_sections(
-                            ctx, plan, user_id, attachment_ctx, template, start_index=1):
+                            ctx, plan, user_id, attachment_ctx, template,
+                            start_index=stream_count):
                             yield result
                     else:
-                        for index in range(1, len(plan)):
+                        for index in range(stream_count, len(plan)):
                             yield await self.service._generate_one_section_async(
                                 ctx, plan[index], index, plan, user_id,
                                 attachment_ctx, template)
