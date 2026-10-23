@@ -4,6 +4,7 @@
 轻量调整后，交给本地 bge-reranker-v2-m3 重排，最终只返回 top_k（默认 3）。
 """
 import re
+import time
 from typing import Dict, List
 
 from sqlalchemy import or_, select
@@ -22,10 +23,12 @@ logger = get_logger(__name__)
 
 
 class RagService:
-    def __init__(self, db: Session, embedder: Embedder, vector_store: VectorStore) -> None:
+    def __init__(self, db: Session, embedder: Embedder, vector_store: VectorStore,
+                 fast_mode: bool = False) -> None:
         self.db = db
         self.embedder = embedder
         self.vector_store = vector_store
+        self.fast_mode = fast_mode
 
     @property
     def access(self):
@@ -106,6 +109,7 @@ class RagService:
                top_k: int = None, min_score: float = None,
                kb_ids: List[str] = None, dept_code: str = None,
                scopes: List[str] = None) -> List[Dict]:
+        started = time.perf_counter()
         top_k = top_k or settings.RAG_TOP_K
         configured_min = min_score if min_score is not None else settings.RAG_SCORE_THRESHOLD
         # 调用方不能把政务检索阈值降回不安全值。
@@ -131,11 +135,13 @@ class RagService:
             return []
 
         candidates = max(30, int(settings.RAG_VECTOR_CANDIDATES))
-        logger.info("[RAG] 查询: %s（scope=%s, threshold=%.2f）",
-                    query, scopes or "ALL", min_score)
+        logger.info("[RAG耗时] 开始 mode=%s kb_count=%d scope_count=%d",
+                    "keyword" if self.fast_mode else "hybrid", len(kb_ids),
+                    len(scopes or []))
 
         vector_hits = []
-        if self.vector_store is not None:
+        if self.vector_store is not None and not self.fast_mode:
+            vector_started = time.perf_counter()
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
                 raw_hits = self.vector_store.search(
@@ -145,8 +151,14 @@ class RagService:
                             len(raw_hits), len(vector_hits))
             except Exception as exc:
                 logger.warning("[RAG] 向量检索失败，仅关键词召回: %s", exc)
+            finally:
+                logger.info("[RAG耗时] 向量阶段完成 duration=%.3fs hit_count=%d",
+                            time.perf_counter() - vector_started, len(vector_hits))
 
+        keyword_started = time.perf_counter()
         keyword_hits = self._keyword_search(query, kb_ids, candidates)
+        logger.info("[RAG耗时] 关键词阶段完成 duration=%.3fs hit_count=%d",
+                    time.perf_counter() - keyword_started, len(keyword_hits))
 
         rrf_k = settings.RAG_RRF_K
         fused: Dict[str, Dict] = {}
@@ -225,8 +237,9 @@ class RagService:
             if len(candidate_results) >= candidates:
                 break
 
-        final_k = min(top_k, int(settings.RAG_RERANK_TOP_K)) if settings.RAG_RERANK_ENABLED else top_k
-        if settings.RAG_RERANK_ENABLED:
+        do_rerank = settings.RAG_RERANK_ENABLED and not self.fast_mode
+        final_k = min(top_k, int(settings.RAG_RERANK_TOP_K)) if do_rerank else top_k
+        if do_rerank:
             results = reranker.rerank(query, candidate_results, final_k)
         else:
             results = candidate_results[:final_k]
@@ -234,8 +247,11 @@ class RagService:
         logger.info(
             "[RAG] 最终返回: %d 个（候选 %d / 向量 %d / 关键词 %d / rerank=%s）",
             len(results), len(candidate_results), len(vector_hits), len(keyword_hits),
-            settings.RAG_RERANK_ENABLED,
+            do_rerank,
         )
+        logger.info("[RAG耗时] 完成 mode=%s duration=%.3fs result_count=%d",
+                    "keyword" if self.fast_mode else "hybrid",
+                    time.perf_counter() - started, len(results))
         return results
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
@@ -247,7 +263,7 @@ class RagService:
         if not kb_ids:
             return []
 
-        if self.vector_store is not None:
+        if self.vector_store is not None and not self.fast_mode:
             try:
                 query_vec = self.embedder.encode_queries([query])[0]
                 hits = self.vector_store.search(query_vec, kb_ids, top_k=30, scopes=scopes)

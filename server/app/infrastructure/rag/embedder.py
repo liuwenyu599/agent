@@ -1,6 +1,8 @@
 """文本向量化：BGE 实现（懒加载重依赖）+ HTTP 远程实现 + Mock 实现（测试用）。"""
 import hashlib
 import json
+import threading
+import time
 import urllib.request
 from typing import List
 
@@ -22,26 +24,37 @@ class BGEEmbedder:
         self.model_path = model_path or settings.EMBED_MODEL_PATH
         self.batch_size = 32
         self._model = None
+        self._load_lock = threading.Lock()
 
     def _load(self) -> None:
         if self._model is not None:
             return
-        import torch
-        from sentence_transformers import SentenceTransformer
+        with self._load_lock:
+            if self._model is not None:
+                return
+            started = time.perf_counter()
+            logger.info("[RAG耗时] embedding 模型开始加载")
+            import torch
+            from sentence_transformers import SentenceTransformer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info("[Embedder] 加载模型: %s, device: %s", self.model_path, device)
-        self._model = SentenceTransformer(self.model_path, device=device)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._model = SentenceTransformer(self.model_path, device=device)
+            logger.info("[RAG耗时] embedding 模型加载完成 device=%s duration=%.3fs",
+                        device, time.perf_counter() - started)
 
     def encode(self, texts: List[str], normalize: bool = True) -> np.ndarray:
+        started = time.perf_counter()
         self._load()
-        return self._model.encode(
+        result = self._model.encode(
             texts,
             batch_size=self.batch_size,
             show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=normalize,
         )
+        logger.info("[RAG耗时] embedding 编码完成 count=%d duration=%.3fs",
+                    len(texts), time.perf_counter() - started)
+        return result
 
     def encode_queries(self, queries: List[str]) -> np.ndarray:
         # 检索场景：查询加指令前缀可显著提升 BGE v1.5 召回质量
@@ -63,12 +76,15 @@ class HTTPEmbedder:
             raise RuntimeError("[Embedder] EMBEDDING_HTTP_URL 未配置，无法使用 http embedder")
 
     def _post(self, texts):
+        started = time.perf_counter()
         body = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
         req = urllib.request.Request(
             self.url, data=body, headers={"Content-Type": "application/json"}, method="POST"
         )
         with urllib.request.urlopen(req, timeout=settings.EMBEDDING_HTTP_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        logger.info("[RAG耗时] HTTP embedding 完成 count=%d duration=%.3fs",
+                    len(texts), time.perf_counter() - started)
         return data
 
     @staticmethod

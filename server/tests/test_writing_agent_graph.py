@@ -36,6 +36,14 @@ def test_template_only_request_keeps_streaming_fast_path():
     }) == "fast"
 
 
+def test_selected_knowledge_does_not_force_short_request_into_agent():
+    assert classify_writing_route({
+        "word_count_target": 800,
+        "kb_ids": ["selected-department-kb"],
+        "history": [{"role": "user", "content": "写一份简短通知"}],
+    }) == "fast"
+
+
 def test_complexity_router_uses_latest_user_requirement():
     assert classify_writing_route({
         "history": [
@@ -84,7 +92,8 @@ def test_agent_planner_reuses_ai_plan_only_for_unchanged_request(same_request):
     "context,has_attachments",
     [
         ({"word_count_target": 1800}, False),
-        ({"kb_ids": ["kb-1"]}, False),
+        ({"kb_ids": ["kb-1"], "history": [
+            {"role": "user", "content": "依据知识库写一份材料"}]}, False),
         ({"history": [{"role": "user", "content": "请依据相关法规和案例起草材料"}]}, False),
         ({}, True),
     ],

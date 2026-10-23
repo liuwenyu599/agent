@@ -475,6 +475,8 @@ class WritingTaskService:
                 user_id, dept_code, bool(org_ctx.get("is_admin")))
             if not kb_ids:
                 return []
+            if getattr(self.rag, "fast_mode", False):
+                return self._plan_materials_fallback(query, user_id, kb_ids)
             query_vec = self.rag.embedder.encode_queries([query])[0]
             hits = self.rag.vector_store.search(query_vec, kb_ids, top_k=8, scopes=scopes)
             out, seen = [], set()
@@ -1551,6 +1553,7 @@ class WritingTaskService:
                     logger.warning("[写作任务] 规范检索失败: %s", e)
             return sources
         except Exception as e:
+            self._rag_failed = True
             logger.warning("[写作任务] RAG 检索失败: %s", e)
             return []
 

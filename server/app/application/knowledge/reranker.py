@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -39,8 +40,11 @@ class Reranker:
                     "请部署 bge-reranker-v2-m3；生产环境禁止静默跳过二阶段重排。"
                 )
             from sentence_transformers import CrossEncoder
+            started = time.perf_counter()
+            logger.info("[RAG耗时] reranker 模型开始加载")
             self._model = CrossEncoder(str(model_path), local_files_only=True)
-            logger.info("[RAG] reranker 已加载: %s", model_path)
+            logger.info("[RAG耗时] reranker 模型加载完成 duration=%.3fs",
+                        time.perf_counter() - started)
             return self._model
 
     def rerank(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
@@ -50,7 +54,10 @@ class Reranker:
         if model is None:
             return candidates[:top_k]
         pairs = [(query, str(item.get("content") or "")) for item in candidates]
+        started = time.perf_counter()
         scores = model.predict(pairs)
+        logger.info("[RAG耗时] reranker 计算完成 count=%d duration=%.3fs",
+                    len(pairs), time.perf_counter() - started)
         ranked = []
         for item, score in zip(candidates, scores):
             clone = dict(item)

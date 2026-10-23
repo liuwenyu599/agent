@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -36,6 +37,45 @@ from app.infrastructure.database.models.writing_suggestion import WritingSuggest
 from app.infrastructure.database.models.writing_task import WritingTaskModel
 
 logger = logging.getLogger(__name__)
+_rag_heavy_slots = threading.BoundedSemaphore(2)
+_rag_breaker_lock = threading.Lock()
+_rag_degraded_until = 0.0
+_rag_failure_count = 0
+
+
+class _RagHeavyBusy(Exception):
+    pass
+
+
+def _rag_degraded() -> bool:
+    with _rag_breaker_lock:
+        now = time.monotonic()
+        if _rag_degraded_until and now >= _rag_degraded_until:
+            global _rag_failure_count
+            _rag_failure_count = 0
+            return False
+        return now < _rag_degraded_until
+
+
+def _record_rag_failure() -> bool:
+    """Record one failed heavy read; open the circuit only after a streak."""
+    global _rag_failure_count, _rag_degraded_until
+    with _rag_breaker_lock:
+        _rag_failure_count += 1
+        if _rag_failure_count < settings.WRITING_RAG_FAILURE_THRESHOLD:
+            return False
+        _rag_degraded_until = time.monotonic() + settings.WRITING_RAG_COOLDOWN_SECONDS
+        return True
+
+
+def _record_rag_success() -> None:
+    global _rag_failure_count
+    with _rag_breaker_lock:
+        _rag_failure_count = 0
+
+
+def _empty_rag_result(method: str):
+    return "" if method == "_example_style_block" or method == "_draft_prompt" else []
 
 
 def _http_error_message(detail: Any) -> str:
@@ -51,6 +91,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
         self.interpreter = AsyncWritingIntentInterpreter(assistant) if assistant else None
         self._draft_memory_cache: dict[tuple[str, str], str] = {}
+        self._draft_style_cache: dict[tuple[str, str], str] = {}
+        self._draft_reference_lock = asyncio.Lock()
+        self._rag_degraded_this_run = False
         # 长文正文生成专用 assistant：配置 LONG_FORM_MODEL_URLS 后路由到独立模型（如 35B），
         # 规划 / 意图理解 / 工具调用仍用主模型（self.assistant）。未配置时为 None，回退主模型。
         long_form_gw = get_long_form_gateway()
@@ -69,18 +112,56 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         if self.rag is None and method != "_draft_prompt":
             return [] if method != "_example_style_block" else ""
 
-        def read():
+        def read(fast_mode: bool = False):
             from app.application.knowledge.rag_service import RagService
             from app.infrastructure.database.session import SessionLocal
 
-            with SessionLocal() as db:
-                rag = (RagService(db, self.rag.embedder, self.rag.vector_store)
-                       if self.rag is not None else None)
-                worker = type(self)(db, assistant=self.assistant, rag=rag, attachments=None)
-                return getattr(worker, method)(*args, **kwargs)
+            if not fast_mode and not _rag_heavy_slots.acquire(blocking=False):
+                raise _RagHeavyBusy()
+            try:
+                with SessionLocal() as db:
+                    rag = (RagService(db, self.rag.embedder, self.rag.vector_store,
+                                      fast_mode=fast_mode)
+                           if self.rag is not None else None)
+                    worker = type(self)(db, assistant=self.assistant, rag=rag, attachments=None)
+                    result = getattr(worker, method)(*args, **kwargs)
+                    if getattr(worker, "_rag_failed", False):
+                        raise RuntimeError("RAG worker reported a retrieval failure")
+                    return result
+            finally:
+                if not fast_mode:
+                    _rag_heavy_slots.release()
 
         started = time.perf_counter()
-        result = await asyncio.to_thread(read)
+        # to_thread 的取消不会停止本地 CPU 推理；容量上限和短暂降级期避免
+        # 超时后的后台线程继续堆积。降级只跳过这次检索，正文仍继续生成。
+        if self.rag is None:
+            result = await asyncio.to_thread(read, True)
+        else:
+            if _rag_degraded():
+                self._rag_degraded_this_run = True
+                logger.warning("[写作检索] 断路器开启 task=%s step=%s elapsed=%.3fs；跳过资料检索",
+                               prompt_snapshot.current_task(), method,
+                               time.perf_counter() - started)
+                return _empty_rag_result(method)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(read),
+                    timeout=settings.WRITING_RAG_SOFT_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                self._rag_degraded_this_run = True
+                opened = _record_rag_failure()
+                logger.warning("[写作检索] 重模型检索失败 task=%s step=%s elapsed=%.3fs reason=%s circuit=%s；继续生成",
+                               prompt_snapshot.current_task(), method,
+                               time.perf_counter() - started, type(exc).__name__, opened)
+                return _empty_rag_result(method)
+            else:
+                _record_rag_success()
+                logger.info("[写作耗时] task=%s step=%s mode=hybrid duration=%.3fs",
+                            prompt_snapshot.current_task(), method,
+                            time.perf_counter() - started)
+                return result
         logger.info("[写作耗时] task=%s step=%s duration=%.3fs",
                     prompt_snapshot.current_task(), method,
                     time.perf_counter() - started)
@@ -94,8 +175,53 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
     async def _draft_prompt_async(self, instruction, sources, attachment_ctx, user_id,
                                   template=None):
-        return await self._read_in_worker(
-            "_draft_prompt", instruction, sources, attachment_ctx, user_id, template)
+        task_id = prompt_snapshot.current_task()
+        task = self.db.get(WritingTaskModel, task_id) if task_id else None
+        context = dict(task.context or {}) if task and task.user_id == user_id else {}
+        doc_type = str(context.get("document_type") or "")
+        original_request = next((
+            str(item.get("content") or "") for item in reversed(context.get("history") or [])
+            if item.get("role") == "user" and item.get("content")
+        ), "")
+        reference_query = ("\n".join(filter(None, [
+            f"文种：{doc_type}" if doc_type else "",
+            f"标题：{context.get('title')}" if context.get("title") else "",
+            f"主题：{context.get('topic')}" if context.get("topic") else "",
+            f"对象：{context.get('recipient')}" if context.get("recipient") else "",
+            f"用户需求：{original_request[:400]}" if original_request else "",
+        ])) or instruction)
+        cache_key = (user_id, task_id or reference_query)
+        async with self._draft_reference_lock:
+            if cache_key not in self._draft_style_cache:
+                self._draft_style_cache[cache_key] = await self._read_in_worker(
+                    "_example_style_block", reference_query, user_id)
+            memory_key = (user_id, doc_type)
+            if memory_key not in self._draft_memory_cache:
+                self._draft_memory_cache[memory_key] = await self._accepted_style_memory_async(
+                    user_id, doc_type)
+            style = self._draft_style_cache[cache_key]
+            memory = self._draft_memory_cache[memory_key]
+
+        # Prompt assembly still reads task context and snapshots the actual prompt,
+        # but it no longer performs RAG. A slow exemplar may drop style, not rules.
+        def compose():
+            from app.infrastructure.database.session import SessionLocal
+            with SessionLocal() as db:
+                worker = type(self)(db, assistant=self.assistant, rag=None, attachments=None)
+                return worker._draft_prompt(
+                    instruction, sources, attachment_ctx, user_id, template,
+                    style_card=style, style_memory=memory)
+
+        return await asyncio.to_thread(compose)
+
+    async def _accepted_style_memory_async(self, user_id: str, doc_type: str) -> str:
+        def read():
+            from app.infrastructure.database.session import SessionLocal
+            with SessionLocal() as db:
+                worker = type(self)(db, assistant=self.assistant, rag=None, attachments=None)
+                return worker._accepted_style_memory(user_id, doc_type)
+
+        return await asyncio.to_thread(read)
 
     # ---------------------------------------------------- 起草提示 + 训练留痕
 
@@ -119,7 +245,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         )
 
     def _draft_prompt(self, instruction: str, sources, attachment_ctx, user_id: str,
-                      template: Optional[Dict[str, Any]] = None) -> str:
+                      template: Optional[Dict[str, Any]] = None,
+                      *, style_card: Optional[str] = None,
+                      style_memory: Optional[str] = None) -> str:
         """组装起草用的 system，并把「撤卡的底稿 + 本次风格卡 + 当时的资料」留痕。
 
         原先每个起草入口都各自写两行（拼底稿、拼风格卡），这里收敛成一处，
@@ -129,16 +257,20 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         除了这一次函数调用没有任何额外开销。
         """
         base = self._draft_system(user_id, template)
-        style = self._example_style_block(instruction, user_id)
+        style = (self._example_style_block(instruction, user_id)
+                 if style_card is None else style_card)
         # Only accepted edits from the current user and document type influence tone.
         current_task = self.db.get(WritingTaskModel, prompt_snapshot.current_task())
         doc_type = (str((current_task.context or {}).get("document_type") or "")
                     if current_task and current_task.user_id == user_id else
                     task_parser.explicit_document_type(instruction) or "")
         cache_key = (user_id, doc_type)
-        if cache_key not in self._draft_memory_cache:
-            self._draft_memory_cache[cache_key] = self._accepted_style_memory(user_id, doc_type)
-        memory = self._draft_memory_cache[cache_key]
+        if style_memory is None:
+            if cache_key not in self._draft_memory_cache:
+                self._draft_memory_cache[cache_key] = self._accepted_style_memory(user_id, doc_type)
+            memory = self._draft_memory_cache[cache_key]
+        else:
+            memory = style_memory
         if current_task and current_task.user_id == user_id and current_task.current_content:
             rule = (
                 "\n\n【继续生成】沿用当前稿的主题、文种、事实、对象和已采纳段落；"
@@ -375,12 +507,15 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         ctx["planning_completed"] = bool(interpreted)
         ctx["planning_request_hash"] = content_hash(message)
 
+        org_started = time.perf_counter()
         try:
             from app.application.organization.service import OrganizationService
             org_ctx = OrganizationService(self.db).user_context(user_id)
         except Exception:
             org_ctx = {"dept_code": "", "dept_name": "", "short_name": "",
                        "agent": None, "scopes": ["GLOBAL"]}
+        logger.info("[写作耗时] request=%s plan_org_context %.3fs",
+                    content_hash(message)[:12], time.perf_counter() - org_started)
         doc_type = str(ctx.get("document_type") or "")
         fields: List[Dict[str, str]] = []
         for key, label in (("document_type", "文种"), ("recipient", "报送对象"),
@@ -394,7 +529,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         material_cues = ("参考", "结合", "根据", "依据", "材料", "范文", "案例", "政策", "文件")
         materials = await self._plan_materials_async(ctx, user_id, org_ctx) \
             if any(cue in message for cue in material_cues) else []
+        knowledge_started = time.perf_counter()
         knowledge = self._plan_knowledge(user_id, org_ctx)
+        logger.info("[写作耗时] request=%s plan_knowledge %.3fs",
+                    content_hash(message)[:12], time.perf_counter() - knowledge_started)
         result = {
             "doc_type": doc_type,
             "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
@@ -941,6 +1079,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                     detail="新稿与当前稿差异过大，未替换已保存版本。请用逐段建议修改具体段落，或新建任务重新起草。",
                 )
         result = super()._finalize_draft(task, ctx, text, sources, user_id)
+        if getattr(self, "_rag_degraded_this_run", False):
+            warning = "本次未取得部分参考资料，请核对文中的事实和引文。"
+            result["retrieval_warning"] = warning
+            result["reply"] = str(result.get("reply") or "") + warning
         logger.info("[写作耗时] task=%s final_check_save %.3fs",
                     task.id, time.perf_counter() - started)
         return result

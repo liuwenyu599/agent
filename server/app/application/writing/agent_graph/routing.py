@@ -37,7 +37,7 @@ def classify_writing_route(
         target = 0
     # 显式模板本身不等于复杂任务。快速链路同样会加载模板，而且可以立即流式
     # 返回正文；只有长文、资料约束或多重限制才值得进入多智能体链路。
-    if target >= 1800 or bool(context.get("kb_ids")):
+    if target >= 1800:
         return "agent"
     if has_attachments:
         return "agent"

@@ -282,6 +282,209 @@ def test_async_retrieval_uses_worker_owned_session_without_blocking_loop(monkeyp
         outer.close()
 
 
+def test_slow_writing_rag_returns_empty_sources_without_delaying_model(monkeypatch):
+    from app.application.knowledge.rag_service import RagService
+    from app.application.writing import async_task_service as module
+    from app.core.config import settings
+    from app.infrastructure.database import SessionLocal
+
+    monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+    monkeypatch.setattr(settings, "WRITING_RAG_SOFT_TIMEOUT_SECONDS", 0.03)
+    calls = []
+
+    def search(worker, **_kwargs):
+        calls.append((worker.fast_mode, threading.get_ident()))
+        if not worker.fast_mode:
+            time.sleep(0.12)
+        return [{"doc_id": "allowed", "content": "资料"}]
+
+    monkeypatch.setattr(RagService, "search", search)
+    outer = SessionLocal()
+    service = AsyncWritingTaskService(
+        outer, assistant=None,
+        rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+    try:
+        async def exercise():
+            started = time.perf_counter()
+            result = await service._retrieve_async({"topic": "普法"}, "u1")
+            return result, time.perf_counter() - started
+
+        result, elapsed = asyncio.run(exercise())
+        assert result == []
+        assert elapsed < 0.11
+        assert calls == [(False, calls[0][1])]
+        assert not module._rag_degraded()
+    finally:
+        outer.close()
+        monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+
+
+def test_rag_circuit_opens_after_three_failures_and_short_circuits(monkeypatch):
+    from app.application.knowledge.rag_service import RagService
+    from app.application.writing import async_task_service as module
+    from app.core.config import settings
+    from app.infrastructure.database import SessionLocal
+
+    monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+    monkeypatch.setattr(module, "_rag_failure_count", 0)
+    monkeypatch.setattr(settings, "WRITING_RAG_SOFT_TIMEOUT_SECONDS", 0.2)
+    calls = []
+    def failed_search(worker, **_kwargs):
+        calls.append(worker.fast_mode)
+        raise RuntimeError("embedding unavailable")
+    monkeypatch.setattr(RagService, "search", failed_search)
+    outer = SessionLocal()
+    service = AsyncWritingTaskService(
+        outer, assistant=None,
+        rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+    try:
+        async def exercise():
+            return [await service._retrieve_async({"topic": "普法"}, "u1")
+                    for _ in range(4)]
+        assert asyncio.run(exercise()) == [[], [], [], []]
+        assert calls == [False, False, False]
+        assert module._rag_degraded()
+    finally:
+        outer.close()
+        monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+        monkeypatch.setattr(module, "_rag_failure_count", 0)
+
+
+def test_prompt_rag_timeout_keeps_base_rules_and_template(monkeypatch):
+    from app.application.writing import async_task_service as module
+    from app.core.config import settings
+    from app.infrastructure.database import SessionLocal
+
+    monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+    monkeypatch.setattr(module, "_rag_failure_count", 0)
+    monkeypatch.setattr(settings, "WRITING_RAG_SOFT_TIMEOUT_SECONDS", 0.03)
+
+    def slow_style(worker, *_args, **_kwargs):
+        time.sleep(0.12)
+        return "迟到的范文"
+
+    monkeypatch.setattr(AsyncWritingTaskService, "_example_style_block", slow_style)
+    monkeypatch.setattr(AsyncWritingTaskService, "_draft_system",
+                        lambda _self, _user, template=None:
+                        "基础写作规则；" + str((template or {}).get("name") or ""))
+    monkeypatch.setattr(AsyncWritingTaskService, "_accepted_style_memory",
+                        lambda *_args: "已采纳风格")
+    received = {}
+    class Assistant:
+        async def achat(self, **kwargs):
+            received.update(kwargs)
+            return "通知正文"
+
+    outer = SessionLocal()
+    service = AsyncWritingTaskService(
+        outer, assistant=Assistant(),
+        rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+    try:
+        assert asyncio.run(service._llm_draft_async(
+            "写通知", [], None, "u1", {"name": "通知模板"}))
+        system = received["system_prompt"]
+        assert "基础写作规则" in system
+        assert "通知模板" in system
+        assert "已采纳风格" in system
+        assert "迟到的范文" not in system
+        assert received["message"] == "写通知"
+        assert service._rag_degraded_this_run
+    finally:
+        outer.close()
+        monkeypatch.setattr(module, "_rag_degraded_until", 0.0)
+        monkeypatch.setattr(module, "_rag_failure_count", 0)
+
+
+def test_draft_prompt_reuses_style_and_memory_across_sections(monkeypatch):
+    from app.infrastructure.database import SessionLocal
+    from app.application.writing import async_task_service as module
+
+    calls = {"style": 0, "memory": 0}
+    queries = []
+    def style(_worker, _query, _user):
+        calls["style"] += 1
+        queries.append(_query)
+        return "同文种范文"
+    def memory(_worker, _user, _doc_type):
+        calls["memory"] += 1
+        return "采纳习惯"
+    monkeypatch.setattr(AsyncWritingTaskService, "_example_style_block", style)
+    monkeypatch.setattr(AsyncWritingTaskService, "_accepted_style_memory", memory)
+    monkeypatch.setattr(AsyncWritingTaskService, "_draft_system",
+                        lambda *_args, **_kwargs: "完整基础规则")
+    monkeypatch.setattr(module.prompt_snapshot, "current_task", lambda: "same-task")
+    outer = SessionLocal()
+    monkeypatch.setattr(outer, "get", lambda *_args: SimpleNamespace(
+        user_id="u1", current_content="", context={
+            "document_type": "讲话稿", "topic": "法治宣传", "recipient": "基层干部",
+            "history": [
+                {"role": "user", "content": "写一篇讲话稿"},
+                {"role": "user", "content": "重点讲基层普法"},
+            ],
+        }))
+    service = AsyncWritingTaskService(
+        outer, assistant=None,
+        rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+    try:
+        async def exercise():
+            return [await service._draft_prompt_async(
+                f"讲话稿第 {index} 节", [], None, "u1") for index in (1, 2, 3)]
+        systems = asyncio.run(exercise())
+        assert all("完整基础规则" in item and "同文种范文" in item
+                   and "采纳习惯" in item for item in systems)
+        assert calls == {"style": 1, "memory": 1}
+        assert "文种：讲话稿" in queries[0]
+        assert "主题：法治宣传" in queries[0]
+        assert "对象：基层干部" in queries[0]
+        assert "重点讲基层普法" in queries[0]
+    finally:
+        outer.close()
+
+
+def test_retrieval_degradation_is_visible_in_final_result(monkeypatch):
+    from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+
+    monkeypatch.setattr(QualityRetryWritingTaskService, "_finalize_draft",
+                        lambda *_args, **_kwargs: {"reply": "生成完成", "current_content": "正文"})
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service._rag_degraded_this_run = True
+    task = SimpleNamespace(current_content="", id="task-a")
+    result = service._finalize_draft(task, {}, "正文", [], "u1")
+    assert "未取得部分参考资料" in result["retrieval_warning"]
+    assert result["retrieval_warning"] in result["reply"]
+
+
+def test_fast_rag_skips_embedding_and_reranking(monkeypatch):
+    from app.application.knowledge.rag_service import RagService
+    from app.application.knowledge import rag_service as module
+
+    rag = RagService(None, SimpleNamespace(encode_queries=lambda *_: 1),
+                     SimpleNamespace(search=lambda *_a, **_kw: 1), fast_mode=True)
+    monkeypatch.setattr(rag, "_dept_code_of", lambda *_: "")
+    monkeypatch.setattr(rag, "_is_admin", lambda *_: False)
+    monkeypatch.setattr(rag, "resolve_scopes", lambda *_: ["GLOBAL"])
+    monkeypatch.setattr(rag, "_get_accessible_kb_ids", lambda *_: ["allowed"])
+    monkeypatch.setattr(rag, "_keyword_search", lambda *_: [])
+    monkeypatch.setattr(rag, "_feedback_weights", lambda *_: {})
+    monkeypatch.setattr(module.reranker, "rerank", lambda *_: 1)
+    assert rag.search("查询", "u1", kb_ids=["forbidden"]) == []
+    assert rag.search("查询", "u1", kb_ids=["allowed"]) == []
+
+
+def test_planning_materials_fast_mode_skips_vector_lookup():
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service.rag = SimpleNamespace(
+        fast_mode=True,
+        _get_accessible_kb_ids=lambda *_: ["allowed"],
+        embedder=SimpleNamespace(encode_queries=lambda *_: (_ for _ in ()).throw(
+            AssertionError("slow embedding must not run"))),
+    )
+    service._plan_materials_fallback = lambda query, user_id, kb_ids: [
+        {"id": kb_ids[0], "label": query, "selected": True}]
+    result = service._plan_materials({"topic": "普法"}, "u1", {})
+    assert result[0]["id"] == "allowed"
+
+
 def test_first_section_emits_tokens_before_completion_and_keeps_checked_result(monkeypatch):
     from unittest.mock import AsyncMock
 

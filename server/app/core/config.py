@@ -132,6 +132,14 @@ class Settings:
         # 单卡默认逐节生成；确认目标机吞吐收益后最多开放两节并发。
         self.WRITING_SECTION_MAX_CONCURRENCY = max(
             1, min(2, int(os.getenv("WRITING_SECTION_MAX_CONCURRENCY", "1"))))
+        # 本地 embedding/reranker 不能中断正在执行的 CPU 推理；超过预算后
+        # 写作请求返回空资料继续生成，并暂缓再次发起重模型检索。
+        self.WRITING_RAG_SOFT_TIMEOUT_SECONDS = max(
+            1, int(os.getenv("WRITING_RAG_SOFT_TIMEOUT_SECONDS", "8")))
+        self.WRITING_RAG_FAILURE_THRESHOLD = max(
+            1, int(os.getenv("WRITING_RAG_FAILURE_THRESHOLD", "3")))
+        self.WRITING_RAG_COOLDOWN_SECONDS = max(
+            1, int(os.getenv("WRITING_RAG_COOLDOWN_SECONDS", "45")))
 
         # Embedding / 向量检索。生产基线使用 bge-m3(1024d)，避免默认 512d 模型与既有索引静默错配。
         self.EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "auto")  # auto|bge|mock|http

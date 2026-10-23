@@ -37,6 +37,7 @@ class WritingAgentState(TypedDict, total=False):
     base_content: str
     section_plan: list[dict[str, Any]]
     sources: list[dict[str, Any]]
+    retrieval_degraded: bool
     candidate: str
     quality: dict[str, Any]
     content_check: dict[str, Any]
@@ -295,7 +296,11 @@ class WritingAgentGraph:
                     )
                     WRITING_AGENT_TOOL_CALLS.labels(
                         "rejected_tool_call", "rejected").inc()
-            return {"sources": _merge_sources(groups)}
+            return {
+                "sources": _merge_sources(groups),
+                "retrieval_degraded": bool(getattr(
+                    self.service, "_rag_degraded_this_run", False)),
+            }
         return await self._durable("research", state, work)
 
     async def _writer(self, state: WritingAgentState):
@@ -382,7 +387,12 @@ class WritingAgentGraph:
                     instruction, sources, attachment_ctx, user_id, template, candidate, ctx)
             if not candidate.strip():
                 raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
-            return {"candidate": candidate, "sources": _jsonable(sources)}
+            return {
+                "candidate": candidate,
+                "sources": _jsonable(sources),
+                "retrieval_degraded": bool(state.get("retrieval_degraded") or getattr(
+                    self.service, "_rag_degraded_this_run", False)),
+            }
         return await self._durable("writer", state, work)
 
     async def _review(self, state: WritingAgentState):
@@ -468,6 +478,8 @@ class WritingAgentGraph:
         async def work():
             user_id = str(state["user_id"])
             task = self.service._get_owned(str(state["task_id"]), user_id)
+            if state.get("retrieval_degraded"):
+                self.service._rag_degraded_this_run = True
             payload = self.service._finalize_draft(
                 task,
                 dict(state.get("context") or {}),

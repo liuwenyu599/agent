@@ -43,7 +43,8 @@ class WritingRepository(private val api: ApiClient) {
         if (spec != null) {
             if (spec.templateId.isNotBlank()) body["template_id"] = spec.templateId
             if (spec.docType.isNotBlank()) body["document_type"] = spec.docType
-            if (spec.kbIds.isNotEmpty()) body["kb_ids"] = spec.kbIds
+            val selectedKbIds = spec.knowledge.filter { it.selected }.map { it.id }
+            if (selectedKbIds.isNotEmpty()) body["kb_ids"] = selectedKbIds
             if (spec.title.isNotBlank()) body["title"] = spec.title
             spec.plannedContext?.let { body["planned_context"] = it }
         }

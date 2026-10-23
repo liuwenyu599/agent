@@ -158,6 +158,7 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
                 max_chars=2500,
             ) or []
         except Exception:
+            self._rag_failed = True
             examples = []
         # A semantically nearby work plan is a harmful style exemplar for a speech.
         # Keep only matching speech forms; otherwise let the model write without an exemplar.
