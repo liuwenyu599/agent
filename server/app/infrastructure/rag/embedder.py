@@ -64,16 +64,25 @@ class BGEEmbedder:
 class HTTPEmbedder:
     """OpenAI 兼容 /embeddings 远程向量化（stdlib urllib，无额外依赖）。
 
+    EMBEDDING_HTTP_URL 视作 OpenAI 兼容 base（通常以 /v1 结尾），本类在其下补
+    /embeddings 端点；若已带 /embeddings 则原样使用。
+
     未配置 EMBEDDING_HTTP_URL 时 __init__ 抛 RuntimeError，由上层回退关键词检索。
     """
 
     DIM = 384
 
     def __init__(self) -> None:
-        self.url = settings.EMBEDDING_HTTP_URL
-        self.model = settings.EMBEDDING_HTTP_MODEL
-        if not self.url:
+        base = (settings.EMBEDDING_HTTP_URL or "").rstrip("/")
+        if not base:
             raise RuntimeError("[Embedder] EMBEDDING_HTTP_URL 未配置，无法使用 http embedder")
+        # OpenAI / vLLM 的 embedding 端点是 base 下的 /embeddings（如 /v1/embeddings）。
+        # 早年实现把 EMBEDDING_HTTP_URL 直接当请求地址，导致 POST /v1 被 404。
+        if base.endswith("/embeddings"):
+            self.url = base
+        else:
+            self.url = base + "/embeddings"
+        self.model = settings.EMBEDDING_HTTP_MODEL
 
     def _post(self, texts):
         started = time.perf_counter()
@@ -101,7 +110,9 @@ class HTTPEmbedder:
         return np.vstack(out)
 
     def encode_queries(self, queries: List[str]) -> np.ndarray:
-        return self.encode(queries)
+        # 与 BGEEmbedder.encode_queries 保持一致：查询侧加 BGE 检索指令前缀，
+        # 否则与已用该前缀建的 FAISS 索引不匹配，召回质量下降
+        return self.encode([BGE_QUERY_INSTRUCTION + q for q in queries])
 
 
 class MockEmbedder:
