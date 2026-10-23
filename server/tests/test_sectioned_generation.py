@@ -88,7 +88,8 @@ def test_section_instruction_reserves_neighbor_content_and_structured_fields():
     assert "只写当前这一节" in text
     assert "前文章节（禁止重复）：一、基本情况" in text
     assert "后续章节（内容留给后文，不要提前展开）：三、存在问题、四、下一步工作" in text
-    assert "不得输出全文标题、主送机关、文号" in text
+    assert "不得输出全文标题、文号" in text
+    assert "主送机关行只允许出现在全文最开头" in text
 
 
 def test_one_sentence_speech_is_not_a_plan_or_a_required_field_form():

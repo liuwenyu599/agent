@@ -284,11 +284,10 @@ class WritingViewModel(
         suggestionInstruction = ""
         if (selectedParagraph == null) {
             val id = task.taskId ?: return
-            scope.launch {
-                if (loadParagraphs(id) && selectedLineIndex == index &&
-                    selectedParagraph != null && selectedSuggestion == null) suggestParagraph()
-            }
-        } else if (selectedSuggestion == null) suggestParagraph()
+            scope.launch { loadParagraphs(id) }
+        }
+        // 不再自动调 AI：点 ✎ 只选中段落并打开建议面板，
+        // 由用户在面板里点「AI优化」或先写下要求再触发。
     }
 
     fun suggestParagraph(regenerate: Boolean = false) {

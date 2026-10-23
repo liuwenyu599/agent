@@ -180,7 +180,8 @@ def test_legacy_semantic_body_still_canonicalizes_one_signoff_for_compatibility(
     body = SemanticWritingTaskService._canonicalize_body(raw, ctx)
 
     assert "关于开展专项工作的通知" not in body
-    assert "广州市白云区财政局" not in body
+    # 主送机关行回归正文：规范主送（值行）保留，不再被剥掉。
+    assert body.startswith("广州市白云区财政局：")
     assert "云司发〔2026〕12号" not in body
     assert body.count("广州市白云区司法局") == 1
     assert body.count("2026年9月30日") == 1
@@ -188,7 +189,7 @@ def test_legacy_semantic_body_still_canonicalizes_one_signoff_for_compatibility(
     assert "现将有关事项通知如下。" in body
 
 
-def test_production_body_contains_no_structured_chrome_at_all():
+def test_production_body_keeps_salutation_but_strips_other_chrome():
     ctx = {
         "title": "关于开展专项工作的通知",
         "recipient": "广州市白云区财政局",
@@ -206,8 +207,12 @@ def test_production_body_contains_no_structured_chrome_at_all():
 2026年9月30日
 """
     body = StructuredFieldWritingTaskService._canonicalize_body(raw, ctx)
-    assert body == "现将有关事项通知如下。"
-    assert all(value not in body for value in ctx.values())
+    # 主送机关行回归正文（由模型按文种判断书写）；标题/文号/落款/日期仍由 chrome 渲染。
+    assert body == "广州市白云区财政局：\n\n现将有关事项通知如下。"
+    assert "关于开展专项工作的通知" not in body
+    assert "云司发〔2026〕12号" not in body
+    assert "广州市白云区司法局" not in body
+    assert "2026年9月30日" not in body
 
 
 def test_canonicalize_strips_placeholder_signoff_and_inline_citations():

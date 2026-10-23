@@ -1414,17 +1414,8 @@ private fun EditorPanel(
                     color = Ink, lineHeight = titleStyle.lineHeight.sp)
                 Spacer(Modifier.height(Dimens.space5))
             }
-            if (vm.task.recipient.isNotBlank()) {
-                val recipientStyle = profile.previewStyle("recipient")
-                Text(
-                    vm.task.recipient.trimEnd('：', ':') + "：",
-                    fontSize = recipientStyle.size.sp,
-                    fontFamily = PreviewFonts.family(recipientStyle.fontName),
-                    color = Ink, lineHeight = recipientStyle.lineHeight.sp,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(Dimens.space3))
-            }
+            // 主送机关行回归正文（由 AI 按文种判断是否书写），不再在这里写死渲染，
+            // 否则填完「报送对象」字段会无 AI 参与地直接插入一行。
             }
             if (sourceMode) {
                 documentHeader()
@@ -1485,7 +1476,8 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
         Spacer(Modifier.height(Dimens.space3))
         val selected = vm.selectedParagraph
         if (selected == null) {
-            Text("点击正文右侧的 ✎，建议会显示在这里。", fontSize = 12.sp,
+            Text("点击正文右侧的 ✎ 选中一段，再点「AI优化」生成建议；" +
+                "也可以先在下方写下对 AI 的要求（例如字数、语气）。", fontSize = 12.sp,
                 color = Muted, lineHeight = 18.sp)
             return@Column
         }
@@ -1512,11 +1504,13 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
                             Text("AI 认为本段可保留原文。", fontSize = 11.sp, color = Muted)
                         }
                     }
-                    "accepted" -> Text("已采纳；这段已更新。", fontSize = 12.sp,
-                        color = EmeraldInk)
-                    "rejected" -> Text("已拒绝；原文保持不变。", fontSize = 12.sp,
-                        color = Muted)
-                    else -> Text("尚无建议。", fontSize = 12.sp, color = Muted)
+                    "accepted" -> Text("已采纳；这段已更新。可再次 AI 优化，" +
+                        "或直接点击正文手动修改。", fontSize = 12.sp, color = EmeraldInk,
+                        lineHeight = 18.sp)
+                    "rejected" -> Text("已拒绝；原文保持不变。可输入要求后再次 AI 优化。",
+                        fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
+                    else -> Text("尚无建议。可先在下方写下对 AI 的要求，再点「AI优化」。",
+                        fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
                 }
                 Spacer(Modifier.height(Dimens.space3))
                 AppLinkButton(if (details) "收起详情" else "看详情", onClick = { details = !details })
@@ -1532,7 +1526,7 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
             value = vm.suggestionInstruction,
             onValueChange = { vm.suggestionInstruction = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("补充要求：例如更简洁", fontSize = 11.sp) },
+            placeholder = { Text("给 AI 的要求：例如更简洁、控制在 300 字内", fontSize = 11.sp) },
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = Ink),
             singleLine = true,
         )
@@ -1548,9 +1542,13 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
                     kind = AppButtonKind.SECONDARY, enabled = vm.suggestionReady)
             }
             Spacer(Modifier.height(Dimens.space2))
+            AppLinkButton("重新建议", onClick = { vm.suggestParagraph(regenerate = true) })
+        } else {
+            // 点 ✎ 不再自动调 AI；由这个按钮显式触发。已采纳/已拒绝的段落同样可以再次优化。
+            AppButton("AI优化", onClick = { vm.suggestParagraph(regenerate = true) },
+                kind = AppButtonKind.AI, enabled = vm.suggestionReady,
+                icon = Icons.Default.AutoAwesome)
         }
-        AppLinkButton(if (pending) "重新建议" else "为这段生成建议",
-            onClick = { vm.suggestParagraph(regenerate = true) })
     }
 }
 

@@ -228,11 +228,13 @@ def test_legacy_structural_prefix_maps_to_displayed_paragraph():
     db.commit()
     svc = AsyncWritingTaskService(db, assistant=Assistant("依法办理。"))
     items = svc.list_paragraphs(task.id, "user-1")["items"]
-    assert [item["line_index"] for item in items] == [0, 1]
-    assert items[1]["content"] == "坚持依法办理。"
-    suggestion = asyncio.run(svc.suggest_paragraph_async(task.id, "user-1", items[1]["id"]))
+    # 主送机关行回归正文：「各科室：」作为正文行显示并可逐段建议。
+    assert [item["line_index"] for item in items] == [0, 1, 2]
+    assert items[0]["content"] == "各科室："
+    assert items[2]["content"] == "坚持依法办理。"
+    suggestion = asyncio.run(svc.suggest_paragraph_async(task.id, "user-1", items[2]["id"]))
     result = svc.accept_paragraph_suggestion(task.id, "user-1", suggestion["id"], "依法办理。")
-    assert result["current_content"] == "一、工作目标\n依法办理。"
+    assert result["current_content"] == "各科室：\n一、工作目标\n依法办理。"
     assert task.current_content == "测试通知\n各科室：\n一、工作目标\n依法办理。"
 
 

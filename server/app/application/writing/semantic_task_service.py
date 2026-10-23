@@ -37,6 +37,11 @@ _DOCNUM_ONLY_RE = re.compile(
     r"^[\u4e00-\u9fa5A-Za-z]{1,16}[〔\[【［].{2,18}[〕\]】］]\s*[0-9０-９]{1,8}\s*号$"
 )
 
+# 模型残留的字段标签行（「报送对象：」「主送机关：××」）：不是正文，确定性剥掉。
+_RECIPIENT_LABEL_LINE_RE = re.compile(
+    r"^(?:报送对象|主送机关|主送|发文对象|收文单位)(?:\s*[：:]|$)"
+)
+
 
 class SemanticWritingTaskService(WritingTaskService):
     """WritingTaskService with model-only semantic routing and canonical structure."""
@@ -97,11 +102,11 @@ class SemanticWritingTaskService(WritingTaskService):
         lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
 
         title = str(ctx.get("title") or "").strip()
-        recipient = str(ctx.get("recipient") or "").strip().rstrip("：:")
         docnum = str(ctx.get("document_number") or "").strip()
 
         # Strip duplicated structural header lines from the leading area. We only remove exact
         # structured values (or a standalone current doc-number), never arbitrary prose.
+        # 主送机关行回归正文（由模型按文种判断书写），这里只剥字段标签垃圾行。
         cleaned: List[str] = []
         nonempty_seen = 0
         for raw in lines:
@@ -112,7 +117,7 @@ class SemanticWritingTaskService(WritingTaskService):
             if in_header and s:
                 if title and s == title:
                     continue
-                if recipient and s.rstrip("：:") == recipient:
+                if _RECIPIENT_LABEL_LINE_RE.match(s):
                     continue
                 if docnum and s == docnum:
                     continue
@@ -171,10 +176,13 @@ class SemanticWritingTaskService(WritingTaskService):
     def _draft_system(self, user_id: str, template: Optional[Dict[str, Any]] = None) -> str:
         base = super()._draft_system(user_id, template)
         return base + (
-            "\n\n【结构字段硬边界】标题、主送机关、当前文号、发文机关署名和成文日期"
-            "全部由系统结构化管理。你只输出正文主体：从正文第一段开始，到正文最后一句结束。"
-            "禁止输出标题、主送机关行、当前文号、落款单位、成文日期；系统会统一渲染，"
-            "否则会造成重复标题和重复落款。"
+            "\n\n【结构字段硬边界】标题、当前文号、发文机关署名和成文日期"
+            "全部由系统结构化管理。你只输出正文主体：从主送机关行（如该文种需要）"
+            "或正文第一段开始，到正文最后一句结束。"
+            "禁止输出标题、当前文号、落款单位、成文日期；系统会统一渲染，"
+            "否则会造成重复标题和重复落款。主送机关行按文种规范判断是否输出"
+            "（通知、函、请示等通常需要，宣传材料、讲话稿等不需要），"
+            "绝不要输出「报送对象：」「主送机关：」这类字段标签或空标签行。"
         )
 
     def _build_revise_prompt(self, current: str, instruction: str,
@@ -182,8 +190,9 @@ class SemanticWritingTaskService(WritingTaskService):
                              ctx: Dict[str, Any]) -> str:
         prompt = super()._build_revise_prompt(current, instruction, mode_desc, selection, ctx)
         return prompt + (
-            "\n\n结构边界：只返回修改后的正文主体全文。不要输出标题、主送机关、当前文号、"
+            "\n\n结构边界：只返回修改后的正文主体全文。不要输出标题、当前文号、"
             "发文机关署名或成文日期；这些字段由系统单独渲染。"
+            "主送机关行属于正文的一部分，原样保留（除非用户要求修改）。"
         )
 
     # --------------------------------------------------------------- creation

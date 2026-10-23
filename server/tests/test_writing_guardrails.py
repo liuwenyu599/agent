@@ -175,7 +175,7 @@ def test_docx_export_recognizes_plain_text_official_headings_and_indent():
     assert body.paragraph_format.line_spacing == Pt(28.8)
 
 
-def test_body_structure_strips_duplicate_title_and_recipient():
+def test_body_structure_strips_duplicate_title_and_label_junk_but_keeps_salutation():
     ctx = {
         "document_type": "通知",
         "title": "关于报送有关材料的通知",
@@ -186,8 +186,19 @@ def test_body_structure_strips_duplicate_title_and_recipient():
         "各镇街、各部门：\n\n"
         "现就有关事项通知如下。"
     )
+    # 主送机关行回归正文：规范主送行保留；标题仍由系统渲染，重复的剥掉。
     assert WritingTaskService._strip_leading_structural_fields(raw, ctx) == (
+        "各镇街、各部门：\n\n现就有关事项通知如下。"
+    )
+    # 模型残留的字段标签行（如空的「报送对象：」）仍要确定性剥掉。
+    raw_label = (
+        "关于报送有关材料的通知\n\n"
+        "报送对象：\n\n"
+        "各镇街、各部门：\n\n"
         "现就有关事项通知如下。"
+    )
+    assert WritingTaskService._strip_leading_structural_fields(raw_label, ctx) == (
+        "各镇街、各部门：\n\n现就有关事项通知如下。"
     )
 
 

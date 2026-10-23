@@ -34,6 +34,11 @@ _INLINE_CITATION_RE = re.compile(
     r"|（缺少事实依据）"
     r"|⚠️\s*缺少事实依据"
 )
+# 模型残留的字段标签行（「报送对象：」「主送机关：××」）：不是正文，确定性剥掉。
+# 「各有关单位：」这类规范主送行不带字段标签，属于正文，不在此列。
+_RECIPIENT_LABEL_LINE_RE = re.compile(
+    r"^(?:报送对象|主送机关|主送|发文对象|收文单位)(?:\s*[：:]|$)"
+)
 
 
 class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
@@ -46,7 +51,6 @@ class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
         text = _INLINE_CITATION_RE.sub("", text or "")
         lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
         title = str(ctx.get("title") or "").strip()
-        recipient = str(ctx.get("recipient") or "").strip().rstrip("：:")
         docnum = str(ctx.get("document_number") or "").strip()
         authority = str(ctx.get("authority") or "").strip()
         doc_date = str(ctx.get("document_date") or "").strip()
@@ -65,7 +69,8 @@ class StructuredFieldWritingTaskService(EvalCaptureWritingTaskService):
             if in_header and s:
                 if title and s == title:
                     continue
-                if recipient and s.rstrip("：:") == recipient:
+                # 主送机关行回归正文（由模型按文种判断书写），这里只剥字段标签垃圾行。
+                if _RECIPIENT_LABEL_LINE_RE.match(s):
                     continue
                 if docnum and s == docnum:
                     continue

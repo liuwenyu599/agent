@@ -84,7 +84,8 @@ REVISION_RULES = (
     "而工作计划、方案、举措等用户自主规划的内容应充分展开，不得整段标注占位；\n"
     "4. 如果用户的要求在当前文档中已经满足、或不构成实质改动，"
     "原样输出全文，不得为了显得有改动而做无谓变动；\n"
-    "5. 标题、主送机关由系统结构化排版；输出修改后的正文主体，不要在正文开头重复标题或主送机关，不要解释、不要加前后缀。"
+    "5. 标题由系统结构化排版；主送机关行属于正文的一部分，原样保留（除非用户要求修改）；"
+    "输出修改后的正文主体，不要在正文开头重复标题，不要解释、不要加前后缀。"
 )
 
 DRAFT_RULES = (
@@ -103,8 +104,11 @@ DRAFT_RULES = (
     "4. 文种与边界以用户表达为准：用户说明了文种、用途、报送对象、时间范围的，"
     "严格照此撰写，不得擅自改文种、不得扩写范围；用户没有明说的，由你根据内容特征"
     "选择最贴切的文种与结构，不要因为信息缺失就退回成提纲或空话；\n"
-    "5. 标题由系统统一管理；正式公文的主送、落款和成文日期由系统字段管理，"
-    "正文不要重复这些字段。其他文种按自身体例行文，不添加无关的公文套式；\n"
+    "5. 标题由系统统一管理，正文不要重复标题；主送机关行是否书写由你按文种规范判断"
+    "（通知、函、请示、报告等通常需要主送机关，宣传材料、讲话稿等不需要），"
+    "需要时写在正文最前面，格式为单独一行「××：」；"
+    "任何情况下都不要输出「报送对象：」「主送机关：」这类字段标签或空标签行；"
+    "落款和成文日期仍由系统字段管理，正文不要写。其他文种按自身体例行文，不添加无关的公文套式；\n"
     "6. 不编造文号；正式公文成文日期由系统确定，不要在正文中另写日期；"
     "联系人、电话、邮箱等材料未提供时直接省略，不得伪造；\n"
     "7. 输出前自检：逐节回看，凡是章节标题下面没有完整段落、只有「略」"
@@ -119,6 +123,12 @@ SIGNOFF_TAIL_RE = re.compile(
 )
 
 DATE_TAIL_RE = re.compile(r"20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
+
+# 模型残留的字段标签行（「报送对象：」「主送机关：××」）：不是正文，确定性剥掉。
+# 「各有关单位：」这类规范主送行不带字段标签，属于正文，不在此列。
+_RECIPIENT_LABEL_LINE_RE = re.compile(
+    r"^(?:报送对象|主送机关|主送|发文对象|收文单位)(?:\s*[：:]|$)"
+)
 
 
 def _sse(event: Dict[str, Any]) -> str:
@@ -1244,14 +1254,14 @@ class WritingTaskService:
         content = "\n".join(lines).rstrip()
 
         renderer = generate_official_document if red_header else markdown_to_docx
+        # 主送机关行已回归正文（由模型按文种判断书写），导出不再用字段另渲染一次，
+        # 否则正文主送 + chrome 主送会出现双主送。
         buf = renderer(
             content=content, title=title, doc_number=doc_number,
-            recipient=ctx.get("recipient") or "",
             signature=signature,
             date_text=date_text,
         ) if red_header else renderer(
             text=content, title=title, doc_number=doc_number,
-            recipient=ctx.get("recipient") or "",
             signature=signature,
             date_text=date_text,
         )
@@ -1324,20 +1334,18 @@ class WritingTaskService:
             lines.pop(0)
 
         title = (ctx.get("title") or task_parser.build_title(ctx) or "").strip()
-        recipient = (ctx.get("recipient") or "").strip()
 
         if lines and title and lines[0].strip().rstrip("。") == title.rstrip("。"):
             lines.pop(0)
             while lines and not lines[0].strip():
                 lines.pop(0)
 
-        if lines and recipient:
-            first = lines[0].strip()
-            normalized = first.rstrip("：:").strip()
-            if normalized == recipient.rstrip("：:").strip():
+        # 主送机关行回归正文（由模型按文种判断书写），这里只剥掉字段标签垃圾行；
+        # 「各有关单位：」这类规范主送行属于正文，不再剥掉。
+        while lines and lines[0].strip() and _RECIPIENT_LABEL_LINE_RE.match(lines[0].strip()):
+            lines.pop(0)
+            while lines and not lines[0].strip():
                 lines.pop(0)
-                while lines and not lines[0].strip():
-                    lines.pop(0)
 
         return "\n".join(lines).strip()
 
@@ -1402,7 +1410,13 @@ class WritingTaskService:
         if ctx.get("time_range"):
             parts.append(f"时间范围：{ctx['time_range']}。")
         if ctx.get("recipient"):
-            parts.append(f"主送机关：{ctx['recipient']}。")
+            # 主送不再写死渲染：交给模型按文种判断（宣传材料/讲话稿等不需要称呼）。
+            parts.append(
+                f"报送对象（供参考，是否写入由你按文种规范判断）：{ctx['recipient']}。"
+                "本文种需要主送机关的，在正文最前面输出一行规范主送（如「各有关单位：」）；"
+                "不需要的就不要输出主送行；"
+                "绝不要输出「报送对象：」「主送机关：」这类字段标签或空标签行。"
+            )
         if ctx.get("authority"):
             parts.append(f"落款单位：{ctx['authority']}。")
         if ctx.get("key_facts"):
