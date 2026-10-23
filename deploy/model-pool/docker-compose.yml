@@ -10,11 +10,15 @@
 #                                       ★ 一套模型同时接管：文本写作/问答（MODEL_*）
 #                                         图片理解与 OCR（VISION_*）、长文（LONG_FORM_*）
 #                                         原 Qwen2.5-14B 文本模型与 Qwen2.5-VL-7B 视觉模型退役
+#   davinci2    → bge-embedding   :8006  RAG 向量化（默认随 compose 启动；占用 2 卡，
+#                                       与下方 27B 试用 profile 的 2,3 互斥——启用 27B
+#                                       试用需把 embedding 改到其它空闲卡，见服务注释）
 #   davinci5,6  → DeepPresenter-9B :8004  PPT 栈，独立 compose 见 deploy/pptagent/
 #   davinci7    → qwen14b-rollback :8003  （仅 profile=rollback 时启动，应急回退用）
-#   davinci2,3  → qwen38-27b-trial :8011  新一代 27B 多模态（profile=trial，待下载试用）
+#   davinci2,3  → qwen38-27b-trial :8011  新一代 27B 多模态（profile=trial，待下载试用；
+#                                       与默认启动的 bge-embedding 争 davinci2，二选一）
 #   davinci4    → qwen-flash-next-trial :8012 轻量多模态（profile=trial，待下载试用）
-#   （试用与回滚按需启用；全开时 8 卡占满）
+#   （embedding 默认常驻；试用与回滚按需启用；全开时 8 卡占满）
 #
 # ⚠ 上线前必须 `npu-smi info` 核实占卡：35B 要的 0,1 若还被旧 14B 裸进程占用，
 #   先停旧进程（stop_services.sh 只停 8000/8001；裸 vllm 用 lsof -ti:8003 杀）。
@@ -264,6 +268,66 @@ services:
       --default-chat-template-kwargs '{"enable_thinking": false}'
       --trust-remote-code
       ${QWEN_FLASH_EXTRA_ARGS:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ==========================================================================
+  # BGE 向量服务（embedding）—— 默认随 compose 启动，承接 RAG 向量化算力
+  #
+  # 背景：原 justice-api 容器内无 NPU 插件，用 CPU 跑 BGEEmbedder 导致每次检索
+  #       卡满 8 秒超时。改后端 EMBEDDING_PROVIDER=http 把向量化卸载到本 NPU 容器
+  #       （OpenAI 兼容 /embeddings）。本服务即 DeepSeek 排查里手动
+  #       `docker exec vllm serve` 的 qwen3-emb-310p 的 compose 化版本。
+  #
+  # ⚠ 维度一致性（上线前必核）：后端 FAISS 索引维度必须与这里 serve 的模型一致。
+  #   代码默认 EMBED_MODEL_PATH=/home/lcode/bge-m3（1024 维），test_delivery_grounding
+  #   也断言含 bge-m3；但 production.env.example 写的是 bge-small-zh-v1.5（384 维）。
+  #   若生产索引是 bge-m3，本服务必须 serve bge-m3（默认即此），且 .env 的
+  #   EMBEDDING_HTTP_MODEL 同步；二者维度不一致会检索全盘错位。
+  # ⚠ BGE v1.5 查询侧需加检索指令前缀（为这个句子生成表示以用于检索相关文章：）。
+  #   若生产索引是用本地 BGEEmbedder（带指令）建的，远程服务必须同样加指令，
+  #   否则召回质量下降——上服务器用 curl 实测检索质量再定。
+  # ⚠ 占卡：默认 davinci2；启用 27B 试用(2,3)/flash(4)/回滚(7) profile 或 PPT(5,6)
+  #   时，按实际占卡改 EMB_EMBED_DEVICES 并同步下面 devices 列表（两处须一致）。
+  # ==========================================================================
+  bge-embedding:
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-bge-embedding
+    privileged: true
+    restart: unless-stopped
+    shm_size: 8g
+    ports:
+      - "${EMB_EMBED_PORT:-8006}:8001"
+    environment:
+      - ASCEND_RT_VISIBLE_DEVICES=${EMB_EMBED_DEVICES:-2}
+      - VLLM_USE_MODELSCOPE=False
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      - /dev/davinci2
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${EMB_EMBED_MODEL_PATH:-/models/bge-m3}
+      --host 0.0.0.0
+      --port 8001
+      --served-model-name ${EMB_EMBED_MODEL_NAME:-bge-m3}
+      --task embed
+      --max-model-len 8192
+      --enforce-eager
+      --trust-remote-code
     logging:
       driver: json-file
       options:
