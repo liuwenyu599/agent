@@ -19,7 +19,7 @@ import json
 import os
 import re
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.llm_json import LLMJsonError, loads_lenient, truncate_for_log
 from app.core.logging import get_logger
@@ -100,6 +100,261 @@ DEFAULT_COLORS = BUILTIN_TEMPLATES[0]["colors"]
 PAGE_TYPES = ["cover", "toc", "section", "content", "data", "chart",
               "case", "timeline", "process", "summary", "closing"]
 
+# ================= 版式目录与选版器 =================
+# 每个页型提供多个**结构不同**的版式（不是只换配色/页眉）。35B 在大纲里给
+# ``layout`` 意图，规则引擎做可行性校验与整篇去重；模型给的值不可用
+# （点数不符、缺图表数据）时自动降级到最贴合内容结构的版式。
+#
+# 字段约定：
+#   min_points/max_points  该版式能装下的要点条数（硬门槛）
+#   needs_image            必须有配图，否则不可用
+#   requires               blocks 里必须存在的数据块
+#   weight                 无结构差异时的基础偏好分
+LAYOUT_CATALOG: Dict[str, List[Dict[str, Any]]] = {
+    "cover": [
+        {"id": "cover.band", "label": "底部色带封面", "weight": 1.0},
+        {"id": "cover.side", "label": "左侧色块封面", "weight": 1.0},
+        {"id": "cover.minimal", "label": "留白极简封面", "weight": 0.9},
+    ],
+    "toc": [
+        {"id": "toc.list", "label": "编号列表目录", "weight": 1.0},
+        {"id": "toc.cards", "label": "卡片目录", "weight": 1.0},
+        {"id": "toc.grid", "label": "宫格目录", "min_points": 4, "max_points": 6, "weight": 1.1},
+    ],
+    "section": [
+        {"id": "section.side", "label": "侧栏章节页", "weight": 1.0},
+        {"id": "section.center", "label": "居中章节页", "weight": 1.0},
+        {"id": "section.number", "label": "大序号章节页", "weight": 0.9},
+    ],
+    "content": [
+        {"id": "content.bullets", "label": "编号要点", "min_points": 1, "max_points": 6,
+         "weight": 1.0},
+        {"id": "content.image_right", "label": "左文右图", "needs_image": True,
+         "min_points": 1, "max_points": 4, "weight": 1.0},
+        {"id": "content.two_col", "label": "双栏并列", "min_points": 4, "max_points": 6,
+         "weight": 0.9},
+        {"id": "content.three_cards", "label": "三卡并列", "min_points": 3, "max_points": 3,
+         "weight": 0.9},
+        {"id": "content.compare", "label": "左右对比", "min_points": 2, "max_points": 2,
+         "weight": 0.8},
+        {"id": "content.icon_grid", "label": "四宫格", "min_points": 3, "max_points": 4,
+         "weight": 0.8},
+        {"id": "content.statement", "label": "单句结论", "min_points": 1, "max_points": 1,
+         "weight": 0.7},
+        {"id": "content.quote", "label": "引言金句", "min_points": 1, "max_points": 2,
+         "weight": 0.6},
+    ],
+    "data": [
+        {"id": "data.cards", "label": "指标卡片", "requires": "cards", "weight": 1.0},
+        {"id": "data.kpi", "label": "KPI 看板", "requires": "cards", "weight": 0.9},
+        {"id": "data.table", "label": "数据表格", "requires": "table", "weight": 1.1},
+    ],
+    "chart": [
+        {"id": "chart.full", "label": "整页图表", "requires": "chart", "weight": 1.0},
+        {"id": "chart.split", "label": "图表加结论", "requires": "chart",
+         "min_points": 1, "weight": 1.0},
+    ],
+    "case": [
+        {"id": "case.block", "label": "整块案例", "weight": 1.0},
+        {"id": "case.split", "label": "三段案例", "min_points": 3, "weight": 1.0},
+    ],
+    "timeline": [
+        {"id": "timeline.horizontal", "label": "横向时间轴", "max_points": 5, "weight": 1.0},
+        {"id": "timeline.vertical", "label": "纵向时间轴", "min_points": 3, "weight": 1.0},
+    ],
+    "process": [
+        {"id": "process.chevron", "label": "横向箭头流程", "max_points": 5, "weight": 1.0},
+        {"id": "process.vertical", "label": "纵向步骤条", "min_points": 3, "weight": 1.0},
+    ],
+    "summary": [
+        {"id": "summary.cards", "label": "结论卡片", "weight": 1.0},
+        {"id": "summary.list", "label": "大字结论", "min_points": 2, "max_points": 4,
+         "weight": 1.0},
+    ],
+    "closing": [
+        {"id": "closing.center", "label": "居中结束页", "weight": 1.0},
+        {"id": "closing.band", "label": "色带结束页", "weight": 1.0},
+    ],
+}
+
+# 旧模板配置里的版式名 → 目录 id（保持已有模板的选择继续生效）
+_LEGACY_LAYOUT_ALIAS: Dict[tuple, str] = {
+    ("cover", "band_bottom"): "cover.band",
+    ("cover", "left_block"): "cover.side",
+    ("toc", "numbered_list"): "toc.list",
+    ("toc", "cards"): "toc.cards",
+    ("section", "left_block"): "section.side",
+    ("section", "center"): "section.center",
+    ("content", "bar_title"): "content.bullets",
+    ("content", "top_band"): "content.bullets",
+    ("content", "image_right"): "content.image_right",
+    ("data", "cards_row"): "data.cards",
+    ("chart", "chart_area"): "chart.full",
+    ("case", "header_text"): "case.block",
+    ("timeline", "horizontal"): "timeline.horizontal",
+    ("process", "chevron"): "process.chevron",
+    ("summary", "cards"): "summary.cards",
+    ("closing", "center"): "closing.center",
+    ("closing", "brand_band"): "closing.band",
+}
+
+
+def layout_ids(slide_type: str) -> List[str]:
+    """某页型可用的版式 id 列表（编辑器/测试用）。"""
+    return [sp["id"] for sp in LAYOUT_CATALOG.get(slide_type, [])]
+
+
+def _normalize_layout_id(raw: Any, slide_type: str) -> str:
+    """把模型/模板给的版式名归一成 ``<type>.<name>``；不属于该页型则返回空串。"""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if "." in value:
+        head, tail = value.split(".", 1)
+        return f"{slide_type}.{tail}" if head == slide_type else ""
+    candidate = f"{slide_type}.{value}"
+    return candidate if candidate in layout_ids(slide_type) else ""
+
+
+def _slide_has_image(slide: Dict) -> bool:
+    img = slide.get("_image") or {}
+    return bool(img.get("file_path"))
+
+
+def _layout_point_count(slide: Dict) -> int:
+    """版式容量用的"条目数"：时间轴/流程的数据在 blocks 里，不在 points。"""
+    blocks = slide.get("blocks") or {}
+    stype = slide.get("type")
+    if stype == "timeline":
+        return len(blocks.get("timeline") or [])
+    if stype == "process":
+        steps = blocks.get("process") or []
+        if steps:
+            return len(steps)
+    return len(slide.get("points") or [])
+
+
+def _layout_usable(spec: Dict, slide: Dict) -> bool:
+    """版式硬门槛：要点条数、配图、数据块。不满足则该版式不可选。"""
+    count = _layout_point_count(slide)
+    lo, hi = spec.get("min_points"), spec.get("max_points")
+    if lo is not None and count < lo:
+        return False
+    if hi is not None and count > hi:
+        return False
+    if spec.get("needs_image") and not _slide_has_image(slide):
+        return False
+    blocks = slide.get("blocks") or {}
+    need = spec.get("requires")
+    if need == "cards" and not (blocks.get("cards") or []):
+        return False
+    if need == "table" and not ((blocks.get("table") or {}).get("rows") or []):
+        return False
+    if need == "chart" and not ((blocks.get("chart") or {}).get("series") or []):
+        return False
+    if need == "timeline" and not (blocks.get("timeline") or []):
+        return False
+    if need == "process" and not (blocks.get("process") or []):
+        return False
+    return True
+
+
+def _layout_score(spec: Dict, slide: Dict, recent: List[str], used: Dict[str, int]) -> float:
+    """无明确偏好时的结构打分：内容形态越贴合得分越高，整篇重复出现要扣分。"""
+    sid = spec["id"]
+    points = [str(p) for p in (slide.get("points") or [])]
+    n = len(points)
+    total_chars = sum(len(p) for p in points)
+    score = float(spec.get("weight", 1.0))
+
+    if _slide_has_image(slide) and sid == "content.image_right":
+        score += 2.0                     # 有图不用图等于白配
+    if sid == "content.statement":
+        score += 1.6 if (n == 1 and total_chars <= 40) else -1.5
+    elif sid == "content.compare":
+        if n == 2:
+            gap = abs(len(points[0]) - len(points[1]))
+            score += 1.2 if gap <= 12 else 0.3
+        else:
+            score -= 1.0
+    elif sid == "content.three_cards":
+        score += 1.0 if n == 3 else -1.0
+    elif sid == "content.two_col":
+        score += 0.9 if n >= 4 else -1.0
+    elif sid == "content.icon_grid":
+        score += 0.7 if 3 <= n <= 4 and all(len(p) <= 26 for p in points) else -0.8
+    elif sid == "content.quote":
+        quoted = any(p[:1] in "“\"「" for p in points)
+        score += 1.2 if quoted else -1.2
+    elif sid == "content.bullets":
+        score += 0.6 if n >= 2 else 0.0
+    elif sid == "data.kpi":
+        cards = (slide.get("blocks") or {}).get("cards") or []
+        score += 0.3 if 3 <= len(cards) <= 4 else -0.6
+    elif sid == "data.cards":
+        cards = (slide.get("blocks") or {}).get("cards") or []
+        score += 0.6 if len(cards) >= 3 else 0.2
+    elif sid == "data.table":
+        rows = ((slide.get("blocks") or {}).get("table") or {}).get("rows") or []
+        score += 1.2 if len(rows) >= 3 else -0.5
+    elif sid == "chart.split":
+        score += 0.8 if n >= 1 else -0.5
+    elif sid == "timeline.vertical":
+        items = (slide.get("blocks") or {}).get("timeline") or []
+        score += 0.9 if len(items) >= 4 else -0.4
+    elif sid == "process.vertical":
+        steps = (slide.get("blocks") or {}).get("process") or []
+        score += 0.9 if len(steps) >= 5 else -0.4
+    elif sid in ("summary.list",):
+        score += 0.7 if n >= 2 else -0.5
+
+    if sid in recent:
+        score -= 1.3                     # 相邻页同版式最容易显“模板感”
+    score -= 0.30 * used.get(sid, 0)      # 整篇均衡使用
+    return score
+
+
+def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
+                  recent: Optional[List[str]] = None,
+                  used: Optional[Dict[str, int]] = None) -> str:
+    """为单页选版式。
+
+    优先级：模型给的 ``layout`` → 模板配置的旧版式名 → 结构打分。
+    前两者都要过 ``_layout_usable`` 硬门槛，不通过就落到打分兜底。
+    """
+    stype = slide.get("type") or "content"
+    specs = LAYOUT_CATALOG.get(stype) or []
+    if not specs:
+        return ""
+    recent = list(recent or [])[-2:]
+    used = used or {}
+
+    # 模板级版式偏好只用于"皮肤位"页型（每篇各一页）；内容页一律按结构打分，
+    # 否则同一模板会把所有正文页钉死成同一种版式，正是"模板感"的来源。
+    prefers = [slide.get("layout")]
+    if stype in ("cover", "section", "closing"):
+        prefers.append((template_layouts or {}).get(stype))
+    for raw in prefers:
+        want = _normalize_layout_id(raw, stype)
+        if not want:
+            want = _LEGACY_LAYOUT_ALIAS.get((stype, str(raw or "")), "")
+        if want:
+            spec = next((sp for sp in specs if sp["id"] == want), None)
+            if spec and _layout_usable(spec, slide):
+                return want
+
+    best, best_score = "", float("-inf")
+    for spec in specs:
+        if not _layout_usable(spec, slide):
+            continue
+        score = _layout_score(spec, slide, recent, used)
+        if score > best_score:
+            best, best_score = spec["id"], score
+    if best:
+        return best
+    # 全部不可用（如无图但所有 content 版式都要求图）时退回首个纯文字版式
+    return next((sp["id"] for sp in specs if not sp.get("needs_image")), specs[0]["id"])
+
 
 def template_to_dict(t) -> Dict:
     """ORM 实体/字典 → 渲染用统一结构。"""
@@ -144,6 +399,20 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 - process 流程页：title、blocks={{"process":["步骤1","步骤2",...]}}（讲工作流程时用，3~5 步）
 - summary 总结页：title、points（2~4 条结论/展望）
 - closing 结束页（必有且仅最后一页）：title（如"谢谢聆听，请批评指正"）
+
+【版式选择】每页可加 "layout" 字段指定版式；不写则系统按内容自动选。系统会做可行性校验，
+点数不符或数据缺失时自动降级，所以只在有把握时指定：
+- content：bullets 编号要点（默认）；two_col 双栏并列（4 条以上）；three_cards 三卡（正好 3 条）；
+  compare 左右对比（正好 2 条，用于前后/正反对照）；icon_grid 四宫格（3~4 条短句，每条 ≤20 字）；
+  statement 单句结论（只写 1 条且 ≤30 字，用于核心判断）；quote 引言金句（第 1 条为原文引用，
+  第 2 条写出处）
+- data：cards 指标卡（默认，3~4 个）；kpi 看板（最核心的指标放第 1 位 + 2~3 个次要指标）；
+  table 表格（材料里有成组明细数据时用，blocks={{"table":{{"headers":["列名"],"rows":[["值"]]}}}}）
+- chart：full 整页图表（默认）；split 图表加右侧结论（此时 points 写 2~3 条图表结论）
+- timeline：horizontal 横向（≤5 项）；vertical 纵向（≥4 项）
+- process：chevron 横向箭头（≤5 步）；vertical 纵向步骤条（≥5 步）
+- summary：cards 卡片（默认）；list 大字结论（2~4 条）
+- 相邻两页不要用同一版式；整篇 content 页尽量覆盖 3 种以上不同版式。
 
 【输出要求】
 1. 只输出 JSON，不要用 markdown 代码块包裹，不要输出其他文字：
@@ -215,6 +484,48 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
         outline,
         target_count=slide_count if enforce_exact_count else None,
     )
+
+
+def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
+    """大纲阶段自动为流程页生成 drawio 原生图示，并固化进 ``blocks.drawio_xml``。
+
+    与「大脑+手脚」架构一致：35B 只决定“这是流程页、这几步”（已由大纲的
+    ``type=process`` + ``blocks.process`` 表达），drawio 负责把语义翻译成可编辑的
+    原生图示；本函数只做编排与兜底，不触碰任何绘图坐标。
+
+    固化的 ``drawio_xml`` 随大纲落库，因此无论是编辑器同步渲染（``generate``）
+    还是工作台异步作业（``submit_job`` → ``_render_local_and_store``），``r_process``
+    都会优先渲染该原生图示，失败时回退原生步骤条——天然覆盖全部渲染链路。
+
+    兜底纪律（绝不拖垮整份大纲）：
+    - ``DRAWIO_MCP_URL`` 未配置 → 直接跳过（后续走原生步骤条）；
+    - 任一页生成失败（MCP 断连 / 结构校验不过 / 超时）→ 仅跳过该页；
+    - 已含 ``drawio_xml`` 的页不重复生成（支持编辑后局部重生成）。
+    """
+    from app.application.ppt.drawio_service import DrawioService
+    drawio = DrawioService()
+    if not drawio.enabled:
+        return outline
+    for s in (outline.get("slides") or []):
+        if (s.get("blocks") or {}).get("drawio_xml"):
+            continue
+        # 大纲阶段 35B 仅产出 process 类型图示页；relationship/organization/
+        # architecture 三类走手动 ai_visual（其生成逻辑会强制 type=process，不宜自动套用）。
+        if s.get("type") != "process":
+            continue
+        blocks = s.get("blocks") or {}
+        # 必须有可画内容：流程步骤 / 要点 / 图示标签
+        if not (blocks.get("process") or s.get("points") or blocks.get("diagram_labels")):
+            continue
+        try:
+            updated = drawio.generate_native_diagram(assistant, s, kind="process")
+            if updated:
+                s.clear()
+                s.update(updated)
+        except Exception as exc:  # noqa: BLE001 - 单页失败不影响整份大纲
+            logger.warning("PPT 自动图示生成跳过页(type=process, title=%s): %s",
+                           s.get("title"), type(exc).__name__)
+    return outline
 
 
 def _looks_truncated(raw: str) -> bool:
@@ -670,10 +981,12 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         text(slide, lx(0.88), ly(0.962), lx(0.08), ly(0.03), f"{idx} / {total}", 9, False, GRAY,
              align=PP_ALIGN.RIGHT)
 
-    def page_header(slide, title):
-        """内容页页眉：bar_title=左侧竖条 / top_band=顶部色带。"""
-        v = layouts.get("content", "bar_title")
-        if v == "top_band":
+    def page_header(slide, title, variant=None):
+        """内容页页眉：bar=左侧竖条 / band=顶部色带 / none=整页留白（大字报页）。"""
+        v = variant or layouts.get("content", "bar_title")
+        if v == "none":
+            return
+        if v in ("band", "top_band"):
             rect(slide, 0, 0, SW, ly(0.135), PRIMARY)
             rect(slide, 0, ly(0.135), SW, ly(0.006), ACCENT)
             text(slide, lx(0.05), ly(0.032), lx(0.9), ly(0.08), title, 24, True, WHITE)
@@ -703,11 +1016,60 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             y += 0.128 if len(pts) <= 4 else 0.108
         return y
 
+    def lay_of(s):
+        """当前页选中的版式短名（content.two_col → two_col）。"""
+        raw = str(s.get("_layout") or "")
+        return raw.split(".", 1)[1] if "." in raw else raw
+
+    def native_table(slide, spec, x, y, w, h):
+        """原生表格（导出后可编辑、可加行）。数据不足时返回 None 由调用方降级。"""
+        headers = [str(v) for v in (spec.get("headers") or [])]
+        rows = [r for r in (spec.get("rows") or []) if r]
+        if not headers or not rows:
+            return None
+        n_cols = max([len(headers)] + [len(r) for r in rows])
+        gf = slide.shapes.add_table(len(rows) + 1, n_cols, x, y, w, h)
+        tbl = gf.table
+        for ci in range(n_cols):
+            tbl.columns[ci].width = Emu(int(w / n_cols))
+        for ci in range(n_cols):
+            cell = tbl.cell(0, ci)
+            cell.text = headers[ci] if ci < len(headers) else ""
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = PRIMARY
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            for para in cell.text_frame.paragraphs:
+                para.alignment = PP_ALIGN.CENTER
+                for run in para.runs:
+                    _font(run, 13, True, WHITE)
+        for ri, row in enumerate(rows, start=1):
+            for ci in range(n_cols):
+                cell = tbl.cell(ri, ci)
+                cell.text = str(row[ci]) if ci < len(row) else ""
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = WHITE if ri % 2 else LIGHT
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                for para in cell.text_frame.paragraphs:
+                    para.alignment = PP_ALIGN.LEFT if ci == 0 else PP_ALIGN.CENTER
+                    for run in para.runs:
+                        _font(run, 12, ci == 0, DARK)
+        return gf
+
     # ---------- 页型渲染 ----------
     def r_cover(s):
         slide = prs.slides.add_slide(blank)
-        v = layouts.get("cover", "band_bottom")
-        if v == "left_block":
+        v = lay_of(s) or "band"
+        if v == "minimal":
+            rect(slide, 0, 0, SW, SH, WHITE)
+            rect(slide, 0, 0, SW, ly(0.012), PRIMARY)
+            rect(slide, lx(0.10), ly(0.30), lx(0.06), ly(0.008), ACCENT)
+            text(slide, lx(0.10), ly(0.34), lx(0.74), ly(0.26), s["title"], 40, True, DARK)
+            if s.get("subtitle"):
+                text(slide, lx(0.10), ly(0.60), lx(0.68), ly(0.09), s["subtitle"], 17, False, GRAY)
+            rect(slide, lx(0.84), ly(0.80), lx(0.10), lx(0.10), PRIMARY, round_=True)
+            rect(slide, lx(0.862), ly(0.837), lx(0.056), ly(0.006), ACCENT)
+            return slide
+        if v == "side":
             rect(slide, 0, 0, lx(0.40), SH, PRIMARY)
             circle(slide, SW * 0.34, SH * 0.18, SH * 0.22, ACCENT, 18)
             circle(slide, SW * 0.08, SH * 0.88, SH * 0.26, ACCENT, 12)
@@ -730,12 +1092,21 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def r_toc(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"] or "目录")
-        items = s["points"][:5]
-        v = layouts.get("toc", "numbered_list")
-        if v == "cards":
+        items = s["points"][:6]
+        v = lay_of(s) or "list"
+        if v == "grid":
+            for i, it in enumerate(items[:6]):
+                cx = 0.06 + (i % 3) * 0.295
+                cy = 0.285 + (i // 3) * 0.275
+                rect(slide, lx(cx), ly(cy), lx(0.275), ly(0.215), LIGHT, round_=True)
+                rect(slide, lx(cx), ly(cy), lx(0.275), ly(0.010), ACCENT)
+                text(slide, lx(cx + 0.022), ly(cy + 0.032), lx(0.13), ly(0.09),
+                     f"{i+1:02d}", 26, True, ACCENT)
+                text(slide, lx(cx + 0.022), ly(cy + 0.122), lx(0.235), ly(0.08), it, 14, True, DARK)
+        elif v == "cards":
             cols = 2
             cw, ch = 0.415, 0.155
-            for i, it in enumerate(items):
+            for i, it in enumerate(items[:4]):
                 cx = 0.065 + (i % cols) * (cw + 0.035)
                 cy = 0.28 + (i // cols) * (ch + 0.055)
                 rect(slide, lx(cx), ly(cy), lx(cw), ly(ch), LIGHT, round_=True)
@@ -762,7 +1133,18 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     def r_section(s):
         slide = prs.slides.add_slide(blank)
-        if layouts.get("section") == "center":
+        v = lay_of(s) or "side"
+        if v == "number":
+            rect(slide, 0, 0, SW, SH, PRIMARY)
+            deco_circles(slide)
+            no = int(s.get("_sec_no") or 1)
+            text(slide, lx(0.06), ly(0.10), lx(0.60), ly(0.52), f"{no:02d}", 150, True,
+                 WHITE)
+            rect(slide, lx(0.83), ly(0.57), lx(0.10), ly(0.008), ACCENT)
+            text(slide, lx(0.40), ly(0.60), lx(0.50), ly(0.16), s["title"], 32, True, WHITE,
+                 align=PP_ALIGN.RIGHT)
+            return slide
+        if v == "center":
             rect(slide, 0, 0, SW, SH, LIGHT)
             circle(slide, SW * 0.9, SH * 0.15, SH * 0.25, PRIMARY, 10)
             circle(slide, SW * 0.08, SH * 0.9, SH * 0.2, PRIMARY, 8)
@@ -778,32 +1160,169 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             text(slide, lx(0.06), ly(0.44), lx(0.26), ly(0.18), s["title"], 30, True, WHITE)
         return slide
 
-    def r_content(s):
+    def _content_image(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
-        img = s.get("_image")
-        has_img = bool(img and img.get("file_path"))
-        if has_img:
-            tw = 0.40
-            y = 0.26 if layouts.get("content") == "bar_title" else 0.22
-            for p in s["points"]:
-                rect(slide, lx(0.06), ly(y + 0.014), lx(0.013), lx(0.013), ACCENT)
-                text(slide, lx(0.085), ly(y), lx(tw), ly(0.13), p, 16, False, GRAY)
-                y += 0.125 if len(s["points"]) <= 4 else 0.105
-            ix, iy, iw, ih = lx(0.53), ly(0.235), lx(0.43), ly(0.60)
-            rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
-            picture_fit(slide, img["file_path"], ix, iy, iw, ih)
-            text(slide, ix, iy + ih + ly(0.012), iw, ly(0.045),
-                 f"▲ {img.get('caption') or img['name']}", 11, False, GRAY, align=PP_ALIGN.CENTER)
-        else:
-            y0 = 0.26 if layouts.get("content") == "bar_title" else 0.22
-            numbered_points(slide, s["points"], y=y0, size=17)
+        img = s["_image"]
+        points = s["points"]
+        y = 0.26
+        step = 0.125 if len(points) <= 4 else 0.105
+        for p in points:
+            rect(slide, lx(0.06), ly(y + 0.014), lx(0.013), lx(0.013), ACCENT)
+            text(slide, lx(0.085), ly(y), lx(0.40), ly(0.13), p, 16, False, GRAY)
+            y += step
+        ix, iy, iw, ih = lx(0.53), ly(0.235), lx(0.43), ly(0.60)
+        rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
+        picture_fit(slide, img["file_path"], ix, iy, iw, ih)
+        text(slide, ix, iy + ih + ly(0.012), iw, ly(0.045),
+             f"▲ {img.get('caption') or img['name']}", 11, False, GRAY, align=PP_ALIGN.CENTER)
         return slide
 
-    def r_data(s):
+    def _content_bullets(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
-        cards = ((s.get("blocks") or {}).get("cards") or [])[:4]
+        y0 = 0.22 if (layouts.get("content") or "") == "band" else 0.26
+        numbered_points(slide, s["points"], y=y0, size=17)
+        return slide
+
+    def _content_two_col(s):
+        """双栏并列：4~6 条按奇偶分栏，适合并列举措、多组要点。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"])
+        pts = s["points"]
+        half = (len(pts) + 1) // 2
+        for ci, group in enumerate((pts[:half], pts[half:])):
+            cx = 0.06 + ci * 0.465
+            rect(slide, lx(cx), ly(0.252), lx(0.10), ly(0.008), ACCENT)
+            y = 0.30
+            size = 16 if len(group) <= 2 else 14
+            step = 0.30 if len(group) <= 2 else 0.21
+            for p in group:
+                rect(slide, lx(cx), ly(y + 0.016), lx(0.012), lx(0.012), PRIMARY)
+                text(slide, lx(cx + 0.028), ly(y), lx(0.395), ly(step), p, size, False, DARK)
+                y += step
+        return slide
+
+    def _content_three_cards(s):
+        """三卡并列：正好 3 条时最稳，每卡一个序号 + 一句话。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"])
+        for i, p in enumerate(s["points"][:3]):
+            cx = 0.055 + i * 0.297
+            rect(slide, lx(cx), ly(0.295), lx(0.283), ly(0.47), LIGHT, round_=True)
+            rect(slide, lx(cx), ly(0.295), lx(0.283), ly(0.012), PRIMARY)
+            text(slide, lx(cx + 0.028), ly(0.34), lx(0.13), ly(0.10), f"{i+1:02d}",
+                 30, True, ACCENT)
+            text(slide, lx(cx + 0.028), ly(0.445), lx(0.232), ly(0.29), p, 15, False, DARK)
+        return slide
+
+    def _content_compare(s):
+        """左右对比：正好 2 条时用，中间加对比标记。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"])
+        pts = (s["points"] + ["", ""])[:2]
+        for i, p in enumerate(pts):
+            cx = 0.055 + i * 0.49
+            rect(slide, lx(cx), ly(0.265), lx(0.40), ly(0.53), LIGHT if i == 0 else WHITE,
+                 round_=True)
+            rect(slide, lx(cx), ly(0.265), lx(0.40), ly(0.012), PRIMARY if i == 0 else ACCENT)
+            text(slide, lx(cx + 0.03), ly(0.315), lx(0.08), ly(0.06), f"0{i+1}", 14, True, GRAY)
+            text(slide, lx(cx + 0.03), ly(0.385), lx(0.34), ly(0.34), p, 16, False, DARK)
+        rect(slide, lx(0.455), ly(0.495), lx(0.05), ly(0.05), PRIMARY, round_=True)
+        text(slide, lx(0.455), ly(0.505), lx(0.05), ly(0.035), "对比", 10, True, WHITE,
+             align=PP_ALIGN.CENTER)
+        return slide
+
+    def _content_icon_grid(s):
+        """四宫格：3~4 条短句，强调并列关系而非先后顺序。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"])
+        for i, p in enumerate(s["points"][:4]):
+            cx = 0.055 + (i % 2) * 0.465
+            cy = 0.27 + (i // 2) * 0.305
+            rect(slide, lx(cx), ly(cy), lx(0.44), ly(0.265), LIGHT, round_=True)
+            circle(slide, lx(cx + 0.045), ly(cy + 0.072), SH * 0.024, ACCENT, 100)
+            text(slide, lx(cx + 0.078), ly(cy + 0.042), lx(0.33), ly(0.055),
+                 f"0{i+1}", 12, True, PRIMARY)
+            text(slide, lx(cx + 0.078), ly(cy + 0.105), lx(0.325), ly(0.14), p, 14, False, DARK)
+        return slide
+
+    def _content_statement(s):
+        """单句结论：一条主张铺满页面，牺牲信息量换冲击力。"""
+        slide = prs.slides.add_slide(blank)
+        rect(slide, 0, 0, lx(0.016), SH, PRIMARY)
+        rect(slide, lx(0.10), ly(0.235), lx(0.05), ly(0.008), ACCENT)
+        text(slide, lx(0.10), ly(0.275), lx(0.78), ly(0.08), s["title"], 17, False, GRAY)
+        text(slide, lx(0.10), ly(0.40), lx(0.80), ly(0.30), s["points"][0], 34, True, DARK)
+        rect(slide, lx(0.10), ly(0.80), lx(0.86), Emu(9525), LINE)
+        return slide
+
+    def _content_quote(s):
+        """引言金句：引用原文 + 出处，政策解读/动员场合适用。"""
+        slide = prs.slides.add_slide(blank)
+        rect(slide, 0, 0, SW, SH, LIGHT)
+        text(slide, lx(0.09), ly(0.11), lx(0.10), ly(0.20), "“", 96, True, ACCENT)
+        text(slide, lx(0.14), ly(0.30), lx(0.72), ly(0.30), s["points"][0], 26, True, DARK)
+        src = s["points"][1] if len(s["points"]) > 1 else ""
+        rect(slide, lx(0.145), ly(0.645), lx(0.06), ly(0.008), PRIMARY)
+        if src:
+            text(slide, lx(0.145), ly(0.675), lx(0.62), ly(0.06), f"—— {src}", 14, False, GRAY)
+        text(slide, lx(0.72), ly(0.86), lx(0.22), ly(0.05), s["title"], 11, False, GRAY,
+             align=PP_ALIGN.RIGHT)
+        return slide
+
+    def r_content(s):
+        v = lay_of(s) or "bullets"
+        if v == "image_right":
+            img = s.get("_image") or {}
+            if img.get("file_path"):
+                return _content_image(s)
+            v = "bullets"
+        return {
+            "two_col": _content_two_col,
+            "three_cards": _content_three_cards,
+            "compare": _content_compare,
+            "icon_grid": _content_icon_grid,
+            "statement": _content_statement,
+            "quote": _content_quote,
+        }.get(v, _content_bullets)(s)
+
+    def r_data(s):
+        blocks = s.get("blocks") or {}
+        cards = blocks.get("cards") or []
+        table = blocks.get("table") or {}
+        points = [str(p) for p in (s.get("points") or [])]
+        v = lay_of(s) or "cards"
+        slide = prs.slides.add_slide(blank)
+
+        if v == "table" and table.get("rows"):
+            page_header(slide, s["title"])
+            native_table(slide, table, lx(0.055), ly(0.235), lx(0.89), ly(0.58))
+            for j, p in enumerate(points[:2]):
+                text(slide, lx(0.06), ly(0.845 + j * 0.045), lx(0.88), ly(0.045), p, 12, False, GRAY)
+            return slide
+
+        if v == "kpi" and cards:
+            page_header(slide, s["title"])
+            main = cards[0]
+            rect(slide, lx(0.055), ly(0.245), lx(0.36), ly(0.50), PRIMARY, round_=True)
+            text(slide, lx(0.075), ly(0.315), lx(0.32), ly(0.20), str(main.get("value", "")),
+                 50, True, WHITE, align=PP_ALIGN.CENTER)
+            text(slide, lx(0.075), ly(0.545), lx(0.32), ly(0.08), str(main.get("label", "")),
+                 16, False, C("D6E4F0"), align=PP_ALIGN.CENTER)
+            for i, c in enumerate(cards[1:4]):
+                cy = 0.245 + i * 0.175
+                rect(slide, lx(0.45), ly(cy), lx(0.50), ly(0.15), LIGHT, round_=True)
+                text(slide, lx(0.472), ly(cy + 0.015), lx(0.21), ly(0.11),
+                     str(c.get("value", "")), 24, True, PRIMARY)
+                text(slide, lx(0.685), ly(cy + 0.042), lx(0.245), ly(0.07),
+                     str(c.get("label", "")), 14, False, GRAY)
+            for j, p in enumerate(points[:2]):
+                text(slide, lx(0.06), ly(0.80 + j * 0.05), lx(0.88), ly(0.05), p, 13, False, GRAY)
+            return slide
+
+        page_header(slide, s["title"])
+        cards = cards[:4]
         if cards:
             n = len(cards)
             cw = 0.88 / n - 0.02
@@ -816,57 +1335,100 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 rect(slide, lx(cx + cw / 2 - 0.02), ly(0.535), lx(0.04), ly(0.006), ACCENT)
                 text(slide, lx(cx), ly(0.555), lx(cw), ly(0.06), str(c.get("label", "")),
                      14, False, GRAY, align=PP_ALIGN.CENTER)
-        for j, p in enumerate(s["points"][:3]):
+        for j, p in enumerate(points[:3]):
             rect(slide, lx(0.065), ly(0.735 + j * 0.068), lx(0.010), lx(0.010), ACCENT)
             text(slide, lx(0.088), ly(0.72 + j * 0.068), lx(0.84), ly(0.06), p, 14, False, GRAY)
         return slide
 
+    def _draw_chart(slide, chart_spec, x, y, w, h):
+        """画原生可编辑图表；数据不完整返回 False 交由调用方降级。"""
+        from pptx.chart.data import CategoryChartData
+        from pptx.enum.chart import XL_CHART_TYPE
+        cats = chart_spec.get("categories") or []
+        series = chart_spec.get("series") or []
+        if not (cats and series):
+            return False
+        ct = (chart_spec.get("chart_type") or "bar").lower()
+        chart_type = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+                      "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
+                      "bar_h": XL_CHART_TYPE.BAR_CLUSTERED,
+                      "stacked": XL_CHART_TYPE.COLUMN_STACKED,
+                      "line": XL_CHART_TYPE.LINE_MARKERS,
+                      "pie": XL_CHART_TYPE.PIE,
+                      "doughnut": XL_CHART_TYPE.DOUGHNUT,
+                      "area": XL_CHART_TYPE.AREA}.get(ct, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        data = CategoryChartData()
+        data.categories = [str(c) for c in cats]
+        n_series = 0
+        for se in series:
+            try:
+                data.add_series(str(se.get("name", "")), [float(v) for v in se.get("values", [])])
+                n_series += 1
+            except (TypeError, ValueError):
+                continue
+        if not n_series:
+            return False
+        rect(slide, x - lx(0.02), y - ly(0.02), w + lx(0.04), h + ly(0.04), LIGHT, round_=True)
+        gf = slide.shapes.add_chart(chart_type, x, y, w, h, data)
+        gf.chart.has_legend = n_series > 1
+        try:
+            palette = [PRIMARY, ACCENT, DARK, C("8FAADC")]
+            for si, serie in enumerate(gf.chart.series):
+                serie.format.fill.solid()
+                serie.format.fill.fore_color.rgb = palette[si % len(palette)]
+                serie.format.line.color.rgb = palette[si % len(palette)]
+        except Exception:
+            pass
+        return True
+
     def r_chart(s):
-        """图表页：原生 pptx 图表（导出后可继续编辑数据）。"""
+        """图表页：原生 pptx 图表（导出后可双击编辑数据）。"""
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         chart_spec = (s.get("blocks") or {}).get("chart") or {}
-        cats = chart_spec.get("categories") or []
-        series = chart_spec.get("series") or []
-        if cats and series:
-            from pptx.chart.data import CategoryChartData
-            from pptx.enum.chart import XL_CHART_TYPE
-            ct = (chart_spec.get("chart_type") or "bar").lower()
-            chart_type = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
-                          "line": XL_CHART_TYPE.LINE_MARKERS,
-                          "pie": XL_CHART_TYPE.PIE}.get(ct, XL_CHART_TYPE.COLUMN_CLUSTERED)
-            data = CategoryChartData()
-            data.categories = [str(c) for c in cats]
-            n_series = 0
-            for se in series:
-                try:
-                    data.add_series(str(se.get("name", "")), [float(v) for v in se.get("values", [])])
-                    n_series += 1
-                except (TypeError, ValueError):
-                    continue
-            if n_series:
-                rect(slide, lx(0.055), ly(0.215), lx(0.89), ly(0.68), LIGHT, round_=True)
-                gf = slide.shapes.add_chart(chart_type, lx(0.09), ly(0.25), lx(0.82), ly(0.60), data)
-                gf.chart.has_legend = n_series > 1
-                try:
-                    palette = [PRIMARY, ACCENT, DARK, C("8FAADC")]
-                    for si, serie in enumerate(gf.chart.series):
-                        serie.format.fill.solid()
-                        serie.format.fill.fore_color.rgb = palette[si % len(palette)]
-                        serie.format.line.color.rgb = palette[si % len(palette)]
-                except Exception:
-                    pass
-        for j, p in enumerate(s["points"][:2]):
+        points = [str(p) for p in (s.get("points") or [])]
+        if (lay_of(s) or "full") == "split":
+            _draw_chart(slide, chart_spec, lx(0.065), ly(0.245), lx(0.575), ly(0.60))
+            rect(slide, lx(0.685), ly(0.245), lx(0.07), ly(0.008), ACCENT)
+            y = 0.295
+            for p in points[:3]:
+                rect(slide, lx(0.685), ly(y + 0.014), lx(0.012), lx(0.012), PRIMARY)
+                text(slide, lx(0.712), ly(y - 0.006), lx(0.238), ly(0.17), p, 14, False, DARK)
+                y += 0.195
+            return slide
+        _draw_chart(slide, chart_spec, lx(0.09), ly(0.25), lx(0.82), ly(0.60))
+        for j, p in enumerate(points[:2]):
             text(slide, lx(0.07), ly(0.90 + j * 0.045), lx(0.86), ly(0.045), p, 12, False, GRAY)
         return slide
 
     def r_case(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
+        pts = [str(p) for p in (s.get("points") or [])]
+        if (lay_of(s) or "block") == "split" and len(pts) >= 3:
+            base, extra = divmod(len(pts), 3)
+            groups, start = [], 0
+            for gi in range(3):
+                take = base + (1 if gi < extra else 0)
+                groups.append(pts[start:start + take])
+                start += take
+            for gi, group in enumerate(groups):
+                cx = 0.055 + gi * 0.30
+                rect(slide, lx(cx), ly(0.25), lx(0.278), ly(0.57), LIGHT, round_=True)
+                rect(slide, lx(cx), ly(0.25), lx(0.278), ly(0.010), PRIMARY)
+                text(slide, lx(cx + 0.022), ly(0.285), lx(0.10), ly(0.06), f"0{gi+1}",
+                     16, True, ACCENT)
+                y = 0.365
+                step = 0.19 if len(group) <= 2 else 0.135
+                for p in group:
+                    text(slide, lx(cx + 0.022), ly(y), lx(0.235), ly(step), p,
+                         13 if len(group) <= 2 else 12, False, DARK)
+                    y += step
+            return slide
         rect(slide, lx(0.055), ly(0.235), lx(0.89), ly(0.64), LIGHT, round_=True)
         rect(slide, lx(0.055), ly(0.235), lx(0.012), ly(0.64), ACCENT)
         y = 0.30
-        for p in s["points"]:
+        for p in pts:
             text(slide, lx(0.10), ly(y), lx(0.80), ly(0.14), p, 17, False, DARK)
             y += 0.145
         return slide
@@ -874,7 +1436,20 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def r_timeline(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
-        items = ((s.get("blocks") or {}).get("timeline") or [])[:5]
+        all_items = (s.get("blocks") or {}).get("timeline") or []
+        if (lay_of(s) or "horizontal") == "vertical" and len(all_items) >= 3:
+            items = all_items[:6]
+            rect(slide, lx(0.175), ly(0.245), Emu(19050), ly(0.60), LINE)
+            step = 0.60 / len(items)
+            for i, it in enumerate(items):
+                cy = 0.245 + step * (i + 0.5)
+                text(slide, lx(0.04), ly(cy - 0.035), lx(0.115), ly(0.07),
+                     str(it.get("time", "")), 13, True, PRIMARY, align=PP_ALIGN.RIGHT)
+                circle(slide, lx(0.175), ly(cy - 0.006), SH * 0.012, PRIMARY, 100)
+                text(slide, lx(0.215), ly(cy - 0.045), lx(0.70), ly(step), str(it.get("text", "")),
+                     14, False, DARK)
+            return slide
+        items = all_items[:5]
         n = max(len(items), 1)
         yline = 0.52
         rect(slide, lx(0.08), ly(yline), lx(0.84), ly(0.009), ACCENT, round_=True)
@@ -919,7 +1494,21 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 text(slide, lx(.06), ly(.3), lx(.88), ly(.15),
                      "该页图示暂无法显示，请核对原内容。", 16, False, GRAY)
             return slide
-        steps = ((s.get("blocks") or {}).get("process") or s["points"])[:5]
+        all_steps = (s.get("blocks") or {}).get("process") or s["points"]
+        if (lay_of(s) or "chevron") == "vertical" and len(all_steps) >= 3:
+            steps = all_steps[:7]
+            step_h = 0.60 / len(steps)
+            for i, st in enumerate(steps):
+                cy = 0.25 + i * step_h
+                rect(slide, lx(0.075), ly(cy + 0.008), lx(0.042), lx(0.042), PRIMARY, round_=True)
+                text(slide, lx(0.075), ly(cy + 0.018), lx(0.042), ly(0.03), f"{i+1}",
+                     13, True, WHITE, align=PP_ALIGN.CENTER)
+                if i < len(steps) - 1:
+                    rect(slide, lx(0.0955), ly(cy + 0.056), Emu(12700), ly(step_h - 0.056), LINE)
+                text(slide, lx(0.14), ly(cy), lx(0.80), ly(step_h - 0.02), str(st),
+                     15 if len(steps) <= 5 else 13, False, DARK)
+            return slide
+        steps = (all_steps)[:5]
         n = max(len(steps), 1)
         cw = 0.88 / n
         for i, st in enumerate(steps):
@@ -947,6 +1536,17 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         pts = s["points"][:4]
+        if (lay_of(s) or "cards") == "list":
+            step = 0.60 / max(len(pts), 1)
+            for i, p in enumerate(pts):
+                cy = 0.27 + i * step
+                text(slide, lx(0.07), ly(cy - 0.012), lx(0.11), ly(0.10), f"0{i+1}",
+                     30, True, ACCENT)
+                text(slide, lx(0.205), ly(cy + 0.01), lx(0.735), ly(step - 0.04), p, 20,
+                     False, DARK)
+                if i < len(pts) - 1:
+                    rect(slide, lx(0.07), ly(cy + step - 0.025), lx(0.86), Emu(9525), LINE)
+            return slide
         cw = 0.425
         for i, p in enumerate(pts):
             cx = 0.06 + (i % 2) * (cw + 0.04)
@@ -960,7 +1560,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         slide = prs.slides.add_slide(blank)
         rect(slide, 0, 0, SW, SH, PRIMARY)
         deco_circles(slide)
-        if layouts.get("closing") == "brand_band":
+        if lay_of(s) == "band":
             rect(slide, 0, ly(0.86), SW, ly(0.14), DARK, alpha=60)
         rect(slide, lx(0.44), ly(0.50), lx(0.12), ly(0.010), ACCENT)
         text(slide, 0, ly(0.40), SW, ly(0.14), s["title"] or "谢谢聆听", 42, True, WHITE,
@@ -971,8 +1571,21 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                  "data": r_data, "chart": r_chart, "case": r_case, "timeline": r_timeline,
                  "process": r_process, "summary": r_summary, "closing": r_closing}
 
-    slides_list = outline.get("slides", [])
+    slides_list = [dict(s) for s in (outline.get("slides") or [])]
     total = len(slides_list)
+    # 先统一选版：相邻页去重 + 整篇均衡，避免"每页长得一样"的模板感
+    used_layouts: Dict[str, int] = {}
+    recent_layouts: List[str] = []
+    sec_no = 0
+    for s in slides_list:
+        if s.get("type") == "section":
+            sec_no += 1
+            s["_sec_no"] = sec_no
+        chosen = choose_layout(s, layouts, recent=recent_layouts, used=used_layouts)
+        s["_layout"] = chosen
+        if chosen:
+            used_layouts[chosen] = used_layouts.get(chosen, 0) + 1
+            recent_layouts = (recent_layouts + [chosen])[-2:]
     for idx, s in enumerate(slides_list, 1):
         slide = renderers.get(s.get("type"), r_content)(s)
         if s.get("type") in ("content", "toc", "data", "chart", "case", "timeline",

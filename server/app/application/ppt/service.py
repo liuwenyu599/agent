@@ -1426,6 +1426,9 @@ class PPTService:
                 # 用户未填页数时也由服务端先算出权威页数，再执行同一硬约束。
                 enforce_exact_count=True)
             outline = self._audit_and_repair_outline(outline, target_count, content)
+            # 大纲阶段自动为流程页挂接 drawio 原生图示（固化进 blocks.drawio_xml，
+            # 后续渲染链路自动取用；未配置/失败则静默回退原生步骤条）。
+            outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
             outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
             raise AIServiceError(str(e))
@@ -1486,6 +1489,10 @@ class PPTService:
                 enforce_exact_count=True)
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
             outline = self._audit_and_repair_outline(outline, target_count, content)
+            # 仅在 drawio 真正开启时提示图示生成进度，避免无配置环境多出 stage 事件
+            if (settings.DRAWIO_MCP_URL or "").strip():
+                yield _sse({"type": "stage", "text": "正在为流程页生成原生图示…"})
+            outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
             outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
             yield _sse({"type": "error", "message": str(e)})
