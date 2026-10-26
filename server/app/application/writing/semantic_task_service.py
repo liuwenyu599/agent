@@ -499,6 +499,7 @@ class SemanticWritingTaskService(WritingTaskService):
 
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
         task.context = ctx
         task.current_content = revised
         self.db.flush()
@@ -515,7 +516,7 @@ class SemanticWritingTaskService(WritingTaskService):
                 "references": references, "revision_summary": summary}
 
     def save_version(self, task_id: str, user_id: str, content: str,
-                     note: Optional[str] = None) -> Dict[str, Any]:
+                     note: Optional[str] = None, formatting: Optional[Dict] = None) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
         canonical = self._canonicalize_body(content, dict(task.context or {}))
-        return super().save_version(task_id, user_id, canonical, note)
+        return super().save_version(task_id, user_id, canonical, note, formatting)

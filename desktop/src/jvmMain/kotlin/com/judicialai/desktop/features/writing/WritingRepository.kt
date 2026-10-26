@@ -219,11 +219,13 @@ class WritingRepository(private val api: ApiClient) {
     suspend fun saveVersion(
         id: String, content: String, note: String?,
         baseVersion: Int, baseContent: String,
+        formatting: Map<String, Any>? = null,
     ): ApiResult<JsonObject?> =
         when (val r = api.post(Endpoints.WritingTasks.versions(id), buildMap<String, Any?> {
             put("content", content)
             put("base_version", baseVersion)
             put("base_content_hash", contentHash(baseContent))
+            if (formatting != null) put("formatting", formatting)
             if (!note.isNullOrBlank()) put("note", note)
         })) {
             is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
@@ -237,6 +239,12 @@ class WritingRepository(private val api: ApiClient) {
                     ?: r.data.items()
                 ApiResult.Ok(items)
             }
+            is ApiResult.Err -> r
+        }
+
+    suspend fun checkCurrentFormat(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.formatCheck(id))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
             is ApiResult.Err -> r
         }
 

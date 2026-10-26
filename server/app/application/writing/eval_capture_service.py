@@ -197,7 +197,7 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
         return row is not None
 
     def save_version(self, task_id: str, user_id: str, content: str,
-                     note: Optional[str] = None) -> Dict[str, Any]:
+                     note: Optional[str] = None, formatting: Optional[Dict] = None) -> Dict[str, Any]:
         """Save the manual version and capture one eval pair when its immediate parent is AI."""
         task = self._get_owned(task_id, user_id)
         previous = self._latest_version(task)
@@ -211,7 +211,7 @@ class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
 
         # Persist the user's version first. Eval capture is a secondary data-asset concern and must
         # never make a successful manual document save disappear if sample persistence later fails.
-        result = super().save_version(task_id, user_id, content, note)
+        result = super().save_version(task_id, user_id, content, note, formatting)
         result["eval_captured"] = False
 
         if not should_capture:

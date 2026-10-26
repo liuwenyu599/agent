@@ -46,6 +46,7 @@ class MyDocumentVersionModel(Base, IdMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     quality: Mapped[Optional[dict]] = mapped_column(JSON)         # 保存时的质检快照
     content_check: Mapped[Optional[dict]] = mapped_column(JSON)   # 内容核查快照
+    formatting: Mapped[Optional[dict]] = mapped_column(JSON)      # 用户编辑的版式快照
     note: Mapped[Optional[str]] = mapped_column(String(500))      # 版本备注
     created_by: Mapped[Optional[str]] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)

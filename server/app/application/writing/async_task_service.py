@@ -667,6 +667,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 quality["level"] = "B"
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
         self._claim_revision_state(task, user_id, expected_state)
         task.context = ctx
         task.current_content = revised
@@ -765,6 +766,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             ctx["document_date"] = doc_date
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
         self._claim_revision_state(task, user_id, expected_state)
         task.context = ctx
         task.current_content = revised

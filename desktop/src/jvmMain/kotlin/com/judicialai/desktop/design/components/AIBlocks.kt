@@ -171,6 +171,7 @@ fun ContextSources(
     modifier: Modifier = Modifier,
     tint: Color = EmeraldInk,
     container: Color = EmeraldSoft,
+    onSourceClick: ((Int) -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(Dimens.radiusMd)
@@ -202,7 +203,7 @@ fun ContextSources(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                sources.forEach { s ->
+                sources.forEachIndexed { index, s ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             Modifier.size(4.dp).clip(CircleShape).background(tint.copy(alpha = 0.6f))
@@ -211,8 +212,12 @@ fun ContextSources(
                         // 资料名多为完整公文标题（40+ 字），单行会被截成看不出差别的一小段，
                         // 放开到两行让用户至少能分辨是哪一份资料
                         Text(s, fontSize = 11.5.sp, color = Ink2, lineHeight = 16.sp,
-                            modifier = Modifier.weight(1f), maxLines = 2,
+                            modifier = Modifier.weight(1f).then(
+                                if (onSourceClick != null) Modifier.clickable { onSourceClick(index) }
+                                else Modifier), maxLines = 2,
                             overflow = TextOverflow.Ellipsis)
+                        if (onSourceClick != null) Text("查看原文 →", fontSize = 11.sp,
+                            color = tint, modifier = Modifier.clickable { onSourceClick(index) })
                     }
                 }
             }

@@ -105,14 +105,31 @@ def export_document_docx(
     """导出指定版本（默认当前版本）为党政机关公文格式 Word。"""
     doc = svc.get_document(doc_id, user.id)
     if version_no is not None:
-        content = svc.get_version(doc_id, version_no, user.id)["content"]
+        version = svc.get_version(doc_id, version_no, user.id)
+        content = version["content"]
+        stored_formatting = version.get("formatting")
     else:
         content = doc["content"]
-    buf = generate_official_document(
-        content=content, title=doc["title"],
-        doc_number=doc.get("document_number") or "",
-        recipient="", signature="", date_text=doc.get("document_date") or "",
-    )
+        stored_formatting = doc.get("formatting")
+    from app.application.documents.formatting import effective_formatting
+    from app.infrastructure.database.models.writing_task import WritingTaskModel
+    task = svc.db.get(WritingTaskModel, doc["task_id"]) if doc.get("task_id") else None
+    if task is not None and task.user_id == user.id and task.document_id == doc_id:
+        from app.application.writing.task_service import WritingTaskService
+        context = {**(task.context or {}), "title": doc["title"],
+                   "formatting": stored_formatting}
+        if doc.get("document_date"):
+            context["document_date"] = doc["document_date"]
+        if doc.get("document_number"):
+            context["document_number"] = doc["document_number"]
+        buf, _ = WritingTaskService(svc.db)._render_docx(content, context, True)
+    else:
+        buf = generate_official_document(
+            content=content, title=doc["title"],
+            doc_number=doc.get("document_number") or "",
+            recipient="", signature="", date_text=doc.get("document_date") or "",
+            formatting=effective_formatting(content, stored_formatting),
+        )
     fname = quote(f"{doc['title']}.docx")
     return StreamingResponse(buf, media_type=_DOCX_MEDIA, headers={
         "Content-Disposition": f"attachment; filename*=UTF-8''{fname}"

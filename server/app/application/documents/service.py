@@ -3,6 +3,7 @@
 安全约束：所有查询强制按 user_id 过滤，用户之间互相看不到文档。
 """
 from app.core.timeutil import now_local
+from app.application.documents.formatting import normalize_formatting
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -74,6 +75,7 @@ class DocumentService:
             "content": latest.content if latest else "",
             "quality": latest.quality if latest else None,
             "content_check": latest.content_check if latest else None,
+            "formatting": latest.formatting if latest else None,
             "versions": [self._version_item(v) for v in doc.versions],
         }
 
@@ -94,6 +96,7 @@ class DocumentService:
             "content": v.content,
             "quality": v.quality,
             "content_check": v.content_check,
+            "formatting": v.formatting,
         }
 
     # ---------- 写入 ----------
@@ -114,6 +117,7 @@ class DocumentService:
         self.db.add(MyDocumentVersionModel(
             document_id=doc.id, version_no=1, content=req.content,
             quality=req.quality, content_check=req.content_check,
+            formatting=normalize_formatting(req.content, req.formatting),
             note=req.note or "初始版本", created_by=user_id,
         ))
         if commit:
@@ -131,6 +135,8 @@ class DocumentService:
             document_id=doc.id, version_no=new_no, content=req.content,
             quality=latest.quality if latest else None,
             content_check=latest.content_check if latest else None,
+            formatting=(normalize_formatting(req.content, req.formatting) if req.formatting is not None else
+                        latest.formatting if latest and req.content == latest.content else None),
             note=req.note or f"版本 {new_no}", created_by=user_id,
         ))
         doc.current_version = new_no

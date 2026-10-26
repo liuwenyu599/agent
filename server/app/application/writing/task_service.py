@@ -24,6 +24,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.application.writing import task_parser
+from app.application.documents.formatting import effective_formatting
 from app.core.config import settings
 from app.infrastructure.database.models.knowledge import DocumentModel
 
@@ -219,6 +220,9 @@ class WritingTaskService:
             # 引用资料随任务落库：GET /writing/tasks/{id} 恢复任务时也要能带回来，
             # 否则切走再切回页面后「依据」栏永远是空的
             "references": list((t.context or {}).get("references") or []),
+            "reference_items": list((t.context or {}).get("reference_items") or []),
+            "formatting": effective_formatting(
+                t.current_content or "", (t.context or {}).get("formatting")),
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "updated_at": t.updated_at.isoformat() if t.updated_at else None,
         }
@@ -308,6 +312,19 @@ class WritingTaskService:
                 order.append(title)
             counts[title] += 1
         return [t if counts[t] <= 1 else f"{t}（命中 {counts[t]} 段）" for t in order]
+
+    @classmethod
+    def _reference_items(cls, sources: List[Dict]) -> List[Dict[str, str]]:
+        """保留检索命中的真实文档 ID，客户端可经鉴权接口查看原文。"""
+        labels = cls._reference_labels(sources)
+        grouped: Dict[str, str] = {}
+        for source in sources or []:
+            title = cls._CHUNK_SUFFIX_RE.sub("", str(source.get("source") or "")).strip()
+            doc_id = str(source.get("doc_id") or "")
+            if title and doc_id and title not in grouped:
+                grouped[title] = doc_id
+        return [{"title": label, "doc_id": grouped.get(
+            re.sub(r"（命中 \d+ 段）$", "", label), "")} for label in labels]
 
     def create_task(self, user_id: str, message: str,
                     session_id: Optional[str] = None,
@@ -1033,6 +1050,7 @@ class WritingTaskService:
         # 引用清单按文档去重后随任务落库，供后续 GET 任务时回放
         references = self._reference_labels(sources)
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources)
         t.context = ctx
         t.current_content = text
         if not t.ai_draft:
@@ -1132,6 +1150,7 @@ class WritingTaskService:
         # 改写同样带检索：有命中就更新引用清单，没命中保留上一版（不把已有依据清空）
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
         t.context = ctx
 
         t.current_content = revised
@@ -1157,17 +1176,25 @@ class WritingTaskService:
     # ---------------- 版本 / 导出 ----------------
 
     def save_version(self, task_id: str, user_id: str, content: str,
-                     note: Optional[str] = None) -> Dict[str, Any]:
+                     note: Optional[str] = None, formatting: Optional[Dict] = None) -> Dict[str, Any]:
         """用户手动保存当前编辑内容为新版本。"""
         t = self._get_owned(task_id, user_id)
         t.current_content = content
+        if formatting is not None:
+            from app.application.documents.formatting import normalize_formatting
+            ctx = dict(t.context or {})
+            ctx["formatting"] = normalize_formatting(content, formatting)
+            t.context = ctx
         self.db.flush()
         doc_id, ver = self._snapshot(t, user_id, note=note or "人工编辑")
         t.document_id = doc_id
         t.version_no = ver
         t.updated_at = now_local()
         self.db.commit()
-        return self._to_dict(t)
+        from app.application.documents.formatting import format_warnings
+        return {**self._to_dict(t), "format_warnings": format_warnings(
+            content, (t.context or {}).get("formatting"),
+            str((t.context or {}).get("document_type") or ""))}
 
     def list_versions(self, task_id: str, user_id: str) -> List[Dict[str, Any]]:
         t = self._get_owned(task_id, user_id)
@@ -1176,6 +1203,30 @@ class WritingTaskService:
         from app.application.documents.service import DocumentService
         doc = DocumentService(self.db).get_document(t.document_id, user_id)
         return doc["versions"]
+
+    def check_current_format(self, task_id: str, user_id: str) -> Dict[str, Any]:
+        """按该用户当前启用的 Word 格式规则检查已保存稿，不调用模型、不创建记录。"""
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from app.application.format_check.service import FormatCheckService, _rule_to_dict
+        from app.application.documents.formatting import OFFICIAL_TYPES
+
+        task = self._get_owned(task_id, user_id)
+        if str((task.context or {}).get("document_type") or "") not in OFFICIAL_TYPES:
+            return {"issues": [], "issue_count": 0, "skipped": "非标准公文材料"}
+        service = FormatCheckService(self.db, assistant=None, rag=None)
+        service.rules.ensure_user_defaults(user_id)
+        rules = [_rule_to_dict(rule) for rule in service.rules.list_for_check(user_id, None)
+                 if rule.target != "ppt"]
+        if not rules:
+            return {"issues": [], "issue_count": 0, "skipped": "未启用校验规则"}
+        buffer, _ = self._render_docx(task.current_content or "", task.context or {}, False)
+        with TemporaryDirectory(prefix="writing-format-") as temp_dir:
+            path = Path(temp_dir) / "draft.docx"
+            path.write_bytes(buffer.getvalue())
+            result = service.engine.check_file(path, "draft.docx", rules, use_ai=False)
+        issues = result.get("issues") or []
+        return {"issues": issues, "issue_count": len(issues)}
 
     def get_version(self, task_id: str, user_id: str, version_no: int) -> Dict[str, Any]:
         t = self._get_owned(task_id, user_id)
@@ -1208,6 +1259,9 @@ class WritingTaskService:
             self._snapshot(t, user_id, note=f"回退到 v{version_no} 前自动保存")
 
         t.current_content = content
+        ctx = dict(t.context or {})
+        ctx["formatting"] = ver.get("formatting")
+        t.context = ctx
         self.db.flush()
         _, new_ver = self._snapshot(t, user_id, note=f"回退到 v{version_no}")
         t.version_no = new_ver
@@ -1230,6 +1284,9 @@ class WritingTaskService:
         已含落款行/日期，则不再用 ctx 中的发文机关/成文日期追加，避免出现两个落款。
         """
         from app.application.chat.docx_export import generate_official_document, markdown_to_docx
+        from app.application.documents.formatting import remap_formatting
+        original_content = content
+        formatting = effective_formatting(content, ctx.get("formatting"))
         # 兼容旧任务：历史正文可能把标题/主送也写进 current_content；
         # 导出前再次确定性去重，避免 Word 出现双标题/双主送。
         content = self._strip_leading_structural_fields(content, ctx)
@@ -1252,6 +1309,7 @@ class WritingTaskService:
                       or SIGNOFF_TAIL_RE.fullmatch(lines[-1].strip())):
             signature = lines.pop().strip()
         content = "\n".join(lines).rstrip()
+        formatting = remap_formatting(original_content, content, formatting)
 
         renderer = generate_official_document if red_header else markdown_to_docx
         # 主送机关行已回归正文（由模型按文种判断书写），导出不再用字段另渲染一次，
@@ -1260,10 +1318,12 @@ class WritingTaskService:
             content=content, title=title, doc_number=doc_number,
             signature=signature,
             date_text=date_text,
+            formatting=formatting,
         ) if red_header else renderer(
             text=content, title=title, doc_number=doc_number,
             signature=signature,
             date_text=date_text,
+            formatting=formatting,
         )
         return buf, title
 
@@ -1288,7 +1348,8 @@ class WritingTaskService:
         content = (ver.get("content") or "").strip()
         if not content:
             raise HTTPException(status_code=409, detail="该版本内容为空")
-        buf, title = self._render_docx(content, t.context or {}, red_header)
+        buf, title = self._render_docx(content, {**(t.context or {}),
+            "formatting": ver.get("formatting")}, red_header)
         return buf, quote(f"{title}_v{version_no}.docx")
 
     def add_to_training(self, task_id: str, user_id: str, final_content: str) -> Dict[str, Any]:
@@ -1650,9 +1711,14 @@ class WritingTaskService:
         from app.application.documents.service import DocumentService
         svc = DocumentService(self.db)
         ctx = t.context or {}
+        stored = ctx.get("formatting")
+        formatting = effective_formatting(t.current_content or "", stored)
+        formatting = formatting if formatting != {
+            "title": {}, "paragraphs": {}} else None
         if t.document_id:
             doc = svc.save_version(t.document_id, user_id, DocumentSaveRequest(
-                content=t.current_content, title=ctx.get("title"), note=note),
+                content=t.current_content, title=ctx.get("title"), note=note,
+                formatting=formatting),
                 commit=commit)
             return doc["id"], doc["current_version"]
         doc = svc.create_document(user_id, DocumentCreateRequest(
@@ -1663,5 +1729,6 @@ class WritingTaskService:
             document_date=ctx.get("document_date"),
             session_id=t.session_id,
             note=note,
+            formatting=formatting,
         ), commit=commit)
         return doc["id"], doc["current_version"]

@@ -84,6 +84,7 @@ class TaskReviseRequest(BaseModel):
 
 class TaskSaveRequest(BaseModel):
     content: str
+    formatting: Optional[Dict[str, Any]] = None
     note: Optional[str] = None
     base_version: Optional[int] = None
     base_content_hash: Optional[str] = None
@@ -322,7 +323,7 @@ def save_version(task_id: str, req: TaskSaveRequest,
     svc._assert_revision_client_base(task, req.base_version, req.base_content_hash)
     svc._claim_revision_state(task, user.id, (task.current_content, task.version_no))
     reset = svc._supersede_pending_suggestions(task_id, user.id)
-    result = svc.save_version(task_id, user.id, req.content, req.note)
+    result = svc.save_version(task_id, user.id, req.content, req.note, req.formatting)
     result["suggestions_reset"] = reset
     return result
 
@@ -332,6 +333,13 @@ def list_versions(task_id: str,
                   user: User = Depends(get_current_user),
                   svc: WritingTaskService = Depends(get_task_service)):
     return {"items": svc.list_versions(task_id, user.id)}
+
+
+@router.get("/{task_id}/format-check")
+def check_current_format(task_id: str,
+                         user: User = Depends(get_current_user),
+                         svc: WritingTaskService = Depends(get_task_service)):
+    return svc.check_current_format(task_id, user.id)
 
 
 @router.get("/{task_id}/versions/{version_no}")

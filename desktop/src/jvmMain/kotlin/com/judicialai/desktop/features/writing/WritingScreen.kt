@@ -27,6 +27,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Checkbox
+import androidx.compose.material.DropdownMenu
+import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Switch
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
@@ -196,53 +199,44 @@ fun WritingScreen() {
                         val roomy = maxWidth >= 1320.dp
                         val medium = maxWidth >= 980.dp
                         val contextWidth = if (roomy) 240.dp else 210.dp
-                        val suggestionWidth = if (roomy) 300.dp else 260.dp
-                        val assistantWidth = if (roomy) 250.dp else 230.dp
+                        val assistantWidth = if (roomy) 350.dp else 300.dp
                         var showContext by remember { mutableStateOf(medium) }
                         var showDocument by remember { mutableStateOf(true) }
-                        var showSuggestions by remember { mutableStateOf(maxWidth >= 1080.dp) }
-                        var showAssistant by remember { mutableStateOf(roomy) }
+                        var showAssistant by remember { mutableStateOf(maxWidth >= 1180.dp) }
+                        var assistantTab by remember { mutableStateOf(0) }
                         val widthBucket = when {
                             maxWidth < 980.dp -> 0
-                            maxWidth < 1080.dp -> 1
-                            maxWidth < 1320.dp -> 2
-                            else -> 3
+                            maxWidth < 1180.dp -> 1
+                            else -> 2
                         }
 
                         // 只在跨过宽度档位时收拢栏目，避免用户拖动窗口的每个像素都重置选择。
-                        // 缩到最窄档时始终保留正文，防止四栏全部收起后留下空白工作区。
+                        // 缩到最窄档时始终保留正文，防止栏目全部收起后留下空白工作区。
                         LaunchedEffect(widthBucket) {
                             when (widthBucket) {
                                 0 -> {
                                     showContext = false
-                                    showSuggestions = false
                                     showAssistant = false
                                     showDocument = true
                                 }
-                                1 -> {
-                                    showSuggestions = false
-                                    showAssistant = false
-                                }
-                                2 -> showAssistant = false
+                                1 -> showAssistant = false
                             }
                         }
 
                         fun openContext() {
                             showContext = true
                             if (maxWidth < 980.dp) {
-                                showSuggestions = false
                                 showAssistant = false
                             }
                         }
                         fun openSuggestions() {
-                            showSuggestions = true
-                            if (maxWidth < 1180.dp) showAssistant = false
-                            if (maxWidth < 900.dp) showContext = false
+                            assistantTab = 1
+                            showAssistant = true
+                            if (maxWidth < 1180.dp) showContext = false
                         }
                         fun openAssistant() {
                             showAssistant = true
-                            if (maxWidth < 1320.dp) showContext = false
-                            if (maxWidth < 980.dp) showSuggestions = false
+                            if (maxWidth < 1180.dp) showContext = false
                         }
 
                         Column(Modifier.fillMaxSize().padding(Dimens.space4)) {
@@ -257,10 +251,7 @@ fun WritingScreen() {
                                 FilterChip("文档正文", selected = showDocument, onClick = {
                                     showDocument = !showDocument
                                 })
-                                FilterChip("逐段建议", selected = showSuggestions, onClick = {
-                                    if (showSuggestions) showSuggestions = false else openSuggestions()
-                                })
-                                FilterChip("助手对话", selected = showAssistant, onClick = {
+                                FilterChip("助手", selected = showAssistant, onClick = {
                                     if (showAssistant) showAssistant = false else openAssistant()
                                 })
                             }
@@ -283,16 +274,12 @@ fun WritingScreen() {
                                         })
                                     }
                                 }
-                                if (showSuggestions) {
-                                    Column(Modifier.width(suggestionWidth).fillMaxHeight()) {
-                                        WritingColumnHeader("逐段建议") { showSuggestions = false }
-                                        ParagraphSuggestionPanel(vm, Modifier.weight(1f))
-                                    }
-                                }
                                 if (showAssistant) {
                                     Column(Modifier.width(assistantWidth).fillMaxHeight()) {
-                                        WritingColumnHeader("助手对话") { showAssistant = false }
-                                        AssistantPanel(vm, Modifier.weight(1f))
+                                        WritingColumnHeader("助手") { showAssistant = false }
+                                        AssistantPanel(vm, Modifier.weight(1f), assistantTab) {
+                                            assistantTab = it
+                                        }
                                     }
                                 }
                             }
@@ -481,7 +468,8 @@ private val SignoffAuthorityRegex = Regex("[\\u4e00-\\u9fa5（）()]{2,25}(政�
  * 普通段落（段首缩进两字符 + 行内粗体）。预览与分块编辑共用这一套。
  */
 @Composable
-private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonObject? = null) {
+private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonObject? = null,
+                          override: WritingTextStyle = WritingTextStyle()) {
     val s = raw.trim()
     val role = when {
         s.startsWith("# ") -> "title"
@@ -490,12 +478,13 @@ private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonO
         else -> "body"
     }
     val spec = profile.previewStyle(role)
+    val displayedSize = override.fontSizePt ?: spec.size
     val lineStyle = TextStyle(
-        fontSize = spec.size.sp,
-        fontFamily = PreviewFonts.family(spec.fontName),
-        fontWeight = if (spec.bold) FontWeight.Bold else FontWeight.Normal,
+        fontSize = displayedSize.sp,
+        fontFamily = PreviewFonts.family(override.fontName ?: spec.fontName),
+        fontWeight = if (override.bold ?: spec.bold) FontWeight.Bold else FontWeight.Normal,
         color = Ink,
-        lineHeight = spec.lineHeight.sp,
+        lineHeight = maxOf(spec.lineHeight, displayedSize * 1.25f).sp,
         textIndent = TextIndent(firstLine = (spec.size * spec.firstLineChars).sp),
     )
     when {
@@ -512,7 +501,13 @@ private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonO
                 else -> s
             }
             Text(inlineMd(shown), modifier = Modifier.fillMaxWidth(), style = lineStyle,
-                textAlign = if (role == "title") TextAlign.Center else TextAlign.Start)
+                textAlign = when (override.alignment) {
+                    "center" -> TextAlign.Center
+                    "right" -> TextAlign.Right
+                    "justify" -> TextAlign.Justify
+                    "left" -> TextAlign.Start
+                    else -> if (role == "title") TextAlign.Center else TextAlign.Start
+                })
         }
     }
 }
@@ -526,6 +521,44 @@ private fun FormattedLine(raw: String, profile: kotlinx.serialization.json.JsonO
 private fun MarkdownText(text: String, profile: kotlinx.serialization.json.JsonObject? = null) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         text.split('\n').forEach { line -> FormattedLine(line, profile) }
+    }
+}
+
+private val EDITOR_FONTS = listOf("仿宋_GB2312", "方正小标宋简体", "黑体", "楷体_GB2312",
+    "宋体", "微软雅黑", "思源宋体", "思源黑体", "Arial")
+private val EDITOR_SIZES = listOf(12f, 14f, 16f, 18f, 20f, 22f, 24f)
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+internal fun FormatToolbar(style: WritingTextStyle, onChange: (WritingTextStyle) -> Unit,
+                           defaultSize: Int = 16, defaultFont: String = "仿宋_GB2312") {
+    var fontOpen by remember { mutableStateOf(false) }
+    var sizeOpen by remember { mutableStateOf(false) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box {
+            AppLinkButton(style.fontName ?: defaultFont, onClick = { fontOpen = true })
+            DropdownMenu(expanded = fontOpen, onDismissRequest = { fontOpen = false }) {
+                EDITOR_FONTS.forEach { font -> DropdownMenuItem(onClick = {
+                    onChange(style.copy(fontName = font)); fontOpen = false
+                }) { Text(font) } }
+            }
+        }
+        Box {
+            AppLinkButton("${style.fontSizePt?.toInt() ?: defaultSize} 磅", onClick = { sizeOpen = true })
+            DropdownMenu(expanded = sizeOpen, onDismissRequest = { sizeOpen = false }) {
+                EDITOR_SIZES.forEach { size -> DropdownMenuItem(onClick = {
+                    onChange(style.copy(fontSizePt = size)); sizeOpen = false
+                }) { Text("${size.toInt()} 磅") } }
+            }
+        }
+        AppLinkButton(if (style.bold == true) "加粗 ✓" else "加粗",
+            onClick = { onChange(style.copy(bold = style.bold != true)) })
+        listOf("left" to "居左", "center" to "居中", "right" to "居右", "justify" to "两端对齐")
+            .forEach { (alignment, label) ->
+                AppLinkButton(if (style.alignment == alignment) "$label ✓" else label,
+                    onClick = { onChange(style.copy(alignment = alignment)) })
+            }
     }
 }
 
@@ -546,7 +579,7 @@ private fun FormattedBodyEditor(
     header: @Composable () -> Unit = {},
 ) {
     var editIdx by remember { mutableStateOf<Int?>(null) }
-    var editText by remember { mutableStateOf("") }
+    var editText by remember { mutableStateOf(TextFieldValue("")) }
     DisposableEffect(Unit) { onDispose { vm.markParagraphEditing(false) } }
     val lines = remember(vm.content) { vm.content.split('\n') }
     val profile = vm.renderProfile
@@ -579,14 +612,7 @@ private fun FormattedBodyEditor(
 
     fun commit() {
         val i = editIdx ?: return
-        val cur = vm.content.split('\n').toMutableList()
-        if (i < cur.size) {
-            cur.removeAt(i)
-            if (editText.isNotBlank()) {
-                cur.addAll(i.coerceAtMost(cur.size), editText.split('\n'))
-            }
-            vm.content = cur.joinToString("\n")
-        }
+        vm.replaceParagraphContent(i, editText.text)
         editIdx = null
         vm.markParagraphEditing(false)
     }
@@ -608,10 +634,13 @@ private fun FormattedBodyEditor(
                         .border(1.dp, Primary, RoundedCornerShape(Dimens.radiusSm))
                         .padding(Dimens.space2),
                 ) {
+                    val style = vm.paragraphFormatting[i] ?: WritingTextStyle()
+                    if (!vm.busy) FormatToolbar(style, { vm.setParagraphFormatting(i, it) },
+                        defaultSize = bodySpec.size.toInt(), defaultFont = bodySpec.fontName)
                     OutlinedTextField(
                         value = editText,
                         onValueChange = { editText = it },
-                        enabled = !vm.suggestionBusy,
+                        enabled = !vm.suggestionBusy && !vm.busy,
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontSize = bodySpec.size.sp,
@@ -628,8 +657,19 @@ private fun FormattedBodyEditor(
                         Modifier.fillMaxWidth().padding(top = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("清空后点完成 = 删除此段；用 **文字** 可加粗",
+                        Text("选中文字后点 B 可局部加粗；清空后点完成可删除此段",
                             fontSize = 10.5.sp, color = Muted2)
+                        AppLinkButton("B", onClick = {
+                            val selection = editText.selection
+                            if (!selection.collapsed) {
+                                val start = selection.min
+                                val end = selection.max
+                                val updated = editText.text.substring(0, start) + "**" +
+                                    editText.text.substring(start, end) + "**" +
+                                    editText.text.substring(end)
+                                editText = TextFieldValue(updated)
+                            }
+                        })
                         Spacer(Modifier.weight(1f))
                         AppLinkButton("取消", onClick = {
                             editIdx = null
@@ -646,12 +686,12 @@ private fun FormattedBodyEditor(
                             .clip(RoundedCornerShape(Dimens.radiusXs))
                             .clickable(enabled = !vm.busy && !vm.suggestionBusy) {
                                 editIdx = i
-                                editText = raw
+                                editText = TextFieldValue(raw)
                                 vm.markParagraphEditing(true)
                             }
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     ) {
-                        FormattedLine(raw, profile)
+                        FormattedLine(raw, profile, vm.paragraphFormatting[i] ?: WritingTextStyle())
                     }
                     if (raw.isNotBlank()) {
                         val state = paragraphStates[i]?.get("status").str()
@@ -1318,6 +1358,24 @@ private fun EditorPanel(
                     }
                 }
             }
+            if (vm.hasDraft) {
+                Spacer(Modifier.height(Dimens.space2))
+                Text("标题格式", fontSize = 11.sp, color = Muted)
+                if (!vm.busy) FormatToolbar(vm.titleFormatting, vm::updateTitleFormatting,
+                    defaultSize = 22, defaultFont = "方正小标宋简体")
+                if (vm.formatDirty) Text("格式已修改，保存版本后生效；导出时会自动保存。",
+                    fontSize = 11.sp, color = Warn)
+                if (vm.formatIssues.isNotEmpty()) {
+                    Spacer(Modifier.height(Dimens.space2))
+                    Text("当前格式复检：${vm.formatIssues.size} 项问题", fontSize = 12.sp, color = Warn)
+                    vm.formatIssues.take(8).forEach { issue ->
+                        val location = issue["location"].str()
+                        val element = issue["element"].str()
+                        val suggestion = issue["suggestion"].str()
+                        Text("${location} ${element}：${suggestion}", fontSize = 11.sp, color = Muted)
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(Dimens.space3))
@@ -1407,10 +1465,16 @@ private fun EditorPanel(
             }
             if (vm.task.title.isNotBlank()) {
                 val titleStyle = profile.previewStyle("title")
-                Text(vm.task.title, fontSize = titleStyle.size.sp,
-                    fontFamily = PreviewFonts.family(titleStyle.fontName),
-                    fontWeight = FontWeight.Normal,
-                    modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                val selectedStyle = vm.titleFormatting
+                Text(vm.task.title, fontSize = (selectedStyle.fontSizePt ?: titleStyle.size).sp,
+                    fontFamily = PreviewFonts.family(selectedStyle.fontName ?: titleStyle.fontName),
+                    fontWeight = if (selectedStyle.bold == true) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.fillMaxWidth(), textAlign = when (selectedStyle.alignment) {
+                        "left" -> TextAlign.Start
+                        "right" -> TextAlign.Right
+                        "justify" -> TextAlign.Justify
+                        else -> TextAlign.Center
+                    },
                     color = Ink, lineHeight = titleStyle.lineHeight.sp)
                 Spacer(Modifier.height(Dimens.space5))
             }
@@ -1422,8 +1486,8 @@ private fun EditorPanel(
                 val bodyStyle = profile.previewStyle("body")
                 OutlinedTextField(
                     value = vm.content,
-                    onValueChange = { vm.content = it },
-                    enabled = !vm.suggestionBusy,
+                    onValueChange = vm::replaceSourceContent,
+                    enabled = !vm.suggestionBusy && !vm.busy,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = bodyStyle.size.sp,
@@ -1464,13 +1528,7 @@ private fun EditorPanel(
 @Composable
 private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
     var details by remember { mutableStateOf(false) }
-    Column(
-        modifier.fillMaxHeight()
-            .clip(RoundedCornerShape(Dimens.radiusLg))
-            .background(Surface)
-            .border(1.dp, LineSubtle, RoundedCornerShape(Dimens.radiusLg))
-            .padding(Dimens.space4),
-    ) {
+    Column(modifier.fillMaxHeight()) {
         Text("选中一段，查看 AI 建议", fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold, color = Ink)
         Spacer(Modifier.height(Dimens.space3))
@@ -1552,7 +1610,7 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
     }
 }
 
-// ---------------- 右栏：AI 助手 ----------------
+// ---------------- 助手栏：对话、逐段建议与依据 ----------------
 
 private val QUICK_ACTIONS = listOf(
     Triple("扩写", "expand", "扩写当前内容"),
@@ -1564,8 +1622,13 @@ private val QUICK_ACTIONS = listOf(
 )
 
 @Composable
-private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
-    var tab by remember { androidx.compose.runtime.mutableStateOf(0) }
+private fun AssistantPanel(
+    vm: WritingViewModel,
+    modifier: Modifier,
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit,
+) {
+    var showQuickActions by remember { mutableStateOf(false) }
     Column(
         modifier.fillMaxHeight()
             .clip(RoundedCornerShape(Dimens.radiusLg))
@@ -1599,15 +1662,59 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
         }
 
         AppSegmentedTabs(
-            tabs = listOf("对话", "建议", "依据"),
-            selectedIndex = tab,
-            onSelect = { tab = it },
+            tabs = listOf("对话", "逐段建议", "依据"),
+            selectedIndex = selectedTab,
+            onSelect = onTabSelected,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(Dimens.space3))
 
-        when (tab) {
+        when (selectedTab) {
             0 -> {
+                AppLinkButton(if (showQuickActions) "收起快捷操作" else "展开快捷操作",
+                    onClick = { showQuickActions = !showQuickActions })
+                if (showQuickActions) {
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(Dimens.space2),
+                    ) {
+                        val actions = vm.spec?.aiActions.orEmpty()
+                        if (actions.isNotEmpty()) {
+                            SectionTitle("针对本次任务")
+                            actions.chunked(2).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                                    row.forEach { action ->
+                                        Box(Modifier.weight(1f)) {
+                                            AiActionChip(action,
+                                                onClick = { vm.revise(action, "revise") },
+                                                enabled = !vm.busy && vm.hasDraft,
+                                                icon = Icons.Default.AutoAwesome)
+                                        }
+                                    }
+                                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        SectionTitle("对当前文档")
+                        QUICK_ACTIONS.chunked(2).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                                row.forEach { (label, mode, hint) ->
+                                    Box(Modifier.weight(1f)) {
+                                        AiActionChip(label,
+                                            onClick = { vm.revise(hint, mode) },
+                                            enabled = !vm.busy && vm.hasDraft)
+                                    }
+                                }
+                                if (row.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                        }
+                        if (!vm.hasDraft) {
+                            Text("生成正文后可用这些操作继续打磨", fontSize = 11.5.sp,
+                                color = Muted)
+                        }
+                    }
+                }
                 LazyColumn(
                     Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(Dimens.space3),
@@ -1625,51 +1732,7 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
                 }
             }
             1 -> {
-                Column(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(Dimens.space2),
-                ) {
-                    val actions = vm.spec?.aiActions.orEmpty()
-                    if (actions.isNotEmpty()) {
-                        SectionTitle("针对本次任务")
-                        Spacer(Modifier.height(Dimens.space1))
-                        Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                            actions.chunked(2).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                                    row.forEach { a ->
-                                        Box(Modifier.weight(1f)) {
-                                            AiActionChip(a, onClick = { vm.revise(a, "revise") },
-                                                enabled = !vm.busy && vm.hasDraft,
-                                                icon = Icons.Default.AutoAwesome)
-                                        }
-                                    }
-                                    if (row.size == 1) Spacer(Modifier.weight(1f))
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(Dimens.space4))
-                    }
-                    SectionTitle("对当前文档")
-                    Spacer(Modifier.height(Dimens.space1))
-                    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                        QUICK_ACTIONS.chunked(2).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
-                                row.forEach { (label, mode, hint) ->
-                                    Box(Modifier.weight(1f)) {
-                                        AiActionChip(label,
-                                            onClick = { vm.revise(hint, mode) },
-                                            enabled = !vm.busy && vm.hasDraft)
-                                    }
-                                }
-                                if (row.size == 1) Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                    if (!vm.hasDraft) {
-                        Spacer(Modifier.height(Dimens.space3))
-                        Text("生成正文后可用这些操作继续打磨", fontSize = 11.5.sp, color = Muted)
-                    }
-                }
+                ParagraphSuggestionPanel(vm, Modifier.weight(1f))
             }
             else -> {
                 Column(
@@ -1686,6 +1749,9 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
                             sources = vm.references,
                             tint = EmeraldInk,
                             container = EmeraldSoft,
+                            onSourceClick = if (vm.referenceItems.isNotEmpty())
+                                ({ index -> vm.referenceItems.getOrNull(index)?.let(vm::openReference) })
+                            else null,
                         )
                     }
                     val selectedKb = vm.spec?.knowledge?.filter { it.selected }.orEmpty()
@@ -1724,36 +1790,58 @@ private fun AssistantPanel(vm: WritingViewModel, modifier: Modifier) {
             }
         }
 
-        Spacer(Modifier.height(Dimens.space3))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = vm.chatInput,
-                onValueChange = { vm.chatInput = it },
-                placeholder = { Text("继续说：把第二部分写详细一点…", fontSize = 12.sp,
-                    color = Muted2) },
-                modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl, max = 72.dp),
-                maxLines = 3,
-                enabled = !vm.busy,
-                shape = RoundedCornerShape(Dimens.radiusControl),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
-                colors = TextFieldDefaults.outlinedTextFieldColors(
-                    backgroundColor = SurfaceTonal, focusedBorderColor = Primary,
-                    unfocusedBorderColor = Line, cursorColor = Primary),
-            )
-            Spacer(Modifier.width(Dimens.space2))
-            AppIconButton(
-                icon = Icons.Default.Send,
-                contentDescription = "发送",
-                onClick = { vm.sendChat() },
-                size = 38.dp,
-                tint = if (vm.chatInput.isBlank() || vm.busy) Muted2 else Primary,
-                active = vm.chatInput.isNotBlank() && !vm.busy,
-            )
-        }
-        if (vm.hasDraft) {
-            Spacer(Modifier.height(Dimens.space2))
+        if (selectedTab == 0) {
+            Spacer(Modifier.height(Dimens.space3))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = vm.chatInput,
+                    onValueChange = { vm.chatInput = it },
+                    placeholder = { Text("继续说：把第二部分写详细一点…", fontSize = 12.sp,
+                        color = Muted2) },
+                    modifier = Modifier.weight(1f).heightIn(min = Dimens.hControl, max = 72.dp),
+                    maxLines = 3,
+                    enabled = !vm.busy,
+                    shape = RoundedCornerShape(Dimens.radiusControl),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Ink),
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        backgroundColor = SurfaceTonal, focusedBorderColor = Primary,
+                        unfocusedBorderColor = Line, cursorColor = Primary),
+                )
+                Spacer(Modifier.width(Dimens.space2))
+                AppIconButton(
+                    icon = Icons.Default.Send,
+                    contentDescription = "发送",
+                    onClick = { vm.sendChat() },
+                    size = 38.dp,
+                    tint = if (vm.chatInput.isBlank() || vm.busy) Muted2 else Primary,
+                    active = vm.chatInput.isNotBlank() && !vm.busy,
+                )
+            }
+            if (vm.hasDraft) {
+                Spacer(Modifier.height(Dimens.space2))
+            }
         }
         WritingStatusLine(vm.status)
+    }
+    vm.openedReference?.let { reference ->
+        AppDialog(
+            onDismissRequest = vm::closeReference,
+            title = reference.title,
+            subtitle = "知识库原文 · 按当前账号权限读取",
+            width = 820.dp,
+            actions = { AppButton("关闭", onClick = vm::closeReference,
+                kind = AppButtonKind.SECONDARY) },
+        ) {
+            Text(
+                when {
+                    vm.referenceLoading -> "正在读取原文…"
+                    vm.referenceError != null -> vm.referenceError.orEmpty()
+                    else -> vm.openedReferenceDocument?.get("content").str()
+                        .ifBlank { "暂无可展示的原文" }
+                },
+                fontSize = 13.sp, color = Ink, lineHeight = 21.sp,
+            )
+        }
     }
 }
 

@@ -13,6 +13,7 @@ class DocumentCreateRequest(BaseModel):
     session_id: Optional[str] = None
     quality: Optional[Dict[str, Any]] = None
     content_check: Optional[Dict[str, Any]] = None
+    formatting: Optional[Dict[str, Any]] = None
     note: Optional[str] = None
 
 
@@ -22,6 +23,7 @@ class DocumentSaveRequest(BaseModel):
     title: Optional[str] = None
     note: Optional[str] = None
     status: Optional[str] = Field(default=None, pattern="^(draft|final)$")
+    formatting: Optional[Dict[str, Any]] = None
 
 
 class DocumentRenameRequest(BaseModel):
@@ -57,4 +59,5 @@ class DocumentDetail(DocumentSummary):
     content: str
     quality: Optional[Dict[str, Any]] = None
     content_check: Optional[Dict[str, Any]] = None
+    formatting: Optional[Dict[str, Any]] = None
     versions: List[DocumentVersionItem] = []

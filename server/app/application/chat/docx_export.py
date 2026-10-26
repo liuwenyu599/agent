@@ -70,6 +70,33 @@ def _apply_official_format(p, target):
             run.bold = checks["bold"]
 
 
+def _apply_user_format(p, style):
+    """用户覆盖规则应用在国标预设之后；未设置的属性仍沿用预设。"""
+    if not style:
+        return
+    if style.get("alignment"):
+        p.alignment = {
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+        }[style["alignment"]]
+    if style.get("font_size_pt"):
+        current = p.paragraph_format.line_spacing
+        minimum = Pt(float(style["font_size_pt"]) * 1.25)
+        if current is None or (hasattr(current, "pt") and current.pt < minimum.pt):
+            p.paragraph_format.line_spacing = minimum
+    for run in p.runs:
+        if style.get("font_name"):
+            run.font.name = style["font_name"]
+            run._element.get_or_add_rPr().get_or_add_rFonts().set(
+                qn("w:eastAsia"), style["font_name"])
+        if style.get("font_size_pt"):
+            run.font.size = Pt(style["font_size_pt"])
+        if "bold" in style:
+            run.bold = style["bold"]
+
+
 def _add_border_line(doc, color="FF0000", size="18", space_after=Pt(12)):
     """
     添加通栏横线：用段落下边框实现（w:pBdr），宽度自动撑满版心，
@@ -379,7 +406,8 @@ def markdown_to_docx(text: str, title: str = "公文",
                      recipient: str = "",
                      signature: str = "",
                      date_text: str = "",
-                     use_red_header: bool = False) -> BytesIO:
+                     use_red_header: bool = False,
+                     formatting: dict = None) -> BytesIO:
     """
     将 Markdown 文本转换为符合党政机关公文格式的 Word 文档
 
@@ -396,6 +424,8 @@ def markdown_to_docx(text: str, title: str = "公文",
         BytesIO: 包含 Word 文档的字节流
     """
     doc = Document()
+    formatting = formatting or {}
+    paragraph_formats = formatting.get("paragraphs") or {}
 
     # 设置页面
     _add_page_setup(doc)
@@ -421,6 +451,7 @@ def markdown_to_docx(text: str, title: str = "公文",
         run = p.add_run(title)
         _set_font(run, FONT_TITLE, Pt(22))
         _apply_official_format(p, "title")
+        _apply_user_format(p, formatting.get("title"))
 
     # 主送机关
     if recipient:
@@ -478,6 +509,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             run = p.add_run(stripped[2:].strip())
             _set_font(run, FONT_TITLE, Pt(22))
             _apply_official_format(p, "title")
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -487,6 +519,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             run = p.add_run(stripped[3:].strip())
             _set_font(run, FONT_H1, Pt(16))
             _apply_official_format(p, "heading1")
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -496,6 +529,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             run = p.add_run(stripped[4:].strip())
             _set_font(run, FONT_H2, Pt(16))
             _apply_official_format(p, "heading2")
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -507,6 +541,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             run = p.add_run(stripped)
             _set_font(run, FONT_H1, Pt(16))
             _apply_official_format(p, "heading1")
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -517,6 +552,7 @@ def markdown_to_docx(text: str, title: str = "公文",
             run = p.add_run(stripped)
             _set_font(run, FONT_H2, Pt(16))
             _apply_official_format(p, "heading2")
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -525,7 +561,8 @@ def markdown_to_docx(text: str, title: str = "公文",
         if list_match:
             indent_len = len(list_match.group(1))
             level = indent_len // 2  # 每2个空格一级
-            _add_list_item(doc, line, level)
+            p = _add_list_item(doc, line, level)
+            _apply_user_format(p, paragraph_formats.get(str(i)))
             i += 1
             continue
 
@@ -539,6 +576,7 @@ def markdown_to_docx(text: str, title: str = "公文",
         )
         _parse_inline_formatting(p, stripped)
         _apply_official_format(p, "body")
+        _apply_user_format(p, paragraph_formats.get(str(i)))
         i += 1
 
     # 落款
@@ -561,7 +599,7 @@ def generate_official_document(content: str,
                                 doc_number: str = "",
                                 recipient: str = "",
                                 signature: str = "",
-                                date_text: str = "") -> BytesIO:
+                                date_text: str = "", formatting: dict = None) -> BytesIO:
     """
     生成标准党政机关公文格式 Word 文档
 
@@ -574,5 +612,6 @@ def generate_official_document(content: str,
         recipient=recipient,
         signature=signature,
         date_text=date_text,
-        use_red_header=True
+        use_red_header=True,
+        formatting=formatting,
     )

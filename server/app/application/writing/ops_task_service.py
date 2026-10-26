@@ -394,6 +394,7 @@ class OpsWritingTaskService(GroundedWritingTaskService):
 
         references = self._reference_labels(sources) or list(ctx.get("references") or [])
         ctx["references"] = references
+        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
         task.context = ctx
         task.current_content = revised
         self.db.flush()

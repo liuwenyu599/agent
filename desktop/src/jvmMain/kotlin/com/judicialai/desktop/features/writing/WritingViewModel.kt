@@ -36,6 +36,20 @@ private fun requestDigest(text: String): String = MessageDigest.getInstance("SHA
 
 /** 工作台对话消息 */
 data class TaskChatMessage(val role: String, val content: String, val revisionSummary: String = "")
+data class WritingReference(val title: String, val documentId: String)
+data class WritingTextStyle(
+    val fontName: String? = null,
+    val fontSizePt: Float? = null,
+    val bold: Boolean? = null,
+    val alignment: String? = null,
+) {
+    fun toRequest(): Map<String, Any> = buildMap {
+        fontName?.let { put("font_name", it) }
+        fontSizePt?.let { put("font_size_pt", it) }
+        bold?.let { put("bold", it) }
+        alignment?.let { put("alignment", it) }
+    }
+}
 
 /** 图片识别结果（写作台「上传图片识别」，服务端视觉模型 Qwen2.5-VL 识别） */
 data class RecognizedImage(
@@ -133,6 +147,66 @@ class WritingViewModel(
         private set
     var renderProfile by mutableStateOf<JsonObject?>(null)
         private set
+    var titleFormatting by mutableStateOf(WritingTextStyle())
+        private set
+    var paragraphFormatting by mutableStateOf(mapOf<Int, WritingTextStyle>())
+        private set
+    var formatDirty by mutableStateOf(false)
+    var formatIssues by mutableStateOf<List<JsonObject>>(emptyList())
+        private set
+
+    fun setParagraphFormatting(index: Int, style: WritingTextStyle) {
+        paragraphFormatting = paragraphFormatting + (index to style)
+        formatDirty = true
+        formatIssues = emptyList()
+    }
+
+    fun replaceParagraphContent(index: Int, replacement: String) {
+        val lines = content.split('\n').toMutableList()
+        if (index !in lines.indices) return
+        lines.removeAt(index)
+        val inserted = if (replacement.isBlank()) emptyList() else replacement.split('\n')
+        lines.addAll(index, inserted)
+        val shift = inserted.size - 1
+        paragraphFormatting = paragraphFormatting.mapNotNull { (line, style) ->
+            when {
+                line < index -> line to style
+                line == index && inserted.isNotEmpty() -> index to style
+                line > index -> line + shift to style
+                else -> null
+            }
+        }.toMap()
+        content = lines.joinToString("\n")
+        formatIssues = emptyList()
+    }
+
+    fun replaceSourceContent(value: String) {
+        if (value != content) {
+            paragraphFormatting = emptyMap()
+            formatDirty = true
+        }
+        content = value
+        formatIssues = emptyList()
+    }
+
+    fun updateTitleFormatting(style: WritingTextStyle) {
+        titleFormatting = style
+        formatDirty = true
+        formatIssues = emptyList()
+    }
+
+    private fun formattingRequest(): Map<String, Any> = mapOf(
+        "title" to titleFormatting.toRequest(),
+        "paragraphs" to paragraphFormatting.mapKeys { it.key.toString() }
+            .mapValues { it.value.toRequest() },
+    )
+
+    private fun parseStyle(o: JsonObject?): WritingTextStyle = WritingTextStyle(
+        fontName = o?.get("font_name").str().ifBlank { null },
+        fontSizePt = o?.get("font_size_pt").str().toFloatOrNull(),
+        bold = o?.get("bold")?.let { it.bool() },
+        alignment = o?.get("alignment").str().ifBlank { null },
+    )
     var content by mutableStateOf("")
     var versionNo by mutableStateOf(0)
         private set
@@ -149,6 +223,39 @@ class WritingViewModel(
         private set
     var references by mutableStateOf(listOf<String>())
         private set
+    var referenceItems by mutableStateOf(listOf<WritingReference>())
+        private set
+    var openedReference by mutableStateOf<WritingReference?>(null)
+        private set
+    var openedReferenceDocument by mutableStateOf<JsonObject?>(null)
+        private set
+    var referenceLoading by mutableStateOf(false)
+        private set
+    var referenceError by mutableStateOf<String?>(null)
+        private set
+
+    fun openReference(reference: WritingReference) {
+        openedReference = reference
+        openedReferenceDocument = null
+        referenceError = if (reference.documentId.isBlank()) "本条资料暂无可查看的原文" else null
+        if (reference.documentId.isBlank()) return
+        referenceLoading = true
+        scope.launch {
+            when (val result = knowledgeRepo?.getDocument(reference.documentId)) {
+                is ApiResult.Ok -> openedReferenceDocument = result.data
+                is ApiResult.Err -> referenceError = result.message
+                null -> referenceError = "知识库暂不可用"
+            }
+            referenceLoading = false
+        }
+    }
+
+    fun closeReference() {
+        openedReference = null
+        openedReferenceDocument = null
+        referenceError = null
+        referenceLoading = false
+    }
     var versions by mutableStateOf(listOf<JsonObject>())
         private set
     var busy by mutableStateOf(false)
@@ -437,9 +544,22 @@ class WritingViewModel(
             }
         }
         versionNo = nextVersion
+        d["formatting"].obj()?.let { format ->
+            titleFormatting = parseStyle(format["title"].obj())
+            paragraphFormatting = format["paragraphs"].obj()?.mapNotNull { (key, value) ->
+                key.toIntOrNull()?.let { it to parseStyle(value.obj()) }
+            }?.toMap().orEmpty()
+            formatDirty = false
+        }
         taskStatus = d["status"].str().ifBlank { taskStatus }
         d["references"].arr().map { it.str() }.filter { it.isNotBlank() }
             .takeIf { it.isNotEmpty() }?.let { references = it }
+        referenceItems = d["reference_items"].arr().mapNotNull { element ->
+            val item = element.obj() ?: return@mapNotNull null
+            item["title"].str().takeIf { it.isNotBlank() }?.let {
+                title -> WritingReference(title, item["doc_id"].str())
+            }
+        }
         if (d["content_changed"].bool()) refreshVersions()
     }
 
@@ -1079,15 +1199,30 @@ class WritingViewModel(
         val submittedContent = content
         val submittedVersion = versionNo
         val submittedServerContent = serverContent
+        val submittedFormatting = formattingRequest()
         busy = true
         scope.launch {
             when (val r = repo.saveVersion(
-                id, submittedContent, note, submittedVersion, submittedServerContent)) {
+                id, submittedContent, note, submittedVersion, submittedServerContent,
+                submittedFormatting)) {
                 is ApiResult.Ok -> {
                     r.data?.let { applyResponse(it) }
+                    val warnings = r.data?.get("format_warnings").arr()
+                        .map { it.str() }.filter { it.isNotBlank() }
                     status = if (r.data?.get("suggestions_reset").bool())
                         "已保存版本 v$versionNo；原逐段建议已失效，请重新获取"
                     else "已保存版本 v$versionNo"
+                    if (warnings.isNotEmpty()) status += "；格式校验：${warnings.take(3).joinToString("、")}"
+                    when (val check = repo.checkCurrentFormat(id)) {
+                        is ApiResult.Ok -> {
+                            formatIssues = check.data?.get("issues").arr().mapNotNull { it.obj() }
+                            val skipped = check.data?.get("skipped").str()
+                            status += if (skipped.isNotBlank()) "；$skipped"
+                                else if (formatIssues.isEmpty()) "；格式复检通过"
+                                else "；格式复检发现 ${formatIssues.size} 项问题"
+                        }
+                        is ApiResult.Err -> status += "；格式复检暂不可用：${check.message}"
+                    }
                     refreshVersions()
                 }
                 is ApiResult.Err -> fail(r.message)
@@ -1194,11 +1329,44 @@ class WritingViewModel(
     fun export(redHeader: Boolean, target: File) {
         val id = task.taskId ?: return
         if (busy || !hasDraft) return
+        val submittedContent = content
+        val submittedServerContent = serverContent
+        val submittedVersion = versionNo
+        val hadPendingFormatting = formatDirty
+        val submittedFormatting = formattingRequest()
         busy = true
         status = "导出 Word 中…"
         scope.launch {
+            var exportWarnings = emptyList<String>()
+            if (submittedContent != submittedServerContent || hadPendingFormatting) {
+                when (val saved = repo.saveVersion(id, submittedContent, "导出前保存",
+                    submittedVersion, submittedServerContent, submittedFormatting)) {
+                    is ApiResult.Ok -> {
+                        val payload = saved.data
+                        if (payload == null) {
+                            fail("保存当前编辑失败，未导出：服务器未返回版本")
+                            return@launch
+                        }
+                        exportWarnings = payload["format_warnings"].arr().map { it.str() }
+                        applyResponse(payload)
+                    }
+                    is ApiResult.Err -> {
+                        fail("保存当前编辑失败，未导出：${saved.message}")
+                        return@launch
+                    }
+                }
+            }
+            val checkResult = repo.checkCurrentFormat(id)
+            if (checkResult is ApiResult.Ok) {
+                formatIssues = checkResult.data?.get("issues").arr().mapNotNull { it.obj() }
+            } else formatIssues = emptyList()
             when (val r = repo.export(id, redHeader, target)) {
-                is ApiResult.Ok -> status = "已导出：${target.name}"
+                is ApiResult.Ok -> status = "已导出：${target.name}" +
+                    (if (exportWarnings.isEmpty()) "" else
+                        "；格式预设：${exportWarnings.take(3).joinToString("、")}") +
+                    (if (formatIssues.isEmpty()) "" else
+                        "；格式复检发现 ${formatIssues.size} 项问题，请核对") +
+                    (if (checkResult is ApiResult.Err) "；格式复检暂不可用" else "")
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
@@ -1217,6 +1385,10 @@ class WritingViewModel(
         restoring = false
         task = WritingTaskState()
         renderProfile = null
+        titleFormatting = WritingTextStyle()
+        paragraphFormatting = emptyMap()
+        formatDirty = false
+        formatIssues = emptyList()
         content = ""
         serverContent = ""
         paragraphs = emptyList()
@@ -1230,6 +1402,7 @@ class WritingViewModel(
         messages = emptyList()
         materials = emptyList()
         references = emptyList()
+        referenceItems = emptyList()
         versions = emptyList()
         entryInput = ""
         chatInput = ""
