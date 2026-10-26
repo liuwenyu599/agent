@@ -22,9 +22,11 @@ from app.application.writing.postprocessor import (
 )
 from app.application.writing.task_service import WritingTaskService
 from app.application.writing.task_parser import (
+    compute_missing,
     normalize_recipient_name,
     parse_message,
 )
+from app.application.templates.builtin_data import BUILTIN_TEMPLATES
 
 
 def test_markdown_table_without_trailing_pipe_keeps_last_cell():
@@ -53,7 +55,41 @@ def test_draft_instruction_keeps_document_type_and_content_boundary():
     assert "不得把通知写成工作要点" in instruction
     assert "不得把通知写成工作要点" in instruction
     assert "把报送事项扩写成全年工作部署" in instruction
-    assert "文号与成文日期由系统程序处理" in instruction
+    assert "成文日期仅在用户明确提供后由系统排版" in instruction
+
+
+def test_meeting_notice_draft_does_not_invent_signoff_date():
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = None
+    body = "各有关单位：\n会议拟于2026年11月2日召开。\n请做好准备。"
+    out, _events, _number, date = svc._postprocess(
+        body, {"document_type": "通知", "authority": "广州市白云区司法局"})
+    assert out == body
+    assert date is None
+    assert "成文日期（定稿时确认）" in compute_missing({"document_type": "通知"})
+
+
+def test_explicit_notice_signoff_date_is_preserved():
+    svc = WritingTaskService.__new__(WritingTaskService)
+    svc.db = None
+    out, _events, _number, date = svc._postprocess(
+        "各有关单位：\n请做好准备。",
+        {"document_type": "通知", "document_date": "2026年10月30日"})
+    assert date == "2026年10月30日"
+    assert out == "各有关单位：\n请做好准备。"
+
+
+def test_speech_template_does_not_require_signoff():
+    speech = next(t for t in BUILTIN_TEMPLATES if t["name"] == "讲话稿")
+    assert speech["need_date"] is False
+    assert speech["need_signature"] is False
+
+
+def test_speech_body_discards_model_written_signoff_date():
+    body = "同志们：\n我们共同做好这项工作。\n\n广州市白云区司法局\n2026年10月26日"
+    cleaned = WritingTaskService._canonicalize_body(
+        body, {"document_type": "讲话稿"})
+    assert cleaned == "同志们：\n我们共同做好这项工作。"
 
 
 def test_postprocessor_injects_real_current_signoff_date():
@@ -114,6 +150,43 @@ def test_body_citation_at_end_is_not_treated_as_signoff_date(monkeypatch):
     assert actual == "2027年1月1日"
 
 
+def test_speech_draft_does_not_get_auto_signoff_date():
+    """讲话稿等现场文种：结尾的讲话人/单位名不应被误判为落款并补上今日日期。"""
+    text = "同志们：\n今天我围绕三项重点工作讲几点意见。\n广州市白云区司法局"
+    out, _events, _number, out_date = PostProcessor().process(
+        text, inject_docnum=False, inject_date=True, document_type="讲话稿")
+    assert local_date_string() not in out
+    assert out_date is None
+
+
+def test_non_formal_summary_does_not_get_auto_signoff_date():
+    """非公文文种（如工作总结）默认不自动补成文日期。"""
+    text = "2026年工作总结\n一、主要工作\n二、存在问题\nXX区司法局"
+    out, _events, _number, out_date = PostProcessor().process(
+        text, inject_docnum=False, inject_date=True, document_type="工作总结")
+    assert local_date_string() not in out
+    assert out_date is None
+
+
+def test_formal_notice_still_gets_auto_signoff_date():
+    """正规公文（通知）仍默认自动补今日落款日期，行为不变。"""
+    text = "关于报送材料的通知\n请按要求报送。\n广州市白云区司法局"
+    out, _events, _number, out_date = PostProcessor().process(
+        text, inject_docnum=False, inject_date=True, document_type="通知")
+    assert local_date_string() in out
+    assert out_date == local_date_string()
+
+
+def test_speech_with_explicit_date_still_honored():
+    """用户显式指定日期时，讲话稿也尊重（走 doc_date 分支）。"""
+    text = "同志们：\n今天讲三点意见。\n广州市白云区司法局"
+    out, _events, _number, out_date = PostProcessor().process(
+        text, inject_docnum=False, inject_date=True,
+        document_type="讲话稿", doc_date="2026年1月1日")
+    assert "2026年1月1日" in out
+    assert out_date == "2026年1月1日"
+
+
 class _FakeDb:
     def add(self, _obj):
         pass
@@ -139,6 +212,7 @@ def test_planned_context_skips_second_llm_interpretation():
         "请起草一份关于报送材料的通知",
         planned_context={
             "document_type": "通知",
+            "document_date": "2026年10月26日",
             "title": "关于报送有关材料的通知",
             "topic": "报送有关材料",
             "recipient": "各镇街、各部门",
@@ -150,6 +224,17 @@ def test_planned_context_skips_second_llm_interpretation():
     assert ctx["document_type"] == "通知"
     assert ctx["title"] == "关于报送有关材料的通知"
     assert ctx["recipient"] == "各镇街、各部门"
+    assert ctx["document_date"] is None
+
+
+def test_task_keeps_only_user_supplied_signoff_date():
+    svc = WritingTaskService(_FakeDb())
+    svc.interpreter = _BoomInterpreter()
+    result = svc.create_task(
+        "u1", "起草通知，成文日期设为2026年10月30日",
+        planned_context={"document_type": "通知", "document_date": "2026年10月26日"},
+    )
+    assert result["task_context"]["document_date"] == "2026年10月30日"
 
 
 def test_docx_export_recognizes_plain_text_official_headings_and_indent():

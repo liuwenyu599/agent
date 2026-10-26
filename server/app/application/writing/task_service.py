@@ -2,7 +2,7 @@
 
 核心原则：
 - 任务上下文结构化，识别不出的字段为 None，绝不虚构；
-- 文号默认关闭；成文日期由程序接管，用户指定日期优先，否则使用系统当天；
+- 文号默认关闭；成文日期由用户确认后交给程序排版，起草时不猜测签发日期；
 - revise 是"对当前文档的修改"，明确告知模型不得重新起草、不得改变事实；
 - 每次 AI 修改自动形成版本（复用 documents 版本快照）；
 - 所有查询按 user_id 隔离；
@@ -110,7 +110,7 @@ DRAFT_RULES = (
     "需要时写在正文最前面，格式为单独一行「××：」；"
     "任何情况下都不要输出「报送对象：」「主送机关：」这类字段标签或空标签行；"
     "落款和成文日期仍由系统字段管理，正文不要写。其他文种按自身体例行文，不添加无关的公文套式；\n"
-    "6. 不编造文号；正式公文成文日期由系统确定，不要在正文中另写日期；"
+    "6. 不编造文号或成文日期；成文日期只有用户确认后才由系统排版，正文不要另写；"
     "联系人、电话、邮箱等材料未提供时直接省略，不得伪造；\n"
     "7. 输出前自检：逐节回看，凡是章节标题下面没有完整段落、只有「略」"
     "「待补充」「仅保留思路」式说明的，一律重写该节为具体内容后再输出——"
@@ -365,6 +365,10 @@ class WritingTaskService:
             else:
                 changes = task_parser.merge_context(ctx, task_parser.parse_message(message))
 
+        # 成文日期是待签发的事实字段，模型规划结果不能凭当前日期补出。
+        # 用户在任务消息里明确指定的日期由字面解析保留；后续仍可在写作台修改。
+        ctx["document_date"] = task_parser.parse_message(message).get("document_date")
+
         # 标题是排版结构字段：用户未显式填写时按已确认的主题+文种确定性生成，
         # 不再让模型在正文里自行重复一个标题。
         if not ctx.get("title"):
@@ -378,15 +382,12 @@ class WritingTaskService:
             if tmpl:
                 ctx["template_id"] = tmpl["id"]
                 ctx["template_name"] = tmpl["name"]
-                # 模板声明 need_signature / need_date 但用户未显式填落款单位 / 日期时，
-                # 由系统兜底：落款取组织机构名 org.name，日期取今天。
-                # 这样“排版三件套”（标题 / 主送 / 落款 / 日期）不会漏渲染。
+                # 模板可补全已配置的发文机关；成文日期必须由用户确认，
+                # 不能把起草当天误当作签发日期。
                 if tmpl.get("need_signature") and not ctx.get("authority"):
                     authority = self._default_authority()
                     if authority:
                         ctx["authority"] = authority
-                if tmpl.get("need_date") and not ctx.get("document_date"):
-                    ctx["document_date"] = _today_doc_date()
         if kb_ids:
             ctx["kb_ids"] = [k for k in kb_ids if k]
         self._complete_default_authority(ctx)
@@ -1432,7 +1433,7 @@ class WritingTaskService:
         if original_request:
             parts.append(f"用户原始需求：{original_request}。")
         parts.append(f"当前日期：{_today_doc_date()}。只用于理解本次写作的时间背景，"
-                     "不得把历史范文中的旧时间移植到本稿。")
+                     "不得据此编造会议召开时间或成文日期，不得把历史范文中的旧时间移植到本稿。")
         # 关联模板：把模板的结构/写作指导/篇幅作为起草依据（模板内容由管理员/用户预先配置，非模型编造）
         if template:
             parts.append(
@@ -1539,7 +1540,8 @@ class WritingTaskService:
                 if doc_type == "通知" else ""
             )
             metadata_rule = (
-                "8) 当前文件的文号与成文日期由系统程序处理，正文不要输出文号或日期占位符；\n"
+                "8) 文号由系统管理；成文日期仅在用户明确提供后由系统排版。"
+                "正文不要输出文号、成文日期或日期占位符；会议时间属于正文事实，未知时不得编造；\n"
                 if doc_type in task_parser.FORMAL_DOC_TYPES else
                 "8) 不添加与本次文种无关的文号、落款或日期占位符；\n"
             )
@@ -1586,7 +1588,7 @@ class WritingTaskService:
             doc_number=user_number,
             doc_date=user_date,
             inject_docnum=enabled and not user_number,
-            inject_date=True,
+            inject_date=False,
             document_type=ctx.get("document_type"),
         )
 

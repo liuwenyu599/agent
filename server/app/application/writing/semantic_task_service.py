@@ -220,6 +220,9 @@ class SemanticWritingTaskService(WritingTaskService):
             if it:
                 changes = self._merge_interpretation(ctx, it)
 
+        # 成文日期必须来自用户明确指定，不能采纳模型在规划时猜出的当天日期。
+        ctx["document_date"] = task_parser.parse_message(message).get("document_date")
+
         if not ctx.get("title"):
             # This is rendering convenience based on already-understood fields, not instruction
             # parsing. The model remains the source of document_type/topic semantics.
@@ -256,6 +259,7 @@ class SemanticWritingTaskService(WritingTaskService):
         it = self._interpret(message, ctx, has_draft=False)
         if it:
             self._merge_interpretation(ctx, it)
+        ctx["document_date"] = task_parser.parse_message(message).get("document_date")
 
         if not ctx.get("title"):
             derived = task_parser.build_title(ctx)

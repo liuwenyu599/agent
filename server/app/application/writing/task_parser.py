@@ -292,6 +292,8 @@ def compute_missing(ctx: Dict[str, Any]) -> List[str]:
             missing.append("主送对象")
         if not ctx.get("authority"):
             missing.append("发文机关（落款单位）")
+        if dt in DOCNUM_TYPICAL and not ctx.get("document_date"):
+            missing.append("成文日期（定稿时确认）")
     if not ctx.get("document_number_enabled") and dt in DOCNUM_TYPICAL:
         pass  # 文号默认关闭属正常状态，不算缺失
     ctx["missing_fields"] = missing

@@ -148,6 +148,21 @@ def test_explicit_speech_type_overrides_wrong_model_guess_in_planning():
     assert plan["template_id"] == ""
 
 
+def test_model_guessed_signoff_date_is_not_used_in_planning():
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    svc.db = None
+    svc.rag = None
+
+    async def guessed_date(*args, **kwargs):
+        return {"document_type": "通知", "topic": "召开工作会议",
+                "document_date": "2026年10月26日"}
+
+    svc._interpret_async = guessed_date
+    svc._plan_knowledge = lambda *args, **kwargs: []
+    plan = asyncio.run(svc.plan_task_async("u1", "写一份召开工作会议的通知"))
+    assert plan["planned_context"]["document_date"] is None
+
+
 def test_model_keeps_requested_genre_despite_topic_keyword():
     assert task_parser.explicit_document_type("写一篇方案发布会新闻稿") == "新闻稿"
     svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)

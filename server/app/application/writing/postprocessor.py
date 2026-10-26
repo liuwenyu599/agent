@@ -112,6 +112,19 @@ SIGNOFF_LINE_RE = re.compile(
     r"(政府|办公厅|办公室|委员会|局|厅|部|署)$"
 )
 
+# 仅调用方明确启用日期注入时，为规范公文补当天日期；写作任务默认不启用。
+# 讲话稿、发言稿、工作总结、宣传材料等现场/事务性文种不自动注入，
+# 避免把结尾的讲话人/单位名误判为落款并补上一行系统当天日期。
+# 未指定文种的显式注入调用保持兼容；
+# 用户显式指定 doc_date 时仍尊重（走 doc_date 分支）。
+from app.application.writing.task_parser import FORMAL_DOC_TYPES
+
+
+def _doc_type_needs_signoff_date(document_type: Optional[str]) -> bool:
+    if not document_type:
+        return True
+    return any(ft in document_type for ft in FORMAL_DOC_TYPES)
+
 DOCNUM_DAIZI_MAP = [
     ("中共广州市白云区委全面依法治区委员会办公室", "云法治办发"),
     ("区委全面依法治区委员会办公室", "云法治办发"),
@@ -489,7 +502,7 @@ class PostProcessor:
         doc_number: Optional[str] = None,
         doc_date: Optional[str] = None,
         inject_docnum: bool = True,
-        inject_date: bool = True,
+        inject_date: bool = False,
         document_type: Optional[str] = None,
     ) -> Tuple[str, List[str], Optional[str], Optional[str]]:
         """后处理。
@@ -499,7 +512,7 @@ class PostProcessor:
         - inject_docnum=True 且未指定 -> 程序生成（序列号服务）；
         - inject_docnum=False -> 不注入任何文号（默认为关闭）。
         - doc_date 传入用户指定日期 -> 落款使用该日期；
-        - inject_date=True -> 修正/补充为系统当天；
+        - inject_date=True -> 调用方明确要求时，规范公文补系统当天；
         - inject_date=False -> 不补不改成文日期。
         """
         from app.application.writing.doc_number_service import (
@@ -527,7 +540,10 @@ class PostProcessor:
         text, calculation_events = verify_and_fix_calculations(text)
         events.extend(calculation_events)
 
-        # 3. 落款日期：用户指定 > 系统当天 > 不处理
+        # 3. 落款日期：用户指定 > 显式启用系统当天 > 不处理
+        # 非公文文种不因调用方误开 inject_date 而自动新增日期。
+        # 用户显式指定 doc_date 时仍尊重（走 doc_date 分支）。
+        needs_date = _doc_type_needs_signoff_date(document_type)
         if doc_date:
             text, placeholder_fix = fix_placeholder_signoff_date(text, doc_date)
             if placeholder_fix:
@@ -538,7 +554,7 @@ class PostProcessor:
             text, date_add = ensure_signoff_date(text, target=doc_date)
             if date_add:
                 events.append(date_add)
-        elif inject_date:
+        elif inject_date and needs_date:
             text, placeholder_fix = fix_placeholder_signoff_date(text, today_str)
             if placeholder_fix:
                 events.append(placeholder_fix)
@@ -575,5 +591,5 @@ class PostProcessor:
             text = _insert_docnum_line(text, out_number)
             events.append(f"程序注入文号：{out_number}")
 
-        out_date = doc_date or (today_str if inject_date else None)
+        out_date = doc_date or (today_str if (inject_date and needs_date) else None)
         return text, events, out_number, out_date

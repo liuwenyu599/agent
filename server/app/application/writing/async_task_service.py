@@ -442,6 +442,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 if not task_parser.explicit_document_type(message):
                     parsed.pop("document_type", None)
                 changes = task_parser.merge_context(ctx, parsed)
+        ctx["document_date"] = task_parser.parse_message(message).get("document_date")
         ctx["document_type"] = task_parser.resolved_document_type(
             message, ctx.get("document_type"))
 
@@ -493,6 +494,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                         "document_number_enabled", "document_number", "document_date")
         task_parser.merge_context(ctx, {k: literal_plan[k] for k in literal_keys
                                         if k in literal_plan})
+        ctx["document_date"] = literal_plan.get("document_date")
         ctx["document_type"] = task_parser.resolved_document_type(
             message, ctx.get("document_type"))
         for key in ("topic", "title", "recipient", "authority"):
