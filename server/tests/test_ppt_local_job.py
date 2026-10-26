@@ -188,3 +188,68 @@ def test_queued_wrapper_delegates_to_local_render(client, token):
     final = _wait_terminal(client, token, doc_id)
     assert final["status"] == "succeeded", final
     assert final["renderer"] == "local", final
+
+
+# ------------------------------------------------ 5. 逐页预览图（本地路径）
+
+def test_render_local_previews_without_tools_is_noop(monkeypatch):
+    """缺 soffice/pdftoppm 时必须静默跳过（返回 0），绝不能拖垮 job。"""
+    from app.application.ppt import agent_job
+
+    monkeypatch.setattr(agent_job.shutil, "which", lambda name: None)
+    assert agent_job._render_local_previews(Path("whatever.pptx"), "doc-x") == 0
+
+
+def test_local_previews_served_by_job_preview_endpoint(client, token, monkeypatch):
+    """本地页图按 preview_document 同款目录约定存放后，job 预览接口必须能列出并按页序取图。
+
+    两段验证：
+    A. job 成功后若环境里有 soffice/pdftoppm，真转换应产出与大纲页数一致的页图
+      （缺工具的环境允许 0 张——这正是「尽力而为」契约）。
+    B. 清空目录后放假 PNG（pg-1/pg-2/pg-10，乱序写入 + 含两位数页码），
+       验证列表按页序排、单页取图内容一一对应（pg-10 必须排最后）。
+    """
+    import shutil as _shutil
+
+    from app.core.config import settings
+
+    doc_id = _doc_with_outline(client, token, "本地页图")
+    client.post(f"{BASE}/ppt/jobs", headers=_hdr(token), json={"doc_id": doc_id})
+    final = _wait_terminal(client, token, doc_id)
+    assert final["status"] == "succeeded", final
+
+    prev_dir = settings.ppt_dir / "preview" / doc_id
+
+    # A. 真转换（环境有工具时）
+    listed = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview", headers=_hdr(token))
+    assert listed.status_code == 200, listed.text
+    pages = listed.json()["pages"]
+    tools_present = bool(_shutil.which("soffice") and _shutil.which("pdftoppm"))
+    if tools_present:
+        assert len(pages) == final["total_pages"], (pages, final)
+    else:
+        assert len(pages) == 0, pages
+
+    # B. 隔离目录，专测排序与取图
+    import shutil
+    shutil.rmtree(prev_dir, ignore_errors=True)
+    prev_dir.mkdir(parents=True, exist_ok=True)
+    contents = {}
+    for name in ("pg-2.png", "pg-10.png", "pg-1.png"):  # 乱序写入
+        data = f"fake-png:{name}".encode()
+        (prev_dir / name).write_bytes(data)
+        contents[name] = data
+
+    listed = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview", headers=_hdr(token))
+    assert listed.status_code == 200, listed.text
+    pages = listed.json()["pages"]
+    assert [p["index"] for p in pages] == [0, 1, 2]
+    assert [p["url"].rsplit("/", 1)[-1] for p in pages] == \
+        ["0.png", "1.png", "2.png"], pages
+
+    # 单页取图：内容与写入的假 PNG 一一对应（pg-10 在 index=2）
+    for idx, name in ((0, "pg-1.png"), (1, "pg-2.png"), (2, "pg-10.png")):
+        r = client.get(f"{BASE}/ppt/jobs/{doc_id}/preview/{idx}",
+                       headers=_hdr(token))
+        assert r.status_code == 200, r.text
+        assert r.content == contents[name], (idx, name)

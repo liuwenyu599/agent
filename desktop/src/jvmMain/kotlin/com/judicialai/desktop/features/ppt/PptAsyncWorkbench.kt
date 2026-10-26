@@ -186,7 +186,9 @@ private fun JobThumbItem(job: PptJobProgress, n: Int) {
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text("$n", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Muted)
-                    Text("生成中", fontSize = 10.5.sp, color = Muted)
+                    // 任务已成功却没有该页预览图 = 渲染环境缺工具，别再说「生成中」误导等待
+                    Text(if (job.status == PptJobStatus.DONE) "暂无预览" else "生成中",
+                        fontSize = 10.5.sp, color = Muted)
                 }
             }
         }
@@ -261,6 +263,15 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
                         color = Primary)
                 }
                 job.status == PptJobStatus.FAILED -> JobErrorBox(job.errorMsg)
+                // 生成成功但没有页图：环境缺 soffice/pdftoppm，明确告知而不是无限骨架屏
+                job.status == PptJobStatus.DONE -> Box(Modifier.fillMaxSize().padding(20.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text(
+                        "该页暂无预览图（生成环境缺少 LibreOffice / poppler），" +
+                            "可点「下载 PPTX」查看实际版式。",
+                        fontSize = 12.sp, color = SecondaryText, lineHeight = 17.sp,
+                    )
+                }
                 else -> PreviewSkeleton()
             }
         }
@@ -350,7 +361,13 @@ private fun JobStatusBar(vm: PptViewModel, job: PptJobProgress) {
         ) {
             // 服务端不知道总页数时（跨机部署）不显示「0/N 页」，只报已生成页数 + 阶段
             Text(
-                job.knownTotal?.let { "进度：${job.donePages}/$it 页 · ${job.stageText}" }
+                job.knownTotal?.let {
+                    // 生成成功但一张页图都没有：显示「已生成 N 页（无逐页预览）」，
+                    // 避免「0/6 页 · 生成完成」这种自相矛盾的进度
+                    if (job.status == PptJobStatus.DONE && job.donePages == 0)
+                        "已生成 $it 页（无逐页预览）· ${job.stageText}"
+                    else "进度：${job.donePages}/$it 页 · ${job.stageText}"
+                }
                     ?: if (job.donePages > 0) "已生成 ${job.donePages} 页 · ${job.stageText}"
                     else job.stageText,
                 fontSize = 12.5.sp,

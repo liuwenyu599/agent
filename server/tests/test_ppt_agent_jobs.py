@@ -935,7 +935,8 @@ def test_job_auto_handles_agent_question_without_user_interruption(
     _install(monkeypatch, _handler_with(b"", outputs=outs))
 
     client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
-    status = _wait_terminal(token, doc_id, timeout=10)
+    # 兜底走 _render_local_and_store，其中含 soffice 真转换（有工具的环境要几秒~十几秒）
+    status = _wait_terminal(token, doc_id, timeout=90)
     assert status["status"] == "succeeded", status
     assert status["question"] == ""
     # 替身每次都只会继续追问，所以自动重试后应无感切到严格模板。

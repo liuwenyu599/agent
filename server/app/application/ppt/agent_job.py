@@ -29,6 +29,7 @@ PPTAgent 跑十几分钟，**绝不能开一个跨越全程的数据库事务**�
 客户端仍按 ``/ppt/jobs`` 轮询，接口与终态语义完全一致。
 """
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -98,6 +99,51 @@ def _is_active(doc_id: str) -> bool:
 
 # 本地渲染是确定性排版，秒级完成，所以它既是「PPTAgent 失败后的兜底」，
 # 也是「没有 PPTAgent 时的正式路径」——两条路共用同一段落盘逻辑。
+def _render_local_previews(pptx_path: Path, doc_id: str) -> int:
+    """把生成的 pptx 逐页转 PNG（尽力而为，复用 soffice + pdftoppm 工具链）。
+
+    产出写入 ``ppt_dir/preview/{doc_id}/pg-*.png`` —— 与
+    :meth:`PPTService.preview_document` 的缓存目录与命名**完全一致**，
+    ``list_previews`` 优先从这里取图。命令缺失 / 超时 / 转换失败一律记日志
+    后返回 0：预览缺失只影响工作台缩略图（前端有降级文案），不影响导出。
+    """
+    import glob
+    import subprocess
+    import tempfile
+
+    soffice = shutil.which("soffice")
+    pdftoppm = shutil.which("pdftoppm")
+    if not (soffice and pdftoppm):
+        logger.info("PPT 本地页图跳过：容器缺 soffice/pdftoppm（doc_id=%s）", doc_id)
+        return 0
+    prev_dir = settings.ppt_dir / "preview" / doc_id
+    prev_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "gen.pptx")
+            shutil.copyfile(pptx_path, src)
+            subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+                            "--outdir", td, src], timeout=180, capture_output=True)
+            pdf = os.path.join(td, "gen.pdf")
+            if not os.path.exists(pdf):
+                logger.info("PPT 本地页图失败：LibreOffice 未产出 PDF（doc_id=%s）", doc_id)
+                return 0
+            for old in prev_dir.glob("pg-*.png"):
+                old.unlink()
+            subprocess.run([pdftoppm, "-png", "-r", "90", pdf,
+                            os.path.join(str(prev_dir), "pg")],
+                           timeout=120, capture_output=True)
+        # pdftoppm 会在总页数≥10 时补零（pg-01…），数字序排序两种都正确
+        pages = sorted(glob.glob(os.path.join(str(prev_dir), "pg-*.png")),
+                       key=lambda p: (len(os.path.basename(p)), p))
+        logger.info("PPT 本地页图完成：%d 张（doc_id=%s）", len(pages), doc_id)
+        return len(pages)
+    except Exception as e:  # noqa: BLE001 - 预览失败绝不能拖垮 job
+        logger.warning("PPT 本地页图渲染失败（不影响导出，doc_id=%s）：%s: %s",
+                       doc_id, type(e).__name__, e)
+        return 0
+
+
 def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool, str]:
     """严格套模板渲染并落盘，把 job 置为成功。
 
@@ -132,6 +178,10 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             except OSError:
                 pass
         slides = len((doc.outline or {}).get("slides") or [])
+        # 逐页预览图（尽力而为）：与 preview_document 共用同一缓存目录约定
+        # （ppt_dir/preview/{doc_id}/pg-*.png）。缺 soffice/pdftoppm 或渲染失败
+        # 只影响工作台缩略图（前端有降级文案），绝不影响 job 成功与 pptx 导出。
+        _render_local_previews(path, doc_id)
         _update_job(doc_id, file_path=str(path), status="generated",
                     slide_count=slides, job_status="succeeded",
                     job_phase="succeeded", job_renderer=renderer,
@@ -684,9 +734,25 @@ class PPTAgentJobRunner:
 
 
 def list_previews(doc_id: str) -> List[str]:
-    """列出已生成的页预览 PNG（绝对路径；找不到返回空列表，不抛异常）。"""
+    """列出已生成的页预览图（绝对路径；找不到返回空列表，不抛异常）。
+
+    取图顺序：
+    1. 本地渲染路径的页图（``ppt_dir/preview/{doc_id}/pg-*.png``，与
+       ``preview_document`` 缓存同目录）——无 PPTAgent 的正式链路走这里；
+    2. 都没有时再扫 PPTAgent 工作区（原逻辑，配置了 URL 才扫）。
+    """
     doc = _open(doc_id)
     if doc is None or doc.job_started_at is None:
+        return []
+    # 本地渲染路径：pg-*.png 按页序排好（pdftoppm 在 ≥10 页时会补零，
+    # 先按文件名长度再按名称排，两种命名都得到正确页序）
+    local_dir = settings.ppt_dir / "preview" / doc_id
+    if local_dir.is_dir():
+        local = sorted(local_dir.glob("pg-*.png"),
+                       key=lambda p: (len(p.name), p.name))
+        if local:
+            return [str(p) for p in local]
+    if not (settings.PPT_AGENT_URL or "").strip():
         return []
     # job_started_at 按系统约定是“东八区本地语义的 naive datetime”。
     # 直接 .timestamp() 会按宿主机本地 TZ 解释：容器/CI 若是 UTC，就会把阈值
@@ -706,18 +772,24 @@ def resolve_preview(doc_id: str, index: int) -> Optional[Path]:
     files = list_previews(doc_id)
     if index < 0 or index >= len(files):
         return None
-    root = Path((settings.PPT_AGENT_WORKSPACE_DIR or "")).resolve()
     try:
         target = Path(files[index]).resolve()
     except OSError:
         return None
     if not target.is_file():
         return None
-    # 必须真正是 root 的子路径。字符串 startswith 会把 /data/work-evil
-    # 错当成 /data/work 的子目录，不能用于目录穿越边界判断。
-    try:
-        target.relative_to(root)
-    except ValueError:
-        logger.warning("预览路径越界被拒绝：%s", target)
-        return None
-    return target
+    # 目录穿越防护：目标必须落在允许的根之内。字符串 startswith 会把
+    # /data/work-evil 错当成 /data/work 的子目录，不能用于边界判断。
+    # 两个合法根：本地页图目录（preview_document 同款）+ PPTAgent 工作区。
+    roots = [(settings.ppt_dir / "preview").resolve()]
+    ws = (settings.PPT_AGENT_WORKSPACE_DIR or "").strip()
+    if ws:
+        roots.append(Path(ws).resolve())
+    for root in roots:
+        try:
+            target.relative_to(root)
+            return target
+        except ValueError:
+            continue
+    logger.warning("预览路径越界被拒绝：%s", target)
+    return None
