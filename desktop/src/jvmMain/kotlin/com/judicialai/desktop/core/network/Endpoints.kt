@@ -84,6 +84,7 @@ object Endpoints {
         /** 上传图片并由视觉模型（Qwen2.5-VL 等）识别为文本，绑定到任务会话 */
         fun images(id: String) = "/writing/tasks/$id/images"
         fun versions(id: String) = "/writing/tasks/$id/versions"
+        fun formatCheck(id: String) = "/writing/tasks/$id/format-check"
         fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
         /** 回退到指定历史版本（回退前当前内容自动保存为新版本） */
         fun versionRestore(id: String, no: Int) = "/writing/tasks/$id/versions/$no/restore"
@@ -151,6 +152,8 @@ object Endpoints {
         const val OUTLINE_PRECHECK = "/ppt/outline/precheck"
         /** 材料分析：多文件上传，逐份返回 AI 摘要与提取文本 */
         const val MATERIALS_ANALYZE = "/ppt/materials/analyze"
+        /** 个人图片素材库：生成时只使用本次勾选的图片 */
+        const val MATERIALS = "/ppt/materials"
         const val GENERATE = "/ppt/generate"
         const val DOCUMENTS = "/ppt/documents"
         /** 上传已有 .pptx 继续修改：解析为可编辑大纲 */
@@ -159,13 +162,16 @@ object Endpoints {
         fun documentDraft(id: String) = "/ppt/documents/$id/draft"
         /** 渲染当前草稿为逐页 PNG 预览（工作台中栏真实版式） */
         fun documentPreview(id: String) = "/ppt/documents/$id/preview"
+        fun documentVisualReview(id: String) = "/ppt/documents/$id/visual-review"
         fun documentExport(id: String) = "/ppt/documents/$id/export"
         fun documentDownload(id: String) = "/ppt/documents/$id/download"
+        fun documentDrawio(id: String) = "/ppt/documents/$id/drawio"
         fun documentDelete(id: String) = "/ppt/documents/$id"
         /** 预览图（GET，name 为 pg-N.png） */
         fun previewImage(docId: String, name: String) = "/ppt/preview/$docId/$name"
         /** 单页局部修改（润色/扩写/精简/重写/自定义） */
         const val AI_SLIDE_ACTION = "/ppt/ai/slide-action"
+        const val AI_VISUAL = "/ppt/ai/visual"
         /** 结构调整（新增/拆分/合并页） */
         const val AI_STRUCTURE = "/ppt/ai/structure"
         const val AI_OUTLINE_ADJUST = "/ppt/ai/outline-adjust"

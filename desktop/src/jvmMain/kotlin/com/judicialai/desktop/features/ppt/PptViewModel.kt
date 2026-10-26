@@ -41,6 +41,14 @@ class MaterialAnalysis(
 /** 材料分析聚合统计："已分析 N 份材料，提取 X 个重点，识别 Y 张数据表" */
 data class MaterialsTotals(val materials: Int = 0, val keyPoints: Int = 0, val tables: Int = 0)
 
+data class PptLibraryMaterial(
+    val id: String, val name: String, val caption: String, val url: String,
+)
+
+data class PptVisualIssue(
+    val page: Int, val code: String, val severity: String, val message: String,
+)
+
 /** 生成前预检提出的待确认问题（答案预填默认方案，可改） */
 class ConfirmQuestion(val question: String, val default: String) {
     var answer by mutableStateOf(default)
@@ -56,6 +64,7 @@ class SlideEdit(
 ) {
     var type by mutableStateOf(type)
     var title by mutableStateOf(title)
+    var layout by mutableStateOf(raw["layout"].str())
     /** 要点编辑为纯文本，一行一个要点 */
     var pointsText by mutableStateOf(points.joinToString("\n"))
     var sources by mutableStateOf(sources)
@@ -76,6 +85,7 @@ class SlideEdit(
         rawSlide.forEach { (key, value) -> put(key, value) }
         put("type", type)
         put("title", title)
+        put("layout", layout)
         putJsonArray("points") { points().forEach { add(it) } }
         putJsonArray("sources") { sources.forEach { add(it) } }
     }
@@ -85,6 +95,7 @@ class SlideEdit(
         val t = slide["type"].str()
         if (t.isNotBlank()) type = t
         title = slide["title"].str().ifBlank { title }
+        layout = slide["layout"].str()
         val pts = slide["points"].arr().map { it.str() }.filter { it.isNotBlank() }
         if (pts.isNotEmpty()) pointsText = pts.joinToString("\n")
         val src = slide["sources"].arr().map { it.str() }.filter { it.isNotBlank() }
@@ -119,6 +130,8 @@ class PptViewModel(private val repo: PptRepository) {
     var templateEditor by mutableStateOf<JsonObject?>(null)
         private set
     var templateEditorBusy by mutableStateOf(false)
+        private set
+    var layoutOptions by mutableStateOf(listOf<JsonObject>())
         private set
 
     // ---- 入口页 ----
@@ -159,6 +172,11 @@ class PptViewModel(private val repo: PptRepository) {
     var analyzing by mutableStateOf(false)
         private set
     var materialsTotals by mutableStateOf<MaterialsTotals?>(null)
+        private set
+    var libraryMaterials by mutableStateOf(listOf<PptLibraryMaterial>())
+        private set
+    val selectedMaterialIds = mutableStateListOf<String>()
+    var materialLibraryBusy by mutableStateOf(false)
         private set
 
     // ---- 知识库（结合知识库生成：服务端按主题做 RAG 语义检索，命中片段作为内容依据） ----
@@ -223,13 +241,21 @@ class PptViewModel(private val repo: PptRepository) {
     // ---- 逐页真实预览（服务端渲染 PNG；404/失败时回退结构化预览卡） ----
     var previewPages by mutableStateOf(listOf<String>())
         private set
+    var previewRevision by mutableStateOf(0)
+        private set
     var previewBusy by mutableStateOf(false)
+        private set
+    var visualReviewBusy by mutableStateOf(false)
+        private set
+    var visualReviewSummary by mutableStateOf<String?>(null)
+        private set
+    var visualReviewIssues by mutableStateOf(listOf<PptVisualIssue>())
         private set
 
     // ---- 撤销（快照栈：覆盖手动编辑与 AI 修改/结构调整，跨步骤有效） ----
     private data class SlideSnap(
         val type: String, val title: String,
-        val pointsText: String, val sources: List<String>,
+        val layout: String, val pointsText: String, val sources: List<String>,
         val raw: JsonObject,
     )
     private data class DeckSnap(
@@ -258,6 +284,60 @@ class PptViewModel(private val repo: PptRepository) {
                     // 由服务端统一采用默认政务模板；只有用户点击后才写 templateId。
                 }
                 is ApiResult.Err -> status = r.message
+            }
+        }
+    }
+
+    fun loadLibraryMaterials() {
+        if (materialLibraryBusy) return
+        materialLibraryBusy = true
+        scope.launch {
+            when (val result = repo.libraryMaterials()) {
+                is ApiResult.Ok -> libraryMaterials = result.data.map {
+                    PptLibraryMaterial(it["id"].str(), it["name"].str(),
+                        it["caption"].str(), it["url"].str())
+                }
+                is ApiResult.Err -> status = result.message
+            }
+            materialLibraryBusy = false
+        }
+    }
+
+    fun uploadLibraryMaterial(file: File) {
+        if (materialLibraryBusy) return
+        materialLibraryBusy = true
+        status = "正在加入图片素材库…"
+        scope.launch {
+            var reload = false
+            when (val result = repo.uploadLibraryMaterial(file)) {
+                is ApiResult.Ok -> {
+                    status = "图片已加入素材库"
+                    reload = true
+                }
+                is ApiResult.Err -> status = result.message
+            }
+            materialLibraryBusy = false
+            if (reload) loadLibraryMaterials()
+        }
+    }
+
+    fun toggleLibraryMaterial(id: String) {
+        if (id in selectedMaterialIds) selectedMaterialIds.remove(id)
+        else selectedMaterialIds.add(id)
+    }
+
+    private fun loadLayoutOptions(id: String?) {
+        if (id.isNullOrBlank()) {
+            layoutOptions = emptyList()
+            return
+        }
+        scope.launch {
+            when (val result = repo.templateDetail(id)) {
+                is ApiResult.Ok -> if (templateId == id) {
+                    layoutOptions = result.data["layout_library"].arr()
+                        .mapNotNull { it.obj() }
+                }
+                is ApiResult.Err -> if (templateId == id) layoutOptions = emptyList()
             }
         }
     }
@@ -348,6 +428,17 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
+    fun downloadDrawio(id: String, target: File) {
+        downloadingId = id
+        scope.launch {
+            status = when (val result = repo.downloadDrawio(id, target)) {
+                is ApiResult.Ok -> result.data
+                is ApiResult.Err -> result.message
+            }
+            downloadingId = null
+        }
+    }
+
     fun deleteDocument(id: String) {
         // 文档已删除：恢复标记必须一起清掉，否则切回页面会去请求一个不存在的文档
         if (AppState.pendingPptDocId == id) AppState.pendingPptDocId = null
@@ -364,7 +455,8 @@ class PptViewModel(private val repo: PptRepository) {
     private fun snapshot(): DeckSnap = DeckSnap(
         outlineTitle, outlineSubtitle,
         slides.map {
-            SlideSnap(it.type, it.title, it.pointsText, it.sources.toList(), it.rawSnapshot())
+            SlideSnap(it.type, it.title, it.layout, it.pointsText,
+                it.sources.toList(), it.rawSnapshot())
         },
     )
 
@@ -381,7 +473,8 @@ class PptViewModel(private val repo: PptRepository) {
         outlineSubtitle = s.subtitle
         slides.clear()
         s.slides.forEach {
-            slides.add(SlideEdit(it.type, it.title, it.pointsText.split("\n"), it.sources, it.raw))
+            slides.add(SlideEdit(it.type, it.title, it.pointsText.split("\n"), it.sources, it.raw)
+                .also { slide -> slide.layout = it.layout })
         }
         selected = selected.coerceIn(0, (slides.size - 1).coerceAtLeast(0))
         canUndo = undoStack.isNotEmpty()
@@ -487,6 +580,7 @@ class PptViewModel(private val repo: PptRepository) {
             "audience" to "",
             "scene" to "",
             "material_names" to materials.map { it.filename },
+            "material_ids" to selectedMaterialIds.toList(),
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -698,10 +792,14 @@ class PptViewModel(private val repo: PptRepository) {
             val slideCount = body["slide_count"] as? Int
             val audience = body["audience"] as? String ?: ""
             val scene = body["scene"] as? String ?: ""
+            @Suppress("UNCHECKED_CAST")
+            val materialNames = (body["material_names"] as? List<String>) ?: emptyList()
+            @Suppress("UNCHECKED_CAST")
+            val materialIds = (body["material_ids"] as? List<String>) ?: emptyList()
             when (val r2 = repo.outline(
                 body["source_type"] as String, body["topic"] as String,
                 body["content"] as String, slideCount, audience, scene,
-                kbIds = kbIds)) {
+                kbIds = kbIds, materialNames = materialNames, materialIds = materialIds)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
@@ -725,6 +823,9 @@ class PptViewModel(private val repo: PptRepository) {
         }
         outlineTitle = outline["title"].str().ifBlank { topic.ifBlank { "未命名PPT" } }
         outlineSubtitle = outline["subtitle"].str()
+        selectedMaterialIds.clear()
+        selectedMaterialIds.addAll(outline["material_ids"].arr().map { it.str() }
+            .filter { it.isNotBlank() })
         slides.clear()
         outline["slides"].arr().mapNotNull { it.obj() }.forEach { slides.add(SlideEdit.fromJson(it)) }
         if (slides.isEmpty()) {
@@ -734,6 +835,9 @@ class PptViewModel(private val repo: PptRepository) {
         undoStack.clear()
         canUndo = false
         previewPages = emptyList()
+        visualReviewIssues = emptyList()
+        visualReviewSummary = null
+        loadLayoutOptions(templateId)
         step = PptStep.OUTLINE
         outlineStage = ""
         status = "大纲已生成（${slides.size} 页），请逐页确认或修改"
@@ -840,6 +944,11 @@ class PptViewModel(private val repo: PptRepository) {
         exportStage = ""
         previewPages = emptyList()
         previewBusy = false
+        visualReviewBusy = false
+        visualReviewIssues = emptyList()
+        visualReviewSummary = null
+        layoutOptions = emptyList()
+        selectedMaterialIds.clear()
         selected = 0
         status = null
         AppState.pendingPptDocId = null
@@ -867,7 +976,7 @@ class PptViewModel(private val repo: PptRepository) {
                     val d = r.data.obj()
                     val ol = d?.get("outline").obj()
                     if (d != null && ol != null) {
-                        d["template_id"].str().ifBlank { null }?.let { templateId = it }
+                        templateId = d["template_id"].str().ifBlank { null }
                         applyOutline(id, ol)
                         step = PptStep.WORKBENCH
                         status = "已打开「${d["title"].str()}」"
@@ -917,6 +1026,7 @@ class PptViewModel(private val repo: PptRepository) {
     private fun outlineJson(): JsonObject = buildJsonObject {
         put("title", outlineTitle)
         put("subtitle", outlineSubtitle)
+        putJsonArray("material_ids") { selectedMaterialIds.forEach { add(it) } }
         putJsonArray("slides") { slides.forEach { add(it.toJson()) } }
     }
 
@@ -947,7 +1057,7 @@ class PptViewModel(private val repo: PptRepository) {
                 when (result) {
                     is ApiResult.Ok ->
                         previewPages = result.data.obj()?.get("pages").arr().map { it.str() }
-                            .filter { it.isNotBlank() }
+                            .filter { it.isNotBlank() }.also { previewRevision++ }
                     is ApiResult.Err -> previewPages = emptyList() // 服务端未部署/无 LibreOffice
                 }
                 previewBusy = false
@@ -972,10 +1082,65 @@ class PptViewModel(private val repo: PptRepository) {
     fun switchTemplate(id: String?) {
         if (templateId == id) return
         templateId = id
+        loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
             ?.get("name").str().ifBlank { null } ?: "默认模板"
         status = "已切换为「$name」，正在按新模板重渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
         refreshPreview()
+    }
+
+    fun selectSlideLayout(layoutId: String) {
+        val slide = slides.getOrNull(selected) ?: return
+        if (slide.layout == layoutId) return
+        pushUndo()
+        slide.layout = layoutId
+        visualReviewIssues = emptyList()
+        visualReviewSummary = null
+        status = if (layoutId.isBlank()) "已恢复自动版式，正在刷新预览"
+            else "已选择本页版式，正在刷新预览"
+        refreshPreview()
+    }
+
+    fun runVisualReview() {
+        val id = docId ?: return
+        if (visualReviewBusy) return
+        visualReviewBusy = true
+        visualReviewSummary = "正在按当前模板复检…"
+        visualReviewIssues = emptyList()
+        scope.launch {
+            when (val save = repo.saveDraft(id, outlineTitle, outlineJson(), templateId)) {
+                is ApiResult.Err -> {
+                    if (docId == id) {
+                        visualReviewSummary = save.message
+                        visualReviewBusy = false
+                    }
+                    return@launch
+                }
+                is ApiResult.Ok -> Unit
+            }
+            val result = repo.visualReview(id)
+            if (docId != id) {
+                visualReviewBusy = false
+                return@launch
+            }
+            when (result) {
+                is ApiResult.Ok -> {
+                    val root = result.data.obj()
+                    visualReviewSummary = root?.get("summary").str().ifBlank { "视觉复检完成" }
+                    visualReviewIssues = root?.get("issues").arr().mapNotNull { item ->
+                        item.obj()?.let { issue ->
+                            PptVisualIssue(issue["page"].int(), issue["code"].str(),
+                                issue["severity"].str(), issue["message"].str())
+                        }
+                    } ?: emptyList()
+                }
+                is ApiResult.Err -> {
+                    visualReviewSummary = result.message
+                    visualReviewIssues = emptyList()
+                }
+            }
+            visualReviewBusy = false
+        }
     }
 
     /**
@@ -1207,6 +1372,39 @@ class PptViewModel(private val repo: PptRepository) {
                     } else aiNote = "AI 未返回有效修改"
                 }
                 is ApiResult.Err -> aiNote = r.message
+            }
+            aiBusy = false
+        }
+    }
+
+    fun aiVisual(kind: String) {
+        val index = selected
+        if (index !in slides.indices || aiBusy) return
+        val original = slides[index].toJson()
+        val document = docId
+        val chosenTemplate = templateId
+        val instruction = aiInstruction.trim()
+        aiBusy = true
+        aiNote = null
+        scope.launch {
+            when (val result = repo.aiVisual(kind, original, instruction, chosenTemplate)) {
+                is ApiResult.Ok -> {
+                    val payload = result.data.obj()
+                    val changed = payload?.get("slide").obj()
+                    if (changed != null) {
+                        if (docId != document || templateId != chosenTemplate ||
+                            slides.getOrNull(index)?.toJson() != original) {
+                            aiNote = "文稿、页面或模板已变化，图示未覆盖当前内容，请重新生成"
+                        } else {
+                            pushUndo()
+                            slides[index].replaceWith(changed)
+                            val warning = payload?.get("warnings").arr().firstOrNull()?.str()
+                            aiNote = warning ?: "已更新第 ${index + 1} 页图示"
+                            refreshPreview()
+                        }
+                    } else aiNote = "AI 未返回有效图示"
+                }
+                is ApiResult.Err -> aiNote = result.message
             }
             aiBusy = false
         }

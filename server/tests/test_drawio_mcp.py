@@ -144,9 +144,86 @@ def test_drawio_native_export_contains_editable_nodes_and_connector():
                for shape in Presentation(io.BytesIO(output.getvalue())).slides[0].shapes)
 
 
+def test_drawio_native_export_uses_template_palette_for_unspecified_colors():
+    import io
+    from pptx import Presentation
+    from app.application.ppt.ppt_engine import build_pptx, DEFAULT_COLORS, DEFAULT_LAYOUTS
+
+    outline = {"title": "业务流程", "slides": [{
+        "type": "process", "title": "业务流程", "points": [],
+        "blocks": {"drawio_xml": NATIVE_XML},
+    }]}
+    colors = {**DEFAULT_COLORS, "light": "F2EADB", "primary": "123456"}
+    data = build_pptx(outline, {"colors": colors, "layouts": DEFAULT_LAYOUTS})
+    shapes = Presentation(io.BytesIO(data)).slides[0].shapes
+    unstyled = next(shape for shape in shapes if shape.has_text_frame and shape.text == "审核")
+    assert str(unstyled.fill.fore_color.rgb) == "F2EADB"
+    assert str(unstyled.line.color.rgb) == "123456"
+
+
+def test_drawio_source_keeps_each_diagram_as_an_editable_page():
+    from xml.etree import ElementTree as ET
+    from app.application.ppt.drawio_native import build_drawio_source
+
+    outline = {"slides": [
+        {"title": "封面", "blocks": {}},
+        {"title": "受理流程", "blocks": {"drawio_xml": NATIVE_XML}},
+        {"title": "审核流程", "blocks": {"drawio_xml": NATIVE_XML}},
+    ]}
+    source = build_drawio_source(outline)
+    root = ET.fromstring(source)
+    pages = root.findall("diagram")
+    assert [page.get("name") for page in pages] == ["受理流程", "审核流程"]
+    assert all(page.find("mxGraphModel") is not None for page in pages)
+
+
+@pytest.mark.parametrize("box", ["-1,0,150,70", "990,0,150,70"])
+def test_generated_diagram_rejects_out_of_canvas_nodes(box):
+    from app.application.ppt.drawio_native import validate_generated_layout
+
+    x, y, width, height = box.split(",")
+    xml = NATIVE_XML.replace('x="0" y="0" width="150" height="70"',
+                             f'x="{x}" y="{y}" width="{width}" height="{height}"', 1)
+    with pytest.raises(ValueError, match="画布"):
+        validate_generated_layout(xml)
+
+
+def test_generated_diagram_rejects_overlapping_nodes():
+    from app.application.ppt.drawio_native import validate_generated_layout
+
+    xml = NATIVE_XML.replace('x="250" y="0"', 'x="20" y="10"')
+    with pytest.raises(ValueError, match="重叠"):
+        validate_generated_layout(xml)
+
+
+def test_generated_diagram_rejects_labels_too_long_for_a_node():
+    from app.application.ppt.drawio_native import validate_generated_layout
+
+    xml = NATIVE_XML.replace('value="受理"', f'value="{"办理要求" * 6}"')
+    with pytest.raises(ValueError, match="文字"):
+        validate_generated_layout(xml)
+
+
+def test_generated_diagram_limits_nodes_to_twelve():
+    from app.application.ppt.drawio_native import validate_generated_layout
+
+    cells = "".join(
+        f'<mxCell id="n{index}" value="节点{index}" vertex="1" parent="1">'
+        f'<mxGeometry x="{index * 70}" y="0" width="60" height="50" as="geometry"/>'
+        '</mxCell>' for index in range(13)
+    )
+    xml = f'<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>{cells}</root></mxGraphModel>'
+    with pytest.raises(ValueError, match="12"):
+        validate_generated_layout(xml)
+
+
 @pytest.mark.parametrize("learned", [False, True])
 @pytest.mark.parametrize("partial_failure", [False, True])
-def test_one_failed_diagram_keeps_other_pages_and_reports_fallback(monkeypatch, learned, partial_failure):
+@pytest.mark.parametrize("diagram_kind,legacy", [
+    ("process", False), ("relationship", False), ("relationship", True),
+])
+def test_one_failed_diagram_keeps_other_pages_and_reports_fallback(
+        monkeypatch, learned, partial_failure, diagram_kind, legacy):
     import io
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -159,10 +236,12 @@ def test_one_failed_diagram_keeps_other_pages_and_reports_fallback(monkeypatch, 
             raise RuntimeError("simulated drawing failure")
         monkeypatch.setattr(drawio_native, "render_diagram", fail_after_adding_shape)
     steps = ["受理", "审核", *[f"流程环节{number}" for number in range(3, 9)]]
+    blocks = {"drawio_xml": NATIVE_XML if partial_failure else "invalid XML",
+              "drawio_kind": diagram_kind}
+    blocks["process" if diagram_kind == "process" or legacy else "diagram_labels"] = steps
     outline = {"title": "导出测试", "slides": [
         {"type": "process", "title": "办理流程", "points": [], "note": "原演讲备注",
-         "blocks": {"drawio_xml": NATIVE_XML if partial_failure else "invalid XML",
-                    "process": steps}},
+         "blocks": blocks},
         {"type": "content", "title": "工作要求", "points": ["其他页面应当完整导出"]},
     ]}
     template = {"colors": ppt_engine.DEFAULT_COLORS, "layouts": ppt_engine.DEFAULT_LAYOUTS}
@@ -192,8 +271,11 @@ def test_one_failed_diagram_keeps_other_pages_and_reports_fallback(monkeypatch, 
                      if shape.has_text_frame)
     assert all(value in text for value in [*steps, "工作要求", "其他页面应当完整导出"]), text
     assert "未完成图形残片" not in text
-    assert len(warnings) == 1 and "基础流程版式" in warnings[0]
-    assert "基础流程版式" in exported.slides[0].notes_slide.notes_text_frame.text
+    expected_layout = "基础流程版式" if diagram_kind == "process" else "基础文字版式"
+    assert len(warnings) == 1 and expected_layout in warnings[0]
+    assert expected_layout in exported.slides[0].notes_slide.notes_text_frame.text
+    if diagram_kind != "process":
+        assert "第1步" not in text and "1. 受理" not in text
 
 
 @pytest.mark.parametrize("xml", [
@@ -223,6 +305,28 @@ def test_drawio_native_generation_uses_mcp_and_validates_before_return(monkeypat
     assert calls == ["reference", "model"]
     assert result["blocks"]["drawio_xml"] == NATIVE_XML
     assert result["blocks"]["process"] == ["受理", "审核"]
+
+
+def test_drawio_generation_uses_template_style_and_relation_kind(monkeypatch):
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
+    prompts = []
+
+    class Assistant:
+        def complete(self, messages, **_kwargs):
+            prompts.append(messages[-1]["content"])
+            return json.dumps({"xml": NATIVE_XML}, ensure_ascii=False)
+
+    result = svc.generate_native_diagram(
+        Assistant(), {"title": "单位关系", "points": ["受理", "审核"]},
+        kind="relationship", style={"colors": {"primary": "123456", "accent": "ABCDEF"},
+                                    "font": "思源黑体"})
+    assert "关系图" in prompts[0]
+    assert "#123456" in prompts[0] and "#ABCDEF" in prompts[0]
+    assert "思源黑体" in prompts[0]
+    assert result["blocks"]["drawio_kind"] == "relationship"
+    assert result["blocks"]["diagram_labels"] == ["受理", "审核"]
+    assert "process" not in result["blocks"]
 
 class TestDrawioServiceConfigured:
     def test_enabled_returns_text(self, monkeypatch):

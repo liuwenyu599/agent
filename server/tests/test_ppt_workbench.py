@@ -32,6 +32,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{(_TMPDIR / 'test.db').as_posi
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.application.ppt.service import PPTService  # noqa: E402
+from app.application.ppt import ppt_engine  # noqa: E402
 from app.infrastructure.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -126,6 +127,29 @@ def _dev_token(client):
         db.close()
 
 
+def test_private_template_is_visible_only_to_owner(client, accounts):
+    created = client.post(f"{BASE}/ppt/templates", headers=_hdr(accounts["a"]), json={
+        "name": "甲的私有模板", "category": "汇报", "description": "仅本人可用",
+    })
+    assert created.status_code == 200, created.text
+    template_id = created.json()["id"]
+
+    owner = client.get(
+        f"{BASE}/ppt/templates/{template_id}", headers=_hdr(accounts["a"]))
+    assert owner.status_code == 200, owner.text
+
+    other = client.get(
+        f"{BASE}/ppt/templates/{template_id}", headers=_hdr(accounts["b"]))
+    assert other.status_code == 404
+    favorite = client.post(
+        f"{BASE}/ppt/templates/{template_id}/favorite", headers=_hdr(accounts["b"]))
+    assert favorite.status_code == 404
+    blank = client.post(f"{BASE}/ppt/blank", headers=_hdr(accounts["b"]), json={
+        "title": "越权模板测试", "template_id": template_id,
+    })
+    assert blank.status_code == 404
+
+
 @pytest.fixture(scope="module")
 def accounts(client):
     """系统管理员 + 两个互不相干的普通用户（用于越权断言）。"""
@@ -197,7 +221,74 @@ def _blank_doc(client, token, title="测试PPT"):
     return r.json()["doc_id"]
 
 
+def _png_bytes(color=(28, 85, 140)):
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (320, 180), color).save(out, format="PNG")
+    return out.getvalue()
+
+
 # ============================================================ 1. materials/analyze
+
+
+def test_outline_uses_only_explicitly_selected_library_materials(
+        client, accounts, fake_llm, monkeypatch):
+    headers = _hdr(accounts["a"])
+    first = client.post(
+        f"{BASE}/ppt/materials", headers=headers,
+        data={"name": "社区矫正现场", "caption": "工作人员开展走访"},
+        files={"file": ("scene.png", _png_bytes(), "image/png")},
+    )
+    second = client.post(
+        f"{BASE}/ppt/materials", headers=headers,
+        data={"name": "办公楼", "caption": "办公场所"},
+        files={"file": ("office.png", _png_bytes((80, 90, 100)), "image/png")},
+    )
+    assert first.status_code == second.status_code == 200
+    captured = {}
+
+    def fake_generate(_assistant, _source_type, topic, _content, images,
+                      slide_count, *_args, **_kwargs):
+        captured["images"] = images
+        return {"title": topic, "slides": [
+            {"type": "cover", "title": topic},
+            {"type": "content", "title": "工作情况", "points": ["依法履职"]},
+            {"type": "closing", "title": "谢谢聆听"},
+        ]}
+
+    monkeypatch.setattr(ppt_engine, "generate_outline", fake_generate)
+    monkeypatch.setattr(PPTService, "_audit_and_repair_outline",
+                        lambda self, outline, *_args: outline)
+    response = client.post(f"{BASE}/ppt/outline", headers=headers, json={
+        "topic": "社区矫正工作汇报", "slide_count": 3,
+        "material_ids": [first.json()["id"]],
+    })
+    assert response.status_code == 200, response.text
+    assert [item["name"] for item in captured["images"]] == ["社区矫正现场"]
+    assert response.json()["outline"]["material_ids"] == [first.json()["id"]]
+
+
+def test_outline_rejects_another_users_library_material(client, accounts, fake_llm):
+    foreign = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["b"]),
+        data={"name": "他人图片", "caption": "不可访问"},
+        files={"file": ("foreign.png", _png_bytes(), "image/png")},
+    )
+    assert foreign.status_code == 200
+    response = client.post(f"{BASE}/ppt/outline", headers=_hdr(accounts["a"]), json={
+        "topic": "工作汇报", "slide_count": 3,
+        "material_ids": [foreign.json()["id"]],
+    })
+    assert response.status_code == 404
+
+
+def test_upload_material_rejects_disguised_non_image(client, accounts):
+    response = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]),
+        data={"name": "伪装图片", "caption": ""},
+        files={"file": ("fake.png", b"not-an-image", "image/png")},
+    )
+    assert response.status_code == 400
 
 
 def test_analyze_materials_requires_login(client):
@@ -862,6 +953,80 @@ def test_ai_process_routes_to_drawio_when_configured(client, accounts, fake_llm,
     assert "mxGraphModel reference" in fake_llm.last_prompt
 
 
+def test_ai_relationship_routes_to_drawio_with_selected_template(client, accounts, fake_llm, monkeypatch):
+    from app.application.ppt.drawio_service import DrawioService
+    monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
+    monkeypatch.setattr(DrawioService, "get_reference", lambda _self: "mxGraphModel reference")
+    template = client.post(f"{BASE}/ppt/templates", json={
+        "name": "关系图风格", "colors": {"primary": "123456", "accent": "ABCDEF"},
+        "font": "思源黑体",
+    }, headers=_hdr(accounts["a"]))
+    assert template.status_code in (200, 201), template.text
+    xml = ('<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+           '<mxCell id="n1" value="司法局" vertex="1" parent="1">'
+           '<mxGeometry x="0" y="0" width="160" height="80" as="geometry"/>'
+           '</mxCell></root></mxGraphModel>')
+    fake_llm._responder = lambda _messages: json.dumps({"xml": xml}, ensure_ascii=False)
+    response = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "relationship", "slide": {"id": "s1", "title": "单位关系"},
+        "template_id": template.json()["id"],
+    }, headers=_hdr(accounts["a"]))
+    assert response.status_code == 200, response.text
+    assert response.json()["slide"]["blocks"]["drawio_kind"] == "relationship"
+    assert "#123456" in fake_llm.last_prompt
+
+    forbidden = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "relationship", "slide": {"id": "s2", "title": "其他单位关系"},
+        "template_id": template.json()["id"],
+    }, headers=_hdr(accounts["b"]))
+    # 他人私有模板按「不存在」处理（与模板详情/收藏的 404 语义一致，不泄露存在性）
+    assert forbidden.status_code == 404
+
+
+def test_drawio_source_download_is_owned_and_multi_page(client, accounts):
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from test_drawio_mcp import NATIVE_XML
+    created = client.post(f"{BASE}/ppt/blank", json={"title": "图示文稿"},
+                          headers=_hdr(accounts["a"]))
+    assert created.status_code in (200, 201), created.text
+    doc_id = created.json()["doc_id"]
+    outline = {"title": "图示文稿", "slides": [
+        {"type": "cover", "title": "图示文稿"},
+        {"type": "process", "title": "办理流程", "blocks": {"drawio_xml": NATIVE_XML}},
+        {"type": "process", "title": "复核流程", "blocks": {"drawio_xml": NATIVE_XML}},
+        {"type": "closing", "title": "谢谢"},
+    ]}
+    saved = client.put(f"{BASE}/ppt/documents/{doc_id}/draft", json={"outline": outline},
+                       headers=_hdr(accounts["a"]))
+    assert saved.status_code == 200, saved.text
+    denied = client.get(f"{BASE}/ppt/documents/{doc_id}/drawio", headers=_hdr(accounts["b"]))
+    assert denied.status_code in (403, 404)
+    downloaded = client.get(f"{BASE}/ppt/documents/{doc_id}/drawio", headers=_hdr(accounts["a"]))
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content.count(b"<diagram ") == 2
+    assert b"<mxGraphModel" in downloaded.content
+    exported = client.post(f"{BASE}/ppt/documents/{doc_id}/export",
+                           headers=_hdr(accounts["a"]))
+    assert exported.status_code == 200, exported.text
+    presentation = Presentation(io.BytesIO(exported.content))
+    assert len(presentation.slides) == 4
+    for slide in (presentation.slides[1], presentation.slides[2]):
+        assert {"受理", "审核"} <= {
+            shape.text for shape in slide.shapes if shape.has_text_frame
+        }
+        assert any(shape.shape_type == MSO_SHAPE_TYPE.LINE for shape in slide.shapes)
+
+
+def test_drawio_source_download_requires_a_diagram(client, accounts):
+    created = client.post(f"{BASE}/ppt/blank", json={"title": "普通文稿"},
+                          headers=_hdr(accounts["a"]))
+    doc_id = created.json()["doc_id"]
+    response = client.get(f"{BASE}/ppt/documents/{doc_id}/drawio",
+                          headers=_hdr(accounts["a"]))
+    assert response.status_code == 400
+
+
 def test_ai_process_falls_back_when_drawio_is_unavailable(client, accounts, fake_llm, monkeypatch):
     from app.application.ppt.drawio_service import DrawioService
     monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
@@ -881,6 +1046,20 @@ def test_ai_process_falls_back_when_drawio_is_unavailable(client, accounts, fake
     assert result["slide"]["blocks"] == {"process": ["受理", "审核", "办结"]}
     assert result["warnings"] == ["图示增强服务暂不可用，已自动使用本地流程图生成。"]
     assert len(fake_llm.calls) == 1
+
+
+def test_ai_relationship_fallback_explains_loss_of_connections(client, accounts, fake_llm, monkeypatch):
+    from app.application.ppt.drawio_service import DrawioService
+    monkeypatch.setattr("app.core.config.settings.DRAWIO_MCP_URL", "http://drawio-mcp:3001")
+    monkeypatch.setattr(DrawioService, "get_reference", lambda _self: None)
+    fake_llm._responder = lambda _messages: json.dumps({
+        "blocks": {"process": ["司法局", "业务科室", "基层单位"]},
+    }, ensure_ascii=False)
+    response = client.post(f"{BASE}/ppt/ai/visual", json={
+        "kind": "relationship", "slide": {"id": "s1", "title": "单位关系"},
+    }, headers=_hdr(accounts["a"]))
+    assert response.status_code == 200, response.text
+    assert "连线关系" in response.json()["warnings"][0]
 
 
 def test_ai_process_invalid_drawio_output_does_not_trigger_fallback(client, accounts, fake_llm, monkeypatch):
@@ -1113,3 +1292,58 @@ def test_learned_layout_explicit_binding_overrides_auto_match():
     auto = ppt_engine._pick_layout(
         layouts, "content", used={}, preferred_layout_id="")
     assert auto["id"] == "L0"
+
+
+def test_slide_layout_override_wins_over_template_default():
+    slide = {"type": "content", "layout": "L9"}
+    skeleton = {"content": "L2"}
+    assert ppt_engine.preferred_layout_id(slide, skeleton) == "L9"
+    assert ppt_engine.preferred_layout_id({"type": "content"}, skeleton) == "L2"
+
+
+def test_visual_review_endpoint_returns_page_level_findings(client, accounts):
+    doc_id = _blank_doc(client, accounts["a"], "视觉复检")
+    dense = "这是用于检查文字密度的长段落" * 18
+    outline = {"title": "视觉复检", "slides": [
+        {"type": "cover", "title": "视觉复检"},
+        {"type": "content", "title": "高密度页面", "points": [dense] * 6},
+        {"type": "closing", "title": "谢谢聆听"},
+    ]}
+    saved = client.put(
+        f"{BASE}/ppt/documents/{doc_id}/draft", headers=_hdr(accounts["a"]),
+        json={"outline": outline},
+    )
+    assert saved.status_code == 200, saved.text
+    response = client.post(
+        f"{BASE}/ppt/documents/{doc_id}/visual-review",
+        headers=_hdr(accounts["a"]),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["pages_checked"] == 3
+    assert result["status"] == "review"
+    assert any(item["page"] == 2 and item["code"] == "text_density"
+               for item in result["issues"])
+
+
+def test_visual_review_respects_document_ownership(client, accounts):
+    doc_id = _blank_doc(client, accounts["a"], "私有复检")
+    response = client.post(
+        f"{BASE}/ppt/documents/{doc_id}/visual-review",
+        headers=_hdr(accounts["b"]),
+    )
+    assert response.status_code == 404
+
+
+def test_visual_review_accepts_standard_government_layout():
+    outline = {"title": "工作汇报", "slides": [
+        {"type": "cover", "title": "工作汇报"},
+        {"type": "content", "title": "工作情况",
+         "points": ["依法履职", "服务群众", "规范管理"]},
+        {"type": "closing", "title": "谢谢聆听"},
+    ]}
+    data = ppt_engine.build_pptx(
+        outline, {"colors": ppt_engine.DEFAULT_COLORS,
+                  "layouts": ppt_engine.DEFAULT_LAYOUTS})
+    result = PPTService.review_pptx_visuals(data)
+    assert result == {"status": "passed", "pages_checked": 3, "issues": []}

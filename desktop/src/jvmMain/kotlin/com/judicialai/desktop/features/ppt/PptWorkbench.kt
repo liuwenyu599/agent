@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.platform.rememberServerImage
+import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
@@ -233,9 +234,6 @@ private fun ThumbRail(vm: PptViewModel) {
 private fun PreviewPane(vm: PptViewModel) {
     val i = vm.selected.coerceIn(0, (vm.slides.size - 1).coerceAtLeast(0))
     val slide = vm.slides.getOrNull(i)
-    // 切换模板 / 手动刷新时递增，避免同一 URL 的预览图被缓存成旧版
-    var previewTick by remember { mutableStateOf(0) }
-
     Column(
         Modifier.fillMaxHeight().verticalScroll(rememberScrollState())
             .background(AppBg).padding(32.dp), // 规范：预览周围留白 32dp
@@ -266,17 +264,46 @@ private fun PreviewPane(vm: PptViewModel) {
                     vm.templates.forEach { t ->
                         DropdownMenuItem(onClick = {
                             tplOpen = false
-                            previewTick++
                             vm.switchTemplate(t["id"].str())
                         }) { Text(t["name"].str()) }
                     }
                 }
             }
+            val compatibleLayouts = vm.layoutOptions.filter {
+                slide.type in it["applicable_types"].arr().map { value -> value.str() }
+            }
+            if (compatibleLayouts.isNotEmpty()) {
+                Spacer(Modifier.width(6.dp))
+                var layoutOpen by remember(slide.type, vm.layoutOptions) { mutableStateOf(false) }
+                val layoutName = compatibleLayouts.firstOrNull {
+                    it["id"].str() == slide.layout
+                }?.get("name").str().ifBlank { "自动版式" }
+                Box {
+                    OutlinedButton(onClick = { layoutOpen = true }, colors = sel(false)) {
+                        Text("$layoutName ▾", fontSize = 12.sp)
+                    }
+                    DropdownMenu(layoutOpen, { layoutOpen = false }) {
+                        DropdownMenuItem(onClick = {
+                            layoutOpen = false
+                            vm.selectSlideLayout("")
+                        }) { Text("自动选择") }
+                        compatibleLayouts.forEach { option ->
+                            DropdownMenuItem(onClick = {
+                                layoutOpen = false
+                                vm.selectSlideLayout(option["id"].str())
+                            }) { Text(option["name"].str().ifBlank { option["id"].str() }) }
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.width(6.dp))
             TextButton(enabled = !vm.previewBusy, onClick = {
-                previewTick++
                 vm.refreshPreview()
             }) { Text(if (vm.previewBusy) "渲染中…" else "刷新预览", fontSize = 12.sp, color = Primary) }
+            TextButton(enabled = !vm.visualReviewBusy, onClick = { vm.runVisualReview() }) {
+                Text(if (vm.visualReviewBusy) "复检中…" else "视觉复检",
+                    fontSize = 12.sp, color = Primary)
+            }
             if (vm.canUndo) {
                 TextButton(onClick = { vm.undo() }) {
                     Text("撤销", fontSize = 12.sp, color = Ink2)
@@ -293,7 +320,7 @@ private fun PreviewPane(vm: PptViewModel) {
         ) {
             val rawUrl = vm.previewPages.getOrNull(i)
             val pageUrl = rawUrl?.let {
-                it + (if (it.contains("?")) "&" else "?") + "_=" + previewTick
+                it + (if (it.contains("?")) "&" else "?") + "_=" + vm.previewRevision
             }
             val img = rememberServerImage(AppState.api, pageUrl)
             when {
@@ -313,6 +340,28 @@ private fun PreviewPane(vm: PptViewModel) {
         if (slide.sources.isNotEmpty()) {
             Text("内容依据：" + slide.sources.joinToString("、"),
                 fontSize = 11.5.sp, color = SecondaryText)
+        }
+        vm.visualReviewSummary?.let { summary ->
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(if (vm.visualReviewIssues.isEmpty())
+                        Color(0xFFEAF6F0) else Color(0xFFFFF7E8))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(summary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                vm.visualReviewIssues.forEach { issue ->
+                    val target = if (issue.page > 0) "第 ${issue.page} 页" else "整份文稿"
+                    Text(
+                        "$target：${issue.message}",
+                        modifier = Modifier.clickable {
+                            if (issue.page in 1..vm.slides.size) vm.selected = issue.page - 1
+                        },
+                        fontSize = 11.5.sp,
+                        color = if (issue.severity == "error") MaterialTheme.colors.error else Ink2,
+                    )
+                }
+            }
         }
 
         // 直接编辑
@@ -371,8 +420,11 @@ private fun StructuredFallback(slide: SlideEdit) {
 internal fun AiPanel(vm: PptViewModel) {
     val i = vm.selected.coerceIn(0, (vm.slides.size - 1).coerceAtLeast(0))
     val slide = vm.slides.getOrNull(i)
+    val diagramEnabled = !vm.aiBusy && slide != null &&
+        slide.type !in setOf("cover", "closing", "toc")
     Column(
-        Modifier.width(280.dp).fillMaxHeight().background(AiPanelBg).padding(14.dp),
+        Modifier.width(280.dp).fillMaxHeight().background(AiPanelBg)
+            .verticalScroll(rememberScrollState()).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("AI 助手", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Ink)
@@ -413,6 +465,25 @@ internal fun AiPanel(vm: PptViewModel) {
             colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
             shape = RoundedCornerShape(8.dp),
         ) { Text(if (vm.aiBusy) "AI 处理中…" else "发送", color = Color.White, fontSize = 13.sp) }
+
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
+        Text("生成本页图示", fontSize = 11.5.sp, color = SecondaryText)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(enabled = diagramEnabled, onClick = { vm.aiVisual("process") }) {
+                Text("流程", fontSize = 12.sp)
+            }
+            OutlinedButton(enabled = diagramEnabled, onClick = { vm.aiVisual("relationship") }) {
+                Text("关系", fontSize = 12.sp)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(enabled = diagramEnabled, onClick = { vm.aiVisual("organization") }) {
+                Text("组织架构", fontSize = 12.sp)
+            }
+            OutlinedButton(enabled = diagramEnabled, onClick = { vm.aiVisual("architecture") }) {
+                Text("系统架构", fontSize = 12.sp)
+            }
+        }
 
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
         Text("页面结构", fontSize = 11.5.sp, color = SecondaryText)

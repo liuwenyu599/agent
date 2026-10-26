@@ -163,6 +163,8 @@ class PPTService:
             }
             if src.get("id"):
                 out["id"] = src["id"]
+            if src.get("layout"):
+                out["layout"] = src["layout"]
             for key in ("unit", "organization", "location", "date", "report_date",
                         "presenter", "汇报单位", "日期"):
                 if src.get(key):
@@ -181,6 +183,8 @@ class PPTService:
                    "title": str(src.get("title") or "谢谢聆听，请批评指正")}
             if src.get("id"):
                 out["id"] = src["id"]
+            if src.get("layout"):
+                out["layout"] = src["layout"]
             return out
 
         slides[0] = cover_clean(slides[0])
@@ -340,6 +344,84 @@ class PPTService:
                 issues.append(f"第{slide_no}页文字过多：{slide_chars}字，超过{max_chars}字")
         return list(dict.fromkeys(issues))
 
+    @staticmethod
+    def review_pptx_visuals(data: bytes) -> Dict[str, Any]:
+        """逐页检查可见排版风险，供工作台在导出前复检。"""
+        from math import ceil
+        try:
+            from pptx import Presentation
+            prs = Presentation(io.BytesIO(data))
+        except Exception as exc:
+            return {"status": "review", "pages_checked": 0, "issues": [{
+                "page": 0, "code": "invalid_file", "severity": "error",
+                "message": f"演示文稿无法解析：{type(exc).__name__}",
+            }]}
+
+        issues: List[Dict[str, Any]] = []
+        issue_keys = set()
+        sw, sh = int(prs.slide_width), int(prs.slide_height)
+        tolerance = max(sw, sh) // 1000
+
+        def add(page: int, code: str, message: str, severity: str = "warning") -> None:
+            key = (page, code, message)
+            if key not in issue_keys:
+                issue_keys.add(key)
+                issues.append({"page": page, "code": code,
+                               "severity": severity, "message": message})
+
+        for page, slide in enumerate(prs.slides, 1):
+            text_shapes = []
+            char_count = 0
+            for shape in slide.shapes:
+                left = int(getattr(shape, "left", 0) or 0)
+                top = int(getattr(shape, "top", 0) or 0)
+                width = int(getattr(shape, "width", 0) or 0)
+                height = int(getattr(shape, "height", 0) or 0)
+                has_text_frame = bool(getattr(shape, "has_text_frame", False))
+                raw_text = (shape.text or "") if has_text_frame else ""
+                compact = re.sub(r"\s+", "", raw_text)
+                shape_type = str(getattr(shape, "shape_type", ""))
+                carries_content = bool(compact) or any(
+                    kind in shape_type.upper() for kind in ("PICTURE", "CHART", "TABLE"))
+                if carries_content and (left < -tolerance or top < -tolerance
+                        or left + width > sw + tolerance or top + height > sh + tolerance):
+                    add(page, "out_of_bounds", "存在超出页面边界的内容元素", "error")
+                if not has_text_frame:
+                    continue
+                if not compact:
+                    continue
+                char_count += len(compact)
+                text_shapes.append((left, top, width, height, shape))
+                sizes = [run.font.size.pt for para in shape.text_frame.paragraphs
+                         for run in para.runs if run.font.size]
+                min_size = min(sizes, default=18.0)
+                if min_size < 9:
+                    add(page, "small_font", f"存在小于 9pt 的文字（{min_size:g}pt）")
+                width_in = max(width / 914400, 0.5)
+                height_in = max(height / 914400, 0.2)
+                chars_per_line = max(6, int(width_in * 2.4 * 18 / max(min_size, 8)))
+                estimated_lines = sum(max(1, ceil(len(line) / chars_per_line))
+                                      for line in raw_text.splitlines() or [raw_text])
+                line_capacity = max(1, int(height_in * 72 / (max(min_size, 8) * 1.2)))
+                if estimated_lines > line_capacity + 1:
+                    add(page, "text_overflow_risk", "文字可能超出文本框，请检查预览")
+            if char_count > 450:
+                add(page, "text_density", f"本页约 {char_count} 字，阅读密度偏高")
+
+            for index, first in enumerate(text_shapes):
+                ax, ay, aw, ah, _ = first
+                for bx, by, bw, bh, _ in text_shapes[index + 1:]:
+                    overlap_w = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+                    overlap_h = max(0, min(ay + ah, by + bh) - max(ay, by))
+                    overlap = overlap_w * overlap_h
+                    smaller = min(max(aw * ah, 1), max(bw * bh, 1))
+                    if overlap / smaller > 0.25:
+                        add(page, "text_overlap", "两个文字区域明显重叠", "error")
+                        break
+
+        return {"status": "review" if issues else "passed",
+                "pages_checked": len(prs.slides), "issues": issues}
+
     # ---- 存储路径 ----
     @property
     def ppt_dir(self) -> Path:
@@ -436,6 +518,15 @@ class PPTService:
             raise PermissionDeniedError("只能修改自己创建的模板")
         return t
 
+    def _get_visible_template(self, template_id: str, user: User) -> PPTTemplate:
+        """Only official templates and the current user's private templates are usable."""
+        t = self.templates.get(template_id)
+        if not t:
+            raise NotFoundError("模板不存在")
+        if not t.is_official and t.created_by != user.id:
+            raise NotFoundError("模板不存在")
+        return t
+
     def update_template(self, template_id: str, body, user: User) -> dict:
         t = self._get_editable_template(template_id, user)
         t.name, t.category, t.description = body.name, body.category, body.description
@@ -460,6 +551,7 @@ class PPTService:
         return {"message": "模板已删除"}
 
     def toggle_favorite(self, template_id: str, user: User) -> dict:
+        self._get_visible_template(template_id, user)
         fav = self.favorites.get(user.id, template_id)
         if fav:
             self.favorites.delete(fav)
@@ -471,7 +563,7 @@ class PPTService:
         """上传 .pptx 作为个人模板：提取主题色与字体，沿用默认版式体系。"""
         if not (file.filename or "").lower().endswith(".pptx"):
             raise AppError(400, "仅支持 .pptx 文件")
-        data = await file.read()
+        data = await file.read(50 * 1024 * 1024 + 1)
         if not data:
             raise AppError(400, "文件内容为空")
         if len(data) > 50 * 1024 * 1024:
@@ -533,21 +625,22 @@ class PPTService:
         except Exception as e:
             logger.warning("模板预览图生成失败（不影响使用）: %s", e)
 
-    def get_layout_preview(self, template_id: str, layout_id: str) -> Path:
+    def get_layout_preview(self, template_id: str, layout_id: str, user: User) -> Path:
+        self._get_visible_template(template_id, user)
         p = self._layout_preview_path(template_id, layout_id)
         if not p.exists():
             raise NotFoundError("预览图不存在")
         return p
 
     def template_detail(self, template_id: str, user: User) -> dict:
-        t = self.templates.get(template_id)
-        if not t:
-            raise NotFoundError("模板不存在")
+        t = self._get_visible_template(template_id, user)
         d = self.template_dto(t, user.id)
         library = []
         for lay in (t.layout_library or []):
             item = dict(lay)
             item.pop("element_schema", None)  # 结构 schema 不给前端，太大
+            item["applicable_types"] = ppt_engine.layout_applicable_slide_types(
+                str(item.get("detected_type") or "content"))
             if item.get("preview"):
                 item["preview_url"] = f"/api/v1/ppt/templates/{t.id}/layout-preview/{item['id']}"
             library.append(item)
@@ -556,9 +649,7 @@ class PPTService:
 
     def copy_template(self, template_id: str, user: User) -> dict:
         """复制模板（官方模板复制为个人模板，可在我的模板中编辑）。"""
-        t = self.templates.get(template_id)
-        if not t:
-            raise NotFoundError("模板不存在")
+        t = self._get_visible_template(template_id, user)
         nt = self.templates.add(PPTTemplate(
             name=t.name + "（副本）", category=t.category, description=t.description,
             is_official=False, created_by=user.id, colors=dict(t.colors or {}),
@@ -613,16 +704,32 @@ class PPTService:
         ext = os.path.splitext(file.filename or "")[1].lower()
         if ext not in [".jpg", ".jpeg", ".png", ".webp", ".gif"]:
             raise AppError(400, "仅支持图片文件")
+        data = await file.read(20 * 1024 * 1024 + 1)
+        if not data or len(data) > 20 * 1024 * 1024:
+            raise AppError(400, "图片为空或超过 20MB")
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(data)) as image:
+                image.verify()
+            with Image.open(io.BytesIO(data)) as image:
+                width, height = image.size
+            if width < 32 or height < 32 or width > 12000 or height > 12000 \
+                    or width * height > 40_000_000:
+                raise ValueError("图片尺寸不适合演示文稿")
+        except Exception as exc:
+            logger.info("PPT 素材图片校验未通过：%s", type(exc).__name__)
+            raise AppError(400, "文件不是有效图片，或图片尺寸不适合演示文稿")
         fname = f"{uuid.uuid4().hex}{ext}"
         path = self.ppt_dir / "materials" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = await file.read()
         path.write_bytes(data)
         m = self.materials.add(PPTMaterial(
             user_id=user.id, name=name, caption=caption,
             file_path=str(path), file_size=len(data),
+            width=width, height=height,
             mime_type=file.content_type or ""))
-        return {"id": m.id, "message": "素材已上传"}
+        return {"id": m.id, "width": width, "height": height,
+                "message": "素材已上传"}
 
     def update_material(self, mid: str, name: str, caption: str, user: User) -> dict:
         m = self.materials.get_for_user(mid, user.id)
@@ -647,9 +754,27 @@ class PPTService:
             raise NotFoundError("文件不存在")
         return Path(m.file_path), m.mime_type or "image/jpeg"
 
-    def _user_images(self, user_id: str) -> List[Dict]:
-        return [{"name": m.name, "caption": m.caption, "file_path": m.file_path}
-                for m in self.materials.list_by_user(user_id)]
+    def _user_images(self, user_id: str,
+                     material_ids: Optional[List[str]] = None,
+                     strict: bool = True) -> List[Dict]:
+        if material_ids is None:
+            rows = self.materials.list_by_user(user_id)
+        else:
+            available = {material.id: material
+                         for material in self.materials.list_by_user(user_id)}
+            rows = []
+            for material_id in dict.fromkeys(material_ids):
+                material = available.get(material_id)
+                if material is None:
+                    if strict:
+                        raise NotFoundError("图片素材不存在")
+                    logger.info("PPT 已选图片素材不可用，渲染时跳过：material_id=%s",
+                                material_id)
+                    continue
+                rows.append(material)
+        return [{"id": m.id, "name": m.name, "caption": m.caption,
+                 "file_path": m.file_path, "width": m.width, "height": m.height}
+                for m in rows]
 
     # ================= 文档（我的PPT） =================
     @staticmethod
@@ -660,6 +785,7 @@ class PPTService:
             "status": d.status, "is_favorite": bool(d.is_favorite),
             "template_id": d.template_id, "template_name": template_name,
             "theme_id": d.theme_id, "slide_count": len(slides),
+            "has_drawio": any((s.get("blocks") or {}).get("drawio_xml") for s in slides),
             "created_at": d.created_at.strftime("%Y-%m-%d %H:%M") if d.created_at else "",
             "updated_at": d.updated_at.strftime("%Y-%m-%d %H:%M") if d.updated_at else "",
         }
@@ -714,8 +840,8 @@ class PPTService:
             changed = True
         if "template_id" in body.model_fields_set:
             if body.template_id:
-                t = self.templates.get(body.template_id)
-                if t and t.id != d.template_id:
+                t = self._get_visible_template(body.template_id, user)
+                if t.id != d.template_id:
                     d.template_id = t.id
                     changed = True
             elif d.template_id is not None:
@@ -846,7 +972,10 @@ class PPTService:
                 data = Path(d.file_path).read_bytes()
             else:
                 template, trow = self._resolve_template(d.template_id, d.theme_id or "")
-                outline = ppt_engine.resolve_slide_images(d.outline, self._user_images(user.id))
+                selected_ids = (d.outline or {}).get("material_ids") \
+                    if "material_ids" in (d.outline or {}) else None
+                outline = ppt_engine.resolve_slide_images(
+                    d.outline, self._user_images(user.id, selected_ids, strict=False))
                 data = ppt_engine.render_pptx(outline, template,
                                               base_pptx=self._tpl_base_bytes(trow))
         except Exception as e:
@@ -903,6 +1032,37 @@ class PPTService:
         return {"pages": [f"/api/v1/ppt/preview/{d.id}/{n}" for n in names],
                 "count": len(names), "degraded": False, "reason": "",
                 "source": preview_source}
+
+    def visual_review_document(self, doc_id: str, user: User) -> dict:
+        """按当前草稿和模板真实渲染，再返回逐页视觉风险。"""
+        document = self._get_doc_checked(doc_id, user)
+        if not document.outline:
+            raise NotFoundError("文档不存在或内容为空")
+        outline = self.sanitize_outline(
+            dict(document.outline),
+            target_count=len((document.outline or {}).get("slides") or []) or None,
+            ensure_toc=False,
+        )
+        selected_ids = outline.get("material_ids")
+        outline = ppt_engine.resolve_slide_images(
+            outline, self._user_images(user.id, selected_ids, strict=False))
+        template, template_row = self._resolve_template(
+            document.template_id, document.theme_id or "")
+        warnings: List[str] = []
+        data = ppt_engine.render_pptx(
+            outline, template, base_pptx=self._tpl_base_bytes(template_row),
+            warnings=warnings)
+        result = self.review_pptx_visuals(data)
+        for warning in warnings:
+            result["issues"].append({
+                "page": 0, "code": "render_fallback", "severity": "warning",
+                "message": warning,
+            })
+        if result["issues"]:
+            result["status"] = "review"
+        result["summary"] = ("视觉复检通过" if result["status"] == "passed" else
+                             f"发现 {len(result['issues'])} 项需要确认的排版问题")
+        return result
 
     def preview_image(self, doc_id: str, name: str, user: User) -> Path:
         """预览图下载（仅本人文档的预览目录，防目录穿越）。"""
@@ -1245,6 +1405,7 @@ class PPTService:
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
                     material_names: Optional[List[str]] = None,
+                    material_ids: Optional[List[str]] = None,
                     kb_ids: Optional[List[str]] = None,
                     enforce_exact_count: bool = True) -> dict:
         content, material_names = self._apply_kb_material(
@@ -1256,7 +1417,7 @@ class PPTService:
                                 "请换个主题描述，或检查库内是否有已发布文档")
         target_count = self._effective_slide_count(
             slide_count, enforce_exact_count, content)
-        images = self._user_images(user.id)
+        images = self._user_images(user.id, material_ids)
         try:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
@@ -1265,6 +1426,7 @@ class PPTService:
                 # 用户未填页数时也由服务端先算出权威页数，再执行同一硬约束。
                 enforce_exact_count=True)
             outline = self._audit_and_repair_outline(outline, target_count, content)
+            outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
             raise AIServiceError(str(e))
         d = self.documents.add(PPTDocument(
@@ -1283,6 +1445,7 @@ class PPTService:
         return self._do_outline(user, body.source_type, body.topic, body.content,
                                 body.slide_count, body.audience, body.scene,
                                 material_names=body.material_names,
+                                material_ids=body.material_ids,
                                 kb_ids=getattr(body, "kb_ids", None),
                                 enforce_exact_count=explicit_count)
 
@@ -1312,7 +1475,7 @@ class PPTService:
             return
         yield _sse({"type": "stage", "text": "正在梳理汇报结构…"})
         try:
-            images = self._user_images(user.id)
+            images = self._user_images(user.id, body.material_ids)
             explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
             target_count = self._effective_slide_count(
                 body.slide_count, explicit_count, content)
@@ -1323,6 +1486,7 @@ class PPTService:
                 enforce_exact_count=True)
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
             outline = self._audit_and_repair_outline(outline, target_count, content)
+            outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
             yield _sse({"type": "error", "message": str(e)})
             return
@@ -1490,7 +1654,9 @@ class PPTService:
             target_count=len((outline or {}).get("slides") or []) or None,
             ensure_toc=False,
         )
-        clean = ppt_engine.resolve_slide_images(clean, self._user_images(user_id))
+        selected_ids = clean.get("material_ids")
+        clean = ppt_engine.resolve_slide_images(
+            clean, self._user_images(user_id, selected_ids, strict=False))
         base = self._tpl_base_bytes(trow)
         logger.info(
             "[PPT] 严格套模板渲染：doc_id=%s template=%s learned_base=%s pages=%d",
@@ -1518,8 +1684,13 @@ class PPTService:
             outline, target_count=target, ensure_toc=False)
         logger.info("[PPT] 渲染前规则净化完成：doc_id=%s pages=%d",
                     d.id, len(outline.get("slides") or []))
-        template, trow = self._resolve_template(template_id or d.template_id, d.theme_id or "")
-        outline = ppt_engine.resolve_slide_images(outline, self._user_images(user.id))
+        selected_template_id = template_id or d.template_id
+        if selected_template_id:
+            self._get_visible_template(selected_template_id, user)
+        template, trow = self._resolve_template(selected_template_id, d.theme_id or "")
+        selected_ids = outline.get("material_ids")
+        outline = ppt_engine.resolve_slide_images(
+            outline, self._user_images(user.id, selected_ids, strict=False))
         data, renderer = self._render_pptx_bytes(
             d, outline, template, self._tpl_base_bytes(trow), warnings=warnings)
         fname = f"{uuid.uuid4().hex}.pptx"
@@ -1568,7 +1739,20 @@ class PPTService:
             raise NotFoundError("文件不存在，请先生成或导出")
         return Path(d.file_path), f"{d.title or 'PPT'}.pptx"
 
+    def download_drawio_source(self, doc_id: str, user: User) -> Tuple[bytes, str]:
+        """Return the editable diagram pages stored in this user's current outline."""
+        from app.application.ppt.drawio_native import build_drawio_source
+
+        d = self._get_doc_checked(doc_id, user)
+        try:
+            source = build_drawio_source(d.outline or {})
+        except ValueError as exc:
+            raise AppError(400, str(exc)) from exc
+        return source, f"{d.title or 'PPT'}-图示.drawio"
+
     def create_blank(self, body, user: User) -> dict:
+        if body.template_id:
+            self._get_visible_template(body.template_id, user)
         outline = ppt_engine.normalize_outline({
             "title": body.title, "subtitle": body.subtitle,
             "slides": [
@@ -1590,21 +1774,38 @@ class PPTService:
         except RuntimeError as e:
             raise AIServiceError(str(e))
 
-    def ai_visual(self, body) -> dict:
+    def ai_visual(self, body, user: User) -> dict:
+        if body.kind not in {"chart", "timeline", "process", "data",
+                             "relationship", "organization", "architecture"}:
+            raise AppError(400, "不支持的可视化类型")
         try:
             warnings = []
-            if body.kind == "process":
+            diagram_kinds = {"process", "relationship", "organization", "architecture"}
+            if body.kind in diagram_kinds:
                 from app.application.ppt.drawio_service import DrawioService
+                if body.template_id:
+                    self._get_visible_template(body.template_id, user)
+                style, _ = self._resolve_template(body.template_id)
                 drawio = DrawioService()
                 if drawio.enabled:
                     diagram = drawio.generate_native_diagram(
-                        self._ppt_assistant(), body.slide, body.instruction)
+                        self._ppt_assistant(), body.slide, body.instruction,
+                        kind=body.kind, style=style)
                     if diagram is not None:
                         return {"slide": diagram}
                     logger.warning("Draw.io MCP 暂不可用，回退本地流程图生成")
-                    warnings.append("图示增强服务暂不可用，已自动使用本地流程图生成。")
+                    if body.kind == "process":
+                        warnings.append("图示增强服务暂不可用，已自动使用本地流程图生成。")
+                    else:
+                        warnings.append(
+                            "图示增强服务暂不可用，已用基础流程版式展示本页内容；"
+                            "连线关系与层级可能未表达，请核对。")
+            fallback_kind = (
+                "process" if body.kind in {"relationship", "organization", "architecture"}
+                else body.kind
+            )
             result: Dict[str, Any] = {"slide": ppt_engine.ai_generate_visual(
-                self._ppt_assistant(), body.kind, body.slide, body.instruction)}
+                self._ppt_assistant(), fallback_kind, body.slide, body.instruction)}
             if warnings:
                 result["warnings"] = warnings
             return result

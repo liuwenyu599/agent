@@ -492,22 +492,30 @@ def outline_from_pptx(data: bytes) -> Dict:
 
 # ================= PPTX 构建 =================
 
-def _try_drawio_render(slide, data: Dict, box: tuple, font: str, warnings: list) -> bool:
+def _try_drawio_render(slide, data: Dict, box: tuple, font: str, warnings: list,
+                       colors: Optional[Dict] = None) -> bool:
     """Roll back a failed diagram so the page can safely use its basic layout."""
     original_shapes = {shape._element for shape in slide.shapes}
     try:
         from app.application.ppt.drawio_native import render_diagram
-        render_diagram(slide, data["blocks"]["drawio_xml"], *box, font)
+        render_diagram(slide, data["blocks"]["drawio_xml"], *box, font, colors)
         return True
     except Exception as exc:
         for shape in list(slide.shapes):
             if shape._element not in original_shapes:
                 shape._element.getparent().remove(shape._element)
-        message = f"页面「{data.get('title') or '流程图'}」图示渲染失败，已使用基础流程版式，请核对流程内容。"
+        blocks = data.get("blocks") or {}
+        kind = blocks.get("drawio_kind") or "process"
+        is_process = kind == "process"
+        layout = "基础流程版式" if is_process else "基础文字版式"
+        check = "流程内容" if is_process else "图示节点与连线关系"
+        message = f"页面「{data.get('title') or '图示'}」图示渲染失败，已使用{layout}，请核对{check}。"
         warnings.append(message)
         logger.warning("PPT 图示回退基础版式: %s", type(exc).__name__)
-        steps = (data.get("blocks") or {}).get("process") or data.get("points") or []
-        slide.notes_slide.notes_text_frame.text = message + "\n原流程内容：\n" + "\n".join(map(str, steps))
+        items = (blocks.get("process") if is_process else
+                 (blocks.get("diagram_labels") or blocks.get("process"))) or data.get("points") or []
+        label = "原流程内容" if is_process else "原图示节点"
+        slide.notes_slide.notes_text_frame.text = message + f"\n{label}：\n" + "\n".join(map(str, items))
         return False
 
 
@@ -892,20 +900,24 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         page_header(slide, s["title"])
         diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
         if diagram_xml:
-            if _try_drawio_render(slide, s, (lx(.06), ly(.23), lx(.88), ly(.64)), FONT, warnings):
+            if _try_drawio_render(slide, s, (lx(.06), ly(.23), lx(.88), ly(.64)), FONT, warnings, colors):
                 return slide
             # A fallback must retain every supplied step, rather than silently
             # truncating a richer diagram to the five-chevron layout below.
-            items = (s.get("blocks") or {}).get("process") or s.get("points") or []
+            blocks = s.get("blocks") or {}
+            is_process = (blocks.get("drawio_kind") or "process") == "process"
+            items = (blocks.get("process") if is_process else
+                     (blocks.get("diagram_labels") or blocks.get("process"))) or s.get("points") or []
             rows = max(1, (len(items) + 1) // 2)
             for index, value in enumerate(items):
                 column, row = divmod(index, rows)
                 text(slide, lx(.06 + column * .45), ly(.24 + row * .64 / rows),
-                     lx(.42), ly(.64 / rows), f"{index + 1}. {value}",
+                     lx(.42), ly(.64 / rows),
+                     f"{index + 1}. {value}" if is_process else str(value),
                      14 if rows <= 8 else 11, False, DARK)
             if not items:
                 text(slide, lx(.06), ly(.3), lx(.88), ly(.15),
-                     "该页图示暂无法显示，请核对原流程内容。", 16, False, GRAY)
+                     "该页图示暂无法显示，请核对原内容。", 16, False, GRAY)
             return slide
         steps = ((s.get("blocks") or {}).get("process") or s["points"])[:5]
         n = max(len(steps), 1)
@@ -1254,6 +1266,13 @@ LEARNED_FALLBACK = {
 }
 
 
+def layout_applicable_slide_types(layout_type: str) -> List[str]:
+    """Return outline slide types for which a learned layout is a valid choice."""
+    return [slide_type for slide_type in LAYOUT_TYPE_LABELS
+            if layout_type == slide_type
+            or layout_type in LEARNED_FALLBACK.get(slide_type, ["content"])]
+
+
 def _shape_kind(shape) -> str:
     """形状分类：text/picture/table/chart/shape。"""
     try:
@@ -1542,6 +1561,11 @@ def _pick_layout(layouts: list, slide_type: str, used: Dict,
     return layouts[0]
 
 
+def preferred_layout_id(slide: Dict, skeleton: Dict) -> str:
+    """单页人工选择优先，其次采用模板为该页型配置的默认版式。"""
+    return str(slide.get("layout") or skeleton.get(slide.get("type", "content"), "") or "")
+
+
 def _clone_slide(prs, src_slide):
     """在同一演示文稿内克隆一页：深拷贝所有形状，并迁移图片关系。"""
     import copy
@@ -1751,7 +1775,7 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     skeleton = template.get("layouts") or {}
     for s in outline.get("slides", []):
         slide_type = s.get("type", "content")
-        preferred = skeleton.get(slide_type, "")
+        preferred = preferred_layout_id(s, skeleton)
         # 内置模板 layouts 值是 band_bottom / bar_title 等渲染样式名；
         # 只有值确实命中学习版式 id 时才视为“骨架绑定”，完全向后兼容。
         lay = _pick_layout(layout_library, slide_type, used, preferred)
@@ -1789,7 +1813,7 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
             _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs)
             if diagram_xml:
                 if not _try_drawio_render(ns, s, (int(sw * .06), int(sh * .23),
-                                                int(sw * .88), int(sh * .64)), font, warnings):
+                                                int(sw * .88), int(sh * .64)), font, warnings, colors):
                     # Blank text regions stop being classified as text. Restore the
                     # original layout before filling it with the fallback content.
                     for shape in list(ns.shapes):
@@ -1798,8 +1822,12 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                         ns.shapes._spTree.insert_element_before(element, "p:extLst")
                     # The learned layout consumes the original structured process/text blocks;
                     # only the unusable XML is excluded. Other pages retain their own layouts.
+                    is_process = (s["blocks"].get("drawio_kind") or "process") == "process"
                     fallback = {**s, "blocks": {key: value for key, value in s["blocks"].items()
-                                              if key != "drawio_xml"}}
+                                              if key != "drawio_xml" and (is_process or key != "process")}}
+                    if not is_process:
+                        fallback["points"] = (s["blocks"].get("diagram_labels") or
+                                              s["blocks"].get("process") or s.get("points") or [])
                     _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs)
         except Exception as e:
             if (s.get("blocks") or {}).get("drawio_xml"):

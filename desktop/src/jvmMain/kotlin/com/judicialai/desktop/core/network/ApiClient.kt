@@ -406,11 +406,13 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
     suspend fun upload(
         path: String, fileField: String, files: List<File>,
         params: Map<String, String> = emptyMap(), timeoutMs: Long = 300_000,
+        formFields: Map<String, String> = emptyMap(),
     ): ApiResult<JsonElement> {
         val url = configProvider().apiBase + path
         return try {
             client(timeoutMs).use { c ->
                 val r = c.submitFormWithBinaryData(url, formData {
+                    formFields.forEach { (key, value) -> append(key, value) }
                     for (f in files) {
                         append(fileField, f.readBytes(), Headers.build {
                             append(HttpHeaders.ContentDisposition,
@@ -419,7 +421,7 @@ class ApiClient(private val configProvider: () -> ServerConfig) {
                     }
                 }) {
                     auth()
-                    params.forEach { (k, v) -> parameter(k, v) }
+                    params.forEach { (key, value) -> parameter(key, value) }
                 }
                 val text = r.body<String>()
                 if (r.status.isSuccess()) ApiResult.Ok(

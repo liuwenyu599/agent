@@ -82,9 +82,57 @@ def parse_diagram(xml: str) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int,
-                   font: str = DEFAULT_CJK_FONT) -> None:
+def validate_generated_layout(xml: str, canvas_width: int = 1000,
+                              canvas_height: int = 550) -> dict:
+    """Check the editable diagram's page bounds and material node overlap."""
     diagram = parse_diagram(xml)
+    nodes = diagram["nodes"]
+    if len(nodes) > 12:
+        raise ValueError("AI 图示最多包含 12 个节点")
+    for node in nodes:
+        if len(node["label"]) > 20 or node["label"].count("\n") > 3:
+            raise ValueError("图示节点文字过长，可能溢出")
+        x, y, width, height = node["box"]
+        if x < 0 or y < 0 or x + width > canvas_width or y + height > canvas_height:
+            raise ValueError("图示节点超出页面画布")
+    for index, first in enumerate(nodes):
+        ax, ay, aw, ah = first["box"]
+        for second in nodes[index + 1:]:
+            bx, by, bw, bh = second["box"]
+            shared = max(0, min(ax + aw, bx + bw) - max(ax, bx)) * max(
+                0, min(ay + ah, by + bh) - max(ay, by))
+            if shared > 0.1 * min(aw * ah, bw * bh):
+                raise ValueError("图示节点明显重叠")
+    return diagram
+
+
+def build_drawio_source(outline: dict) -> bytes:
+    """Export validated diagram pages as one editable, uncompressed .drawio file."""
+    source = ET.Element("mxfile", {"host": "app.diagrams.net"})
+    for index, slide in enumerate((outline or {}).get("slides") or [], 1):
+        xml = ((slide.get("blocks") or {}).get("drawio_xml"))
+        if not xml:
+            continue
+        parse_diagram(xml)
+        model = ET.fromstring(xml)
+        if model.tag != "mxGraphModel":
+            model = next(model.iter("mxGraphModel"))
+        page = ET.SubElement(source, "diagram", {
+            "id": f"page-{index}", "name": str(slide.get("title") or f"第{index}页")[:60],
+        })
+        page.append(model)
+    if not len(source):
+        raise ValueError("这份演示文稿没有可下载的 Draw.io 图示")
+    return ET.tostring(source, encoding="utf-8", xml_declaration=True)
+
+
+def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int,
+                   font: str = DEFAULT_CJK_FONT, colors: dict | None = None) -> None:
+    diagram = parse_diagram(xml)
+    palette = colors or {}
+    fill_default = palette.get("light", "E8F0FA")
+    line_default = palette.get("primary", "35649C")
+    text_default = palette.get("dark", "15365D")
     nodes = diagram["nodes"]
     x0 = min(node["box"][0] for node in nodes)
     y0 = min(node["box"][1] for node in nodes)
@@ -107,7 +155,7 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
             for run in paragraph.runs:
                 run.font.name = font
                 run.font.size = Pt(14)
-                run.font.color.rgb = color(style.get("fontColor"), "15365D")
+                run.font.color.rgb = color(style.get("fontColor"), text_default)
 
     rendered = {}
     for node in nodes:
@@ -126,8 +174,8 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
                 shape.fill.background()
             else:
                 shape.fill.solid()
-                shape.fill.fore_color.rgb = color(style.get("fillColor"), "E8F0FA")
-            shape.line.color.rgb = color(style.get("strokeColor"), "35649C")
+                shape.fill.fore_color.rgb = color(style.get("fillColor"), fill_default)
+            shape.line.color.rgb = color(style.get("strokeColor"), line_default)
         put_text(shape, node["label"], style)
         rendered[node["id"]] = shape
     for edge in diagram["edges"]:
@@ -138,7 +186,7 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 1, 1)
         connector.begin_connect(source, start_site)
         connector.end_connect(target, end_site)
-        connector.line.color.rgb = color(edge["style"].get("strokeColor"), "35649C")
+        connector.line.color.rgb = color(edge["style"].get("strokeColor"), line_default)
         if edge["style"].get("endArrow") != "none":
             arrow = OxmlElement("a:tailEnd")
             arrow.set("type", "triangle")

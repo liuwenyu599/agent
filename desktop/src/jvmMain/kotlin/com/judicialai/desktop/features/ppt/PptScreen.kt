@@ -114,7 +114,9 @@ fun PptScreen() {
     val generating = AppState.pptOutlineGenerating
     val pendingJobId = AppState.pendingPptJobId
 
-    LaunchedEffect(Unit) { vm.loadTemplates(); vm.loadDocuments(); vm.loadKbs() }
+    LaunchedEffect(Unit) {
+        vm.loadTemplates(); vm.loadDocuments(); vm.loadKbs(); vm.loadLibraryMaterials()
+    }
     LaunchedEffect(pendingDocId) {
         if (pendingDocId != null && vm.docId == null) vm.openDocument(pendingDocId)
     }
@@ -290,7 +292,7 @@ private fun PptEntryPane(
     onOpenDocuments: () -> Unit,
     onOpenTemplates: () -> Unit,
 ) {
-    /** 展开的工具面板：kb / page / meta（同一时间最多展开一个） */
+    /** 展开的工具面板：kb / image / page / meta（同一时间最多展开一个） */
     var openPanel by remember { mutableStateOf<String?>(null) }
 
     Column(
@@ -349,6 +351,7 @@ private fun PptEntryPane(
             // 工具面板（点工具栏按钮展开/收起）
             when (openPanel) {
                 "kb" -> KbPanel(vm)
+                "image" -> MaterialLibraryPanel(vm)
                 "page" -> PagePanel(vm)
                 "meta" -> MetaPanel(vm)
             }
@@ -369,6 +372,11 @@ private fun PptEntryPane(
                     if (vm.selectedKbIds.isEmpty()) "▣ 知识库" else "▣ 知识库 · ${vm.selectedKbIds.size}",
                     active = openPanel == "kb",
                 ) { openPanel = if (openPanel == "kb") null else "kb" }
+                ComposerTool(
+                    if (vm.selectedMaterialIds.isEmpty()) "▧ 图片素材"
+                    else "▧ 图片 · ${vm.selectedMaterialIds.size}",
+                    active = openPanel == "image",
+                ) { openPanel = if (openPanel == "image") null else "image" }
                 ComposerTool(
                     if (vm.slideCount.isNotBlank()) "▤ ${vm.slideCount} 页" else "▤ 页数",
                     active = openPanel == "page",
@@ -485,6 +493,61 @@ private fun PptEntryPane(
             )
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun MaterialLibraryPanel(vm: PptViewModel) {
+    Column(
+        Modifier.fillMaxWidth().background(Color(0xFFF7F9FC))
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("图片素材库", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+                Text("只会把本次勾选的图片交给 AI 配图", fontSize = 11.sp, color = SecondaryText)
+            }
+            TextButton(enabled = !vm.materialLibraryBusy, onClick = {
+                pickFiles("选择图片素材", multi = false).firstOrNull()
+                    ?.let { vm.uploadLibraryMaterial(it) }
+            }) { Text(if (vm.materialLibraryBusy) "处理中…" else "＋ 上传图片", fontSize = 12.sp) }
+        }
+        if (vm.libraryMaterials.isEmpty()) {
+            Text("暂无图片素材。上传后可在不同 PPT 中重复使用。",
+                fontSize = 11.5.sp, color = Muted, modifier = Modifier.padding(vertical = 12.dp))
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 220.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(vm.libraryMaterials, key = { it.id }) { material ->
+                    val selected = material.id in vm.selectedMaterialIds
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                            .background(if (selected) Primary.copy(alpha = 0.10f) else Color.White)
+                            .border(1.dp, if (selected) Primary else Line, RoundedCornerShape(8.dp))
+                            .clickable { vm.toggleLibraryMaterial(material.id) }
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val image = rememberServerImage(AppState.api, material.url)
+                        Box(Modifier.width(72.dp).height(42.dp).clip(RoundedCornerShape(5.dp))
+                            .background(Line.copy(alpha = 0.5f))) {
+                            if (image != null) Image(image, material.name,
+                                Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(material.name, fontSize = 12.sp, color = Ink, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            if (material.caption.isNotBlank()) Text(material.caption,
+                                fontSize = 10.5.sp, color = SecondaryText, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(if (selected) "✓ 已选" else "选择", fontSize = 11.sp,
+                            color = if (selected) Primary else SecondaryText)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -929,6 +992,15 @@ private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
                             vm.download(id, target)
                         }) { Text(if (vm.downloadingId == id) "下载中…" else "下载") }
                         Spacer(Modifier.width(4.dp))
+                        if (d["has_drawio"].str() == "true") {
+                            OutlinedButton(enabled = vm.downloadingId != id, onClick = {
+                                val target = pickSaveFile(
+                                    d["title"].str().ifBlank { "演示文稿" } + "-图示.drawio")
+                                    ?: return@OutlinedButton
+                                vm.downloadDrawio(id, target)
+                            }) { Text("图示源文件") }
+                            Spacer(Modifier.width(4.dp))
+                        }
                         IconButton(onClick = { pendingDelete = d }) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colors.error)
                         }

@@ -85,11 +85,15 @@ class PptRepository(private val api: ApiClient) {
         sourceType: String, topic: String, content: String,
         slideCount: Int?, audience: String, scene: String,
         kbIds: List<String> = emptyList(),
+        materialNames: List<String> = emptyList(),
+        materialIds: List<String> = emptyList(),
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
             "audience" to audience, "scene" to scene,
             "kb_ids" to kbIds,
+            "material_names" to materialNames,
+            "material_ids" to materialIds,
         ).apply {
             slideCount?.let { put("slide_count", it) }
         }
@@ -117,6 +121,16 @@ class PptRepository(private val api: ApiClient) {
     suspend fun analyzeMaterials(files: List<File>) =
         api.upload(Endpoints.Ppt.MATERIALS_ANALYZE, "files", files, timeoutMs = 300_000)
 
+    suspend fun libraryMaterials(): ApiResult<List<JsonObject>> =
+        when (val result = api.get(Endpoints.Ppt.MATERIALS)) {
+            is ApiResult.Ok -> ApiResult.Ok(result.data.items())
+            is ApiResult.Err -> result
+        }
+
+    suspend fun uploadLibraryMaterial(file: File) =
+        api.upload(Endpoints.Ppt.MATERIALS, "file", listOf(file),
+            formFields = mapOf("name" to file.nameWithoutExtension, "caption" to ""))
+
     /** 上传已有 .pptx 继续修改 → {doc_id, outline, message} */
     suspend fun importPptx(file: File) =
         api.upload(Endpoints.Ppt.DOCUMENT_IMPORT, "file", listOf(file), timeoutMs = 300_000)
@@ -132,11 +146,20 @@ class PptRepository(private val api: ApiClient) {
     suspend fun preview(id: String) =
         api.post(Endpoints.Ppt.documentPreview(id), emptyMap<String, Any?>(), timeoutMs = 300_000)
 
+    suspend fun visualReview(id: String) =
+        api.post(Endpoints.Ppt.documentVisualReview(id), emptyMap<String, Any?>(), timeoutMs = 300_000)
+
     /** 单页局部修改：action = rewrite / expand / condense / custom */
     suspend fun aiSlideAction(action: String, slide: JsonObject, instruction: String) =
         api.post(Endpoints.Ppt.AI_SLIDE_ACTION,
             mapOf("action" to action, "slide" to slide, "instruction" to instruction),
             timeoutMs = 180_000)
+
+    suspend fun aiVisual(kind: String, slide: JsonObject, instruction: String,
+                         templateId: String?) =
+        api.post(Endpoints.Ppt.AI_VISUAL,
+            mapOf("kind" to kind, "slide" to slide, "instruction" to instruction,
+                "template_id" to templateId), timeoutMs = 180_000)
 
     /** 结构调整：action = add / split / merge */
     suspend fun aiStructure(action: String, slides: List<JsonObject>, index: Int) =
@@ -174,6 +197,9 @@ class PptRepository(private val api: ApiClient) {
      */
     suspend fun downloadDocument(id: String, target: File, timeoutMs: Long = 300_000) =
         api.downloadPost(Endpoints.Ppt.documentExport(id), emptyMap(), target, timeoutMs)
+
+    suspend fun downloadDrawio(id: String, target: File) =
+        api.downloadGet(Endpoints.Ppt.documentDrawio(id), target)
 
     suspend fun deleteDocument(id: String) = api.del(Endpoints.Ppt.documentDelete(id))
 

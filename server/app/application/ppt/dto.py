@@ -43,6 +43,9 @@ class OutlineIn(BaseModel):
     # 本次参与生成的材料文件名清单（材料分析步骤返回），
     # 用于要求模型为每页标注 sources 内容依据（provenance）
     material_names: List[str] = Field(default_factory=list)
+    # 本次允许 AI 使用的个人图片素材。None 兼容旧客户端（使用全部素材），
+    # 空数组表示用户明确不使用素材库图片。
+    material_ids: Optional[List[str]] = Field(default=None, max_length=30)
     # 结合知识库生成：所选知识库 id 列表。服务端按主题做 RAG 语义检索，
     # 命中片段作为大纲内容依据；权限范围由服务端解析（与可访问库取交集），
     # 客户端传值无法扩大检索范围
@@ -82,9 +85,10 @@ class SlideActionIn(BaseModel):
 
 
 class VisualIn(BaseModel):
-    kind: str                      # chart / timeline / process / data
+    kind: str                      # chart / timeline / process / data / relationship / organization / architecture
     slide: dict
     instruction: str = ""
+    template_id: Optional[str] = None
 
 
 class StructureIn(BaseModel):

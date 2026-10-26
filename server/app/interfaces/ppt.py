@@ -4,9 +4,10 @@ import os
 import re
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.application.ppt import agent_job
@@ -120,8 +121,9 @@ async def upload_template(file: UploadFile = File(...), name: str = Form(""),
 
 @router.get("/templates/{template_id}/layout-preview/{layout_id}")
 def layout_preview(template_id: str, layout_id: str,
+                   user: User = Depends(get_current_user),
                    svc: PPTService = Depends(get_ppt_service)):
-    p = svc.get_layout_preview(template_id, layout_id)
+    p = svc.get_layout_preview(template_id, layout_id, user)
     return FileResponse(str(p), media_type="image/png")
 
 
@@ -234,6 +236,14 @@ def preview_document(doc_id: str,
                      svc: PPTService = Depends(get_ppt_service)):
     """把当前草稿渲染成逐页 PNG 预览（LibreOffice），供工作台中栏真实版式显示。"""
     return svc.preview_document(doc_id, user)
+
+
+@router.post("/documents/{doc_id}/visual-review")
+def visual_review_document(doc_id: str,
+                           user: User = Depends(get_current_user),
+                           svc: PPTService = Depends(get_ppt_service)):
+    """按当前模板真实渲染并检查越界、重叠、字号和文字密度。"""
+    return svc.visual_review_document(doc_id, user)
 
 
 @router.post("/documents/{doc_id}/copy")
@@ -362,6 +372,14 @@ def download_document(doc_id: str, user: User = Depends(get_current_user),
     return FileResponse(str(path), media_type=_PPTX_MIME, filename=download_name)
 
 
+@router.get("/documents/{doc_id}/drawio")
+def download_drawio_source(doc_id: str, user: User = Depends(get_current_user),
+                           svc: PPTService = Depends(get_ppt_service)):
+    source, name = svc.download_drawio_source(doc_id, user)
+    return Response(source, media_type="application/vnd.jgraph.mxfile",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name, safe='')}"})
+
+
 @router.post("/blank")
 def create_blank(body: BlankIn, user: User = Depends(get_current_user),
                svc: PPTService = Depends(get_ppt_service)):
@@ -381,7 +399,7 @@ def ai_slide_action(body: SlideActionIn,
 def ai_visual(body: VisualIn,
               user: User = Depends(get_current_user),
               svc: PPTService = Depends(get_ppt_service)):
-    return svc.ai_visual(body)
+    return svc.ai_visual(body, user)
 
 
 @router.post("/ai/structure")

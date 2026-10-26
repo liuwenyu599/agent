@@ -87,26 +87,44 @@ class DrawioService:
         except DrawioMcpError:
             return False
 
-    def generate_native_diagram(self, assistant, slide: dict, instruction: str = "") -> Optional[dict]:
+    def generate_native_diagram(self, assistant, slide: dict, instruction: str = "",
+                                kind: str = "process", style: Optional[dict] = None) -> Optional[dict]:
         """Return None on MCP outage so the caller can use the local visual generator.
 
         Invalid model output still raises: infrastructure fallback must not bypass XML checks.
         """
         import json
-        from app.application.ppt.drawio_native import parse_diagram
+        import re
+        from app.application.ppt.drawio_native import validate_generated_layout
         from app.core.llm_json import loads_lenient
 
         reference = self.get_reference()
         if not reference:
             return None
+        diagram_names = {
+            "process": "工作流程图", "relationship": "关系图",
+            "organization": "组织架构图", "architecture": "系统架构图",
+        }
+        if kind not in diagram_names:
+            raise ValueError("不支持的图示类型")
+        style = style or {}
+        colors = style.get("colors") or {}
+        primary = str(colors.get("primary", "17365D")).lstrip("#")
+        accent = str(colors.get("accent", "4A78AD")).lstrip("#")
+        primary = primary if re.fullmatch(r"[0-9a-fA-F]{6}", primary) else "17365D"
+        accent = accent if re.fullmatch(r"[0-9a-fA-F]{6}", accent) else "4A78AD"
+        font = str(style.get("font") or "思源黑体")[:40]
         prompt = (
-            "根据页面内容生成简洁的工作流程图。只输出 JSON 对象 {\"xml\": \"...\"}。"
+            f"根据页面内容生成简洁的{diagram_names[kind]}。只输出 JSON 对象 {{\"xml\": \"...\"}}。"
             "xml 必须是未压缩的单页 mxGraphModel，根节点 id=0、图层 id=1。"
             "所有节点 parent=1，使用绝对 mxGeometry 坐标，仅允许 rectangle、ellipse、"
             "rhombus、text；最多12个节点，每个标签不超过20字。"
             "连线 edge=1，source/target 指向已有节点，parent=1。"
             "禁止图片、图标、自定义 stencil、嵌套分组和外部资源。"
-            "页面坐标范围 0..1000 × 0..550，保持间距，使用蓝色系。"
+            "页面坐标范围 0..1000 × 0..550；主要内容放在 x=40..960、y=30..520 的安全区。"
+            "节点之间至少留20坐标单位，节点不得重叠；文字放进节点 value，不另叠文字框。"
+            f"模板主色 #{primary}、强调色 #{accent}、中文字体 {font}；"
+            "节点优先使用模板配色，留出足够的文字空间。"
             "事实和步骤只来自本页和用户要求，不虚构数字。\n"
             "【MCP 语法参考】\n" + reference[:5000]
             + "\n【本页】\n" + json.dumps(slide, ensure_ascii=False)[:4000]
@@ -118,14 +136,16 @@ class DrawioService:
                  {"role": "user", "content": prompt}], temperature=0.2, max_tokens=3000)
             result = loads_lenient(raw or "")
             xml = result.get("xml") if isinstance(result, dict) else None
-            diagram = parse_diagram(xml)
+            diagram = validate_generated_layout(xml)
         except Exception as exc:
             logger.warning("原生图示生成或验证失败: %s", type(exc).__name__)
             raise RuntimeError("AI 图示未通过结构检查，页面未修改，请重试") from exc
         updated = dict(slide)
         updated["type"] = "process"
+        labels = [node["label"] for node in diagram["nodes"] if node["label"]]
         updated["blocks"] = {
             "drawio_xml": xml,
-            "process": [node["label"] for node in diagram["nodes"] if node["label"]],
+            "drawio_kind": kind,
+            "process" if kind == "process" else "diagram_labels": labels,
         }
         return updated
