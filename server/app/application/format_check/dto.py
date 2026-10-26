@@ -1,5 +1,5 @@
 """格式校验 DTO。"""
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,7 @@ class RuleActiveRequest(BaseModel):
 class ContentUpdateRequest(BaseModel):
     """工作台中栏的人工正文修改：整篇段落文本，写回记录文件成为新基线。"""
     paragraphs: List[str]
+    formatting: Optional[Dict[str, dict]] = None
 
 
 class FixRequest(BaseModel):

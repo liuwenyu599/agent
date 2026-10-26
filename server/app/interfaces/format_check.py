@@ -94,7 +94,7 @@ def update_record_content(record_id: str, req: ContentUpdateRequest,
                           user: User = Depends(get_current_user),
                           svc: FormatCheckService = Depends(get_format_check_service)):
     """保存工作台中栏的人工正文修改：写回记录文件成为新基线，应用/解决状态重置。"""
-    return svc.update_record_content(record_id, req.paragraphs, user)
+    return svc.update_record_content(record_id, req.paragraphs, user, req.formatting)
 
 
 @router.post("/records/{record_id}/apply")

@@ -513,6 +513,37 @@ def test_manual_edit_rejects_empty_body(env):
     assert e.value.status_code == 400
 
 
+def test_manual_formatting_is_written_to_source_docx_and_recheckable(env):
+    db, svc, tmp = env
+    doc = _make_docx(tmp / "styled.docx")
+    res = _check(svc, doc)
+    original = Document(str(svc.record_file(res["id"])))
+    texts = [p.text for p in original.paragraphs]
+    svc.update_record_content(res["id"], texts, ADMIN, {
+        "1": {"font_name": "黑体", "font_size_pt": 18,
+              "bold": True, "alignment": "center"},
+    })
+    saved = Document(str(svc.record_file(res["id"])))
+    assert saved.paragraphs[1].runs[0].font.name == "黑体"
+    assert saved.paragraphs[1].runs[0].font.size.pt == 18
+    assert saved.paragraphs[1].runs[0].bold is True
+    assert saved.paragraphs[1].alignment == 1  # WD_ALIGN_PARAGRAPH.CENTER
+    assert svc.recheck(res["id"], ADMIN)["id"] == res["id"]
+
+
+def test_manual_inline_bold_is_exported_as_word_runs(env):
+    _db, svc, tmp = env
+    res = _check(svc, _make_docx(tmp / "inline-bold.docx"))
+    original = Document(str(svc.record_file(res["id"])))
+    texts = [p.text for p in original.paragraphs]
+    texts[1] = "请突出**重点事项**并核对。"
+    svc.update_record_content(res["id"], texts, ADMIN)
+    saved = Document(str(svc.record_file(res["id"])))
+    paragraph = saved.paragraphs[1]
+    assert paragraph.text == "请突出重点事项并核对。"
+    assert any(run.text == "重点事项" and run.bold for run in paragraph.runs)
+
+
 # ---------------- 规则管理（AI 生成 + 生效） ----------------
 
 class _CompileReq:

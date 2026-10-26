@@ -999,6 +999,8 @@ def extract_paragraph_properties(doc) -> List[Dict]:
             "indent_chars": _first_line_indent_chars(p),
             "is_heading": _paragraph_is_heading(p),
             "bold": (bool(run.bold) if run is not None and run.bold is not None else None),
+            "runs": [{"text": item.text, "bold": bool(item.bold)} for item in p.runs
+                     if item.text],
             "font_name": (_run_font_name(run) if run is not None else None),
             "font_pt": _effective_font_pt(p),
             "line_spacing": _paragraph_line_spacing(p),

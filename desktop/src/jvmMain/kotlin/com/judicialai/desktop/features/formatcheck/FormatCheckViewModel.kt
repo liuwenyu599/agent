@@ -1,5 +1,7 @@
 package com.judicialai.desktop.features.formatcheck
 
+import com.judicialai.desktop.features.writing.WritingTextStyle
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -117,6 +119,16 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
 
     // ---------------- 中栏编辑器 ----------------
 
+    var paragraphFormatting by mutableStateOf(mapOf<Int, WritingTextStyle>())
+        private set
+    var paragraphBaselineFormatting by mutableStateOf(mapOf<Int, WritingTextStyle>())
+        private set
+
+    fun setParagraphFormatting(index: Int, style: WritingTextStyle) {
+        paragraphFormatting = paragraphFormatting + (index to style)
+        editorDirty = true
+    }
+
     /** 把段落列表拼成连续文本并重建段落字符区间映射。 */
     private fun loadEditor(paragraphs: List<JsonObject>) {
         val sb = StringBuilder()
@@ -129,6 +141,17 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         }
         paraRanges = ranges
         editorText = TextFieldValue(sb.toString().trimEnd('\n'))
+        val supportedFonts = setOf("方正小标宋简体", "仿宋_GB2312", "黑体", "楷体_GB2312",
+            "宋体", "微软雅黑", "思源宋体", "思源黑体", "Arial")
+        paragraphBaselineFormatting = paragraphs.mapIndexed { index, paragraph ->
+            val font = paragraph["font_name"].str().takeIf { it in supportedFonts }
+            val size = paragraph["font_pt"].str().toFloatOrNull()?.takeIf { it in 8f..36f }
+            val bold = paragraph["bold"]?.let { it.bool() }
+            val alignment = paragraph["align"].str().takeIf {
+                it in setOf("left", "center", "right", "justify") }
+            index to WritingTextStyle(font, size, bold, alignment)
+        }.toMap()
+        paragraphFormatting = emptyMap()
         editorDirty = false
     }
 
@@ -145,6 +168,8 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     /** 用户输入。手动编辑先只影响本地预览，点「保存修改」后写回服务端。 */
     fun onEditorChange(v: TextFieldValue) {
         if (version == DocVersion.ORIGINAL) return // 修改前只读，双保险（UI 层也 readOnly）
+        if (v.text.count { it == '\n' } != editorText.text.count { it == '\n' })
+            paragraphFormatting = emptyMap()
         editorText = v
         editorDirty = true
     }
@@ -171,7 +196,9 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
         notice = null
         status = "正在保存正文修改…"
         scope.launch {
-            when (val r = repo.updateContent(id, texts)) {
+            when (val r = repo.updateContent(id, texts,
+                paragraphFormatting.mapKeys { it.key.toString() }
+                    .mapValues { it.value.toRequest() })) {
                 is ApiResult.Ok -> {
                     paragraphsCurrent = r.data["paragraphs"].arr().mapNotNull { it.obj() }
                     // 人工修改成为新基线：修改前视图同步指向新内容

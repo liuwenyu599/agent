@@ -660,7 +660,7 @@ class FormatCheckService:
         return data
 
     def update_record_content(self, record_id: str, paragraphs: List[str],
-                              user: User) -> dict:
+                              user: User, formatting: Optional[dict] = None) -> dict:
         """保存工作台中栏的人工正文修改。
 
         语义：人工修改直接写回 ``{id}.docx``，成为后续校验 / 应用修正 / 导出的
@@ -676,19 +676,31 @@ class FormatCheckService:
             raise AppError(400, "正文不能为空")
 
         doc = DocxDocument(str(path))
+        from app.application.documents.formatting import normalize_formatting
+        from app.application.chat.docx_export import _apply_user_format
+        validated = normalize_formatting("\n".join(texts), {"paragraphs": formatting or {}})
+        paragraph_styles = validated["paragraphs"]
         paras = list(doc.paragraphs)
         for i, text in enumerate(texts):
             if i < len(paras):
                 p = paras[i]
-                runs = p.runs
-                if runs:
-                    runs[0].text = text
-                    for r in runs[1:]:
-                        r.text = ""
-                else:
-                    p.add_run(text)
+                if p.text != text:
+                    font_name = p.runs[0].font.name if p.runs else None
+                    font_size = p.runs[0].font.size if p.runs else None
+                    p.clear()
+                    for part in re.split(r"(\*\*.+?\*\*)", text):
+                        if not part:
+                            continue
+                        bold = part.startswith("**") and part.endswith("**")
+                        run = p.add_run(part[2:-2] if bold else part)
+                        run.bold = bold
+                        if font_name:
+                            run.font.name = font_name
+                        if font_size:
+                            run.font.size = font_size
             else:
-                doc.add_paragraph(text)
+                p = doc.add_paragraph(text)
+            _apply_user_format(p, paragraph_styles.get(str(i)))
         for p in paras[len(texts):]:
             try:
                 p._p.getparent().remove(p._p)

@@ -54,9 +54,10 @@ class FormatCheckRepository(private val api: ApiClient) {
      * PUT /format-check/records/{id}/content {"paragraphs": [...]}
      * 保存中栏人工正文修改：写回服务端成为新基线，应用/解决状态由后端重置。
      */
-    suspend fun updateContent(id: String, paragraphs: List<String>): ApiResult<JsonObject> =
+    suspend fun updateContent(id: String, paragraphs: List<String>,
+                              formatting: Map<String, Map<String, Any>> = emptyMap()): ApiResult<JsonObject> =
         asObject(api.put(Endpoints.FormatCheck.updateContent(id),
-            mapOf("paragraphs" to paragraphs)))
+            mapOf("paragraphs" to paragraphs, "formatting" to formatting)))
 
     /** POST /format-check/records/{id}/apply {"issue_id":n} → {applied_ids, resolved_ids, paragraphs} */
     suspend fun applyIssue(id: String, issueId: Int): ApiResult<JsonObject> =

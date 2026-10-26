@@ -66,10 +66,14 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.bool
+import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.int
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
+import com.judicialai.desktop.features.writing.FormatToolbar
+import com.judicialai.desktop.features.writing.PreviewFonts
+import com.judicialai.desktop.features.writing.WritingTextStyle
 import com.judicialai.desktop.design.components.AppButton
 import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppButtonSize
@@ -323,27 +327,51 @@ private fun fcInline(text: String): AnnotatedString = buildAnnotatedString {
  * 其余正文段首缩进两字符；**粗体** 行内生效。字号跟随缩放档位 baseSp。
  */
 @Composable
-private fun FcLine(raw: String, index: Int, baseSp: Float) {
+private fun FcLine(raw: String, index: Int, baseSp: Float,
+                   override: WritingTextStyle = WritingTextStyle(),
+                   savedRuns: List<JsonObject> = emptyList()) {
     val s = raw.trim()
-    val size = baseSp.sp
+    val shown = if (savedRuns.isNotEmpty() &&
+        savedRuns.joinToString("") { it["text"].str() }.trim() == s) buildAnnotatedString {
+        savedRuns.forEach { run ->
+            if (run["bold"].bool()) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                append(run["text"].str())
+            } else append(run["text"].str())
+        }
+    } else fcInline(s)
+    val size = (override.fontSizePt ?: baseSp).sp
+    val font = override.fontName?.let(PreviewFonts::family)
+    val alignment = when (override.alignment) {
+        "center" -> TextAlign.Center
+        "right" -> TextAlign.Right
+        "justify" -> TextAlign.Justify
+        "left" -> TextAlign.Start
+        else -> if (index == 0) TextAlign.Center else TextAlign.Start
+    }
     when {
         s.isBlank() -> Spacer(Modifier.height((baseSp * 0.4f).dp))
         index == 0 -> Text(
-            fcInline(s), fontSize = (baseSp * 1.3f).sp, fontWeight = FontWeight.Bold,
+            shown, fontSize = (override.fontSizePt ?: baseSp * 1.3f).sp,
+            fontFamily = font, fontWeight = if (override.bold == false) FontWeight.Normal else FontWeight.Bold,
             color = Ink, lineHeight = (baseSp * 1.9f).sp,
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            modifier = Modifier.fillMaxWidth(), textAlign = alignment)
         FcHeading1Regex.matches(s) -> Text(
-            fcInline(s), fontSize = (baseSp * 1.05f).sp, fontWeight = FontWeight.Bold,
-            color = Ink, lineHeight = (baseSp * 1.7f).sp)
+            shown, fontSize = (override.fontSizePt ?: baseSp * 1.05f).sp,
+            fontFamily = font, fontWeight = if (override.bold == false) FontWeight.Normal else FontWeight.Bold,
+            color = Ink, lineHeight = (baseSp * 1.7f).sp, textAlign = alignment)
         FcHeading2Regex.matches(s) -> Text(
-            fcInline(s), fontSize = size, fontWeight = FontWeight.SemiBold,
-            color = Ink, lineHeight = (baseSp * 1.65f).sp)
+            shown, fontSize = size, fontFamily = font,
+            fontWeight = if (override.bold == false) FontWeight.Normal else FontWeight.SemiBold,
+            color = Ink, lineHeight = (baseSp * 1.65f).sp, textAlign = alignment)
         else -> Text(
-            fcInline(s),
+            shown,
             style = TextStyle(
-                fontSize = size, color = Ink, lineHeight = (baseSp * 1.6f).sp,
+                fontSize = size, fontFamily = font,
+                fontWeight = if (override.bold == true) FontWeight.Bold else FontWeight.Normal,
+                color = Ink, lineHeight = maxOf(baseSp * 1.6f, size.value * 1.25f).sp,
                 textIndent = TextIndent(firstLine = (baseSp * 2).sp, restLine = 0.sp),
             ),
+            textAlign = alignment,
         )
     }
 }
@@ -360,7 +388,7 @@ private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier
     val readOnly = vm.version == DocVersion.ORIGINAL
     val baseSp = vm.zoom.baseSp
     var editIdx by remember { mutableStateOf<Int?>(null) }
-    var editText by remember { mutableStateOf("") }
+    var editText by remember { mutableStateOf(TextFieldValue("")) }
 
     // 右栏选中问题对应的段落下标：高亮该段，让「定位第 N 段」在分块模式下可见
     val focusedPara = (vm.selectedIssueId
@@ -372,8 +400,8 @@ private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier
         val cur = vm.editorText.text.split('\n').toMutableList()
         if (i < cur.size) {
             cur.removeAt(i)
-            if (editText.isNotBlank()) {
-                cur.addAll(i.coerceAtMost(cur.size), editText.split('\n'))
+            if (editText.text.isNotBlank()) {
+                cur.addAll(i.coerceAtMost(cur.size), editText.text.split('\n'))
             }
             vm.onEditorChange(TextFieldValue(cur.joinToString("\n")))
         }
@@ -389,6 +417,9 @@ private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier
                         .border(1.dp, Primary, RoundedCornerShape(Dimens.radiusSm))
                         .padding(Dimens.space2),
                 ) {
+                    FormatToolbar(vm.paragraphFormatting[i] ?:
+                        vm.paragraphBaselineFormatting[i] ?: WritingTextStyle(),
+                        { vm.setParagraphFormatting(i, it) })
                     OutlinedTextField(
                         value = editText,
                         onValueChange = { editText = it },
@@ -406,8 +437,18 @@ private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier
                         Modifier.fillMaxWidth().padding(top = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("清空后点完成 = 删除此段；用 **文字** 可加粗",
+                        Text("选中文字后点 B 可局部加粗",
                             fontSize = 10.5.sp, color = Muted2)
+                        AppLinkButton("B", onClick = {
+                            val selection = editText.selection
+                            if (!selection.collapsed) {
+                                val start = selection.min
+                                val end = selection.max
+                                editText = TextFieldValue(editText.text.substring(0, start) +
+                                    "**" + editText.text.substring(start, end) + "**" +
+                                    editText.text.substring(end))
+                            }
+                        })
                         Spacer(Modifier.weight(1f))
                         AppLinkButton("取消", onClick = { editIdx = null })
                         Spacer(Modifier.width(Dimens.space3))
@@ -421,11 +462,15 @@ private fun FcBodyEditor(vm: FormatCheckViewModel, modifier: Modifier = Modifier
                         .background(if (i == focusedPara) PrimarySoft else Color.Transparent)
                         .clickable(enabled = !readOnly && !vm.busy) {
                             editIdx = i
-                            editText = raw
+                            editText = TextFieldValue(raw)
                         }
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 ) {
-                    FcLine(raw, i, baseSp)
+                    val saved = (if (vm.version == DocVersion.ORIGINAL)
+                        vm.paragraphsOriginal else vm.paragraphsCurrent).getOrNull(i)
+                    FcLine(raw, i, baseSp, vm.paragraphFormatting[i] ?:
+                        vm.paragraphBaselineFormatting[i] ?: WritingTextStyle(),
+                        saved?.get("runs").arr().mapNotNull { it as? JsonObject })
                 }
             }
         }
