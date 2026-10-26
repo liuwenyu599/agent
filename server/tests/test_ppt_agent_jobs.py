@@ -1078,10 +1078,19 @@ def test_double_submit_does_not_start_twice(monkeypatch, doc_and_token):
     _wait_terminal(token, doc_id)
 
 
-def test_submit_without_agent_url_is_failed(doc_and_token, monkeypatch):
-    """未配置 PPTAgent 时提交会立即失败，不做无意义的异步等待。"""
+def test_submit_without_agent_url_falls_back_to_local_render(doc_and_token, monkeypatch):
+    """未配置 PPTAgent 时不再拒绝：改走本地严格套模板渲染（旧契约已变更）。
+
+    历史行为是「直接置 failed」，那会把桌面端主路径（异步 job）堵死——
+    DP9B 退出正式链路后，无 URL 才是常态。现在提交返回 pending，
+    后台线程做本地渲染；本文档是空白文稿，自带默认大纲（封面/目录/结束），
+    因此终态应为 succeeded 且 renderer=local。
+    """
     token, doc_id = doc_and_token
     monkeypatch.setattr(settings, "PPT_AGENT_URL", "")
     r = client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
     assert r.status_code == 200, r.text
-    assert r.json()["status"] == "failed"
+    assert r.json()["status"] in ("pending", "running", "succeeded", "failed")
+    final = _wait_terminal(token, doc_id)
+    assert final["status"] == "succeeded", final
+    assert final["renderer"] == "local", final

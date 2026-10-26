@@ -21,13 +21,19 @@ PPTAgent 跑十几分钟，**绝不能开一个跨越全程的数据库事务**�
 2. 取不到 → 扫共享卷找 ``presentation.pptx``；
 3. 再取不到 → **回退本地 render_pptx**。
 任何时候都不会把打不开的文件交给用户。
+
+无 PPTAgent 时的正式路径
+------------------------
+``PPT_AGENT_URL`` 为空（DP9B 已退役）时，submit_job **不再拒绝**，
+而是登记同一条异步 job、由 :class:`LocalRenderJobRunner` 做本地严格套模板渲染。
+客户端仍按 ``/ppt/jobs`` 轮询，接口与终态语义完全一致。
 """
 import os
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -88,6 +94,94 @@ def _is_active(doc_id: str) -> bool:
         return bool(t and t.is_alive())
 
 
+# ============================================================ 本地渲染（无 PPTAgent）
+
+# 本地渲染是确定性排版，秒级完成，所以它既是「PPTAgent 失败后的兜底」，
+# 也是「没有 PPTAgent 时的正式路径」——两条路共用同一段落盘逻辑。
+def _render_local_and_store(doc_id: str) -> Tuple[bool, str]:
+    """严格套模板渲染并落盘，把 job 置为成功。
+
+    Returns:
+        ``(True, "")`` 成功；``(False, 失败说明)`` 失败（调用方决定怎么对外表达）。
+    """
+    db: Session = _db.SessionLocal()
+    try:
+        svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
+        doc = svc.documents.get(doc_id)
+        if doc is None:
+            return False, "文档不存在"
+        if not doc.outline:
+            return False, "本地渲染缺少大纲"
+        data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
+        ok, why = looks_like_pptx(data)
+        if not ok:
+            return False, f"本地渲染产物非法：{why}"
+        fname = f"{uuid.uuid4().hex}.pptx"
+        path = settings.ppt_dir / "generated" / fname
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        if doc.file_path and os.path.exists(doc.file_path):
+            try:
+                os.remove(doc.file_path)
+            except OSError:
+                pass
+        slides = len((doc.outline or {}).get("slides") or [])
+        _update_job(doc_id, file_path=str(path), status="generated",
+                    slide_count=slides, job_status="succeeded",
+                    job_phase="succeeded", job_renderer="local",
+                    job_event_id="", job_error="", job_question="",
+                    job_total_pages=slides, job_current_page=slides,
+                    job_finished_at=now_local(), job_progress_at=now_local())
+        logger.info("PPT 本地渲染完成：job_id=%s，%d 字节", doc_id, len(data))
+        return True, ""
+    except Exception as e:  # noqa: BLE001 - 落盘失败要变成可读的 job 错误
+        logger.exception("PPT 本地渲染失败：%s", e)
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        db.close()
+
+
+class LocalRenderJobRunner:
+    """无 PPTAgent 时的 job 执行体：本地严格套模板渲染 → 落盘 → 置成功。
+
+    与 :class:`PPTAgentJobRunner` 共用 ``_RUNNING`` 登记与终态语义，
+    前端轮询的是同一套 ``/ppt/jobs`` 接口，无需任何客户端改动。
+    """
+
+    def __init__(self, doc_id: str) -> None:
+        self.doc_id = doc_id
+
+    def run(self) -> None:
+        try:
+            doc = _open(self.doc_id)
+            if doc is None:
+                self._fail("文档不存在")
+                return
+            if doc.job_cancel_requested:
+                self._set(job_status="cancelled", job_phase="cancelled",
+                          job_finished_at=now_local())
+                return
+            self._set(job_status="running", job_phase="designing",
+                      job_progress_at=now_local())
+            ok, why = _render_local_and_store(self.doc_id)
+            if not ok:
+                self._fail(why)
+        except Exception as e:  # noqa: BLE001 - 后台线程绝不能把异常抛穿
+            logger.exception("PPT 本地渲染任务异常：%s", e)
+            self._fail(f"{type(e).__name__}: {e}")
+        finally:
+            with _RUNNING_LOCK:
+                _RUNNING.pop(self.doc_id, None)
+
+    def _set(self, **fields: Any) -> None:
+        _update_job(self.doc_id, **fields)
+
+    def _fail(self, reason: str) -> None:
+        self._set(status="failed", job_status="failed", job_phase="failed",
+                  job_error=reason[:1000], job_finished_at=now_local())
+        logger.error("PPT 本地渲染失败：job_id=%s，原因=%s", self.doc_id, reason)
+
+
 # ============================================================ 提交 / 取消 / 追问
 
 
@@ -109,13 +203,23 @@ def submit_job(doc_id: str, user_id: str, message: str = "",
         return {"job_id": doc_id, "status": "running", "phase": "submitting",
                 "message": "已有进行中的任务"}
 
-    # 未配置 PPTAgent 时不做无意义的异步：直接置为失败，让调用方走现有本地导出
+    # 正式链路不含 PPTAgent（DP9B 已退役）：未配置 URL 不是「不可用」，
+    # 而是改由本地严格套模板渲染接管同一条异步 job 链路（渲染秒级完成）。
     if not (settings.PPT_AGENT_URL or "").strip():
-        _update_job(doc_id, job_status="failed", job_phase="failed",
-                    job_error="未配置 PPT_AGENT_URL，异步生成不可用",
-                    job_finished_at=now_local())
-        return {"job_id": doc_id, "status": "failed", "phase": "failed",
-                "message": "未配置 PPT_AGENT_URL"}
+        _update_job(doc_id, job_status="pending", job_phase="submitting",
+                    job_error="", job_question="", job_current_page=0,
+                    job_total_pages=0, job_cancel_requested=False,
+                    job_started_at=now_local(), job_progress_at=now_local(),
+                    job_finished_at=None)
+        runner = LocalRenderJobRunner(doc_id)
+        t = threading.Thread(target=runner.run, name=f"ppt-local-{doc_id[:8]}",
+                             daemon=True)
+        with _RUNNING_LOCK:
+            _RUNNING[doc_id] = t
+        t.start()
+        logger.info("PPT job 走本地渲染：job_id=%s", doc_id)
+        return {"job_id": doc_id, "status": "pending", "phase": "submitting",
+                "renderer": "local"}
 
     _update_job(doc_id, job_status="pending", job_phase="submitting",
                 job_error="", job_question="", job_current_page=0,
@@ -466,35 +570,13 @@ class PPTAgentJobRunner:
 
     def _fallback_local(self, reason: str) -> None:
         """严格套模板兜底：AI 智能设计失败/低质时自动切换，用户无感。"""
-        db: Session = _db.SessionLocal()
-        try:
-            svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
-            doc = svc.documents.get(self.doc_id)
-            if doc is None or not doc.outline:
-                self._fail(f"{reason}；且本地渲染缺少大纲")
-                return
-            data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
-            ok, why = looks_like_pptx(data)
-            if not ok:
-                self._fail(f"{reason}；本地渲染产物非法：{why}")
-                return
-            fname = f"{uuid.uuid4().hex}.pptx"
-            path = settings.ppt_dir / "generated" / fname
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            slides = len((doc.outline or {}).get("slides") or [])
-            _update_job(self.doc_id, file_path=str(path), status="generated",
-                        slide_count=slides, job_status="succeeded",
-                        job_phase="succeeded", job_renderer="local",
-                        job_error="", job_question="",
-                        job_finished_at=now_local(), job_progress_at=now_local())
+        # 与「没有 PPTAgent 时的正式路径」共用同一段落盘逻辑，避免两份实现漂移。
+        ok, why = _render_local_and_store(self.doc_id)
+        if ok:
             logger.warning("[PPT] 已切换严格套模板并完成：job_id=%s，内部原因=%s",
                            self.doc_id, reason)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("本地兜底渲染失败：%s", e)
-            self._fail(f"{reason}；本地兜底也失败：{type(e).__name__}: {e}")
-        finally:
-            db.close()
+            return
+        self._fail(f"{reason}；{why}")
 
     # ---------------- 工具 ----------------
 

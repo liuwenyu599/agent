@@ -215,8 +215,8 @@ class PptRepository(private val api: ApiClient) {
      * message 是用户补充需求（追加到给 PPTAgent 的需求末尾）。
      * 大纲走服务端已存的 doc.outline，所以**调用前必须先 saveDraft**。
      *
-     * 注意：后端在「已有任务在跑」时返回 status=running，「未配置 PPT_AGENT_URL」时返回
-     * status=failed（HTTP 仍是 200），这两种都通过 [PptJobSubmit.status] 回传，由调用方决定。
+     * 注意：「已有任务在跑」时返回 status=running；无 PPTAgent 时后端改走本地渲染，
+     * 仍返回 pending。失败（如缺大纲）则以 status=failed + 说明回传（HTTP 仍是 200）。
      */
     suspend fun submitJob(docId: String, message: String): ApiResult<PptJobSubmit> =
         postJob(Endpoints.Ppt.Jobs.CREATE, docId, message)

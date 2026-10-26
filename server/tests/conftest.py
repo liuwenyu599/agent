@@ -64,6 +64,7 @@ _SEED_USERNAMES = {
     "test_password_policy": "pwddev",
     "test_ppt_agent_jobs": "jobdev",
     "test_ppt_job_lifecycle_contract": "developer",
+    "test_ppt_local_job": "developer",
     "test_ppt_kb_rag": "kbdev",
     "test_ppt_preview_degrade": "pptprevdev",
     "test_ppt_workbench": "pptdev",

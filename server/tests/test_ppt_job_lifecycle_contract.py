@@ -5,9 +5,9 @@
 PPTAgentClient monkeypatch 掉的单元级测试，路由、鉴权、归属、参数校验这一层
 从来没被走过。
 
-未配置 PPT_AGENT_URL 时 submit_job 会直接置 failed 并给出明确原因（这是
-有意的本地安全开关，不是缺陷），所以本文件**不依赖真实 PPTAgent**，
-在不联网的机器上也能跑。
+未配置 PPT_AGENT_URL 时 submit_job **不再直接失败**，而是改走本地严格套模板
+渲染（正式链路不含 DP9B）——详见 test_ppt_local_job.py。本文件因此不依赖
+真实 PPTAgent，在不联网的机器上也能跑。
 
 本文件重点锁三类行为：
 1. 提交必须立即返回，不得阻塞（这是「异步」的定义，退化成同步会拖死请求线程）
@@ -47,8 +47,9 @@ def _offline_ppt_agent():
     停在 running 直到 PPT_AGENT_TOTAL_TIMEOUT（默认 1800s）——测试表现为
     轮询 30s 拿不到终态而超时失败，且留下一个跑不完的线程。
 
-    关掉之后走的是 submit_job 的既定降级分支：直接置 failed 并给出
-    「未配置 PPT_AGENT_URL」的原因。这条分支本身也是要覆盖的契约。
+    关掉之后走的是 submit_job 的本地渲染分支：后台线程用严格套模板排版，
+    本文档没有大纲，因此很快落到 failed（这不是缺陷，是「没有内容可排版」）。
+    该分支本身也是要覆盖的契约。
     """
     from app.core.config import settings
 

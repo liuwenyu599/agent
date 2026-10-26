@@ -152,21 +152,12 @@ def submit_job(
     history: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Admit immediately when capacity exists; otherwise enqueue in FIFO order."""
+    # 无 PPTAgent 时走本地严格套模板渲染：秒级确定性任务，不占用排队名额，
+    # 因此直接交给 core 的同一条异步 job 链路，不再以「不可用」拒绝。
     if not (settings.PPT_AGENT_URL or "").strip():
-        _update_job(
-            doc_id,
-            job_status="failed",
-            job_phase="failed",
-            job_error="未配置 PPT_AGENT_URL，异步生成不可用",
-            job_finished_at=now_local(),
-        )
-        return {
-            "job_id": doc_id,
-            "status": "failed",
-            "phase": "failed",
-            "queue_position": None,
-            "message": "未配置 PPT_AGENT_URL",
-        }
+        result = _core.submit_job(doc_id, user_id, message, history)
+        result.setdefault("queue_position", None)
+        return result
 
     with _QUEUE_LOCK:
         position = _queue_position_locked(doc_id)

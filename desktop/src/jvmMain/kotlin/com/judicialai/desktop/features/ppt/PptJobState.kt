@@ -32,9 +32,9 @@ private val TERMINAL_JOB_STATUSES = setOf("succeeded", "failed", "cancelled")
 /** 提交 / 追问接口返回的结构：{job_id, status, phase, message} */
 data class PptJobSubmit(
     val jobId: String,
-    /** pending / running / failed（未配置 PPT_AGENT_URL 时后端直接给 failed） */
+    /** pending / running / failed（无 PPTAgent 时后端改走本地渲染，仍返回 pending） */
     val status: String,
-    /** 后端附带的说明，如「已有进行中的任务」「未配置 PPT_AGENT_URL」 */
+    /** 后端附带的说明，如「已有进行中的任务」「本地渲染缺少大纲」 */
     val hint: String,
 )
 
@@ -126,7 +126,7 @@ class PptJobProgress {
     var errorMsg by mutableStateOf<String?>(null)
     /** 网络抖动等可恢复错误：不终止任务，只在界面上提示「正在重试」 */
     var transientError by mutableStateOf<String?>(null)
-    /** 提交被拒（例如服务端未配置 PPT_AGENT_URL / 还没部署 /ppt/jobs） */
+    /** 提交被拒（例如还没部署 /ppt/jobs，或本地渲染无法启动） */
     var submitRejected by mutableStateOf(false)
 
     var exporting by mutableStateOf(false)
@@ -229,7 +229,7 @@ object PptJobEngine {
      * @param message 用户补充需求（后端会追加到给 PPTAgent 的需求末尾）。
      *                大纲走服务端已存的 doc.outline，**调用前必须先保存草稿**。
      *
-     * 返回结构里 status=failed 表示后端直接拒绝了（如未配置 PPT_AGENT_URL），
+     * 返回结构里 status=failed 表示后端直接拒绝了（如文档不可用/无法启动渲染），
      * 此时 [PptJobProgress.submitRejected] = true，由调用方回退同步导出。
      */
     suspend fun submit(
@@ -260,7 +260,7 @@ object PptJobEngine {
                 p.jobId = s.jobId
                 p.statusRaw = s.status
                 if (s.status == "failed") {
-                    // 后端明确拒绝（未配置 PPT_AGENT_URL 等）：HTTP 仍是 200，只有 status 能看出来
+                    // 后端明确拒绝（无法启动渲染等）：HTTP 仍是 200，只有 status 能看出来
                     p.submitRejected = true
                     p.status = PptJobStatus.FAILED
                     p.errorMsg = s.hint.ifBlank { "服务端未启用 PPTAgent 异步生成" }
