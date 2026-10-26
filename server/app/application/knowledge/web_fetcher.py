@@ -1,9 +1,14 @@
 """网页抓取与正文提取（移植自旧 services/web_fetcher.py，行为一致）。"""
+import ipaddress
 import re
+import socket
 from typing import Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 from app.core.logging import get_logger
 
@@ -23,6 +28,75 @@ FETCH_TIMEOUT = 20
 MAX_CONTENT_CHARS = 200000  # 入库正文上限
 
 _ANTI_BOT_HINTS = ["环境异常", "验证", "操作频繁", "访问过于频繁", "captcha", "验证身份"]
+MAX_REDIRECTS = 5
+
+
+class UnsafeWebAddress(ValueError):
+    """用户链接指向内网、非网页协议或不允许的端口。"""
+
+
+def _public_address(host: str) -> str:
+    """只连接公开可路由地址；返回实际要建连的 IP，避免校验后再次解析。"""
+    try:
+        addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise UnsafeWebAddress("链接域名无法解析") from exc
+    if not addresses:
+        raise UnsafeWebAddress("链接域名无法解析")
+    ips = [item[4][0] for item in addresses]
+    if any(not ipaddress.ip_address(ip).is_global for ip in ips):
+        raise UnsafeWebAddress("链接指向内网或非公开地址，禁止导入")
+    return ips[0]
+
+
+def _validate_web_url(url: str) -> None:
+    parsed = urlparse(url)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname or
+            parsed.username or parsed.password or parsed.fragment):
+        raise UnsafeWebAddress("仅允许公开网站的 http(s) 链接")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise UnsafeWebAddress("链接端口无效") from exc
+    if port not in (None, 80, 443):
+        raise UnsafeWebAddress("仅允许 80 或 443 端口的网页链接")
+    _public_address(parsed.hostname)
+
+
+class _PublicHTTPConnection(HTTPConnection):
+    def _new_conn(self):
+        original = self._dns_host
+        try:
+            self._dns_host = _public_address(original)
+            return super()._new_conn()
+        finally:
+            self._dns_host = original
+
+
+class _PublicHTTPSConnection(HTTPSConnection):
+    def _new_conn(self):
+        original = self._dns_host
+        try:
+            self._dns_host = _public_address(original)
+            return super()._new_conn()
+        finally:
+            self._dns_host = original
+
+
+class _PublicHTTPPool(HTTPConnectionPool):
+    ConnectionCls = _PublicHTTPConnection
+
+
+class _PublicHTTPSPool(HTTPSConnectionPool):
+    ConnectionCls = _PublicHTTPSConnection
+
+
+class _PublicOnlyAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": _PublicHTTPPool, "https": _PublicHTTPSPool,
+        }
 
 
 def _clean_text(text: str) -> str:
@@ -33,12 +107,27 @@ def _clean_text(text: str) -> str:
 
 
 def _fetch_html(url: str) -> str:
-    resp = requests.get(url, headers={"User-Agent": UA}, timeout=FETCH_TIMEOUT,
-                        allow_redirects=True)
-    resp.raise_for_status()
-    if not resp.encoding or resp.encoding.lower() in ("iso-8859-1",):
-        resp.encoding = resp.apparent_encoding or "utf-8"
-    return resp.text
+    with requests.Session() as session:
+        session.trust_env = False  # 环境代理不得绕过目标 IP 校验
+        adapter = _PublicOnlyAdapter()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            _validate_web_url(current)
+            with session.get(current, headers={"User-Agent": UA}, timeout=FETCH_TIMEOUT,
+                             allow_redirects=False, stream=True) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("Location")
+                    if not location:
+                        raise UnsafeWebAddress("跳转链接缺少目标地址")
+                    current = urljoin(current, location)
+                    continue
+                resp.raise_for_status()
+                if not resp.encoding or resp.encoding.lower() in ("iso-8859-1",):
+                    resp.encoding = resp.apparent_encoding or "utf-8"
+                return resp.text
+    raise UnsafeWebAddress("网页跳转次数过多")
 
 
 def _looks_blocked(html: str) -> Optional[str]:
@@ -143,6 +232,9 @@ def fetch_webpage(url: str) -> Dict:
 
     try:
         html = _fetch_html(url)
+    except UnsafeWebAddress as e:
+        result["error"] = str(e)
+        return result
     except requests.exceptions.Timeout:
         result["error"] = "访问超时"
         return result
