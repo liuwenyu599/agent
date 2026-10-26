@@ -667,14 +667,19 @@ fun formatJobDuration(seconds: Int): String {
 }
 
 /**
- * 渲染来源提示：让用户知道拿到的是 AI 智能设计产物，还是本地模板兜底渲染。
- * - "pptagent"        ：AI 智能设计成功返回，无需提示
- * - "pptagent_retry"  ：AI 经一次重试后成功返回，仍是 AI 产物，无需提示
- * - "local" / 空 / 未知：AI 成品未成功回传，已回退本地模板渲染，必须明确告知用户核对
+ * 渲染来源提示：让用户知道拿到的是 AI 智能设计产物，还是本地模板排版。
+ * - "pptagent"       ：AI 智能设计成功返回，无需提示
+ * - "pptagent_retry" ：AI 经一次重试后成功返回，仍是 AI 产物，无需提示
+ * - "local_fallback" ：AI 尝试过但没拿到合格成品 → 已回退本地模板，必须明确告知核对
+ * - "local" / 空 / 未知：没接 AI 智能设计，本地政务模板就是正式路径，**不是失败**
+ *   （DP9B 退役后这是常态，若沿用兜底警告会让用户误以为每次都出错）
  */
 fun pptRendererNote(renderer: String?): String? {
     return when (renderer) {
         "pptagent", "pptagent_retry" -> null
-        else -> "⚠️ AI 智能设计未能成功返回成品，已自动采用本地模板渲染。排版与内容为兜底结果，请核对后再使用。"
+        "local_fallback" ->
+            "⚠️ AI 智能设计未能成功返回成品，已自动采用本地模板渲染。排版与内容为兜底结果，请核对后再使用。"
+        else ->
+            "本次由本地政务模板排版生成；文字仍由大模型按大纲撰写，建议核对后再使用。"
     }
 }

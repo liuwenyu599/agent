@@ -98,8 +98,14 @@ def _is_active(doc_id: str) -> bool:
 
 # 本地渲染是确定性排版，秒级完成，所以它既是「PPTAgent 失败后的兜底」，
 # 也是「没有 PPTAgent 时的正式路径」——两条路共用同一段落盘逻辑。
-def _render_local_and_store(doc_id: str) -> Tuple[bool, str]:
+def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool, str]:
     """严格套模板渲染并落盘，把 job 置为成功。
+
+    Args:
+        doc_id: 文档 ID。
+        renderer: 写进 ``job_renderer`` 的来源标记，客户端据此决定提示语。
+            ``local`` = 没配 PPTAgent、本地模板就是正式路径（不该报警）；
+            ``local_fallback`` = AI 智能设计尝试过但没拿到合格成品，回退本地（要报警）。
 
     Returns:
         ``(True, "")`` 成功；``(False, 失败说明)`` 失败（调用方决定怎么对外表达）。
@@ -128,7 +134,7 @@ def _render_local_and_store(doc_id: str) -> Tuple[bool, str]:
         slides = len((doc.outline or {}).get("slides") or [])
         _update_job(doc_id, file_path=str(path), status="generated",
                     slide_count=slides, job_status="succeeded",
-                    job_phase="succeeded", job_renderer="local",
+                    job_phase="succeeded", job_renderer=renderer,
                     job_event_id="", job_error="", job_question="",
                     job_total_pages=slides, job_current_page=slides,
                     job_finished_at=now_local(), job_progress_at=now_local())
@@ -570,8 +576,9 @@ class PPTAgentJobRunner:
 
     def _fallback_local(self, reason: str) -> None:
         """严格套模板兜底：AI 智能设计失败/低质时自动切换，用户无感。"""
-        # 与「没有 PPTAgent 时的正式路径」共用同一段落盘逻辑，避免两份实现漂移。
-        ok, why = _render_local_and_store(self.doc_id)
+        # 与「没有 PPTAgent 时的正式路径」共用同一段落盘逻辑，避免两份实现漂移；
+        # 但要区分来源：这里确实是「AI 尝试过且没成」，客户端必须如实告知用户。
+        ok, why = _render_local_and_store(self.doc_id, renderer="local_fallback")
         if ok:
             logger.warning("[PPT] 已切换严格套模板并完成：job_id=%s，内部原因=%s",
                            self.doc_id, reason)

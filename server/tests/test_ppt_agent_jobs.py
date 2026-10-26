@@ -918,7 +918,7 @@ def test_job_falls_back_to_local_on_agent_failure(monkeypatch, doc_and_token):
     client.post(f"{BASE}/ppt/jobs", json={"doc_id": doc_id}, headers=_hdr(token))
     status = _wait_terminal(token, doc_id)
     assert status["status"] == "succeeded", status
-    assert status["renderer"] == "local", "必须是本地兜底产物"
+    assert status["renderer"] == "local_fallback", "必须是本地兜底产物"
 
     r = client.get(f"{BASE}/ppt/jobs/{doc_id}/export", headers=_hdr(token))
     assert r.status_code == 200
@@ -939,7 +939,7 @@ def test_job_auto_handles_agent_question_without_user_interruption(
     assert status["status"] == "succeeded", status
     assert status["question"] == ""
     # 替身每次都只会继续追问，所以自动重试后应无感切到严格模板。
-    assert status["renderer"] == "local"
+    assert status["renderer"] == "local_fallback"
 
 
 def test_legacy_empty_clarification_is_translated_to_instruction(
