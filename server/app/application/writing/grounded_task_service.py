@@ -68,68 +68,6 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             return explicit.group(1).strip()
         return str(task_parser.explicit_document_type(message) or "").strip()
 
-    def _interpret(self, message: str, ctx: Dict[str, Any], has_draft: bool = False):
-        result = super()._interpret(message, ctx, has_draft=has_draft)
-        if not result:
-            return None
-        result.update(self._literal_overrides(message))
-        return result
-
-    def plan_task(self, user_id: str, message: str) -> Dict[str, Any]:
-        ctx = task_parser.empty_context()
-        literal_plan = task_parser.parse_message(message)
-        task_parser.merge_context(ctx, literal_plan)
-        has_clear_core = bool(
-            ctx.get("document_type") and
-            (ctx.get("topic") or ctx.get("title") or task_parser.build_title(ctx))
-        )
-        if not has_clear_core:
-            return super().plan_task(user_id, message)
-
-        if not ctx.get("title"):
-            derived = task_parser.build_title(ctx)
-            if derived:
-                ctx["title"] = derived
-        task_parser.compute_missing(ctx)
-
-        try:
-            from app.application.organization.service import OrganizationService
-            org_ctx = OrganizationService(self.db).user_context(user_id)
-        except Exception:
-            org_ctx = {"dept_code": "", "dept_name": "", "short_name": "",
-                       "agent": None, "scopes": ["GLOBAL"]}
-
-        doc_type = str(ctx.get("document_type") or "")
-        fields: List[Dict[str, str]] = []
-        for key, label in (("document_type", "文种"), ("recipient", "报送对象"),
-                           ("authority", "发文机关"), ("time_range", "时间范围"),
-                           ("purpose", "用途"), ("topic", "主题")):
-            value = ctx.get(key)
-            if value:
-                fields.append({"label": label, "value": str(value)})
-
-        knowledge = self._plan_knowledge(user_id, org_ctx)
-        return {
-            "doc_type": doc_type,
-            "target": ctx.get("purpose") or ctx.get("topic") or message[:40],
-            "audience": ctx.get("recipient") or "",
-            "department": org_ctx.get("dept_name") or org_ctx.get("short_name") or "",
-            "agent": (org_ctx.get("agent") or {}).get("name") or "",
-            "title": ctx.get("title") or "",
-            "source": "rule_fast",
-            "planned_context": {
-                k: v for k, v in ctx.items() if k not in ("history", "missing_fields")
-            },
-            "fields": fields,
-            "materials": [],
-            "knowledge": knowledge,
-            "template_id": "",
-            "template_name": "",
-            "scopes": org_ctx.get("scopes") or ["GLOBAL"],
-            "kb_ids": [k["id"] for k in knowledge],
-            "ai_actions": self._plan_actions(doc_type),
-        }
-
     # 范文注入的两块内容与各自预算（上下文有限，按重要性分配）：
     #   风格卡 —— 结构/套语/开头结尾的抽象，好处是短
     #   原文摘录 —— 真实段落，好处是模型能看到本单位怎么说话

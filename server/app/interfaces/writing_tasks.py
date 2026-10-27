@@ -15,7 +15,7 @@ from app.application.chat.attachment_service import AttachmentService
 from app.application.knowledge.rag_service import RagService
 from app.application.shared.async_writing_assistant import AsyncWritingAssistant
 from app.application.shared.writing_assistant import WritingAssistant
-from app.application.writing.task_service import WritingTaskService
+from app.application.writing import ProductionWritingTaskService
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
@@ -36,8 +36,8 @@ router = APIRouter(prefix="/writing/tasks", tags=["智能写作工作台"])
 _DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def get_task_service(db: Session = Depends(get_db)) -> WritingTaskService:
-    return WritingTaskService(
+def get_task_service(db: Session = Depends(get_db)) -> ProductionWritingTaskService:
+    return ProductionWritingTaskService(
         db,
         assistant=AsyncWritingAssistant(get_llm_gateway()),
         rag=RagService(db, get_embedder(), get_vector_store()),
@@ -48,7 +48,7 @@ def get_task_service(db: Session = Depends(get_db)) -> WritingTaskService:
 @router.get("/{task_id}/render-profile")
 def render_profile(task_id: str,
                    user: User = Depends(get_current_user),
-                   svc: WritingTaskService = Depends(get_task_service)):
+                   svc: ProductionWritingTaskService = Depends(get_task_service)):
     svc._get_owned(task_id, user.id)
     return writing_preview_profile()
 
@@ -106,7 +106,7 @@ class ParagraphAcceptRequest(BaseModel):
 @router.post("", status_code=201)
 async def create_task(req: TaskCreateRequest,
                       user: User = Depends(get_current_user),
-                      svc: WritingTaskService = Depends(get_task_service)):
+                      svc: ProductionWritingTaskService = Depends(get_task_service)):
     return await svc.create_task_async(
         user.id, req.message, req.session_id,
         template_id=req.template_id, kb_ids=req.kb_ids,
@@ -120,35 +120,35 @@ class TaskPlanRequest(BaseModel):
 @router.post("/plan")
 async def plan_task(req: TaskPlanRequest,
                     user: User = Depends(get_current_user),
-                    svc: WritingTaskService = Depends(get_task_service)):
+                    svc: ProductionWritingTaskService = Depends(get_task_service)):
     """一句话指令 → 本次写作的工作台配置（WorkspaceSpec）。"""
     return await svc.plan_task_async(user.id, req.message)
 
 
 @router.get("")
 def list_tasks(user: User = Depends(get_current_user),
-               svc: WritingTaskService = Depends(get_task_service)):
+               svc: ProductionWritingTaskService = Depends(get_task_service)):
     return {"items": svc.list_tasks(user.id)}
 
 
 @router.get("/{task_id}")
 def get_task(task_id: str,
              user: User = Depends(get_current_user),
-             svc: WritingTaskService = Depends(get_task_service)):
+             svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.get_task(task_id, user.id)
 
 
 @router.get("/{task_id}/paragraphs")
 def list_paragraphs(task_id: str,
                     user: User = Depends(get_current_user),
-                    svc: WritingTaskService = Depends(get_task_service)):
+                    svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.list_paragraphs(task_id, user.id)
 
 
 @router.post("/{task_id}/paragraphs/{paragraph_id}/suggest")
 async def suggest_paragraph(task_id: str, paragraph_id: str, req: ParagraphSuggestRequest,
                             user: User = Depends(get_current_user),
-                            svc: WritingTaskService = Depends(get_task_service)):
+                            svc: ProductionWritingTaskService = Depends(get_task_service)):
     return await svc.suggest_paragraph_async(
         task_id, user.id, paragraph_id, req.instruction, req.regenerate)
 
@@ -156,14 +156,14 @@ async def suggest_paragraph(task_id: str, paragraph_id: str, req: ParagraphSugge
 @router.post("/{task_id}/suggestions/{suggestion_id}/accept")
 def accept_paragraph_suggestion(task_id: str, suggestion_id: str, req: ParagraphAcceptRequest,
                                 user: User = Depends(get_current_user),
-                                svc: WritingTaskService = Depends(get_task_service)):
+                                svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.accept_paragraph_suggestion(task_id, user.id, suggestion_id, req.final_content)
 
 
 @router.post("/{task_id}/suggestions/{suggestion_id}/reject")
 def reject_paragraph_suggestion(task_id: str, suggestion_id: str,
                                 user: User = Depends(get_current_user),
-                                svc: WritingTaskService = Depends(get_task_service)):
+                                svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.reject_paragraph_suggestion(task_id, user.id, suggestion_id)
 
 
@@ -171,28 +171,28 @@ def reject_paragraph_suggestion(task_id: str, suggestion_id: str,
 @router.put("/{task_id}")
 def patch_task(task_id: str, req: TaskPatchRequest,
                user: User = Depends(get_current_user),
-               svc: WritingTaskService = Depends(get_task_service)):
+               svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.update_context(task_id, user.id, req.context)
 
 
 @router.post("/{task_id}/chat")
 async def task_chat(task_id: str, req: TaskChatRequest,
                     user: User = Depends(get_current_user),
-                    svc: WritingTaskService = Depends(get_task_service)):
+                    svc: ProductionWritingTaskService = Depends(get_task_service)):
     return await svc.chat_async(task_id, user.id, req.message)
 
 
 @router.post("/{task_id}/draft")
 async def task_draft(task_id: str, req: TaskDraftRequest,
                      user: User = Depends(get_current_user),
-                     svc: WritingTaskService = Depends(get_task_service)):
+                     svc: ProductionWritingTaskService = Depends(get_task_service)):
     return await svc.draft_async(task_id, user.id, req.outline_only)
 
 
 @router.post("/{task_id}/draft/stream")
 async def task_draft_stream(task_id: str, req: TaskDraftRequest,
                             user: User = Depends(get_current_user),
-                            svc: WritingTaskService = Depends(get_task_service)):
+                            svc: ProductionWritingTaskService = Depends(get_task_service)):
     return StreamingResponse(
         svc.draft_stream_async(task_id, user.id, req.outline_only),
         media_type="text/event-stream",
@@ -203,7 +203,7 @@ async def task_draft_stream(task_id: str, req: TaskDraftRequest,
 @router.get("/{task_id}/agent-runs/{run_id}")
 def get_agent_run(task_id: str, run_id: str,
                   user: User = Depends(get_current_user),
-                  svc: WritingTaskService = Depends(get_task_service)):
+                  svc: ProductionWritingTaskService = Depends(get_task_service)):
     """查询本人的写作智能体运行摘要，不返回提示词或正文中间态。"""
     return svc.get_agent_run(task_id, user.id, run_id)
 
@@ -211,21 +211,21 @@ def get_agent_run(task_id: str, run_id: str,
 @router.post("/{task_id}/agent-runs/{run_id}/resume")
 async def resume_agent_run(task_id: str, run_id: str,
                            user: User = Depends(get_current_user),
-                           svc: WritingTaskService = Depends(get_task_service)):
+                           svc: ProductionWritingTaskService = Depends(get_task_service)):
     return await svc.resume_agent_run_async(task_id, user.id, run_id)
 
 
 @router.post("/{task_id}/agent-runs/{run_id}/cancel")
 def cancel_agent_run(task_id: str, run_id: str,
                      user: User = Depends(get_current_user),
-                     svc: WritingTaskService = Depends(get_task_service)):
+                     svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.cancel_agent_run(task_id, user.id, run_id)
 
 
 @router.post("/{task_id}/revise")
 async def task_revise(task_id: str, req: TaskReviseRequest,
                       user: User = Depends(get_current_user),
-                      svc: WritingTaskService = Depends(get_task_service)):
+                      svc: ProductionWritingTaskService = Depends(get_task_service)):
     if req.current_content is not None:
         from app.application.writing.paragraph_suggestions import content_hash
 
@@ -253,7 +253,7 @@ _IMAGE_RECOGNIZE_PROMPT = (
 async def upload_task_images(task_id: str,
                              files: List[UploadFile] = File(...),
                              user: User = Depends(get_current_user),
-                             svc: WritingTaskService = Depends(get_task_service),
+                             svc: ProductionWritingTaskService = Depends(get_task_service),
                              db: Session = Depends(get_db)):
     task = svc._get_owned(task_id, user.id)
     if not files:
@@ -318,7 +318,7 @@ async def upload_task_images(task_id: str,
 @router.post("/{task_id}/versions")
 def save_version(task_id: str, req: TaskSaveRequest,
                  user: User = Depends(get_current_user),
-                 svc: WritingTaskService = Depends(get_task_service)):
+                 svc: ProductionWritingTaskService = Depends(get_task_service)):
     task = svc._get_owned(task_id, user.id)
     svc._assert_revision_client_base(task, req.base_version, req.base_content_hash)
     svc._claim_revision_state(task, user.id, (task.current_content, task.version_no))
@@ -331,35 +331,35 @@ def save_version(task_id: str, req: TaskSaveRequest,
 @router.get("/{task_id}/versions")
 def list_versions(task_id: str,
                   user: User = Depends(get_current_user),
-                  svc: WritingTaskService = Depends(get_task_service)):
+                  svc: ProductionWritingTaskService = Depends(get_task_service)):
     return {"items": svc.list_versions(task_id, user.id)}
 
 
 @router.get("/{task_id}/format-check")
 def check_current_format(task_id: str,
                          user: User = Depends(get_current_user),
-                         svc: WritingTaskService = Depends(get_task_service)):
+                         svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.check_current_format(task_id, user.id)
 
 
 @router.get("/{task_id}/versions/{version_no}")
 def get_version(task_id: str, version_no: int,
                 user: User = Depends(get_current_user),
-                svc: WritingTaskService = Depends(get_task_service)):
+                svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.get_version(task_id, user.id, version_no)
 
 
 @router.post("/{task_id}/versions/{version_no}/restore")
 def restore_version(task_id: str, version_no: int,
                     user: User = Depends(get_current_user),
-                    svc: WritingTaskService = Depends(get_task_service)):
+                    svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.restore_version(task_id, user.id, version_no)
 
 
 @router.get("/{task_id}/versions/{version_no}/export")
 def export_version(task_id: str, version_no: int, red_header: bool = True,
                    user: User = Depends(get_current_user),
-                   svc: WritingTaskService = Depends(get_task_service)):
+                   svc: ProductionWritingTaskService = Depends(get_task_service)):
     buf, fname = svc.export_version_docx(task_id, user.id, version_no, red_header)
     return StreamingResponse(buf, media_type=_DOCX_MEDIA, headers={
         "Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
@@ -368,7 +368,7 @@ def export_version(task_id: str, version_no: int, red_header: bool = True,
 @router.get("/{task_id}/export")
 def export_task(task_id: str, red_header: bool = True,
                 user: User = Depends(get_current_user),
-                svc: WritingTaskService = Depends(get_task_service)):
+                svc: ProductionWritingTaskService = Depends(get_task_service)):
     buf, fname = svc.export_docx(task_id, user.id, red_header)
     return StreamingResponse(buf, media_type=_DOCX_MEDIA, headers={
         "Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})
@@ -377,5 +377,5 @@ def export_task(task_id: str, red_header: bool = True,
 @router.post("/{task_id}/training-sample")
 def add_training_sample(task_id: str, req: TaskTrainingRequest,
                         user: User = Depends(get_current_user),
-                        svc: WritingTaskService = Depends(get_task_service)):
+                        svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.add_to_training(task_id, user.id, req.final_content)

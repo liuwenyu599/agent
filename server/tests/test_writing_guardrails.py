@@ -22,6 +22,8 @@ from app.application.writing.postprocessor import (
     local_date_string,
 )
 from app.application.writing.task_service import WritingTaskService
+from app.application.writing.async_task_service import AsyncWritingTaskService
+from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_parser import (
     compute_missing,
     normalize_recipient_name,
@@ -88,7 +90,7 @@ def test_speech_template_does_not_require_signoff():
 
 def test_speech_body_discards_model_written_signoff_date():
     body = "同志们：\n我们共同做好这项工作。\n\n广州市白云区司法局\n2026年10月26日"
-    cleaned = WritingTaskService._canonicalize_body(
+    cleaned = StructuredFieldWritingTaskService._canonicalize_body(
         body, {"document_type": "讲话稿"})
     assert cleaned == "同志们：\n我们共同做好这项工作。"
 
@@ -200,15 +202,15 @@ class _FakeDb:
 
 
 class _BoomInterpreter:
-    def interpret(self, *args, **kwargs):
+    async def interpret_async(self, *args, **kwargs):
         raise AssertionError("planned_context 路径不应再次调用 LLM")
 
 
 def test_planned_context_skips_second_llm_interpretation():
-    svc = WritingTaskService(_FakeDb())
+    svc = AsyncWritingTaskService(_FakeDb())
     svc.interpreter = _BoomInterpreter()
 
-    result = svc.create_task(
+    result = asyncio.run(svc.create_task_async(
         "u1",
         "请起草一份关于报送材料的通知",
         planned_context={
@@ -219,7 +221,7 @@ def test_planned_context_skips_second_llm_interpretation():
             "recipient": "各镇街、各部门",
             "authority": "中共广州市白云区委全面依法治区委员会办公室",
         },
-    )
+    ))
 
     ctx = result["task_context"]
     assert ctx["document_type"] == "通知"
@@ -229,12 +231,12 @@ def test_planned_context_skips_second_llm_interpretation():
 
 
 def test_task_keeps_only_user_supplied_signoff_date():
-    svc = WritingTaskService(_FakeDb())
+    svc = AsyncWritingTaskService(_FakeDb())
     svc.interpreter = _BoomInterpreter()
-    result = svc.create_task(
+    result = asyncio.run(svc.create_task_async(
         "u1", "起草通知，成文日期设为2026年10月30日",
         planned_context={"document_type": "通知", "document_date": "2026年10月26日"},
-    )
+    ))
     assert result["task_context"]["document_date"] == "2026年10月30日"
 
 
@@ -288,20 +290,28 @@ def test_body_structure_strips_duplicate_title_and_label_junk_but_keeps_salutati
     )
 
 
-def test_clear_plan_uses_rule_fast_without_llm_or_material_search():
-    svc = WritingTaskService.__new__(WritingTaskService)
+def test_plan_uses_single_async_ai_interpretation_without_unrequested_material_search():
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     svc.db = None
     svc.rag = None
-    svc._interpret = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("明确文种+主题不应调用 LLM 规划"))
-    svc._plan_materials = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("未要求参考材料时不应同步做材料向量检索"))
+    calls = {"interpret": 0}
+
+    async def interpret(*_args, **_kwargs):
+        calls["interpret"] += 1
+        return {"document_type": "通知", "topic": "社区矫正工作", "title": "社区矫正工作通知"}
+
+    svc._interpret_async = interpret
+
+    async def no_materials(*_args, **_kwargs):
+        raise AssertionError("未要求参考材料时不应做材料向量检索")
+
+    svc._plan_materials_async = no_materials
     svc._plan_knowledge = lambda *args, **kwargs: []
-    svc._plan_template = lambda *args, **kwargs: {}
 
-    result = svc.plan_task("u1", "请起草一份关于社区矫正工作的通知")
+    result = asyncio.run(svc.plan_task_async("u1", "请起草一份关于社区矫正工作的通知"))
 
-    assert result["source"] == "rule_fast"
+    assert calls["interpret"] == 1
+    assert result["source"] == "llm"
     assert result["doc_type"] == "通知"
     assert "社区矫正" in result["title"]
     assert result["materials"] == []
@@ -352,7 +362,7 @@ def test_postprocessor_corrects_prose_calculation_used_by_chat():
 
 
 def test_correspondence_uses_official_ending_and_concise_prompt():
-    svc = WritingTaskService.__new__(WritingTaskService)
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     instruction = svc._build_draft_instruction({
         "document_type": "函",
         "topic": "经费结算",
@@ -422,7 +432,7 @@ def test_small_bracket_docnum_is_normalized_to_standard_bracket():
 def test_word_count_target_does_not_cancel_letter_structure_rule():
     """指定字数不能把「函件 3-5 段 / 条目不超 5 个」的结构约束换掉，
     否则模型只能靠加章节凑字数，函会被写成报告。"""
-    svc = WritingTaskService.__new__(WritingTaskService)
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     instruction = svc._build_draft_instruction({
         "document_type": "函",
         "topic": "划拨人民调解员工作补贴",
@@ -540,7 +550,7 @@ class _StubTask:
 
 def test_revise_applies_user_date_to_context_and_keeps_body_chrome_free():
     """结构字段接管后，日期写入 context；正文只保留正文主体。"""
-    svc = WritingTaskService.__new__(WritingTaskService)
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     svc.db = _StubDB()
 
     old = ("关于举办专题讲座的函\n\n"
@@ -605,7 +615,7 @@ def test_parser_understands_everyday_phrasings_for_context_updates():
 
 def test_sync_structured_fields_strips_legacy_signoff_date_from_body():
     """历史正文仍带落款时，结构同步应迁出正文并形成一次真实版本。"""
-    svc = WritingTaskService.__new__(WritingTaskService)
+    svc = StructuredFieldWritingTaskService.__new__(StructuredFieldWritingTaskService)
     svc.db = _StubDB()
 
     body = "请予支持为盼。\n\n广州市白云区司法局\n2026年1月1日"
@@ -631,7 +641,7 @@ def test_sync_structured_fields_strips_legacy_signoff_date_from_body():
 
 
 def test_sync_structured_fields_is_noop_for_already_body_only_content():
-    svc = WritingTaskService.__new__(WritingTaskService)
+    svc = StructuredFieldWritingTaskService.__new__(StructuredFieldWritingTaskService)
     svc.db = _StubDB()
 
     body = "请予支持为盼。"

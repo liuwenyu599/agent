@@ -420,7 +420,12 @@ def _tool_args_from_message(message: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
 
 class WritingIntentInterpreter:
-    """Tool-first semantic router with one legacy JSON repair fallback."""
+    """Shared intent schema, prompt builder and sanitizers for the async router.
+
+    Production model I/O lives only in ``AsyncWritingIntentInterpreter``.  Keeping a synchronous
+    ``interpret`` implementation here previously created a second routing truth that could drift
+    from the ASGI path.
+    """
 
     def __init__(self, assistant) -> None:
         self.assistant = assistant
@@ -454,69 +459,3 @@ class WritingIntentInterpreter:
                 messages.append({"role": h["role"], "content": h["content"][:1200]})
         messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
         return messages
-
-    def interpret(
-        self,
-        message: str,
-        context: Optional[Dict[str, Any]] = None,
-        has_draft: bool = False,
-        history: Optional[List[Dict[str, str]]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        if not self.assistant:
-            return self._safe_failure("模型未配置")
-
-        messages = self._messages(message, context, has_draft, history)
-
-        tool_complete = getattr(self.assistant, "complete_with_tools", None)
-        if callable(tool_complete):
-            try:
-                tool_message = tool_complete(
-                    messages,
-                    tools=[WRITING_OPS_TOOL],
-                    tool_choice={"type": "function", "function": {"name": "route_writing_ops"}},
-                    temperature=0.0,
-                    max_tokens=1200,
-                )
-                tool_args = _tool_args_from_message(tool_message)
-                result = _sanitize_tool_args(tool_args or {}) if tool_args else None
-                if result:
-                    logger.info(
-                        "[意图解释] tool operation=%s intent=%s target=%s",
-                        result["operation"], result["intent"], result.get("patch_target"),
-                    )
-                    return result
-                logger.warning("[意图解释] tool call arguments 非法，降级到 JSON v2")
-            except Exception as exc:
-                logger.warning("[意图解释] tool calling 不可用，降级到 JSON v2: %s", exc)
-
-        try:
-            raw = self.assistant.complete(messages, temperature=0.0, max_tokens=1400)
-        except Exception as exc:
-            return self._safe_failure(f"模型调用失败: {exc}")
-
-        obj = _extract_json(raw or "")
-        if obj is None or obj.get("_schema") not in ("writing_intent_v2", "writing_intent_v1"):
-            repair_messages = messages + [
-                {"role": "assistant", "content": (raw or "")[:3000]},
-                {"role": "user", "content": (
-                    "上一条输出不是合法的 writing_intent_v2 JSON。请重新理解原始用户消息，"
-                    "只输出符合 system 中兼容 schema 的单个 JSON 对象，不要解释。"
-                )},
-            ]
-            try:
-                repaired = self.assistant.complete(repair_messages, temperature=0.0, max_tokens=1400)
-            except Exception as exc:
-                return self._safe_failure(f"JSON 修复调用失败: {exc}")
-            obj = _extract_json(repaired or "")
-
-        if obj is None or obj.get("_schema") not in ("writing_intent_v2", "writing_intent_v1"):
-            return self._safe_failure("模型连续两次未返回合法意图 JSON")
-
-        result = _sanitize_legacy_args(obj)
-        if not result:
-            return self._safe_failure("JSON 操作参数不完整")
-        logger.info(
-            "[意图解释] json-fallback side_effect=%s intent=%s topic=%s dtype=%s",
-            result["side_effect"], result["intent"], result.get("topic"), result.get("document_type"),
-        )
-        return result

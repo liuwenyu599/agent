@@ -13,6 +13,7 @@
 「不得谎称尚未执行的修改已经完成」这条必须保留。
 """
 import os
+import asyncio
 import sys
 import uuid
 from pathlib import Path
@@ -27,6 +28,8 @@ from app.application.writing.intent_interpreter import (  # noqa: E402
     SYSTEM_PROMPT,
     WRITING_OPS_TOOL,
 )
+from app.application.writing import ProductionWritingTaskService  # noqa: E402
+from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter  # noqa: E402
 from app.application.writing.semantic_task_service import (  # noqa: E402
     SemanticWritingTaskService,
 )
@@ -47,22 +50,6 @@ def svc():
 @pytest.fixture()
 def semantic_svc():
     return SemanticWritingTaskService.__new__(SemanticWritingTaskService)
-
-
-def _original_base_class():
-    """取回 monkey patch 之前的原始 WritingTaskService 类对象。
-
-    writing/__init__.py 把 task_service 模块上的同名属性替换成了
-    AsyncWritingTaskService，直接 import 拿到的是被替换后的类。
-    原始类对象只能从继承链里捞出来。
-    """
-    from app.application.writing import task_service as patched
-
-    Runtime = patched.WritingTaskService  # monkey patch 后这里已是 AsyncWritingTaskService
-    for klass in Runtime.__mro__:
-        if klass.__name__ == "WritingTaskService":
-            return klass
-    raise AssertionError("未能在继承链中找到原始 WritingTaskService")
 
 
 # ---------------------------------------------------------------- 1. 提示词与 schema
@@ -229,31 +216,18 @@ def test_collecting_reply_is_only_a_fallback():
     """
 
     class FakeInterpreter:
-        def interpret(self, message, context=None, has_draft=False, history=None):
+        async def interpret_async(self, message, context=None, has_draft=False, history=None):
             return {"operation": "answer", "reply": "这是一句来自模型的自然回复",
                     "field_updates": {}}
 
-    # __new__ 绕过了 __init__，interpreter 是实例属性需自行挂载
-    svc = _original_base_class().__new__(_original_base_class())
+    svc = ProductionWritingTaskService.__new__(ProductionWritingTaskService)
     svc.interpreter = FakeInterpreter()
-    result = svc._interpret("随便", {}, has_draft=False)
+    result = asyncio.run(svc._interpret_async("随便", {}, has_draft=False))
     assert result["reply"] == "这是一句来自模型的自然回复"
 
 
-def test_new_reply_logic_reaches_the_runtime_service_class():
-    """新的回复逻辑必须能被「运行时真正生效的那个类」看到。
-
-    writing/__init__.py 有一行 monkey patch：
-        _task_service.WritingTaskService = AsyncWritingTaskService
-    它把 task_service 模块上的名字换掉了，但继承链仍指向原始基类。
-    这意味着改动若落在没有被继承的地方（或某人又加了一层覆盖），
-    运行时会**静默地继续走老模板**——没有任何报错，只有用户觉得没改。
-    这里直接用运行时类验证新方法可见且不再产出旧话术。
-    """
-    from app.application.writing import task_service as patched
-
-    Runtime = patched.WritingTaskService
-    svc = Runtime.__new__(Runtime)
+def test_new_reply_logic_reaches_explicit_production_service_class():
+    svc = ProductionWritingTaskService.__new__(ProductionWritingTaskService)
     reply = svc._collecting_reply({"document_type": "通知"}, [], [], "写个通知")
     assert FROZEN_READY_LINE not in reply
     assert reply
@@ -265,8 +239,6 @@ def test_interpret_failure_returns_none_not_fabricated_reply(monkeypatch):
     这条是既有安全设计，本轮改动不得破坏：模板轮换再自然，也只配出现在模型
     没接管的场合，不能反过来替模型编话。
     """
-    from app.application.writing.intent_interpreter import WritingIntentInterpreter
-
-    interp = WritingIntentInterpreter.__new__(WritingIntentInterpreter)
+    interp = AsyncWritingIntentInterpreter.__new__(AsyncWritingIntentInterpreter)
     interp.assistant = None  # 模型未配置
-    assert interp.interpret("写个通知") is None
+    assert asyncio.run(interp.interpret_async("写个通知")) is None

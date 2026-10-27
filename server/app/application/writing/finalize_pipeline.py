@@ -10,8 +10,8 @@
 - :func:`persist_revision` —— 并发校验 + 写正文 + 版本快照 + 提交，
   由调用方决定 note 与是否切换到 editing 状态。
 
-质量门的失败策略不在这里：D 级拒收在 :mod:`quality_policy`，正文改写过程由
-``_postprocess`` 内的 fail-closed 守卫负责。
+最终候选的 fail-closed 判断也在这里完成：后处理后的正文只评估一次，再结合
+``ContentChecker`` 的问题决定是否允许落库。生成中途的候选修复属于另一阶段。
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.application.writing.content_check import ContentChecker
-from app.application.writing.quality_gate import QualityGate
+from app.application.writing.quality_policy import assert_acceptable, quality_result
 from app.core.timeutil import now_local
 
 
@@ -52,15 +52,19 @@ def finalize_text(service, text: str, ctx: Dict[str, Any], sources: List[Dict],
     else:
         ctx.pop("citation_warnings", None)
 
-    quality = QualityGate().evaluate(
-        text, body_only=True, document_type=ctx.get("document_type") or "",
-        word_count_target=ctx.get("word_count_target"))
+    quality = quality_result(
+        text,
+        topic=str(ctx.get("title") or ctx.get("topic") or ""),
+        document_type=str(ctx.get("document_type") or ""),
+        word_count_target=ctx.get("word_count_target"),
+    )
     content_check = ContentChecker().check(
         text, sources=sources, header_docnum=doc_number)
     if content_check["issues"]:
         quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
         if quality.get("level") == "A":
             quality["level"] = "B"
+    assert_acceptable(quality, "收尾后的结果仍存在硬伤，未保存该版本。")
 
     # 后处理**实际采用**的文号/成文日期回写 ctx，保证任务信息与正文一致。
     if doc_number:

@@ -1,22 +1,22 @@
 import json
+import asyncio
 
+from app.application.writing import ProductionWritingTaskService
+from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.async_task_service import AsyncWritingTaskService
 from app.application.writing.eval_capture_service import EvalCaptureWritingTaskService
-from app.application.writing.intent_interpreter import WritingIntentInterpreter
 from app.application.writing.ops_task_service import OpsWritingTaskService
-from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
 from app.application.writing.semantic_task_service import SemanticWritingTaskService
 from app.application.writing.structured_field_service import StructuredFieldWritingTaskService
 from app.application.writing.task_service import WritingTaskService
-from app.application.shared.writing_assistant import WritingAssistant
 
 
 class BrokenAssistant:
     def __init__(self):
         self.calls = 0
 
-    def complete(self, *args, **kwargs):
+    async def acomplete(self, *args, **kwargs):
         self.calls += 1
         return "这不是合法 JSON"
 
@@ -27,7 +27,7 @@ class ToolAssistant:
         self.tool_calls = 0
         self.complete_calls = 0
 
-    def complete_with_tools(self, messages, tools, **kwargs):
+    async def acomplete_with_tools(self, messages, tools, **kwargs):
         self.tool_calls += 1
         assert tools[0]["function"]["name"] == "route_writing_ops"
         return {
@@ -43,30 +43,30 @@ class ToolAssistant:
             }],
         }
 
-    def complete(self, *args, **kwargs):
+    async def acomplete(self, *args, **kwargs):
         self.complete_calls += 1
         raise AssertionError("valid tool call must not fall back to JSON completion")
 
 
 def test_public_writing_service_routes_to_async_sectioned_generation_service():
-    assert WritingTaskService is AsyncWritingTaskService
+    assert ProductionWritingTaskService is AsyncWritingTaskService
+    assert WritingTaskService is not AsyncWritingTaskService
     assert issubclass(AsyncWritingTaskService, SectionedGenerationWritingTaskService)
 
 
-def test_sectioned_service_preserves_structured_eval_quality_retry_and_ops_layers():
+def test_sectioned_service_preserves_structured_eval_and_ops_layers():
     assert issubclass(SectionedGenerationWritingTaskService, StructuredFieldWritingTaskService)
     assert issubclass(StructuredFieldWritingTaskService, EvalCaptureWritingTaskService)
-    assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
-    assert issubclass(QualityRetryWritingTaskService, OpsWritingTaskService)
+    assert issubclass(EvalCaptureWritingTaskService, OpsWritingTaskService)
 
 
 def test_intent_failure_fails_closed_instead_of_regex_fallback():
     assistant = BrokenAssistant()
-    result = WritingIntentInterpreter(assistant).interpret(
+    result = asyncio.run(AsyncWritingIntentInterpreter(assistant).interpret_async(
         "把标题改成关于社区矫正工作的通知",
         context={"title": "旧标题"},
         has_draft=True,
-    )
+    ))
     assert assistant.calls == 2
     assert result is None
 
@@ -80,11 +80,11 @@ def test_tool_call_routes_local_edit_to_patch_section():
         "revision_mode": "condense",
         "reply": "将只精简第二段。",
     })
-    result = WritingIntentInterpreter(assistant).interpret(
+    result = asyncio.run(AsyncWritingIntentInterpreter(assistant).interpret_async(
         "第二段太长了，精简一半",
         context={"title": "测试通知"},
         has_draft=True,
-    )
+    ))
     assert result["operation"] == "patch_section"
     assert result["patch_target"] == "第二段"
     assert result["revision_instruction"] == "把这一段精简一半，事实不变"
@@ -93,18 +93,16 @@ def test_tool_call_routes_local_edit_to_patch_section():
     assert assistant.complete_calls == 0
 
 
-def test_sync_writing_assistant_exposes_gateway_tool_calls():
-    assistant = WritingAssistant.__new__(WritingAssistant)
-    gateway = ToolAssistant({
+def test_async_intent_interpreter_uses_gateway_tool_calls():
+    assistant = ToolAssistant({
         "operation": "patch_section", "field_updates": {}, "target": "第二段",
         "instruction": "精简第二段", "reply": "将只修改第二段。",
     })
-    assistant.gateway = gateway
-    result = WritingIntentInterpreter(assistant).interpret(
-        "只改第二段", context={}, has_draft=True)
+    result = asyncio.run(AsyncWritingIntentInterpreter(assistant).interpret_async(
+        "只改第二段", context={}, has_draft=True))
     assert result["operation"] == "patch_section"
     assert result["routing"] == "tool_call"
-    assert gateway.tool_calls == 1
+    assert assistant.tool_calls == 1
 
 
 def test_tool_call_keeps_field_updates_separate_from_body_operation():
@@ -116,11 +114,11 @@ def test_tool_call_keeps_field_updates_separate_from_body_operation():
         "revision_mode": "expand",
         "reply": "更新标题和日期，并扩写工作措施。",
     })
-    result = WritingIntentInterpreter(assistant).interpret(
+    result = asyncio.run(AsyncWritingIntentInterpreter(assistant).interpret_async(
         "标题改成新标题，日期改成2026年10月2日，第三部分措施写具体",
         context={"title": "旧标题"},
         has_draft=True,
-    )
+    ))
     assert result["title"] == "新标题"
     assert result["document_date"] == "2026年10月2日"
     assert result["operation"] == "patch_section"

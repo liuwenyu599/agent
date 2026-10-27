@@ -4,11 +4,13 @@
 任务内对话 / 质量重试）在同步与异步两条链上各写一遍，改一处忘一处就会分叉——日期注入
 误伤讲话稿、修复动作只在同步链生效都是这么来的。
 
-这里锁住四条不变量：
-1. 生产服务上不存在同步内容入口（重新加回来会直接失败）；
-2. 三条支路共用同一套收尾与落库管线；
-3. 质量门的重试预算只有一处定义；
-4. 讲话类文种判断只有一处定义。
+这里锁住六条不变量：
+1. 生产服务上不存在同步内容或规划入口（重新加回来会直接失败）；
+2. 路由显式依赖异步生产服务，不靠包初始化时重绑基类；
+3. 三条支路共用同一套收尾与落库管线；
+4. 最终候选只在收尾管线做一次 fail-closed 质检；
+5. 质量门的重试预算只有一处定义；
+6. 讲话类文种判断只有一处定义。
 """
 import inspect
 
@@ -16,6 +18,7 @@ import pytest
 
 from app.application.writing import quality_policy, section_policy
 from app.application.writing.async_task_service import AsyncWritingTaskService
+from app.application.writing.task_service import WritingTaskService
 
 SYNC_ENTRY_POINTS = ("draft", "draft_stream", "revise", "patch_section", "chat")
 
@@ -27,6 +30,28 @@ def test_production_service_has_no_sync_content_entry_point(name):
     )
 
 
+def test_metadata_and_intent_have_no_second_sync_model_path():
+    from app.application.writing.intent_interpreter import WritingIntentInterpreter
+    from app.application.writing.semantic_task_service import SemanticWritingTaskService
+    from app.application.writing.grounded_task_service import GroundedWritingTaskService
+
+    assert not hasattr(WritingIntentInterpreter, "interpret")
+    assert not hasattr(WritingTaskService, "create_task")
+    assert not hasattr(WritingTaskService, "plan_task")
+    assert "create_task" not in SemanticWritingTaskService.__dict__
+    assert "plan_task" not in SemanticWritingTaskService.__dict__
+    assert "plan_task" not in GroundedWritingTaskService.__dict__
+
+
+def test_public_route_uses_explicit_production_service_without_rebinding_base():
+    import app.application.writing.task_service as task_module
+    from app.interfaces import writing_tasks
+
+    assert task_module.WritingTaskService is WritingTaskService
+    assert task_module.WritingTaskService is not AsyncWritingTaskService
+    assert writing_tasks.ProductionWritingTaskService is AsyncWritingTaskService
+
+
 @pytest.mark.parametrize("method", ["revise_async", "patch_section_async"])
 def test_revision_paths_share_finalize_and_persist_pipeline(method):
     source = inspect.getsource(getattr(AsyncWritingTaskService, method))
@@ -35,12 +60,20 @@ def test_revision_paths_share_finalize_and_persist_pipeline(method):
 
 
 def test_draft_finalizer_uses_the_same_pipeline():
-    # 基类 ``WritingTaskService`` 在包初始化时被重绑到异步实现，取 MRO 里的基类本体。
-    base = next(cls for cls in AsyncWritingTaskService.__mro__
-                if cls.__name__ == "WritingTaskService")
-    source = inspect.getsource(base._finalize_draft)
+    source = inspect.getsource(WritingTaskService._finalize_draft)
     assert "finalize_text(" in source
     assert "persist_revision(" in source
+
+
+def test_final_quality_guard_lives_only_in_finalize_pipeline():
+    from app.application.writing import finalize_pipeline
+    from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+
+    source = inspect.getsource(finalize_pipeline.finalize_text)
+    assert source.count("quality_result(") == 1
+    assert source.count("assert_acceptable(") == 1
+    assert "_postprocess" not in QualityRetryWritingTaskService.__dict__
+    assert "_finalize_draft" not in QualityRetryWritingTaskService.__dict__
 
 
 def test_quality_retry_budget_is_defined_once():

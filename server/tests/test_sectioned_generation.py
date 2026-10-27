@@ -458,9 +458,9 @@ def test_draft_prompt_reuses_style_and_memory_across_sections(monkeypatch):
 
 
 def test_retrieval_degradation_is_visible_in_final_result(monkeypatch):
-    from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+    from app.application.writing.task_service import WritingTaskService
 
-    monkeypatch.setattr(QualityRetryWritingTaskService, "_finalize_draft",
+    monkeypatch.setattr(WritingTaskService, "_finalize_draft",
                         lambda *_args, **_kwargs: {"reply": "生成完成", "current_content": "正文"})
     service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     service._rag_degraded_this_run = True

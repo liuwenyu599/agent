@@ -1,7 +1,7 @@
 """Async production writing service.
 
 All long model I/O is awaited. Deterministic SQL/RAG/post-processing helpers stay shared with the
-mature synchronous service chain so item-1..5/9..15 guarantees are not forked or weakened.
+core service chain so their guarantees are not forked or weakened.
 """
 from __future__ import annotations
 
@@ -34,8 +34,10 @@ from app.application.writing.quality_policy import (
     critical_issue_lines,
     model_plan_prompt,
     parse_model_plan,
+    quality_result,
     raise_quality_gate,
     repair_decision,
+    retry_prompt,
 )
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
 from app.application.writing.section_policy import is_speech_type
@@ -97,6 +99,11 @@ def _http_error_message(detail: Any) -> str:
 
 class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWritingTaskService):
     """Final production writing service for ASGI routes."""
+
+    # One injectable seam for agent-graph tests and extensions; the implementation remains the
+    # single function in quality_policy rather than another copy of QualityGate configuration.
+    _quality_result = staticmethod(quality_result)
+    _retry_prompt = staticmethod(retry_prompt)
 
     def __init__(self, db, assistant=None, rag=None, attachments=None):
         super().__init__(db, assistant=assistant, rag=rag, attachments=attachments)
@@ -429,7 +436,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         """改写候选；D 级按 quality_policy 的针对性动作最多修复两次。"""
         candidate = await self._llm_revise_once_async(prompt, sources, attachment_ctx, user_id)
         topic = str((ctx or {}).get("title") or (ctx or {}).get("topic") or "")
-        quality = self._quality_result(candidate, topic=topic)
+        quality = quality_result(candidate, topic=topic)
         retry_no = 0
         while quality.get("level") == "D" and retry_no < MAX_QUALITY_RETRIES:
             retry_no += 1
@@ -439,11 +446,11 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 retry_no, MAX_QUALITY_RETRIES, decision.source,
                 critical_issue_lines(quality), decision.action,
             )
-            retry_prompt = self._retry_prompt(
+            repair_prompt = retry_prompt(
                 prompt, candidate, quality, retry_no, decision.action)
             candidate = await self._llm_revise_once_async(
-                retry_prompt, sources, attachment_ctx, user_id)
-            quality = self._quality_result(candidate, topic=topic)
+                repair_prompt, sources, attachment_ctx, user_id)
+            quality = quality_result(candidate, topic=topic)
         if quality.get("level") == "D":
             raise_quality_gate(quality, "生成结果连续两次修复后仍存在硬伤，未保存该版本。")
         return candidate
@@ -817,7 +824,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             except Exception:
                 pass
 
-        quality = self._quality_result(
+        quality = quality_result(
             candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
         topic = str(ctx.get("title") or ctx.get("topic") or "")
         while quality.get("level") == "D" and retries_used < MAX_QUALITY_RETRIES:
@@ -828,7 +835,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 retries_used, MAX_QUALITY_RETRIES, decision.source,
                 critical_issue_lines(quality), decision.action,
             )
-            retry_instruction = self._retry_prompt(
+            retry_instruction = retry_prompt(
                 instruction, candidate, quality, retries_used, decision.action)
             try:
                 candidate = self._clean_markdown(await self._llm_draft_async(
@@ -836,7 +843,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             except Exception as exc:
                 logger.warning("[写作质量门] D 级修复重试调用失败: %s", exc)
                 break
-            quality = self._quality_result(candidate, topic=topic)
+            quality = quality_result(candidate, topic=topic)
             reasons.append(
                 f"QualityGate 检测到硬伤，已按针对性策略自动修复第 {retries_used} 次"
                 f"（{decision.source} 决策）。")

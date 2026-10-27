@@ -53,8 +53,13 @@ class RepairDecision(dict):
         return str(self.get("source") or "rule")
 
 
-def quality_result(text: str, topic: str = "") -> Dict[str, Any]:
-    return QualityGate().evaluate(text or "", topic=topic or "", body_only=True)
+def quality_result(text: str, topic: str = "", *, document_type: str = "",
+                   word_count_target: Optional[int] = None) -> Dict[str, Any]:
+    """Evaluate one candidate through the shared gate with all task-level constraints."""
+    return QualityGate().evaluate(
+        text or "", topic=topic or "", body_only=True,
+        document_type=document_type or "", word_count_target=word_count_target,
+    )
 
 
 def critical_issue_lines(quality: Dict[str, Any]) -> List[str]:

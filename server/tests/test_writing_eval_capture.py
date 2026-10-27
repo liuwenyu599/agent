@@ -1,8 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.application.writing import ProductionWritingTaskService
 from app.application.writing.eval_capture_service import EvalCaptureWritingTaskService
-from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
 from app.application.writing.task_service import WritingTaskService
 from app.infrastructure.database.base import Base
 from app.infrastructure.database.models.document import MyDocumentModel, MyDocumentVersionModel
@@ -49,11 +49,9 @@ def _task_with_version(db, *, note="V1 AI 初稿", content="AI版本正文。", 
     return task
 
 
-def test_public_service_keeps_eval_capture_above_quality_retry():
-    # Production may add stricter structured-field / section-generation layers on top,
-    # but manual-save eval capture must remain in the inheritance chain.
-    assert issubclass(WritingTaskService, EvalCaptureWritingTaskService)
-    assert issubclass(EvalCaptureWritingTaskService, QualityRetryWritingTaskService)
+def test_public_service_keeps_eval_capture_in_production_chain():
+    assert issubclass(ProductionWritingTaskService, EvalCaptureWritingTaskService)
+    assert not issubclass(WritingTaskService, EvalCaptureWritingTaskService)
 
 
 def test_ai_version_note_classifier_excludes_manual_and_structural_versions():

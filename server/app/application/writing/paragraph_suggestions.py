@@ -51,7 +51,7 @@ class ParagraphSuggestionMixin:
             "仅返回这一段的最终建议文本，不返回整篇文稿、说明、标题、列表或 Markdown。"
             "保持用户未要求改变的事实、数字、日期、人物和政策口径；不得编造。"
         )
-        card = self._example_style_block(prompt, user_id)
+        card = await self._read_in_worker("_example_style_block", prompt, user_id)
         self._record_prompt(system, card, prompt, sources, attachment_ctx, user_id,
                             kind="paragraph_suggestion")
         return await self.assistant.achat(
@@ -190,7 +190,8 @@ class ParagraphSuggestionMixin:
             f"用户要求：{instruction or '在忠于原意的前提下检查并优化表达'}"
             + memory
         )
-        sources = self._retrieve(ctx, user_id, extra_query=instruction or original[:100])
+        sources = await self._retrieve_async(
+            ctx, user_id, extra_query=instruction or original[:100])
         proposed_body = (await self._generate_paragraph_suggestion(
             prompt, sources, self._attachment_context(task, ctx), user_id)).strip()
         indentation = re.match(r"^[ \t\u3000]*", original).group()

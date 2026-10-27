@@ -42,11 +42,7 @@ from app.application.templates.builtin_data import BUILTIN_TEMPLATES  # noqa: E4
 from app.application.writing.async_intent_interpreter import (  # noqa: E402
     AsyncWritingIntentInterpreter,
 )
-from app.application.writing.intent_interpreter import (  # noqa: E402
-    WritingIntentInterpreter,
-    _extract_json,
-    _sanitize,
-)
+from app.application.writing.intent_interpreter import _extract_json, _sanitize  # noqa: E402
 
 
 # ---------------------------------------------------------------- 工具
@@ -226,24 +222,24 @@ class TestInterpreterRobustness:
 
     def test_schema_marker_required(self):
         """无 schema 标记的 JSON（如 Mock 回显）不得被当作意图"""
-        interp = WritingIntentInterpreter(ScriptedAssistant(['{"intent": "draft"}']))
-        assert interp.interpret("起草吧") is None
+        interp = AsyncWritingIntentInterpreter(ScriptedAssistant(['{"intent": "draft"}']))
+        assert asyncio.run(interp.interpret_async("起草吧")) is None
 
     def test_valid_interpretation(self):
-        interp = WritingIntentInterpreter(ScriptedAssistant(
+        interp = AsyncWritingIntentInterpreter(ScriptedAssistant(
             [intent_json(intent="update_context", document_type="报告", topic="晋升")]))
-        out = interp.interpret("写一个晋升报告")
+        out = asyncio.run(interp.interpret_async("写一个晋升报告"))
         assert out["intent"] == "update_context"
         assert out["topic"] == "晋升"
 
     def test_llm_exception_returns_none(self):
         class Boom:
-            def complete(self, *a, **k):
+            async def acomplete(self, *a, **k):
                 raise ConnectionError("vllm down")
-        assert WritingIntentInterpreter(Boom()).interpret("hi") is None
+        assert asyncio.run(AsyncWritingIntentInterpreter(Boom()).interpret_async("hi")) is None
 
     def test_llm_none_assistant(self):
-        assert WritingIntentInterpreter(None).interpret("hi") is None
+        assert asyncio.run(AsyncWritingIntentInterpreter(None).interpret_async("hi")) is None
 
 
 # ---------------------------------------------------------------- C. 写作任务全链路
@@ -504,17 +500,17 @@ def make_db_user(db, role="user", username=None):
 class TestServiceLevel:
     def _service(self, replies):
         from app.infrastructure.database import SessionLocal
-        from app.application.writing.task_service import WritingTaskService
+        from app.application.writing import ProductionWritingTaskService
         db = SessionLocal()
         assistant = ScriptedAssistant(replies)
-        return db, WritingTaskService(db, assistant=assistant), assistant
+        return db, ProductionWritingTaskService(db, assistant=assistant), assistant
 
     def test_llm_date_cannot_override_user(self):
         """LLM 想改日期，但 parser 裁定的用户指定值获胜"""
         db, svc, _ = self._service([intent_json(
             intent="update_context", topic="晋升")])
         uid = make_db_user(db).id
-        t = svc.create_task(uid, "写一个晋升报告")
+        t = asyncio.run(svc.create_task_async(uid, "写一个晋升报告"))
         tid = t["task_id"]
         svc.interpreter = AsyncWritingIntentInterpreter(ScriptedAssistant([intent_json(
             intent="update_context", reply="好的")]))
@@ -526,7 +522,7 @@ class TestServiceLevel:
         """绑定模板后，起草指令包含模板名与模板结构"""
         db, svc, assistant = self._service(None)
         uid = make_db_user(db).id
-        t = svc.create_task(uid, "帮我写一份2026年度司法行政工作总结")
+        t = asyncio.run(svc.create_task_async(uid, "帮我写一份2026年度司法行政工作总结"))
         ctx = dict(t["task_context"])
         template = {"id": "t1", "name": "年度总结标准模板", "is_active": True,
                     "writing_style": "庄重", "word_count": 2500,

@@ -221,6 +221,76 @@ def test_continue_generation_rejects_unrelated_document():
     assert task.version_no == 0
 
 
+def test_continue_generation_allows_explicit_800_to_200_character_condense():
+    db, task = setup_task()
+    essentials = [
+        "受理窗口应一次性告知申请材料，并记录补正事项和办理期限。",
+        "承办人员核对身份信息，确认提交材料与原件内容一致。",
+        "疑难事项由业务科室集体研判，形成书面意见后再办理。",
+        "审批环节明确岗位责任，避免同一事项在多个部门重复流转。",
+        "办理进度通过内网系统更新，逾期事项及时提醒责任人员。",
+        "涉及个人信息的材料应分类保存，查阅和导出均需登记。",
+        "群众提出异议时应说明依据，并告知复核渠道和办理时限。",
+        "各科室定期核查办结质量，对发现的问题明确整改措施。",
+    ]
+    extra = [f"补充工作事项{i}：结合实际情况完善办理流程和协作机制。"
+             for i in range(1, 27)]
+    task.current_content = "\n".join(essentials + extra)
+    task.context = {**task.context, "word_count_target": 200,
+                    "history": [{"role": "user", "content": "把当前稿压缩到200字"}]}
+    db.commit()
+    svc = AsyncWritingTaskService(db)
+    candidate = "\n".join(essentials)
+
+    result = svc._finalize_draft(task, task.context, candidate, [], "user-1")
+
+    assert result["version_no"] == 1
+    assert task.current_content == candidate
+
+
+def test_short_target_does_not_allow_unrelated_document():
+    db, task = setup_task()
+    task.current_content = "依法办理窗口事项，核对申请材料并落实办理时限。" * 35
+    task.context = {**task.context, "word_count_target": 200}
+    db.commit()
+    svc = AsyncWritingTaskService(db)
+
+    with pytest.raises(HTTPException) as error:
+        svc._finalize_draft(task, task.context,
+                            "另一个主题讲述旅游路线和餐饮安排。" * 12, [], "user-1")
+
+    assert error.value.status_code == 422
+    assert task.version_no == 0
+
+
+def test_shortening_without_explicit_target_preserves_topic_and_saves():
+    db, task = setup_task()
+    core = "受理窗口一次性告知材料，并记录办理期限。"
+    task.current_content = core + "补充说明办理要求和责任分工。" * 35
+    task.context = {"document_type": "通知", "title": "窗口办理通知"}
+    db.commit()
+    svc = AsyncWritingTaskService(db)
+
+    result = svc._finalize_draft(task, task.context, core, [], "user-1")
+
+    assert result["version_no"] == 1
+    assert task.current_content == core
+
+
+def test_paragraph_suggestion_uses_bounded_async_retrieval(monkeypatch):
+    db, task = setup_task()
+    svc = AsyncWritingTaskService(db, assistant=Assistant("依法办理。"))
+    pid = svc.list_paragraphs(task.id, "user-1")["items"][1]["id"]
+    monkeypatch.setattr(svc, "_retrieve", lambda *_a, **_k:
+                        pytest.fail("sync retrieval blocked the request"))
+    monkeypatch.setattr(svc, "_example_style_block", lambda *_a, **_k:
+                        pytest.fail("sync style retrieval blocked the request"))
+
+    suggestion = asyncio.run(svc.suggest_paragraph_async(task.id, "user-1", pid))
+
+    assert suggestion["proposed_content"] == "依法办理。"
+
+
 def test_legacy_structural_prefix_maps_to_displayed_paragraph():
     db, task = setup_task()
     task.context = {"title": "测试通知", "recipient": "各科室", "document_type": "通知"}
@@ -241,7 +311,7 @@ def test_legacy_structural_prefix_maps_to_displayed_paragraph():
 def test_paragraph_routes_are_wired_to_the_async_service():
     from app.interfaces.deps import get_current_user
     from app.interfaces.writing_tasks import (
-        WritingTaskService as RouteService, get_task_service,
+        ProductionWritingTaskService as RouteService, get_task_service,
     )
     from app.main import app
 

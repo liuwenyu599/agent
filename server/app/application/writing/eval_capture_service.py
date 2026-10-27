@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import desc, select
 
 from app.application.writing import prompt_snapshot
-from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+from app.application.writing.ops_task_service import OpsWritingTaskService
 from app.infrastructure.database.models.document import MyDocumentVersionModel
 from app.infrastructure.database.models.training import TrainingSampleModel
 
@@ -33,7 +33,7 @@ _AI_NOTE_PREFIXES = (
 )
 
 
-class EvalCaptureWritingTaskService(QualityRetryWritingTaskService):
+class EvalCaptureWritingTaskService(OpsWritingTaskService):
     """Production writing service with automatic AI→human evaluation-pair capture."""
 
     @staticmethod

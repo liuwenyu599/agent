@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.application.writing.async_task_service import AsyncWritingTaskService
-from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+from app.application.writing.finalize_pipeline import finalize_text
 
 
 class BareRetryService(AsyncWritingTaskService):
@@ -79,13 +79,30 @@ def test_revise_stops_after_two_retries_and_raises_without_returning_d_candidate
     assert exc.value.detail["issues"]
 
 
-def test_finalizer_rejects_d_before_calling_persistence_parent():
-    service = BareRetryService(SequenceAssistant([]))
+def test_finalizer_rejects_d_before_persistence():
+    class FinalizeStub:
+        @staticmethod
+        def _postprocess(text, _ctx):
+            return text, [], None, None
+
+        @staticmethod
+        def _strip_leading_structural_fields(text, _ctx):
+            return text
+
+        @staticmethod
+        def _guard_external_document_numbers(text, _sources, _ctx):
+            return text, []
+
+        @staticmethod
+        def _reference_labels(_sources):
+            return []
+
+        @staticmethod
+        def _reference_items(_sources):
+            return []
 
     with pytest.raises(HTTPException) as exc:
-        # 直接调用质量门这一层的 fail-closed 守卫：D 级在触碰持久化父类之前就被拒收。
-        QualityRetryWritingTaskService._finalize_draft(
-            service, object(), {"title": "测试通知"}, BAD, [], "u1")
+        finalize_text(FinalizeStub(), BAD, {"title": "测试通知"}, [])
 
     assert exc.value.status_code == 422
     assert exc.value.detail["code"] == "WRITING_QUALITY_GATE_D"

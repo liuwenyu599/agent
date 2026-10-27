@@ -61,11 +61,11 @@ def test_kb_examples_are_compacted_into_style_cards_not_plain_sources():
 
 
 def test_production_service_keeps_grounded_behavior():
-    from app.application.writing import task_service
+    from app.application.writing import ProductionWritingTaskService
 
     # The public production service may add stricter layers (ops routing / QualityGate retries),
     # but it must continue to inherit all grounded-writing behavior rather than bypass it.
-    assert issubclass(task_service.WritingTaskService, GroundedWritingTaskService)
+    assert issubclass(ProductionWritingTaskService, GroundedWritingTaskService)
 
 
 def test_speech_does_not_copy_a_scheme_as_style_exemplar():
