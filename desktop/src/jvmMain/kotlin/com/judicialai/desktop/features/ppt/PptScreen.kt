@@ -433,7 +433,10 @@ private fun PptEntryPane(
                 }
             }
         }
-        Text("模板只控制视觉与版式，不改变已确认内容。",
+        val selectedTemplateName = vm.templates.firstOrNull { it["id"].str() == vm.templateId }
+            ?.get("name").str()
+        Text(if (vm.templateId == null) "本次未套用模板，将使用自适应排版。"
+             else "本次将套用「${selectedTemplateName.ifBlank { "所选模板" }}」的版式与配色。",
             fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
 
         // 最近创建
@@ -1054,6 +1057,8 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                 pickFiles("选择 pptx 模板").firstOrNull()?.let { vm.uploadTemplate(it) }
             }) { Text(if (vm.busy) "学习中…" else "上传模板") }
         }
+        Text("模板文字框可写 {{title}}、{{point1}}、{{card1_title}}、{{card1_body}}、{{time1}}、{{event1}} 等占位符；生成时按位置替换。",
+            fontSize = 11.sp, color = Muted)
         PptStatus(vm)
         LazyVerticalGrid(columns = GridCells.Adaptive(200.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),

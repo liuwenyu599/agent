@@ -228,6 +228,11 @@ def outline_ok(fake_llm):
              "subtitle": "2026年第一季度", "sources": []},
             {"type": "content", "title": "案件办理情况",
              "points": ["受理120件", "办结115件"], "sources": ["材料A.txt"]},
+            {"type": "content", "title": "受理工作", "points": ["按规定受理申请"]},
+            {"type": "content", "title": "审理工作", "points": ["依法审查材料"]},
+            {"type": "content", "title": "协调机制", "points": ["加强部门衔接"]},
+            {"type": "content", "title": "风险提示", "points": ["及时核对事实"]},
+            {"type": "content", "title": "后续安排", "points": ["持续完善流程"]},
             {"type": "closing", "title": "谢谢聆听，请批评指正", "sources": []},
         ]}
     fake_llm._responder = lambda m: json.dumps(payload, ensure_ascii=False)
@@ -335,9 +340,9 @@ def test_b1_search_raises_but_outline_still_200(client, accounts, fake_llm,
     assert r.status_code == 200, f"检索异常被冒泡成 {r.status_code}：{r.text}"
     body = r.json()
     assert body["outline"]["title"] == "行政复议工作汇报"
-    assert len(body["outline"]["slides"]) == 6
+    assert len(body["outline"]["slides"]) == 8
     assert body["outline"]["slides"][0]["type"] == "cover"
-    assert body["outline"]["slides"][1]["type"] == "toc"
+    assert body["outline"]["slides"][1]["type"] == "content"
     assert body["outline"]["slides"][-1]["type"] == "closing"
     assert body["doc_id"]
     prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]

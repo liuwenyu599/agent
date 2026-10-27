@@ -834,6 +834,25 @@ def outline_from_pptx(data: bytes) -> Dict:
 
 # ================= PPTX 构建 =================
 
+def _diagram_fallback_labels(blocks: Dict) -> List[str]:
+    labels = blocks.get("diagram_labels") or [
+        node.get("label") for node in (blocks.get("diagram_nodes") or [])
+        if isinstance(node, dict) and node.get("label")
+    ]
+    return [str(label) for label in labels if str(label).strip()]
+
+
+def _diagram_fallback_relations(blocks: Dict) -> List[str]:
+    names = {str(node.get("id")): str(node.get("label"))
+             for node in (blocks.get("diagram_nodes") or [])
+             if isinstance(node, dict) and node.get("id") and node.get("label")}
+    relations = [f"{names[edge['source']]} → {names[edge['target']]}"
+                 for edge in (blocks.get("diagram_edges") or [])
+                 if isinstance(edge, dict) and edge.get("source") in names
+                 and edge.get("target") in names]
+    return relations or _diagram_fallback_labels(blocks)
+
+
 def _try_drawio_render(slide, data: Dict, box: tuple, font: str, warnings: list,
                        colors: Optional[Dict] = None) -> bool:
     """Roll back a failed diagram so the page can safely use its basic layout."""
@@ -1891,7 +1910,7 @@ LAYOUT_TYPE_LABELS = {
     "cover": "封面", "toc": "目录", "section": "章节页", "content": "正文页",
     "content_image": "图文页", "two_col": "双栏页", "data": "数据页",
     "chart": "图表页", "case": "案例页", "timeline": "时间轴页",
-    "process": "流程页", "summary": "总结页", "closing": "结束页",
+    "process": "流程页", "cards": "卡片页", "summary": "总结页", "closing": "结束页",
 }
 
 # 大纲页型 → 版式库匹配的优先顺序（模板没有该版式时降级，不强行套用默认版式）
@@ -1900,6 +1919,7 @@ LEARNED_FALLBACK = {
     "toc": ["toc", "content", "two_col"],
     "section": ["section", "content", "cover"],
     "content": ["content", "content_image", "two_col", "section"],
+    "cards": ["cards", "content", "content_image"],
     "data": ["data", "chart", "content", "two_col"],
     "chart": ["chart", "data", "content"],
     "case": ["case", "content_image", "content"],
@@ -1981,6 +2001,8 @@ def _element_of(shape, sw, sh) -> Dict:
         el = {"kind": kind, **r}
         if kind == "text":
             el.update(_text_meta(shape))
+            el["placeholder_keys"] = re.findall(
+                r"\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}", shape.text_frame.text)
         elif kind == "picture":
             try:
                 import hashlib
@@ -2035,7 +2057,10 @@ def _classify_slide(els, idx, total) -> str:
     arrows = [s for s in shapes if s.get("shape_type") and
               ("CHEVRON" in s["shape_type"] or "ARROW" in s["shape_type"])]
     if len(arrows) >= 3:
-        return "process"
+        return "timeline" if len(texts) >= len(arrows) * 2 else "process"
+    body_texts = [t for t in texts if t.get("font_size", 0) < max_size * .9]
+    if len(body_texts) >= 6 and len({round(t["x"] * 8) for t in body_texts}) >= 3:
+        return "cards"
     if texts and len(texts) <= 3 and max_size >= 28 and len(joined) < 60 \
             and all(t.get("font_size", 0) >= max_size * 0.7 for t in texts):
         return "section"
@@ -2075,6 +2100,10 @@ def _mark_fixed(slides_els: list):
     for els in slides_els:
         keys = set()
         for e in els:
+            # 带 {{...}} 占位符的文本框是内容槽：标题通常每页都在同一位置，
+            # 若按“重复出现”判成装饰，克隆后占位符永远不被替换，会原样印进成品。
+            if e.get("placeholder_keys"):
+                continue
             if e["kind"] == "picture":
                 k = ("pic", e.get("hash", ""), round(e["x"] * 10), round(e["y"] * 10))
             elif e["kind"] == "shape":
@@ -2089,6 +2118,9 @@ def _mark_fixed(slides_els: list):
     threshold = max(2, int(n * 0.6))
     for els in slides_els:
         for e in els:
+            if e.get("placeholder_keys"):
+                e["role"] = "content"
+                continue
             if e["kind"] == "picture":
                 k = ("pic", e.get("hash", ""), round(e["x"] * 10), round(e["y"] * 10))
             elif e["kind"] == "shape":
@@ -2202,7 +2234,13 @@ def _pick_layout(layouts: list, slide_type: str, used: Dict,
             i = used.get(want, 0) % len(cands)
             used[want] = used.get(want, 0) + 1
             return cands[i]
-    return layouts[0]
+    non_chrome = [l for l in layouts if l.get("detected_type") not in
+                  ("cover", "toc", "closing")]
+    if non_chrome:
+        index = used.get("fallback", 0)
+        used["fallback"] = index + 1
+        return non_chrome[index % len(non_chrome)]
+    return None
 
 
 def preferred_layout_id(slide: Dict, skeleton: Dict) -> str:
@@ -2274,6 +2312,41 @@ def _clear_text(shape):
         pass
 
 
+def _replace_template_tokens(shape, values: Dict[str, str]) -> None:
+    """Replace named tokens while retaining the paragraph and run formatting."""
+    token = re.compile(r"\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}")
+    for paragraph in shape.text_frame.paragraphs:
+        runs = list(paragraph.runs)
+        if not runs:
+            continue
+        for run in runs:
+            run.text = token.sub(lambda match: values.get(match.group(1), ""), run.text)
+        # PowerPoint may split one token between multiple runs. Keep the first
+        # run's formatting in that case and remove the consumed fragments.
+        joined = "".join(run.text for run in runs)
+        if token.search(joined):
+            runs[0].text = token.sub(lambda match: values.get(match.group(1), ""), joined)
+            for run in runs[1:]:
+                run.text = ""
+
+
+def _template_token_values(sdata: Dict, points: Optional[List[str]] = None) -> Dict[str, str]:
+    """占位符取值。``points`` 传合并后的正文（含卡片/时间轴/流程展开的内容），
+    否则 block 型页面的 {{pointN}} 会取空、整页正文丢失。"""
+    blocks = sdata.get("blocks") or {}
+    values = {"title": str(sdata.get("title") or ""),
+              "subtitle": str(sdata.get("subtitle") or "")}
+    for i, point in enumerate(points if points is not None else (sdata.get("points") or []), 1):
+        values[f"point{i}"] = str(point)
+    for i, card in enumerate(blocks.get("cards") or [], 1):
+        values[f"card{i}_title"] = values[f"card{i}_label"] = str(card.get("label") or "")
+        values[f"card{i}_body"] = values[f"card{i}_value"] = str(card.get("value") or "")
+    for i, entry in enumerate(blocks.get("timeline") or [], 1):
+        values[f"time{i}"] = str(entry.get("time") or "")
+        values[f"event{i}"] = str(entry.get("event") or entry.get("text") or "")
+    return values
+
+
 def _delete_shape(shape):
     shape._element.getparent().remove(shape._element)
 
@@ -2314,7 +2387,7 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     return gf
 
 
-def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs):
+def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warnings=None):
     """把大纲一页的内容填进克隆出来的模板页：
     - 标题/副标题/正文 → 对应文本区域（示例文字全部替换）
     - 示例图片/图表/表格（非固定元素）→ 删除；有匹配素材图时在图片区插入
@@ -2351,41 +2424,97 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs):
     subtitle = sdata.get("subtitle", "")
     points = [str(p) for p in (sdata.get("points") or [])]
     blocks = sdata.get("blocks") or {}
+    token_keys = {key for _, e in texts for key in e.get("placeholder_keys", [])}
 
-    if blocks.get("cards") and not layout.get("chart_regions"):
-        for c in blocks["cards"]:
-            points.append(f"{c.get('label', '')}：{c.get('value', '')}")
-    if blocks.get("timeline"):
-        for t in blocks["timeline"]:
-            points.append(f"{t.get('time', '')}　{t.get('event', '')}")
-    if blocks.get("process"):
+    body_slots = max(0, len(texts) - (2 if layout.get("detected_type") == "cover" else 1))
+    cards = blocks.get("cards") or []
+    if cards and not layout.get("chart_regions") and not any(
+            re.fullmatch(r"card\d+_(?:title|label|body|value)", key)
+            for key in token_keys):
+        if body_slots >= len(cards) * 2:
+            points.extend(str(value) for card in cards for value in
+                          (card.get("label") or "", card.get("value") or ""))
+        else:
+            points.extend(f"{c.get('label', '')}：{c.get('value', '')}" for c in cards)
+    timeline = blocks.get("timeline") or []
+    if timeline and not any(re.fullmatch(r"(?:time|event)\d+", key)
+                            for key in token_keys):
+        if body_slots >= len(timeline) * 2:
+            points.extend(str(value) for entry in timeline for value in
+                          (entry.get("time") or "", entry.get("event") or entry.get("text") or ""))
+        else:
+            points.extend(f"{t.get('time', '')}　{t.get('event') or t.get('text') or ''}" for t in timeline)
+    if blocks.get("drawio_kind") not in (None, "process"):
+        points.extend(_diagram_fallback_relations(blocks) or blocks.get("process") or [])
+    elif blocks.get("process"):
         for i, p in enumerate(blocks["process"], 1):
             points.append(f"第{i}步：{p if isinstance(p, str) else p.get('name', '')}")
 
     is_cover = layout.get("detected_type") == "cover"
-    body_filled = False
+    values = _template_token_values(sdata, points)
+    used_points = {int(key[5:]) for _, e in texts for key in e.get("placeholder_keys", [])
+                   if re.fullmatch(r"point\d+", key)}
+    available_points = [point for index, point in enumerate(points, 1)
+                        if index not in used_points]
+    body_index = 0
+    img_path = (sdata.get("_image") or {}).get("file_path")
+    image_drawn = False
+    chart_spec = blocks.get("chart")
+    chart_drawn = False
     for ti, (shp, e) in enumerate(texts):
+        keys = e.get("placeholder_keys") or []
+        if "image" in keys:
+            if img_path and os.path.exists(img_path):
+                slide.shapes.add_picture(img_path, shp.left, shp.top, shp.width, shp.height)
+                image_drawn = True
+                _delete_shape(shp)
+            else:
+                _clear_text(shp)
+            continue
+        if "chart" in keys:
+            if chart_spec:
+                region = {k: e[k] for k in ("x", "y", "w", "h")}
+                _add_native_chart(slide, chart_spec, region, colors, font, sw, sh)
+                chart_drawn = True
+                _delete_shape(shp)
+            else:
+                _clear_text(shp)
+            continue
+        if keys:
+            _replace_template_tokens(shp, values)
+            continue
         if ti == 0:
             _fill_text_region(shp, [title] if title else [])
         elif is_cover and ti == 1:
             _fill_text_region(shp, [subtitle] if subtitle else [])
-        elif not body_filled and points:
-            _fill_text_region(shp, points)
-            body_filled = True
         else:
-            _clear_text(shp)
+            remaining = max(1, body_slots - body_index)
+            count = max(0, len(available_points) - body_index)
+            if count:
+                lines = (available_points[body_index:] if remaining == 1
+                         else available_points[body_index:body_index + 1])
+                _fill_text_region(shp, lines)
+                body_index += len(lines)
+            else:
+                _clear_text(shp)
 
-    img_path = (sdata.get("_image") or {}).get("file_path")
+    if warnings is not None:
+        # 模板槽位少于内容条目时，多出来的内容无处安放：显式提示，不静默丢弃。
+        dropped = len(points) - len(used_points) - body_index
+        if dropped > 0:
+            warnings.append(f"「{title or '本页'}」有 {dropped} 条内容超出模板文本框数量，未能放入")
+
     for pi, (shp, e) in enumerate(pics):
-        if pi == 0 and img_path and os.path.exists(img_path):
+        if pi == 0 and not image_drawn and img_path and os.path.exists(img_path):
             try:
                 slide.shapes.add_picture(img_path, shp.left, shp.top, shp.width, shp.height)
+                _delete_shape(shp)
+                image_drawn = True
             except Exception:
                 pass
-        _delete_shape(shp)
+        # A template picture is part of the chosen visual style until the user
+        # supplies a replacement image for that exact region.
 
-    chart_spec = blocks.get("chart")
-    chart_drawn = False
     for shp, e in chartframes:
         if chart_spec and not chart_drawn:
             region = {k: e[k] for k in ("x", "y", "w", "h")}
@@ -2424,7 +2553,12 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
         # 只有值确实命中学习版式 id 时才视为“骨架绑定”，完全向后兼容。
         lay = _pick_layout(layout_library, slide_type, used, preferred)
         if not lay:
-            break
+            warnings.append(f"模板没有适合「{slide_type}」的内容页版式，本次改用基础排版")
+            raise ValueError(f"no learned layout for {slide_type}")
+        expected_types = LEARNED_FALLBACK.get(slide_type, ["content"]) + ["content"]
+        if not preferred and lay.get("detected_type") not in expected_types:
+            warnings.append(
+                f"模板没有「{slide_type}」专用版式，已改用「{lay.get('name') or '内容页'}」")
         idx = lay.get("source_slide_index", 0)
         if idx >= len(src_slides):
             idx = 0
@@ -2454,7 +2588,7 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                 from copy import deepcopy
                 template_shapes = [deepcopy(shape._element) for shape in ns.shapes]
             payload = {**s, "points": [], "blocks": {}} if diagram_xml else s
-            _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs)
+            _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs, warnings)
             if diagram_xml:
                 if not _try_drawio_render(ns, s, (int(sw * .06), int(sh * .23),
                                                 int(sw * .88), int(sh * .64)), font, warnings, colors):
@@ -2466,13 +2600,9 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                         ns.shapes._spTree.insert_element_before(element, "p:extLst")
                     # The learned layout consumes the original structured process/text blocks;
                     # only the unusable XML is excluded. Other pages retain their own layouts.
-                    is_process = (s["blocks"].get("drawio_kind") or "process") == "process"
                     fallback = {**s, "blocks": {key: value for key, value in s["blocks"].items()
-                                              if key != "drawio_xml" and (is_process or key != "process")}}
-                    if not is_process:
-                        fallback["points"] = (s["blocks"].get("diagram_labels") or
-                                              s["blocks"].get("process") or s.get("points") or [])
-                    _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs)
+                                              if key != "drawio_xml"}}
+                    _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs, warnings)
         except Exception as e:
             if (s.get("blocks") or {}).get("drawio_xml"):
                 raise

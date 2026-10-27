@@ -1302,6 +1302,96 @@ def test_learned_layout_explicit_binding_overrides_auto_match():
     assert auto["id"] == "L0"
 
 
+def test_learned_layout_fills_each_template_region():
+    from io import BytesIO
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from app.application.ppt import ppt_engine
+
+    prs = Presentation()
+    cover = prs.slides.add_slide(prs.slide_layouts[6])
+    cover.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text = "封面样例"
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    for i, text in enumerate(["{{title}}", "{{card1_title}}", "{{card1_body}}",
+                               "{{card2_title}}", "{{card2_body}}"]):
+        shape = slide.shapes.add_textbox(Inches(1 + (i // 2) * 2),
+                                          Inches(1 + (i % 2)), Inches(2), Inches(.7))
+        run = shape.text_frame.paragraphs[0].add_run()
+        run.text = text if i != 4 else "{{card2_"
+        run.font.size = Pt(24 if i == 0 else 16)
+        if i == 4:
+            shape.text_frame.paragraphs[0].add_run().text = "body}}"
+    picture = BytesIO()
+    Image.new("RGB", (4, 4), "navy").save(picture, format="PNG")
+    picture.seek(0)
+    slide.shapes.add_picture(picture, Inches(7), Inches(1), Inches(1), Inches(1))
+    source = BytesIO()
+    prs.save(source)
+    base = source.getvalue()
+    learned = ppt_engine.analyze_template(base)
+    cards_layout = next(layout for layout in learned["layouts"]
+                        if layout["source_slide_index"] == 1)
+    assert cards_layout["element_schema"][1]["placeholder_keys"] == ["card1_title"]
+    outline = {"slides": [{"type": "content", "title": "新标题", "blocks": {
+        "cards": [{"label": "规范执法", "value": "完善流程"},
+                  {"label": "业务学习", "value": "定期复盘"}]}}]}
+    template = {"colors": learned["colors"], "font": learned["font"]}
+    out = ppt_engine.build_pptx_learned(outline, template, base, learned["layouts"])
+    rendered = Presentation(BytesIO(out))
+    values = [shape.text for shape in rendered.slides[0].shapes if shape.has_text_frame]
+    assert "新标题" in values
+    assert "规范执法" in values
+    assert "完善流程" in values
+    assert "业务学习" in values
+    assert "定期复盘" in values
+    assert sum(shape.shape_type == 13 for shape in rendered.slides[0].shapes) == 1
+
+
+def test_learned_layout_never_uses_cover_for_unmatched_summary():
+    from app.application.ppt import ppt_engine
+    layouts = [{"id": "L0", "detected_type": "cover"},
+               {"id": "L1", "detected_type": "toc"}]
+    assert ppt_engine._pick_layout(layouts, "summary", {}) is None
+
+
+def test_learned_layout_spreads_points_across_untagged_regions():
+    from io import BytesIO
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from app.application.ppt import ppt_engine
+
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6]).shapes.add_textbox(
+        Inches(1), Inches(1), Inches(6), Inches(1)).text = "封面样例"
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    for i, text in enumerate(["目录", "示例一", "示例二", "示例三"]):
+        shape = slide.shapes.add_textbox(Inches(1), Inches(1 + i), Inches(6), Inches(.7))
+        run = shape.text_frame.paragraphs[0].add_run()
+        run.text = text
+        run.font.size = Pt(24 if i == 0 else 16)
+    source = BytesIO()
+    prs.save(source)
+    base = source.getvalue()
+    learned = ppt_engine.analyze_template(base)
+    out = ppt_engine.build_pptx_learned(
+        {"slides": [{"type": "toc", "title": "本次汇报", "points": ["背景", "措施", "成效"]}]},
+        {"colors": learned["colors"], "font": learned["font"]}, base, learned["layouts"])
+    rendered = Presentation(BytesIO(out))
+    texts = [shape.text for shape in rendered.slides[0].shapes if shape.has_text_frame]
+    assert texts == ["本次汇报", "背景", "措施", "成效"]
+
+
+def test_learned_layout_distinguishes_timeline_from_process():
+    from app.application.ppt import ppt_engine
+
+    arrows = [{"kind": "shape", "shape_type": "CHEVRON"} for _ in range(4)]
+    labels = [{"kind": "text", "sample": f"节点{i}", "font_size": 16,
+               "x": i / 10, "y": .3, "w": .1} for i in range(8)]
+    assert ppt_engine._classify_slide(arrows + labels, 1, 3) == "timeline"
+    assert ppt_engine._classify_slide(arrows + labels[:3], 1, 3) == "process"
+
+
 def test_slide_layout_override_wins_over_template_default():
     slide = {"type": "content", "layout": "L9"}
     skeleton = {"content": "L2"}
