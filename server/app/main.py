@@ -141,6 +141,7 @@ def create_app() -> FastAPI:
         templates,
         users,
         writing_tasks,
+        writing_memories,
         workflow,
     )
 
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
         references.router,
         templates.router,
         writing_tasks.router,
+        writing_memories.router,
         workflow.router,
         ppt.router,
         dashboard.router,

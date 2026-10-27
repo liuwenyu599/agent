@@ -14,6 +14,8 @@ from app.infrastructure.database.models.writing_suggestion import (
     WritingSuggestionEventModel, WritingSuggestionModel,
 )
 from app.infrastructure.database.models.writing_task import WritingTaskModel
+from app.infrastructure.database.models.identity import UserModel
+from app.application.writing.scoped_memory import ScopedWritingMemory
 
 
 def paragraph_id(task_id: str, index: int, content: str) -> str:
@@ -137,9 +139,11 @@ class ParagraphSuggestionMixin:
         ))
 
     def _accepted_style_memory(self, user_id: str, document_type: str) -> str:
-        """A small same-user, same-genre few-shot card; facts remain task-specific."""
+        """Scoped curated habits plus a few accepted same-user edits, without facts."""
+        scoped = (ScopedWritingMemory(self.db).prompt_block(user_id, document_type)
+                  if self.db.get(UserModel, user_id) else "")
         if not document_type:
-            return ""
+            return scoped
         rows = self.db.scalars(select(WritingSuggestionModel).where(
             WritingSuggestionModel.user_id == user_id,
             WritingSuggestionModel.document_type == document_type,
@@ -149,8 +153,8 @@ class ParagraphSuggestionMixin:
         pairs = [f"原：{row.original_content[:160]}\n采纳：{row.final_content[:160]}"
                  for row in rows if row.final_content != row.original_content]
         if not pairs:
-            return ""
-        return ("\n\n【该用户曾采纳的同文种修改习惯】\n" + "\n".join(pairs) +
+            return scoped
+        return scoped + ("\n\n【该用户曾采纳的同文种修改习惯】\n" + "\n".join(pairs) +
                 "\n只参考语气、结构与表达习惯；历史稿的事实、时间、数字、人名和对象"
                 "绝不能移入本次文稿。本次明确要求优先。")
 

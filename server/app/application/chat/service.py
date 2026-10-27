@@ -157,6 +157,11 @@ class ChatService:
         # 只读问答（咨询/查询/闲聊）一律跳过澄清与写作流水线，直接作答。
         knowledge_qa = source == "knowledge_qa"
         writing_request = False if knowledge_qa else self.intent.is_writing_request(message)
+        if writing_request or template_category or reference_template_id:
+            from app.application.writing.scoped_memory import ScopedWritingMemory
+            from app.application.writing.task_parser import explicit_document_type
+            user_preference = (user_preference or "") + ScopedWritingMemory(
+                self.db).prompt_block(user.id, explicit_document_type(message) or "")
 
         # 写作类请求的信息完整度判断（模板表单模式跳过）
         clarify_reply = None

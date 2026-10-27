@@ -272,4 +272,9 @@ object Endpoints {
     object Preferences {
         const val ME = "/preferences/me"
     }
+
+    object WritingMemories {
+        const val LIST = "/writing/memories"
+        fun item(id: String) = "$LIST/$id"
+    }
 }

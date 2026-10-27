@@ -462,6 +462,83 @@ private fun PersonalizationPanel(vm: PersonalViewModel) {
             }
         }
 
+        AppCardTonal {
+            Eyebrow("写作记忆")
+            Spacer(Modifier.height(Dimens.space2))
+            Text("公共、本科室、个人记忆按权限参与写作，只学习表达习惯；当前任务和资料始终优先。",
+                fontSize = 12.sp, color = Muted, lineHeight = 18.sp)
+            Spacer(Modifier.height(Dimens.space2))
+            AppSelect(
+                label = "记忆范围", value = vm.memoryScope,
+                options = vm.memoryScopes.map { SelectOption(it.first, it.second) },
+                onSelect = { if (vm.memoryEditingId == null) vm.memoryScope = it },
+                hint = if (vm.memoryEditingId != null) "修改时不能变更归属范围" else "科室和公共记忆仅管理员可维护",
+            )
+            Spacer(Modifier.height(Dimens.space2))
+            AppTextField(
+                value = vm.memoryDocumentType,
+                onValueChange = { if (it.length <= 100) vm.memoryDocumentType = it },
+                label = "适用文种（选填）", placeholder = "留空表示所有文种",
+                singleLine = true,
+            )
+            Spacer(Modifier.height(Dimens.space2))
+            AppTextField(
+                value = vm.memoryContent,
+                onValueChange = { if (it.length <= 500) vm.memoryContent = it },
+                label = "写作习惯", placeholder = "例如：通知的措施先写责任单位，再写完成时限",
+                singleLine = false, minLines = 2, maxLines = 4,
+                hint = "不存放本次材料的事实、数字或敏感内容；最多 500 字。",
+            )
+            Spacer(Modifier.height(Dimens.space2))
+            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space2)) {
+                AppButton(
+                    text = if (vm.memoryEditingId == null) "添加记忆" else "保存修改",
+                    onClick = vm::saveWritingMemory, enabled = !vm.memoryBusy,
+                )
+                if (vm.memoryEditingId != null) AppButton(
+                    text = "取消编辑", onClick = vm::clearWritingMemoryForm,
+                    kind = AppButtonKind.SECONDARY,
+                )
+            }
+            vm.memoryError?.let {
+                Spacer(Modifier.height(Dimens.space2))
+                NoticeBar(text = it, fg = Warn, bg = WarnSoft)
+            }
+            if (vm.writingMemories.isNotEmpty()) {
+                Spacer(Modifier.height(Dimens.space3))
+                Hairline()
+                vm.writingMemories.forEach { item ->
+                    Spacer(Modifier.height(Dimens.space2))
+                    Column {
+                        val scopeName = when (item.scope) {
+                            "public" -> "公共"; "department" -> "本科室"; else -> "个人"
+                        }
+                        Text("$scopeName · ${item.documentType.ifBlank { "通用" }}",
+                            color = Muted, fontSize = 11.sp)
+                        Text(item.content, color = Ink, fontSize = 12.sp,
+                            lineHeight = 17.sp, maxLines = 4,
+                            overflow = TextOverflow.Ellipsis)
+                        if (item.canEdit) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = item.enabled,
+                                onCheckedChange = { vm.setWritingMemoryEnabled(item, it) },
+                                enabled = !vm.memoryBusy,
+                                colors = CheckboxDefaults.colors(checkedColor = Primary),
+                            )
+                            Text(if (item.enabled) "已启用" else "已停用", fontSize = 11.sp,
+                                color = Muted)
+                            Spacer(Modifier.width(Dimens.space2))
+                            Text("编辑", color = Primary, fontSize = 11.sp,
+                                modifier = Modifier.clickable { vm.editWritingMemory(item) })
+                            Spacer(Modifier.width(Dimens.space2))
+                            Text("删除", color = Warn, fontSize = 11.sp,
+                                modifier = Modifier.clickable { vm.deleteWritingMemory(item) })
+                        }
+                    }
+                }
+            }
+        }
+
         // 状态反馈：未保存提示 / 失败 / 成功
         if (vm.prefDirty) {
             NoticeBar(text = "有未保存的修改，记得点击「保存」。", fg = Warn, bg = WarnSoft)

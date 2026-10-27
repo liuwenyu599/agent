@@ -19,4 +19,5 @@ from app.infrastructure.database.models import (  # noqa: F401
     writing_agent,
     writing_task,
     writing_suggestion,
+    writing_memory,
 )

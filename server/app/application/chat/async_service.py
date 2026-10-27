@@ -154,6 +154,11 @@ class AsyncChatService(ChatService):
         user_preference = self._user_preference_block(user.id)
         knowledge_qa = source == "knowledge_qa"
         writing_request = False if knowledge_qa else self.intent.is_writing_request(message)
+        if writing_request or template_category or reference_template_id:
+            from app.application.writing.scoped_memory import ScopedWritingMemory
+            from app.application.writing.task_parser import explicit_document_type
+            user_preference = (user_preference or "") + ScopedWritingMemory(
+                self.db).prompt_block(user.id, explicit_document_type(message) or "")
 
         clarify_reply = None
         if not system_prompt and writing_request:

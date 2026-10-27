@@ -43,6 +43,10 @@ class PersonalViewModel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     data class DocItem(val id: String, val title: String, val status: String, val updatedAt: String)
+    data class WritingMemoryItem(
+        val id: String, val scope: String, val documentType: String,
+        val content: String, val enabled: Boolean, val canEdit: Boolean,
+    )
 
     var section by mutableStateOf(PersonalSection.RECENT)
         private set
@@ -56,6 +60,24 @@ class PersonalViewModel {
         private set
     var docs by mutableStateOf(listOf<DocItem>())
         private set
+
+    var writingMemories by mutableStateOf(listOf<WritingMemoryItem>())
+        private set
+    var memoryScope by mutableStateOf("personal")
+    var memoryDocumentType by mutableStateOf("")
+    var memoryContent by mutableStateOf("")
+    var memoryEditingId by mutableStateOf<String?>(null)
+    var memoryBusy by mutableStateOf(false)
+        private set
+    var memoryError by mutableStateOf<String?>(null)
+        private set
+
+    val memoryScopes: List<Pair<String, String>> get() = buildList {
+        add("personal" to "个人")
+        if (AppState.role in setOf("knowledge_admin", "developer", "admin"))
+            add("department" to "本科室")
+        if (AppState.role in setOf("developer", "admin")) add("public" to "公共")
+    }
 
     // ---- 个性化：个人偏好（GET / PUT Endpoints.Preferences.ME）----
 
@@ -141,7 +163,7 @@ class PersonalViewModel {
         this.section = section
         when (section) {
             // 个性化：每次进入都重新读取，保证与后端一致
-            PersonalSection.PERSONALIZATION -> loadPreferences()
+            PersonalSection.PERSONALIZATION -> { loadPreferences(); loadWritingMemories() }
             // 这三个分区没有后端列表，不触发 load()
             PersonalSection.FAVORITES, PersonalSection.SETTINGS, PersonalSection.SECURITY, PersonalSection.GUIDE -> Unit
             else -> load()
@@ -187,6 +209,89 @@ class PersonalViewModel {
     fun clearChangeResult() {
         changeError = null
         changeSuccess = null
+    }
+
+    fun loadWritingMemories() {
+        memoryError = null
+        scope.launch {
+            when (val r = AppState.api.get(Endpoints.WritingMemories.LIST)) {
+                is ApiResult.Ok -> writingMemories = r.data.obj()?.get("items").arr()
+                    .mapNotNull { it.obj() }.map { item ->
+                        WritingMemoryItem(
+                            id = item["id"].str(), scope = item["scope"].str(),
+                            documentType = item["document_type"].str(),
+                            content = item["content"].str(), enabled = item["enabled"].bool(),
+                            canEdit = item["can_edit"].bool(),
+                        )
+                    }
+                is ApiResult.Err -> memoryError = r.message
+            }
+        }
+    }
+
+    fun editWritingMemory(item: WritingMemoryItem) {
+        if (!item.canEdit) return
+        memoryEditingId = item.id
+        memoryScope = item.scope
+        memoryDocumentType = item.documentType
+        memoryContent = item.content
+        memoryError = null
+    }
+
+    fun clearWritingMemoryForm() {
+        memoryEditingId = null
+        memoryScope = "personal"
+        memoryDocumentType = ""
+        memoryContent = ""
+    }
+
+    fun saveWritingMemory() {
+        if (memoryBusy) return
+        val content = memoryContent.trim()
+        if (content.isEmpty() || content.length > 500 || memoryDocumentType.length > 100) {
+            memoryError = "请填写 1 至 500 字的记忆内容，文种不超过 100 字"
+            return
+        }
+        memoryBusy = true
+        memoryError = null
+        val editing = memoryEditingId
+        scope.launch {
+            val r = if (editing == null) AppState.api.post(Endpoints.WritingMemories.LIST,
+                mapOf("scope" to memoryScope, "document_type" to memoryDocumentType.trim(),
+                      "content" to content))
+            else AppState.api.patch(Endpoints.WritingMemories.item(editing),
+                mapOf("document_type" to memoryDocumentType.trim(), "content" to content))
+            when (r) {
+                is ApiResult.Ok -> { clearWritingMemoryForm(); loadWritingMemories() }
+                is ApiResult.Err -> memoryError = r.message
+            }
+            memoryBusy = false
+        }
+    }
+
+    fun setWritingMemoryEnabled(item: WritingMemoryItem, enabled: Boolean) {
+        if (memoryBusy || !item.canEdit) return
+        memoryBusy = true
+        scope.launch {
+            when (val r = AppState.api.patch(Endpoints.WritingMemories.item(item.id),
+                                             mapOf("enabled" to enabled))) {
+                is ApiResult.Ok -> loadWritingMemories()
+                is ApiResult.Err -> memoryError = r.message
+            }
+            memoryBusy = false
+        }
+    }
+
+    fun deleteWritingMemory(item: WritingMemoryItem) {
+        if (memoryBusy || !item.canEdit) return
+        memoryBusy = true
+        scope.launch {
+            when (val r = AppState.api.del(Endpoints.WritingMemories.item(item.id))) {
+                is ApiResult.Ok -> { clearWritingMemoryForm(); loadWritingMemories() }
+                is ApiResult.Err -> memoryError = r.message
+            }
+            memoryBusy = false
+        }
     }
 
     // ---------- 个性化：个人偏好 ----------
