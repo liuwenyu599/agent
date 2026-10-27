@@ -24,8 +24,9 @@ PPTAgent 跑十几分钟，**绝不能开一个跨越全程的数据库事务**�
 
 无 PPTAgent 时的正式路径
 ------------------------
-``PPT_AGENT_URL`` 为空（DP9B 已退役）时，submit_job **不再拒绝**，
-而是登记同一条异步 job、由 :class:`LocalRenderJobRunner` 做本地严格套模板渲染。
+``PPT_AGENT_URL`` 为空时，submit_job **不再拒绝**，
+而是登记同一条异步 job、由 :class:`LocalRenderJobRunner` 按内容自适应排版；
+只有用户显式选模板时才使用模板底稿。
 客户端仍按 ``/ppt/jobs`` 轮询，接口与终态语义完全一致。
 """
 import os
@@ -71,6 +72,14 @@ def _open(doc_id: str) -> Optional[PPTDocument]:
         return _doc(m) if m else None
     finally:
         db.close()
+
+
+def uses_local_renderer(doc_id: str) -> bool:
+    """Free-layout documents stay on 35B + Draw.io even if a legacy URL remains set."""
+    if not (settings.PPT_AGENT_URL or "").strip():
+        return True
+    doc = _open(doc_id)
+    return doc is not None and not doc.template_id
 
 
 def _update_job(doc_id: str, **fields: Any) -> Optional[PPTDocument]:
@@ -145,7 +154,7 @@ def _render_local_previews(pptx_path: Path, doc_id: str) -> int:
 
 
 def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool, str]:
-    """严格套模板渲染并落盘，把 job 置为成功。
+    """按用户选择的排版方式渲染并落盘，把 job 置为成功。
 
     Args:
         doc_id: 文档 ID。
@@ -164,7 +173,12 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             return False, "文档不存在"
         if not doc.outline:
             return False, "本地渲染缺少大纲"
-        data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
+        if doc.template_id:
+            data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
+            adjusted_outline = doc.outline
+        else:
+            data, adjusted_outline = svc.render_adaptive_pptx(
+                doc, doc.outline, doc.user_id)
         ok, why = looks_like_pptx(data)
         if not ok:
             return False, f"本地渲染产物非法：{why}"
@@ -182,7 +196,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         # （ppt_dir/preview/{doc_id}/pg-*.png）。缺 soffice/pdftoppm 或渲染失败
         # 只影响工作台缩略图（前端有降级文案），绝不影响 job 成功与 pptx 导出。
         _render_local_previews(path, doc_id)
-        _update_job(doc_id, file_path=str(path), status="generated",
+        _update_job(doc_id, file_path=str(path), outline=adjusted_outline,
+                    status="generated",
                     slide_count=slides, job_status="succeeded",
                     job_phase="succeeded", job_renderer=renderer,
                     job_event_id="", job_error="", job_question="",
@@ -198,7 +213,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
 
 
 class LocalRenderJobRunner:
-    """无 PPTAgent 时的 job 执行体：本地严格套模板渲染 → 落盘 → 置成功。
+    """无 PPTAgent 时的 job 执行体：本地自适应/显式模板渲染 → 落盘 → 置成功。
 
     与 :class:`PPTAgentJobRunner` 共用 ``_RUNNING`` 登记与终态语义，
     前端轮询的是同一套 ``/ppt/jobs`` 接口，无需任何客户端改动。
@@ -259,9 +274,9 @@ def submit_job(doc_id: str, user_id: str, message: str = "",
         return {"job_id": doc_id, "status": "running", "phase": "submitting",
                 "message": "已有进行中的任务"}
 
-    # 正式链路不含 PPTAgent（DP9B 已退役）：未配置 URL 不是「不可用」，
-    # 而是改由本地严格套模板渲染接管同一条异步 job 链路（渲染秒级完成）。
-    if not (settings.PPT_AGENT_URL or "").strip():
+    # 自由排版始终走本地可编辑渲染；旧地址残留不能改变用户已选的生成方式。
+    # 显式模板且启用旧服务时仍保留兼容路由。
+    if uses_local_renderer(doc_id):
         _update_job(doc_id, job_status="pending", job_phase="submitting",
                     job_error="", job_question="", job_current_page=0,
                     job_total_pages=0, job_cancel_requested=False,

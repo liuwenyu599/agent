@@ -250,17 +250,21 @@ private fun PreviewPane(vm: PptViewModel) {
                 Text("← 返回大纲", color = Primary, fontSize = 12.5.sp)
             }
             Spacer(Modifier.weight(1f))
-            Text("模板", fontSize = 12.sp, color = Muted)
+            Text("排版", fontSize = 12.sp, color = Muted)
             Spacer(Modifier.width(6.dp))
             var tplOpen by remember { mutableStateOf(false) }
             val curName = vm.templates
                 .firstOrNull { it["id"].str() == vm.templateId }
-                ?.get("name").str().ifBlank { "默认模板" }
+                ?.get("name").str().ifBlank { "自适应排版" }
             Box {
                 OutlinedButton(onClick = { tplOpen = true }, colors = sel(false)) {
                     Text("$curName ▾", fontSize = 12.sp)
                 }
                 DropdownMenu(tplOpen, { tplOpen = false }) {
+                    DropdownMenuItem(onClick = {
+                        tplOpen = false
+                        vm.switchTemplate(null)
+                    }) { Text("自适应排版") }
                     vm.templates.forEach { t ->
                         DropdownMenuItem(onClick = {
                             tplOpen = false
@@ -332,9 +336,9 @@ private fun PreviewPane(vm: PptViewModel) {
         }
         Text(
             when {
-                vm.previewPages.getOrNull(i) != null -> "预览由所选模板真实渲染，与导出效果一致"
-                vm.previewBusy -> "正在按模板渲染预览…"
-                else -> "模板渲染预览暂不可用，当前为结构示意（不影响导出效果）"
+                vm.previewPages.getOrNull(i) != null -> "按当前排版渲染的预览，与导出效果一致"
+                vm.previewBusy -> "正在渲染预览…"
+                else -> "渲染预览暂不可用，当前为结构示意（不影响导出效果）"
             },
             fontSize = 11.5.sp, color = SecondaryText)
         if (slide.sources.isNotEmpty()) {
@@ -541,12 +545,12 @@ private fun StatusBar(vm: PptViewModel) {
     }
 }
 
-/** 生成前确认：说明将真实调用 PPTAgent 渲染并下载 pptx，确认后选择保存位置 */
+/** 生成前确认：说明将按当前大纲与排版方式生成可编辑 PPTX。 */
 @Composable
 private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
     val curName = vm.templates
         .firstOrNull { it["id"].str() == vm.templateId }
-        ?.get("name").str().ifBlank { "默认模板" }
+        ?.get("name").str().ifBlank { "自适应排版" }
     AppDialog(
         onDismissRequest = onDismiss,
         title = "AI 生成 PPT",
@@ -562,11 +566,11 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
             })
         },
     ) {
-        Text("共 ${vm.slides.size} 页 · 模板：$curName", fontSize = 13.sp, color = Ink)
+        Text("共 ${vm.slides.size} 页 · 排版：$curName", fontSize = 13.sp, color = Ink)
         Spacer(Modifier.height(6.dp))
         Text(
-            "AI 会结合当前大纲和所选视觉风格逐页设计并排版，" +
-                "不是简单套用本地模板。预计需要 5–15 分钟。生成完成即保存在系统中，" +
+            "未选模板时会按每页内容选择版式、渲染后检查明显的遮挡和越界；" +
+                "选定模板时按模板排版。生成完成即保存在系统中，" +
                 "无需提前选择本地保存位置。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp,
         )

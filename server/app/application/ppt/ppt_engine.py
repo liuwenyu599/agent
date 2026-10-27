@@ -341,6 +341,9 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
         if want:
             spec = next((sp for sp in specs if sp["id"] == want), None)
             if spec and _layout_usable(spec, slide):
+                if (stype == "content" and want in recent
+                        and not slide.get("layout_locked")):
+                    continue
                 return want
 
     best, best_score = "", float("-inf")
@@ -663,6 +666,7 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict
             "id": s.get("id") or uuid.uuid4().hex[:8],
             "type": t,
             "layout": layout,
+            "layout_locked": bool(s.get("layout_locked", False)),
             "title": (s.get("title") or "")[:60],
             "subtitle": (s.get("subtitle") or "")[:80],
             "points": [str(p)[:150] for p in (s.get("points") or [])][:6],
@@ -704,26 +708,38 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict
 
 
 def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
-    """智能配图：AI 指定名 → 严格匹配 → 模糊匹配；找不到则不配图（版式自动退化）。"""
-    by_name = {im["name"]: im for im in images}
+    """只使用本次授权的素材；说明与页面主题明显相符时才自动配图。"""
+    by_name = {str(im["name"]): im for im in images}
 
-    def _fuzzy(hint: str) -> Optional[Dict]:
-        if not hint:
+    def _grams(value: str) -> set[str]:
+        value = re.sub(r"[^\w\u4e00-\u9fff]", "", value.lower())
+        return {value[i:i + 2] for i in range(len(value) - 1)}
+
+    def _relevant(hint: str) -> Optional[Dict]:
+        query = _grams(hint)
+        if len(query) < 2:
             return None
-        hint_chars = set(re.sub(r"\s", "", hint.lower()))
-        best, best_score = None, 0
+        best, best_score = None, 0.0
         for im in images:
-            score = len(hint_chars & set(im["name"].lower()))
-            if score > best_score:
+            if im.get("id") in used_auto_ids:
+                continue
+            description = f"{im.get('caption') or ''} {im.get('name') or ''}"
+            terms = _grams(description)
+            common = len(query & terms)
+            score = common / len(query) if query else 0.0
+            if common >= 2 and score > best_score:
                 best, best_score = im, score
-        return best if best_score >= 2 else None
+        return best if best_score >= 0.55 else None
 
+    used_auto_ids: set[str] = set()
     for s in outline.get("slides", []):
         img = None
         if s.get("image_name"):
-            img = by_name.get(s["image_name"]) or _fuzzy(s["image_name"])
-        if not img and s.get("layout") == "image_right":
-            img = _fuzzy(s.get("image_hint") or s.get("title") or "")
+            img = by_name.get(str(s["image_name"]))
+        if not img and s.get("type") == "content":
+            img = _relevant(str(s.get("image_hint") or s.get("title") or ""))
+            if img:
+                used_auto_ids.add(str(img.get("id")))
         s["_image"] = img
         if img and s.get("layout") is None and s.get("type") == "content":
             s["layout"] = "image_right"

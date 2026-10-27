@@ -297,9 +297,9 @@ private fun jobHintText(job: PptJobProgress): String = when (job.status) {
     PptJobStatus.GENERATING -> "每生成完一页就会出现在左侧，可点选查看大图"
     PptJobStatus.CLARIFYING -> "AI 需要你补充一点信息，回答后会接着刚才的进度继续生成"
     PptJobStatus.DONE -> if (job.exportedPath == null)
-        "全部页面已生成并保存到“我的作品”；想换风格：在上方切换模板后点「重新生成 PPT」"
+        "全部页面已生成并保存到“我的作品”；想换排版：在上方切换后点「重新生成 PPT」"
     else
-        "全部页面已生成；想换风格：在上方切换模板后点「重新生成 PPT」，也可再次下载到本地"
+        "全部页面已生成；想换排版：在上方切换后点「重新生成 PPT」，也可再次下载到本地"
     PptJobStatus.FAILED -> "生成未完成，可点击「重试」用同一份大纲再生成一次"
     PptJobStatus.CANCELLED -> "已停止等待本次生成，可点击「重新开始」再生成一次"
     PptJobStatus.IDLE -> ""
@@ -311,12 +311,16 @@ private fun DoneTemplateSwitcher(vm: PptViewModel) {
     var tplOpen by remember { mutableStateOf(false) }
     val curName = vm.templates
         .firstOrNull { it["id"].str() == vm.templateId }
-        ?.get("name").str().ifBlank { "默认模板" }
+        ?.get("name").str().ifBlank { "自适应排版" }
     Box {
         OutlinedButton(onClick = { tplOpen = true }) {
-            Text("模板：$curName ▾", fontSize = 12.sp)
+            Text("排版：$curName ▾", fontSize = 12.sp)
         }
         DropdownMenu(tplOpen, { tplOpen = false }) {
+            DropdownMenuItem(onClick = {
+                tplOpen = false
+                vm.switchTemplate(null)
+            }) { Text("自适应排版") }
             vm.templates.forEach { t ->
                 DropdownMenuItem(onClick = {
                     tplOpen = false

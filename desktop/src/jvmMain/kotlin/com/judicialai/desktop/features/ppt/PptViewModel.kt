@@ -65,6 +65,7 @@ class SlideEdit(
     var type by mutableStateOf(type)
     var title by mutableStateOf(title)
     var layout by mutableStateOf(raw["layout"].str())
+    var layoutLocked by mutableStateOf(raw["layout_locked"].toString() == "true")
     /** 要点编辑为纯文本，一行一个要点 */
     var pointsText by mutableStateOf(points.joinToString("\n"))
     var sources by mutableStateOf(sources)
@@ -86,6 +87,7 @@ class SlideEdit(
         put("type", type)
         put("title", title)
         put("layout", layout)
+        put("layout_locked", layoutLocked)
         putJsonArray("points") { points().forEach { add(it) } }
         putJsonArray("sources") { sources.forEach { add(it) } }
     }
@@ -96,6 +98,7 @@ class SlideEdit(
         if (t.isNotBlank()) type = t
         title = slide["title"].str().ifBlank { title }
         layout = slide["layout"].str()
+        layoutLocked = slide["layout_locked"].toString() == "true"
         val pts = slide["points"].arr().map { it.str() }.filter { it.isNotBlank() }
         if (pts.isNotEmpty()) pointsText = pts.joinToString("\n")
         val src = slide["sources"].arr().map { it.str() }.filter { it.isNotBlank() }
@@ -281,7 +284,7 @@ class PptViewModel(private val repo: PptRepository) {
                 is ApiResult.Ok -> {
                     templates = r.data
                     // 不替用户静默选择“列表第一项”。null 表示未显式选模板，
-                    // 由服务端统一采用默认政务模板；只有用户点击后才写 templateId。
+                    // 服务端使用自适应版式与政务配色；只有用户点击后才绑定模板。
                 }
                 is ApiResult.Err -> status = r.message
             }
@@ -1084,8 +1087,8 @@ class PptViewModel(private val repo: PptRepository) {
         templateId = id
         loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
-            ?.get("name").str().ifBlank { null } ?: "默认模板"
-        status = "已切换为「$name」，正在按新模板重渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
+            ?.get("name").str().ifBlank { null } ?: "自适应排版"
+        status = "已切换为「$name」，正在重新渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
         refreshPreview()
     }
 
@@ -1094,6 +1097,7 @@ class PptViewModel(private val repo: PptRepository) {
         if (slide.layout == layoutId) return
         pushUndo()
         slide.layout = layoutId
+        slide.layoutLocked = layoutId.isNotBlank()
         visualReviewIssues = emptyList()
         visualReviewSummary = null
         status = if (layoutId.isBlank()) "已恢复自动版式，正在刷新预览"
@@ -1105,7 +1109,7 @@ class PptViewModel(private val repo: PptRepository) {
         val id = docId ?: return
         if (visualReviewBusy) return
         visualReviewBusy = true
-        visualReviewSummary = "正在按当前模板复检…"
+        visualReviewSummary = "正在检查实际渲染页面…"
         visualReviewIssues = emptyList()
         scope.launch {
             when (val save = repo.saveDraft(id, outlineTitle, outlineJson(), templateId)) {
@@ -1126,7 +1130,9 @@ class PptViewModel(private val repo: PptRepository) {
             when (result) {
                 is ApiResult.Ok -> {
                     val root = result.data.obj()
-                    visualReviewSummary = root?.get("summary").str().ifBlank { "视觉复检完成" }
+                    val checked = root?.get("rendered_pages_checked").int()
+                    visualReviewSummary = root?.get("summary").str().ifBlank { "视觉复检完成" } +
+                        if (checked > 0) " · 已让本地模型审看 $checked 页" else " · 已完成排版规则检查"
                     visualReviewIssues = root?.get("issues").arr().mapNotNull { item ->
                         item.obj()?.let { issue ->
                             PptVisualIssue(issue["page"].int(), issue["code"].str(),

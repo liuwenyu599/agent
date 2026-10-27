@@ -150,6 +150,7 @@ def test_generate_reports_diagram_fallback_without_losing_export(monkeypatch, ct
     from types import SimpleNamespace
     svc, doc, user = ctx
     monkeypatch.setattr(settings, "PPT_AGENT_URL", "")
+    monkeypatch.setattr(settings, "VISION_MODEL_URL", "")
     source = {"title": "流程图导出", "slides": [{
         "id": "flow", "type": "process", "title": "办理流程", "points": [],
         "blocks": {"drawio_xml": "invalid XML", "process": ["受理", "审核"]},
@@ -205,8 +206,8 @@ def test_a_empty_url_round_trip_persists(monkeypatch, ctx):
 # ============================================================ (b) PPTAgent 成功
 
 
-def test_b_agent_success_stores_agent_pptx(monkeypatch, ctx):
-    """PPTAgent 成功：落盘的必须是它返回的那个 pptx（字节一致且可打开）。"""
+def test_b_legacy_agent_available_but_free_export_stays_local(monkeypatch, ctx):
+    """旧渲染器可独立调用；自由生成的正式落盘仍走本地可编辑版式。"""
     svc, doc, user = ctx
     agent_pptx = _make_pptx_bytes("AGENT")
     monkeypatch.setattr(settings, "PPT_AGENT_URL", AGENT_URL)
@@ -245,7 +246,8 @@ def test_b_agent_success_stores_agent_pptx(monkeypatch, ctx):
     assert any("/result/" in p for p in transport_hits)
 
     path = svc._render_and_store(doc, doc.outline, user, None)
-    assert Path(path).read_bytes() == agent_pptx
+    assert Path(path).read_bytes() != agent_pptx
+    assert _open_slide_count(Path(path).read_bytes()) == len(_OUTLINE_SRC["slides"])
 
 
 def test_b_agent_binary_result_direct(monkeypatch, ctx):

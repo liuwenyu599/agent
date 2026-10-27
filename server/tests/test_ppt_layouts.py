@@ -111,6 +111,12 @@ class TestChooseLayout:
         chosen = E.choose_layout(s, recent=["content.two_col"])
         assert chosen != "content.two_col"
 
+    def test_ai_layout_hint_does_not_make_every_content_page_identical(self):
+        s = _slide("content", ["事项一", "事项二", "事项三"], layout="bullets")
+        assert E.choose_layout(s, recent=["content.bullets"]) != "content.bullets"
+        s["layout_locked"] = True
+        assert E.choose_layout(s, recent=["content.bullets"]) == "content.bullets"
+
     def test_legacy_alias_applies_to_skin_pages(self):
         s = _slide("cover", title="封面")
         assert E.choose_layout(s, {"cover": "left_block"}) == "cover.side"

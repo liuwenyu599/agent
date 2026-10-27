@@ -422,6 +422,15 @@ class PPTService:
         return {"status": "review" if issues else "passed",
                 "pages_checked": len(prs.slides), "issues": issues}
 
+    @staticmethod
+    def review_rendered_pages(data: bytes, gateway=None) -> Dict[str, Any]:
+        """让配置的本地视觉模型审看实际渲染截图，不信任其页码或问题代码。"""
+        from app.application.ppt.visual_review import review_rendered_pages
+        if gateway is None:
+            from app.infrastructure.ai import get_vision_gateway
+            gateway = get_vision_gateway()
+        return review_rendered_pages(data, gateway)
+
     # ---- 存储路径 ----
     @property
     def ppt_dir(self) -> Path:
@@ -971,13 +980,11 @@ class PPTService:
             if preview_source == "generated":
                 data = Path(d.file_path).read_bytes()
             else:
-                template, trow = self._resolve_template(d.template_id, d.theme_id or "")
-                selected_ids = (d.outline or {}).get("material_ids") \
-                    if "material_ids" in (d.outline or {}) else None
-                outline = ppt_engine.resolve_slide_images(
-                    d.outline, self._user_images(user.id, selected_ids, strict=False))
-                data = ppt_engine.render_pptx(outline, template,
-                                              base_pptx=self._tpl_base_bytes(trow))
+                if d.template_id:
+                    data = self.render_strict_template_pptx(d, d.outline, user.id)
+                else:
+                    data, _ = self.render_adaptive_pptx(
+                        d, d.outline, user.id, vision_review=False)
         except Exception as e:
             logger.warning("PPT 逐页预览降级：渲染 pptx 失败（doc_id=%s）：%s: %s",
                            doc_id, type(e).__name__, e)
@@ -1046,13 +1053,28 @@ class PPTService:
         selected_ids = outline.get("material_ids")
         outline = ppt_engine.resolve_slide_images(
             outline, self._user_images(user.id, selected_ids, strict=False))
-        template, template_row = self._resolve_template(
-            document.template_id, document.theme_id or "")
         warnings: List[str] = []
-        data = ppt_engine.render_pptx(
-            outline, template, base_pptx=self._tpl_base_bytes(template_row),
-            warnings=warnings)
+        if document.template_id:
+            template, template_row = self._resolve_template(
+                document.template_id, document.theme_id or "")
+            data = ppt_engine.render_pptx(
+                outline, template, base_pptx=self._tpl_base_bytes(template_row),
+                warnings=warnings)
+        else:
+            data, _ = self.render_adaptive_pptx(
+                document, outline, user.id, warnings=warnings,
+                vision_review=False)
         result = self.review_pptx_visuals(data)
+        rendered = self.review_rendered_pages(data)
+        result["rendered_pages_checked"] = rendered["pages_checked"]
+        result["review_method"] = ("geometry_and_vision" if rendered["pages_checked"]
+                                   else "geometry_only")
+        result["issues"].extend(rendered["issues"])
+        if rendered["status"] in ("unavailable", "partial"):
+            result["issues"].append({
+                "page": 0, "code": "vision_unavailable", "severity": "warning",
+                "message": "实际页面视觉复检未全部完成；请查看逐页预览",
+            })
         for warning in warnings:
             result["issues"].append({
                 "page": 0, "code": "render_fallback", "severity": "warning",
@@ -1569,12 +1591,13 @@ class PPTService:
 
     def _render_pptx_bytes(self, d: PPTDocument, outline: dict, template: Dict,
                            base_pptx: Optional[bytes],
-                           warnings: Optional[List[str]] = None) -> Tuple[bytes, str]:
-        """渲染 pptx 字节：优先走 PPTAgent，失败一律回退本地 render_pptx。
+                           warnings: Optional[List[str]] = None,
+                           adaptive: bool = False) -> Tuple[bytes, str]:
+        """渲染 pptx 字节：自由排版直走本地；旧模板路线保留兼容回退。
 
         开关语义：
-        - ``PPT_AGENT_URL`` 为空 → 直接走本地 ``render_pptx``（与接入前完全一致）；
-        - 非空 → 先试 PPTAgent；**任何**失败 / 超时 / 返回非法文件 → 回退本地渲染。
+        - 自由排版或 ``PPT_AGENT_URL`` 为空 → 直接走本地 ``render_pptx``；
+        - 显式模板且旧服务已启用 → 先试旧渲染器，失败则回退本地渲染。
         回退目标始终是真实可用的本地渲染结果，绝不会返回空文件或占位文件。
 
         Args:
@@ -1587,11 +1610,17 @@ class PPTService:
             (pptx 字节, 渲染来源 ``"pptagent"`` / ``"local"``)
         """
         def local_render() -> bytes:
-            """本地渲染唯一的真源：回退永远回到这里。"""
+            """未选模板时按内容排版并复检；显式模板保持原样。"""
+            if adaptive:
+                data, adjusted = self._render_with_feedback(
+                    outline, template, warnings=warnings)
+                outline.clear()
+                outline.update(adjusted)
+                return data
             return ppt_engine.render_pptx(outline, template, base_pptx=base_pptx, warnings=warnings)
 
-        if not (settings.PPT_AGENT_URL or "").strip():
-            logger.debug("PPTAgent 未配置（PPT_AGENT_URL 为空），走本地渲染")
+        if adaptive or not (settings.PPT_AGENT_URL or "").strip():
+            logger.debug("PPT 自适应或未配置旧渲染器，走本地可编辑版式")
             return local_render(), "local"
 
         # PPTAgent 走的是「喂主题 + 材料，由它全权排版」的形态，故把结构化大纲
@@ -1675,8 +1704,95 @@ class PPTService:
         return ppt_engine.render_pptx(clean, template, base_pptx=base)
 
     def render_local_pptx(self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
-        """兼容旧调用名：本地渲染即严格套模板路径。"""
-        return self.render_strict_template_pptx(d, outline, user_id)
+        """显式模板走固定版式；自由生成按内容选择并复检版式。"""
+        if d.template_id:
+            return self.render_strict_template_pptx(d, outline, user_id)
+        data, adjusted = self.render_adaptive_pptx(d, outline, user_id)
+        d.outline = adjusted
+        return data
+
+    @staticmethod
+    def _render_with_feedback(outline: dict, template: Dict,
+                              warnings: Optional[List[str]] = None,
+                              vision_review: bool = True) -> Tuple[bytes, dict]:
+        """针对检测出排版问题的页面试用其他可行版式，保留内容和页数。"""
+        from copy import deepcopy
+
+        current = deepcopy(outline)
+        render_warnings: List[str] = []
+        data = ppt_engine.render_pptx(current, template, warnings=render_warnings)
+        review = PPTService.review_pptx_visuals(data)
+
+        def score(result: dict, page: int) -> int:
+            weights = {"out_of_bounds": 10, "text_overlap": 10,
+                       "text_overflow_risk": 4, "small_font": 2, "text_density": 1}
+            return sum(weights.get(issue["code"], 2)
+                       for issue in result.get("issues") or [] if issue.get("page") == page)
+
+        bad_pages = sorted({issue["page"] for issue in review.get("issues") or []
+                            if issue.get("page", 0) > 0 and
+                            issue.get("code") in ("out_of_bounds", "text_overlap",
+                                                   "text_overflow_risk")})[:3]
+        for page in bad_pages:
+            slide = current["slides"][page - 1]
+            if slide.get("layout_locked"):
+                continue
+            original = str(slide.get("layout") or "")
+            best_score = score(review, page)
+            if not best_score:
+                continue
+            for layout in ppt_engine.layout_ids(slide.get("type") or "content")[:6]:
+                if layout == original or ppt_engine.choose_layout(
+                        {**slide, "layout": layout}) != layout:
+                    continue
+                trial = deepcopy(current)
+                trial["slides"][page - 1]["layout"] = layout
+                trial_warnings: List[str] = []
+                try:
+                    trial_data = ppt_engine.render_pptx(
+                        trial, template, warnings=trial_warnings)
+                except Exception as exc:  # noqa: BLE001 - 候选版式失败不影响已生成的基线版本
+                    logger.warning("[PPT] 替代版式渲染失败：page=%d layout=%s error=%s",
+                                   page, layout, type(exc).__name__)
+                    continue
+                trial_review = PPTService.review_pptx_visuals(trial_data)
+                trial_score = score(trial_review, page)
+                if trial_score < best_score:
+                    current, data, review, best_score = trial, trial_data, trial_review, trial_score
+                    render_warnings = trial_warnings
+                if best_score == 0:
+                    break
+        if warnings is not None:
+            warnings.extend(render_warnings)
+            warnings.extend(
+                f"第{issue['page']}页：{issue['message']}" for issue in review.get("issues") or []
+                if issue.get("page", 0) > 0)
+        if vision_review and settings.VISION_MODEL_URL:
+            rendered = PPTService.review_rendered_pages(data)
+            findings = [f"第{issue['page']}页：{issue['message']}"
+                        for issue in rendered["issues"]]
+            if warnings is not None:
+                warnings.extend(findings)
+                if rendered["status"] in ("unavailable", "partial"):
+                    warnings.append("实际页面视觉复检未全部完成，请查看逐页预览")
+            for finding in findings:
+                logger.warning("[PPT] 视觉复检发现问题：%s", finding)
+        return data, current
+
+    def render_adaptive_pptx(self, d: PPTDocument, outline: dict,
+                             user_id: str,
+                             warnings: Optional[List[str]] = None,
+                             vision_review: bool = True) -> Tuple[bytes, dict]:
+        """自由生成使用主题配色；只在用户显式选模板时加载模板底稿。"""
+        template, _ = self._resolve_template(None, d.theme_id or "")
+        clean = self.sanitize_outline(
+            outline, target_count=len((outline or {}).get("slides") or []) or None,
+            ensure_toc=False)
+        selected_ids = clean.get("material_ids")
+        clean = ppt_engine.resolve_slide_images(
+            clean, self._user_images(user_id, selected_ids, strict=False))
+        return self._render_with_feedback(clean, template, warnings,
+                                          vision_review=vision_review)
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str],
@@ -1699,7 +1815,9 @@ class PPTService:
         outline = ppt_engine.resolve_slide_images(
             outline, self._user_images(user.id, selected_ids, strict=False))
         data, renderer = self._render_pptx_bytes(
-            d, outline, template, self._tpl_base_bytes(trow), warnings=warnings)
+            d, outline, template,
+            self._tpl_base_bytes(trow) if selected_template_id else None,
+            warnings=warnings, adaptive=not selected_template_id)
         fname = f"{uuid.uuid4().hex}.pptx"
         path = self.ppt_dir / "generated" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1712,7 +1830,7 @@ class PPTService:
         d.file_path = str(path)
         d.status = "generated"
         d.slide_count = len(outline.get("slides") or [])
-        if trow:
+        if trow and selected_template_id:
             d.template_id = trow.id
             trow.use_count = (trow.use_count or 0) + 1
             self.templates.update(trow)
@@ -1724,6 +1842,8 @@ class PPTService:
     def generate(self, body, user: User) -> dict:
         """渲染并保存 pptx 文件（编辑器中的'生成/重新生成'动作）。"""
         d = self._get_doc_checked(body.doc_id, user)
+        if "template_id" in getattr(body, "model_fields_set", set()) and body.template_id is None:
+            d.template_id = None
         outline = ppt_engine.normalize_outline(body.outline) if body.outline else d.outline
         if not outline:
             raise AppError(400, "大纲为空")

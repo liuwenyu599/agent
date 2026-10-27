@@ -133,6 +133,7 @@ def test_local_job_succeeds_and_exports_real_pptx(client, token):
     doc = client.get(f"{BASE}/ppt/documents/{doc_id}", headers=_hdr(token))
     assert doc.status_code == 200, doc.text
     assert doc.json()["status"] == "generated"
+    assert doc.json()["template_id"] is None
 
 
 # ------------------------------------------------ 2. 不触达 PPTAgent
