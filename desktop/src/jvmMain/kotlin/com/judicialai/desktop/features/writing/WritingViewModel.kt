@@ -351,7 +351,8 @@ class WritingViewModel(
     val selectedParagraph: JsonObject?
         get() = paragraphs.firstOrNull { it["line_index"].int() == selectedLineIndex }
     val suggestionReady: Boolean
-        get() = content == serverContent && !busy && !suggestionBusy && !paragraphEditing
+        get() = selectedParagraph != null && content == serverContent &&
+            !busy && !suggestionBusy && !paragraphEditing
 
     private suspend fun loadParagraphs(id: String): Boolean {
         val expectedContent = serverContent
@@ -391,10 +392,12 @@ class WritingViewModel(
         suggestionInstruction = ""
         if (selectedParagraph == null) {
             val id = task.taskId ?: return
-            scope.launch { loadParagraphs(id) }
+            scope.launch {
+                if (!loadParagraphs(id) && selectedLineIndex == index) {
+                    status = "暂时无法定位该段，请刷新任务后重试"
+                }
+            }
         }
-        // 不再自动调 AI：点 ✎ 只选中段落并打开建议面板，
-        // 由用户在面板里点「AI优化」或先写下要求再触发。
     }
 
     fun suggestParagraph(regenerate: Boolean = false) {
@@ -402,6 +405,7 @@ class WritingViewModel(
         val requestedLineIndex = selectedLineIndex
         val pid = selectedParagraph?.get("id").str()
         if (pid.isNullOrBlank()) {
+            status = "该段定位尚未加载，请稍后再点 AI 优化"
             refreshParagraphs()
             return
         }
@@ -991,7 +995,7 @@ class WritingViewModel(
         // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
         // 不是「在旧文后面续写」。所以开流前必须先清空编辑器：
         // 否则 content += delta 会把新一版直接拼在上一版下面，界面上出现 v1+v2 连体。
-        // 保留一份本地旧内容：若新稿因差异过大被拒或网络失败，立即恢复。
+        // 保留一份本地旧内容：若生成失败或服务端拒收，立即恢复。
         // 注意：这里**不动** serverContent，让 content 与它保持不一致，
         // 期间 refreshTask() 就不会拿服务端的旧正文把正在流的这一版盖掉。
         draftPreviousContent = content

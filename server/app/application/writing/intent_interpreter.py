@@ -5,13 +5,15 @@ explicit operation (set fields / patch one section / rewrite document / draft / 
 deterministic code validates arguments and executes the mutation. A legacy JSON-v2 path remains
 as a compatibility fallback for model endpoints that do not expose tool calling yet.
 
-Regex/keyword parsers never decide whether a message means draft/revise/change-title/etc.
-If both tool calling and JSON interpretation fail, callers receive ``None`` and must not mutate.
+Semantic routing decides the operation. A narrowly scoped fallback recovers explicit
+"put this in paragraph N" commands when the model merely answers them; all other failed
+interpretations leave the document unchanged.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -236,6 +238,42 @@ def _blank_result(reply: str) -> Dict[str, Any]:
     for f in SEMANTIC_FIELDS:
         out[f] = [] if f == "key_facts" else None
     return out
+
+
+def placement_fallback(message: str, interpreted: Optional[Dict[str, Any]],
+                       *, has_draft: bool) -> Optional[Dict[str, Any]]:
+    """Recover a clear paragraph placement command if intent parsing only answered it.
+
+    This runs after semantic routing and only for an explicit ordinal target.
+    Ambiguous placement requests keep the model's answer/clarification unchanged.
+    """
+    if not has_draft or (interpreted and interpreted.get("operation") not in
+                         ("answer", "clarify", "draft_document", "outline", "rewrite_document")):
+        return interpreted
+    utterance = (message or "").strip()
+    if not utterance or utterance.endswith(("?", "？", "吗", "呢")):
+        return interpreted
+    match = re.fullmatch(
+        r"(?:请|把|将|我想|麻烦)?\s*(?P<fragment>.{1,60}?)\s*"
+        r"(?:要|请|应该)?\s*(?:放|加|写|移|挪)(?:进|到|在)?\s*"
+        r"第\s*(?P<ordinal>[0-9０-９一二三四五六七八九十百零〇两]+)\s*段"
+        r"(?:里|中|内|末尾|开头)?\s*[。！!]*",
+        utterance,
+    )
+    if not match:
+        return interpreted
+    fragment = match.group("fragment").strip(" ：:，,。‘’“”\"'")
+    if not fragment:
+        return interpreted
+    target = f"第{match.group('ordinal')}段"
+    result = dict(interpreted or _blank_result(""))
+    result.update(
+        intent="revise_content", side_effect="workspace",
+        operation="patch_section", patch_target=target,
+        revision_instruction=f"请将“{fragment}”放入{target}，保留该段原有事实、语气与其余内容。",
+        revision_mode="revise", routing="explicit_paragraph_placement",
+    )
+    return result
 
 
 def _sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:

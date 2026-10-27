@@ -27,8 +27,10 @@ os.environ.setdefault("DATA_DIR", f"/tmp/test-reply-{uuid.uuid4().hex[:8]}")
 from app.application.writing.intent_interpreter import (  # noqa: E402
     SYSTEM_PROMPT,
     WRITING_OPS_TOOL,
+    placement_fallback,
 )
 from app.application.writing import ProductionWritingTaskService  # noqa: E402
+from app.application.writing.async_task_service import AsyncWritingTaskService  # noqa: E402
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter  # noqa: E402
 from app.application.writing.semantic_task_service import (  # noqa: E402
     SemanticWritingTaskService,
@@ -89,6 +91,31 @@ def test_prompt_allows_proactive_clarification():
     assert "缺的那项会实质改变写法时用" in SYSTEM_PROMPT
     # 但仍要防止变成「什么都问」：锦上添花的细节不许拦人
     assert "锦上添花的细节" in SYSTEM_PROMPT
+
+
+def test_explicit_paragraph_placement_is_a_local_edit_when_model_only_answers():
+    interpreted = {"operation": "answer", "reply": "好的，我会把它放到第二段。"}
+    result = placement_fallback("妥否，请批示要放在第二段", interpreted, has_draft=True)
+    assert result["operation"] == "patch_section"
+    assert result["patch_target"] == "第二段"
+    assert "妥否，请批示" in result["revision_instruction"]
+    assert placement_fallback("第二段是什么意思？", interpreted, has_draft=True) == interpreted
+    assert placement_fallback("妥否，请批示要放在第二段", interpreted, has_draft=False) == interpreted
+    mistaken_draft = {"operation": "draft_document", "reply": "继续生成一版"}
+    assert placement_fallback("妥否，请批示要放在第二段", mistaken_draft,
+                              has_draft=True)["operation"] == "patch_section"
+
+
+def test_production_interpreter_uses_paragraph_placement_recovery():
+    class AnswerOnly:
+        async def interpret_async(self, *args, **kwargs):
+            return {"operation": "answer", "reply": "好的，放在第二段。"}
+
+    service = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
+    service.interpreter = AnswerOnly()
+    result = asyncio.run(service._interpret_async("妥否，请批示要放在第二段", {}, has_draft=True))
+    assert result["operation"] == "patch_section"
+    assert result["patch_target"] == "第二段"
 
 
 # ---------------------------------------------------------------- 2. 兜底话术轮换

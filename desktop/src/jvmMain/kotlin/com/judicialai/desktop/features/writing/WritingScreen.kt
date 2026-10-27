@@ -565,7 +565,7 @@ internal fun FormatToolbar(style: WritingTextStyle, onChange: (WritingTextStyle)
 /**
  * 所见即所得正文编辑：
  * 每行一个块，按公文格式渲染（标题居中/加粗、正文段首缩进两字符、**粗体** 生效）；
- * 点击任意段落就地进入编辑（框内支持多行，一次可拆成多段），点「完成」写回正文，
+ * 点击段落旁的「编辑」就地进入编辑（框内支持多行，一次可拆成多段），点「完成」写回正文，
  * 格式变化立刻可见，不再需要切到「预览」才能看到加粗/缩进效果。
  * 清空段落内容再点「完成」= 删除该段。
  */
@@ -684,16 +684,19 @@ private fun FormattedBodyEditor(
                     Box(
                         Modifier.weight(1f)
                             .clip(RoundedCornerShape(Dimens.radiusXs))
-                            .clickable(enabled = !vm.busy && !vm.suggestionBusy) {
-                                editIdx = i
-                                editText = TextFieldValue(raw)
-                                vm.markParagraphEditing(true)
-                            }
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     ) {
                         FormattedLine(raw, profile, vm.paragraphFormatting[i] ?: WritingTextStyle())
                     }
                     if (raw.isNotBlank()) {
+                        TextButton(onClick = {
+                            editIdx = i
+                            editText = TextFieldValue(raw)
+                            vm.markParagraphEditing(true)
+                        }, enabled = !vm.busy && !vm.suggestionBusy,
+                            modifier = Modifier.width(44.dp)) {
+                            Text("编辑", color = Primary, fontSize = 11.sp)
+                        }
                         val state = paragraphStates[i]?.get("status").str()
                         val marker = when (state) {
                             "pending" -> "⚡"
@@ -707,8 +710,8 @@ private fun FormattedBodyEditor(
                             else -> Muted
                         }
                         TextButton(onClick = {
-                            onOpenSuggestions()
                             vm.selectParagraph(i)
+                            onOpenSuggestions()
                         }, enabled = !vm.busy && !vm.suggestionBusy,
                             modifier = Modifier.width(32.dp)) {
                             Text(marker, color = markerColor, fontSize = 14.sp)
@@ -1128,7 +1131,7 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
                 kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
                 icon = Icons.Default.Refresh, fill = true)
             Spacer(Modifier.height(Dimens.space1))
-            Text("会以当前稿为基础生成新版本；差异过大时保留原稿",
+            Text("会参考当前稿生成新版本；原稿可在历史版本中查看和回退",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
         if (vm.busy) {
@@ -1256,7 +1259,7 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
                 kind = AppButtonKind.AI, enabled = !vm.busy, loading = vm.busy,
                 icon = Icons.Default.Refresh, fill = true)
             Spacer(Modifier.height(Dimens.space1))
-            Text("会以当前稿为基础生成新版本；差异过大时保留原稿",
+            Text("会参考当前稿生成新版本；原稿可在历史版本中查看和回退",
                 fontSize = 11.sp, color = Muted, lineHeight = 16.sp)
         }
         if (vm.busy) {
@@ -1429,7 +1432,7 @@ private fun EditorPanel(
                     Spacer(Modifier.width(Dimens.space3))
                 }
                 if (!sourceMode) {
-                    Text("点击段落即可修改", fontSize = 11.sp, color = Muted2)
+                    Text("选中文字可复制，点「编辑」修改", fontSize = 11.sp, color = Muted2)
                     Spacer(Modifier.width(Dimens.space3))
                 }
                 AppLinkButton(if (sourceMode) "返回排版视图" else "纯文本编辑",
@@ -1534,10 +1537,16 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
         Spacer(Modifier.height(Dimens.space3))
         val selected = vm.selectedParagraph
         if (selected == null) {
-            Text("点击正文右侧的 ✎ 选中一段，再点「AI优化」生成建议；" +
-                "也可以先在下方写下对 AI 的要求（例如字数、语气）。", fontSize = 12.sp,
+            Text(if (vm.selectedLineIndex == null)
+                    "点击正文右侧的 ✎ 选中该段；输入要求后点「AI 优化」才会生成建议。"
+                 else "正在定位所选段落；若仍未出现，请刷新任务后重试。", fontSize = 12.sp,
                 color = Muted, lineHeight = 18.sp)
             return@Column
+        }
+        if (!vm.suggestionReady && !vm.busy && !vm.suggestionBusy) {
+            Text("当前正文有尚未保存的手动修改。请先保存版本，再对这一段获取 AI 建议。",
+                fontSize = 11.sp, color = Warn, lineHeight = 17.sp)
+            Spacer(Modifier.height(Dimens.space2))
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Text("原文", fontSize = 11.sp, color = Muted)
@@ -1602,7 +1611,7 @@ private fun ParagraphSuggestionPanel(vm: WritingViewModel, modifier: Modifier) {
             Spacer(Modifier.height(Dimens.space2))
             AppLinkButton("重新建议", onClick = { vm.suggestParagraph(regenerate = true) })
         } else {
-            // 点 ✎ 不再自动调 AI；由这个按钮显式触发。已采纳/已拒绝的段落同样可以再次优化。
+            // 允许用户在自动建议后提出新的修改要求。
             AppButton("AI优化", onClick = { vm.suggestParagraph(regenerate = true) },
                 kind = AppButtonKind.AI, enabled = vm.suggestionReady,
                 icon = Icons.Default.AutoAwesome)

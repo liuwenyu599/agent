@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from app.application.writing import task_parser
 from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
+from app.application.writing.intent_interpreter import placement_fallback
 from app.application.writing.ops_task_service import LOCAL_OPERATIONS
 from app.application.writing.paragraph_suggestions import ParagraphSuggestionMixin, content_hash
 from app.application.writing.quality_gate import QualityGate
@@ -349,6 +350,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             has_draft=has_draft,
             history=(ctx.get("history") or [])[-6:],
         )
+        result = placement_fallback(message, result, has_draft=has_draft)
         if not result:
             return None
         # Preserve GroundedWritingTaskService's deterministic literal precedence.
