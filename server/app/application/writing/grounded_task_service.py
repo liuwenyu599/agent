@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, Iterator, List, Optional
-
-from fastapi import HTTPException
+from typing import Any, Dict, List
 
 from app.application.writing import task_parser
 from app.application.writing.calculation_guard import verify_and_fix_calculations
@@ -220,78 +218,6 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             if total <= 0:
                 break
         return "\n\n".join(items)
-
-    def _draft_system(self, user_id: str, template: Optional[Dict[str, Any]] = None) -> str:
-        return super()._draft_system(user_id, template)
-
-    def _llm_draft(self, instruction: str, sources, attachment_ctx, user_id,
-                   template: Optional[Dict[str, Any]] = None) -> str:
-        if not self.assistant:
-            raise HTTPException(status_code=503, detail="模型服务不可用")
-        system = self._draft_system(user_id, template)
-        system += self._example_style_block(instruction, user_id)
-        system += (
-            "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计。凡正文必须给出由多个数字推导的结果，"
-            "应确保运算关系明确且结果精确；最终文本还会由程序做确定性复核。"
-        )
-        return self.assistant.chat(
-            message=instruction,
-            history=[],
-            sources=sources,
-            user_role="user",
-            system_prompt=system,
-            attachment_context=attachment_ctx,
-        ) or ""
-
-    def _llm_draft_stream(self, instruction: str, sources, attachment_ctx, user_id,
-                          template: Optional[Dict[str, Any]] = None) -> Iterator[str]:
-        if not self.assistant:
-            raise HTTPException(status_code=503, detail="模型服务不可用")
-        system = self._draft_system(user_id, template)
-        system += self._example_style_block(instruction, user_id)
-        system += (
-            "\n\n【计算纪律】不要凭语言模型心算派生金额、比例或合计；派生结果必须可由原始数字复核。"
-        )
-        return self.assistant.chat_stream(
-            message=instruction,
-            history=[],
-            sources=sources,
-            user_role="user",
-            system_prompt=system,
-            attachment_context=attachment_ctx,
-        )
-
-    def _llm_revise(self, prompt: str, sources, attachment_ctx, user_id) -> str:
-        if not self.assistant:
-            raise HTTPException(status_code=503, detail="模型服务不可用")
-        agent = self._agent_prompt(user_id)
-        from app.application.writing.task_service import REVISION_RULES
-        system = (agent + "\n" if agent else "") + REVISION_RULES
-        system += self._example_style_block(prompt, user_id)
-        system += (
-            "\n\n若用户要求规范化、仿写、按单位口径调整，应以以上知识库风格卡的结构和措辞习惯作为风格依据；"
-            "不要迁移历史稿的事实。"
-        )
-        return self.assistant.chat(
-            message=prompt,
-            history=[],
-            sources=sources,
-            user_role="user",
-            system_prompt=system,
-            attachment_context=attachment_ctx,
-        ) or ""
-
-    def revise(self, task_id: str, user_id: str, instruction: str,
-               mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
-        literal = self._literal_overrides(instruction)
-        if literal:
-            task = self._get_owned(task_id, user_id)
-            ctx = dict(task.context or {})
-            task_parser.merge_context(ctx, literal)
-            task_parser.compute_missing(ctx)
-            task.context = ctx
-            self.db.commit()
-        return super().revise(task_id, user_id, instruction, mode, selection)
 
     def _postprocess(self, text: str, ctx: Dict[str, Any]):
         processed, events, doc_number, doc_date = super()._postprocess(text, ctx)

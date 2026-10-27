@@ -27,7 +27,18 @@ from app.application.writing.agent_graph.routing import (
     classify_writing_route,
     graph_enabled_for_user,
 )
-from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService, _SPEECH_TYPES
+from app.application.writing.finalize_pipeline import finalize_text, persist_revision
+from app.application.writing.quality_policy import (
+    MAX_QUALITY_RETRIES,
+    RepairDecision,
+    critical_issue_lines,
+    model_plan_prompt,
+    parse_model_plan,
+    raise_quality_gate,
+    repair_decision,
+)
+from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
+from app.application.writing.section_policy import is_speech_type
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
 from app.core.config import settings
@@ -392,24 +403,49 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             system_prompt=system, attachment_context=attachment_ctx,
         ) or ""
 
-    async def _llm_revise_async(self, prompt: str, sources, attachment_ctx, user_id) -> str:
-        """QualityRetryWritingTaskService semantics, with awaited model calls."""
+    async def _model_plan_async(self, quality: Dict[str, Any],
+                                ctx: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """规则覆盖不到时，让模型读 issue 自己决定怎么改。只调用一次，失败即放弃。"""
+        if not self.assistant:
+            return None
+        prompt = model_plan_prompt(quality, ctx or {})
+        if not prompt:
+            return None
+        try:
+            text = await self.assistant.acomplete(
+                [{"role": "user", "content": prompt}], temperature=0.1, max_tokens=300)
+        except Exception as exc:  # 模型不可用时退回规则/兜底，绝不让修复链断在这里
+            logger.warning("[质量门修复] 模型决策失败，回退兜底动作: %s", exc)
+            return None
+        return parse_model_plan(text or "", len(critical_issue_lines(quality)))
+
+    async def _repair_plan_async(self, quality: Dict[str, Any],
+                                 ctx: Optional[Dict[str, Any]] = None) -> RepairDecision:
+        """与同步链共用同一套修复策略，只是模型调用换成 await。"""
+        return repair_decision(quality, await self._model_plan_async(quality, ctx))
+
+    async def _llm_revise_async(self, prompt: str, sources, attachment_ctx, user_id,
+                                ctx: Optional[Dict[str, Any]] = None) -> str:
+        """改写候选；D 级按 quality_policy 的针对性动作最多修复两次。"""
         candidate = await self._llm_revise_once_async(prompt, sources, attachment_ctx, user_id)
-        quality = self._quality_result(candidate)
+        topic = str((ctx or {}).get("title") or (ctx or {}).get("topic") or "")
+        quality = self._quality_result(candidate, topic=topic)
         retry_no = 0
-        while quality.get("level") == "D" and retry_no < 2:
+        while quality.get("level") == "D" and retry_no < MAX_QUALITY_RETRIES:
             retry_no += 1
-            retry_prompt = self._retry_prompt(prompt, candidate, quality, retry_no)
+            decision = await self._repair_plan_async(quality, ctx)
+            logger.warning(
+                "[写作质量门] revise D 级，第 %d/%d 次修复（%s 决策）: %s -> %s",
+                retry_no, MAX_QUALITY_RETRIES, decision.source,
+                critical_issue_lines(quality), decision.action,
+            )
+            retry_prompt = self._retry_prompt(
+                prompt, candidate, quality, retry_no, decision.action)
             candidate = await self._llm_revise_once_async(
                 retry_prompt, sources, attachment_ctx, user_id)
-            quality = self._quality_result(candidate)
+            quality = self._quality_result(candidate, topic=topic)
         if quality.get("level") == "D":
-            raise HTTPException(status_code=422, detail={
-                "code": "WRITING_QUALITY_GATE_D",
-                "message": "生成结果连续两次修复后仍存在硬伤，未保存该版本。",
-                "issues": quality.get("issues") or [],
-                "retry_count": 2,
-            })
+            raise_quality_gate(quality, "生成结果连续两次修复后仍存在硬伤，未保存该版本。")
         return candidate
 
     # ------------------------------------------------------------- create/plan
@@ -632,7 +668,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         sources = await self._retrieve_async(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
         replacement = "" if operation == "delete_range" else (await self._llm_revise_async(
-            prompt, sources, attachment_ctx, user_id)).strip()
+            prompt, sources, attachment_ctx, user_id, ctx)).strip()
         if not replacement and operation != "delete_range":
             raise HTTPException(status_code=502, detail="模型未返回局部修改内容，请重试")
         if (operation == "patch_section" and replacement == fragment and
@@ -643,57 +679,25 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                     "operation": "patch_section", "patch_target": target}
 
         revised = self._splice_local(current, start, end, replacement, operation)
-        revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
-        revised = self._canonicalize_body(revised, {
-            **ctx,
-            **({"document_number": doc_number} if doc_number else {}),
-            **({"document_date": doc_date} if doc_date else {}),
-        })
-        revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
-        if citation_warnings:
-            ctx["citation_warnings"] = citation_warnings
-        else:
-            ctx.pop("citation_warnings", None)
-        if doc_number:
-            ctx["document_number"] = doc_number
-        if doc_date:
-            ctx["document_date"] = doc_date
-        from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(
-            revised, body_only=True, document_type=ctx.get("document_type") or "",
-            word_count_target=ctx.get("word_count_target"))
-        content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
-        if content_check["issues"]:
-            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
-            if quality.get("level") == "A":
-                quality["level"] = "B"
-        references = self._reference_labels(sources) or list(ctx.get("references") or [])
-        ctx["references"] = references
-        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
-        self._claim_revision_state(task, user_id, expected_state)
-        task.context = ctx
-        task.current_content = revised
-        self.db.flush()
-        document_id, version = self._snapshot(
-            task, user_id, note=f"AI 局部修改：{instruction[:30]}", commit=False)
-        task.document_id = document_id
-        task.version_no = version
-        task.updated_at = now_local()
-        suggestions_reset = (
-            self._supersede_pending_suggestions(task_id, user_id)
-            if getattr(task, "id", None) else False
+        finalized = finalize_text(
+            self, revised, ctx, sources, keep_previous_references=True)
+        revised = finalized.text
+        version, suggestions_reset = persist_revision(
+            self, task, ctx, revised, user_id,
+            note=f"AI 局部修改：{instruction[:30]}",
+            expected_state=expected_state,
+            supersede_suggestions=True,
         )
-        self.db.commit()
         summary = self._revision_diff(current, revised)
         verb = {"append_to_section": "补充", "insert_paragraph": "插入新段落", "delete_range": "删除"}.get(operation, "修改")
         reply = (f"“{target}”已完成{verb}。"
-                 + self._revise_reply(version, summary, citation_warnings, instruction))
+                 + self._revise_reply(version, summary, finalized.citation_warnings, instruction))
         if suggestions_reset:
             reply += " 原有逐段建议已失效，请按新稿重新获取建议。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
-                "quality": quality, "content_check": content_check,
-                "postprocess_events": events, "context_changes": [],
-                "references": references, "revision_summary": summary,
+                "quality": finalized.quality, "content_check": finalized.content_check,
+                "postprocess_events": finalized.events, "context_changes": [],
+                "references": finalized.references, "revision_summary": summary,
                 "operation": operation, "patch_target": target}
 
     async def revise_async(self, task_id: str, user_id: str, instruction: str,
@@ -724,7 +728,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         prompt = self._build_revise_prompt(current, instruction, mode_desc, None, ctx)
         sources = await self._retrieve_async(ctx, user_id, extra_query=instruction)
         attachment_ctx = self._attachment_context(task, ctx)
-        revised = await self._llm_revise_async(prompt, sources, attachment_ctx, user_id)
+        revised = await self._llm_revise_async(prompt, sources, attachment_ctx, user_id, ctx)
         if not revised.strip():
             raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
         revised = self._canonicalize_body(revised, ctx)
@@ -746,54 +750,26 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                     "reply": "对照您的要求检查了当前文档，没有需要实际改动的地方，正文保持原样，也未生成新版本。",
                     "content_changed": False, "context_changes": []}
 
-        revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
-        revised = self._canonicalize_body(revised, ctx)
-        revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
-        from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(
-            revised, body_only=True, document_type=ctx.get("document_type") or "",
-            word_count_target=ctx.get("word_count_target"))
-        content_check = ContentChecker().check(revised, sources=sources, header_docnum=doc_number)
-        if content_check["issues"]:
-            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
-            if quality.get("level") == "A":
-                quality["level"] = "B"
-        if citation_warnings:
-            ctx["citation_warnings"] = citation_warnings
-        else:
-            ctx.pop("citation_warnings", None)
-        if doc_number:
-            ctx["document_number"] = doc_number
-        if doc_date:
-            ctx["document_date"] = doc_date
-        references = self._reference_labels(sources) or list(ctx.get("references") or [])
-        ctx["references"] = references
-        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
-        self._claim_revision_state(task, user_id, expected_state)
-        task.context = ctx
-        task.current_content = revised
-        self.db.flush()
-        document_id, version = self._snapshot(
-            task, user_id, note=f"AI 修改：{instruction[:30]}", commit=False)
-        task.document_id = document_id
-        task.version_no = version
-        task.updated_at = now_local()
-        suggestions_reset = (
-            self._supersede_pending_suggestions(task_id, user_id)
-            if getattr(task, "id", None) else False
+        finalized = finalize_text(
+            self, revised, ctx, sources, keep_previous_references=True)
+        revised = finalized.text
+        version, suggestions_reset = persist_revision(
+            self, task, ctx, revised, user_id,
+            note=f"AI 修改：{instruction[:30]}",
+            expected_state=expected_state,
+            supersede_suggestions=True,
         )
-        self.db.commit()
         reply = f"已按您的要求修改当前文档（{mode_desc.split('：')[0]}），保存为 v{version}。"
         if suggestions_reset:
             reply += " 原有逐段建议已失效，请按新稿重新获取建议。"
-        if citation_warnings:
-            reply += f"系统同时移除了 {len(citation_warnings)} 处无法核实的具体文号，请确认资料来源后再补回。"
+        if finalized.citation_warnings:
+            reply += f"系统同时移除了 {len(finalized.citation_warnings)} 处无法核实的具体文号，请确认资料来源后再补回。"
         if context_changes:
             reply += "任务信息同步更新：" + "；".join(context_changes) + "。"
         return {**self._to_dict(task), "reply": reply, "content_changed": True,
-                "quality": quality, "content_check": content_check,
-                "postprocess_events": events, "context_changes": context_changes,
-                "references": references}
+                "quality": finalized.quality, "content_check": finalized.content_check,
+                "postprocess_events": finalized.events, "context_changes": context_changes,
+                "references": finalized.references}
 
     # ----------------------------------------------------------- draft/retries
     async def _regenerate_if_needed_async(self, instruction: str, sources, attachment_ctx,
@@ -843,18 +819,27 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
         quality = self._quality_result(
             candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
-        while quality.get("level") == "D" and retries_used < 2:
+        topic = str(ctx.get("title") or ctx.get("topic") or "")
+        while quality.get("level") == "D" and retries_used < MAX_QUALITY_RETRIES:
             retries_used += 1
+            decision = await self._repair_plan_async(quality, ctx)
+            logger.warning(
+                "[写作质量门] draft D 级，第 %d/%d 次修复（%s 决策）: %s -> %s",
+                retries_used, MAX_QUALITY_RETRIES, decision.source,
+                critical_issue_lines(quality), decision.action,
+            )
             retry_instruction = self._retry_prompt(
-                instruction, candidate, quality, retries_used)
+                instruction, candidate, quality, retries_used, decision.action)
             try:
                 candidate = self._clean_markdown(await self._llm_draft_async(
                     retry_instruction, sources, attachment_ctx, user_id, template=template))
-            except Exception:
+            except Exception as exc:
+                logger.warning("[写作质量门] D 级修复重试调用失败: %s", exc)
                 break
-            quality = self._quality_result(
-                candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
-            reasons.append(f"QualityGate 检测到硬伤，已按具体问题自动修复第 {retries_used} 次。")
+            quality = self._quality_result(candidate, topic=topic)
+            reasons.append(
+                f"QualityGate 检测到硬伤，已按针对性策略自动修复第 {retries_used} 次"
+                f"（{decision.source} 决策）。")
         return candidate, ("".join(reasons) if reasons else None)
 
     async def _section_plan_async(self, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -893,7 +878,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 if focus:
                     plan.append({"heading": heading[:80], "focus": focus[:240],
                                  "target_chars": max(300, min(chars or total // 4, max(1200, total)))})
-            speech = any(x in str(ctx.get("document_type") or "") for x in _SPEECH_TYPES)
+            speech = is_speech_type(str(ctx.get("document_type") or ""))
             if speech and any(
                 item["heading"] or any(bad in item["focus"] for bad in
                     ("总体要求", "实施步骤", "保障措施", "责任分工", "工作方案"))
@@ -1056,6 +1041,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                                     detail="生成期间正文已变化，未覆盖新版本，请刷新后重试")
             self.db.refresh(task)
 
+        old = re.sub(r"\s+", "", task.current_content or "")
+        new = re.sub(r"\s+", "", text or "")
         if task.current_content:
             old_lines = set(task.current_content.splitlines())
             new_lines = set(text.splitlines())
@@ -1065,11 +1052,12 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 WritingSuggestionModel.status == "accepted",
                 WritingSuggestionModel.final_content.is_not(None),
             )).all()
-            if any(line in old_lines and line not in new_lines for line in accepted):
+            # An accepted edit is a useful style example, not a permanent lock on
+            # every sentence. A later rewrite/shortening may legitimately remove it.
+            if any(line in old_lines and line not in new_lines for line in accepted) and not (
+                    len(new) < len(old) * 0.55):
                 raise HTTPException(status_code=422,
                                     detail="新稿丢失了已采纳的逐段修改，未替换当前版本")
-        old = re.sub(r"\s+", "", task.current_content or "")
-        new = re.sub(r"\s+", "", text or "")
         if len(old) >= 120:
             def grams(value: str) -> set[str]:
                 value = value[:8000]
@@ -1077,10 +1065,10 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
             old_grams, new_grams = grams(old), grams(new)
             overlap = (len(old_grams & new_grams) / max(1, min(len(old_grams), len(new_grams))))
-            if len(new) < len(old) * 0.55 or overlap < 0.18:
+            if overlap < 0.18:
                 raise HTTPException(
                     status_code=422,
-                    detail="新稿与当前稿差异过大，未替换已保存版本。请用逐段建议修改具体段落，或新建任务重新起草。",
+                    detail="新稿与当前稿主题关联不足，未替换已保存版本。请确认是否需要另起任务。",
                 )
         result = super()._finalize_draft(task, ctx, text, sources, user_id)
         if getattr(self, "_rag_degraded_this_run", False):

@@ -18,11 +18,9 @@ import re
 import zlib
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
-
 from app.application.writing import task_parser
 from app.application.writing.intent_interpreter import SEMANTIC_FIELDS
-from app.application.writing.task_service import REVISE_MODES, WritingTaskService
+from app.application.writing.task_service import WritingTaskService
 from app.core.timeutil import now_local
 
 
@@ -60,18 +58,6 @@ class SemanticWritingTaskService(WritingTaskService):
             messages.append({"role": "user", "content": message})
         return messages
 
-    def _answer_only(self, message, ctx, content):
-        if self.assistant:
-            try:
-                reply = self.assistant.complete(self._answer_messages(message, ctx, content),
-                                                temperature=0.3, max_tokens=1000)
-                if reply and reply.strip():
-                    return reply.strip()
-            except Exception:
-                pass
-        return "暂时无法回答。请补充要讨论的问题或需要修改的具体内容。"
-
-    # ------------------------------------------------------------------ context
     @staticmethod
     def _merge_interpretation(ctx: Dict[str, Any], it: Dict[str, Any]) -> List[str]:
         """Merge model-extracted fields without re-parsing the user's sentence locally."""
@@ -309,68 +295,6 @@ class SemanticWritingTaskService(WritingTaskService):
             "ai_actions": self._plan_actions(doc_type),
         }
 
-    # ------------------------------------------------------------------- chat
-    def chat(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
-        task = self._get_owned(task_id, user_id)
-        ctx = dict(task.context or {})
-        has_draft = bool((task.current_content or "").strip())
-        self._push_history(ctx, "user", message)
-
-        it = self._interpret(message, ctx, has_draft=has_draft)
-        if not it:
-            # Normally unreachable with the new interpreter, but keep fail-closed semantics.
-            reply = self._answer_only(message, ctx, task.current_content or "")
-            self._push_history(ctx, "assistant", reply)
-            task.context = ctx
-            self.db.commit()
-            return {**self._to_dict(task), "reply": reply, "content_changed": False}
-
-        before_ctx = dict(ctx)
-        changes = self._merge_interpretation(ctx, it)
-        task_parser.compute_missing(ctx)
-        task.context = ctx
-        task.updated_at = now_local()
-        self.db.commit()
-
-        intent = it.get("intent") or "answer"
-        if intent == "revise_content" and has_draft:
-            instruction = it.get("revision_instruction") or message
-            mode = it.get("revision_mode") or "revise"
-            result = self.revise(task_id, user_id, instruction=instruction, mode=mode)
-            result["context_changes"] = changes
-            latest_ctx = dict(task.context or {})
-            self._push_history(latest_ctx, "assistant", result["reply"])
-            task.context = latest_ctx
-            self.db.commit()
-            return result
-
-        if intent in ("draft", "outline"):
-            result = self.draft(task_id, user_id, outline_only=(intent == "outline"))
-            result["context_changes"] = changes
-            latest_ctx = dict(task.context or {})
-            self._push_history(latest_ctx, "assistant", result["reply"])
-            task.context = latest_ctx
-            self.db.commit()
-            return result
-
-        # Structural field changes are applied to the canonical document representation. This is
-        # what makes “落款改成X/日期改成Y” visibly true rather than just a chat claim.
-        content_changed = False
-        if has_draft and intent == "update_context" and before_ctx != ctx:
-            note = self._sync_structured_fields(task, user_id)
-            content_changed = bool(note)
-            if note:
-                changes = list(changes) + [note]
-
-        reply = it.get("reply") or self._answer_only(message, ctx, task.current_content or "")
-        if changes:
-            reply += "\n\n已应用：" + "；".join(changes) + "。"
-        self._push_history(ctx, "assistant", reply)
-        task.context = ctx
-        self.db.commit()
-        return {**self._to_dict(task), "reply": reply,
-                "content_changed": content_changed, "context_changes": changes}
-
     def _sync_structured_fields(self, task, user_id: str) -> str:
         current = (task.current_content or "").strip()
         if not current:
@@ -445,79 +369,6 @@ class SemanticWritingTaskService(WritingTaskService):
             parts.append(f"另外有 {len(citation_warnings)} 处文号核实不到依据，"
                          "已替换成「相关文件」，确认来源后再补回。")
         return "".join(parts)
-
-    def revise(self, task_id: str, user_id: str, instruction: str,
-               mode: str = "revise", selection: Optional[str] = None) -> Dict[str, Any]:
-        task = self._get_owned(task_id, user_id)
-        current = self._canonicalize_body((task.current_content or "").strip(),
-                                          dict(task.context or {}))
-        if not current:
-            raise HTTPException(status_code=409, detail="当前还没有草稿，请先起草")
-
-        ctx = dict(task.context or {})
-        mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
-        prompt = self._build_revise_prompt(current, instruction, mode_desc, selection, ctx)
-        sources = self._retrieve(ctx, user_id, extra_query=instruction)
-        attachment_ctx = self._attachment_context(task, ctx)
-        revised = self._llm_revise(prompt, sources, attachment_ctx, user_id)
-        if not revised.strip():
-            raise HTTPException(status_code=502, detail="模型未返回内容，请重试")
-
-        revised = self._canonicalize_body(revised.strip(), ctx)
-        if revised == current:
-            reply = (
-                "我已按你的指令逐项对照当前正文，但没有产生实际文字变化，"
-                "因此没有伪造“已修改”状态，也没有生成新版本。"
-            )
-            return {**self._to_dict(task), "reply": reply,
-                    "content_changed": False, "context_changes": []}
-
-        revised, events, doc_number, doc_date = self._postprocess(revised, ctx)
-        revised = self._canonicalize_body(revised, {
-            **ctx,
-            **({"document_number": doc_number} if doc_number else {}),
-            **({"document_date": doc_date} if doc_date else {}),
-        })
-        revised, citation_warnings = self._guard_external_document_numbers(revised, sources, ctx)
-
-        if citation_warnings:
-            ctx["citation_warnings"] = citation_warnings
-        else:
-            ctx.pop("citation_warnings", None)
-        if doc_number:
-            ctx["document_number"] = doc_number
-        if doc_date:
-            ctx["document_date"] = doc_date
-
-        from app.application.writing.quality_gate import QualityGate
-        from app.application.writing.content_check import ContentChecker
-        quality = QualityGate().evaluate(
-            revised, body_only=True, document_type=ctx.get("document_type") or "",
-            word_count_target=ctx.get("word_count_target"))
-        content_check = ContentChecker().check(
-            revised, sources=sources, header_docnum=doc_number)
-        if content_check["issues"]:
-            quality["issues"] = list(quality.get("issues") or []) + content_check["issues"]
-            if quality.get("level") == "A":
-                quality["level"] = "B"
-
-        references = self._reference_labels(sources) or list(ctx.get("references") or [])
-        ctx["references"] = references
-        ctx["reference_items"] = self._reference_items(sources) or list(ctx.get("reference_items") or [])
-        task.context = ctx
-        task.current_content = revised
-        self.db.flush()
-        _, version = self._snapshot(task, user_id, note=f"AI 修改：{instruction[:30]}")
-        task.version_no = version
-        task.updated_at = now_local()
-        self.db.commit()
-
-        summary = self._revision_diff(current, revised)
-        reply = self._revise_reply(version, summary, citation_warnings, instruction)
-        return {**self._to_dict(task), "reply": reply, "content_changed": True,
-                "quality": quality, "content_check": content_check,
-                "postprocess_events": events, "context_changes": [],
-                "references": references, "revision_summary": summary}
 
     def save_version(self, task_id: str, user_id: str, content: str,
                      note: Optional[str] = None, formatting: Optional[Dict] = None) -> Dict[str, Any]:

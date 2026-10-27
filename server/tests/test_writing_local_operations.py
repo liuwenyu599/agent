@@ -64,7 +64,8 @@ def test_insert_before_and_delete_inclusive_range():
     assert OpsWritingTaskService._splice_local(BODY, start, end, "", "delete_range") == ""
 
 
-def service_stub(cls):
+def service_stub(cls=AsyncWritingTaskService):
+    """单一路径：生产只有异步服务，stub 只围绕 AsyncWritingTaskService 搭建。"""
     svc = object.__new__(cls)
     task = SimpleNamespace(context={}, current_content=BODY, version_no=1)
     svc.db = Mock()
@@ -75,24 +76,23 @@ def service_stub(cls):
     svc._postprocess = lambda text, ctx: (text, [], None, None)
     svc._guard_external_document_numbers = lambda text, sources, ctx: (text, [])
     svc._reference_labels = lambda *_: []
+    svc._reference_items = lambda *_: []
     svc._snapshot = lambda *_args, **_kwargs: (None, 2)
     svc._to_dict = lambda task: {"current_content": task.current_content}
     svc._llm_revise = Mock(return_value="补贴按月发放。")
-    async def revise(*_args):
+
+    async def revise(*_args, **_kwargs):
         return svc._llm_revise(*_args)
+
     svc._llm_revise_async = revise
     return svc, task
 
 
-@pytest.mark.parametrize("cls", [OpsWritingTaskService, AsyncWritingTaskService])
 @pytest.mark.parametrize("operation", ["append_to_section", "insert_paragraph", "delete_range"])
-def test_sync_async_execution_saves_local_changes(cls, operation):
-    svc, task = service_stub(cls)
-    kwargs = dict(target="补贴标准", instruction="补充按月发放。", operation=operation)
-    if cls is AsyncWritingTaskService:
-        result = asyncio.run(svc.patch_section_async("task", "user", **kwargs))
-    else:
-        result = svc.patch_section("task", "user", **kwargs)
+def test_local_patch_saves_changes(operation):
+    svc, task = service_stub()
+    result = asyncio.run(svc.patch_section_async(
+        "task", "user", target="补贴标准", instruction="补充按月发放。", operation=operation))
     assert result["content_changed"] is True
     assert result["operation"] == operation
     assert "二、申报流程\n向属地司法所申报。" in task.current_content
@@ -107,37 +107,33 @@ def test_sync_async_execution_saves_local_changes(cls, operation):
         assert "补贴按月发放。" in task.current_content
 
 
-@pytest.mark.parametrize("cls", [OpsWritingTaskService, AsyncWritingTaskService, SemanticWritingTaskService])
 @pytest.mark.parametrize("routing_failed", [True, False])
-def test_question_answers_without_mutating_document(cls, routing_failed):
+def test_question_answers_without_mutating_document(routing_failed):
     """纯问答不得改动正文，也不得升版本。
 
-    两条路径的回复来源不同，都属正确行为：
+    两种情形的回复来源不同，都属正确行为：
 
-    - ``routing_failed=True`` —— 意图路由拿不到结果，回退 ``_answer_only``
+    - ``routing_failed=True`` —— 意图路由拿不到结果，回退 ``_answer_only_async``
       直接问模型，用模型的实际回答。
     - ``routing_failed=False`` —— 路由返回了 ``reply``（它已读过上下文），
-      实现按 ``it.get("reply") or self._answer_only(...)`` 短路，不再二次调用
-      模型。这是刻意设计：避免同一问题问两遍模型、白白多花一次推理。
-
-    早先这里两种情形都断言 ``answer.assert_called_once()`` 且要求回复等于
-    模型输出，等于要求"已经有reply 时仍要再问一次模型"，与实现语义冲突。
+      实现按 ``it.get("reply") or ...`` 短路，不再二次调用模型。这是刻意设计：
+      避免同一问题问两遍模型、白白多花一次推理。
     """
-    svc, task = service_stub(cls)
+    svc, task = service_stub()
     interpreted = None if routing_failed else _sanitize_tool_args({
         "operation": "answer", "field_updates": {}, "reply": "我来解释补贴标准。"})
-    svc._interpret = lambda *_args, **_kwargs: interpreted
+
     async def interpret(*_args, **_kwargs):
         return interpreted
+
     svc._interpret_async = interpret
     answer = Mock(return_value="补贴标准通常需要明确对象、金额和发放周期。")
+
     async def complete(*args, **kwargs):
         return answer(*args, **kwargs)
+
     svc.assistant = SimpleNamespace(complete=answer, acomplete=complete)
-    if cls is AsyncWritingTaskService:
-        result = asyncio.run(svc.chat_async("task", "user", "这节还缺什么？"))
-    else:
-        result = svc.chat("task", "user", "这节还缺什么？")
+    result = asyncio.run(svc.chat_async("task", "user", "这节还缺什么？"))
 
     expected = ("补贴标准通常需要明确对象、金额和发放周期。"
                 if routing_failed else "我来解释补贴标准。")
@@ -149,42 +145,34 @@ def test_question_answers_without_mutating_document(cls, routing_failed):
     assert answer.called is routing_failed
 
 
-@pytest.mark.parametrize("cls", [OpsWritingTaskService, AsyncWritingTaskService])
 @pytest.mark.parametrize("operation", ["append_to_section", "insert_paragraph", "delete_range"])
-def test_chat_routes_local_operations_to_execution(cls, operation):
-    svc, task = service_stub(cls)
+def test_chat_routes_local_operations_to_execution(operation):
+    svc, task = service_stub()
     parsed = _sanitize_tool_args({"operation": operation, "field_updates": {},
                                  "target": "补贴标准", "instruction": "补充按月发放。"})
-    svc._interpret = lambda *_args, **_kwargs: parsed
+
     async def interpret(*_args, **_kwargs):
         return parsed
+
     svc._interpret_async = interpret
-    if cls is AsyncWritingTaskService:
-        result = asyncio.run(svc.chat_async("task", "user", "在补贴标准那节加一句话"))
-    else:
-        result = svc.chat("task", "user", "在补贴标准那节加一句话")
+    result = asyncio.run(svc.chat_async("task", "user", "在补贴标准那节加一句话"))
     assert result["operation"] == operation
     assert result["content_changed"] is True
     assert task.version_no == 2
     assert task.context["history"][-1]["content"] == result["reply"]
 
 
-@pytest.mark.parametrize("cls", [OpsWritingTaskService, AsyncWritingTaskService])
-def test_chat_local_edit_without_draft_reports_missing_draft(cls):
-    svc, task = service_stub(cls)
+def test_chat_local_edit_without_draft_reports_missing_draft():
+    svc, task = service_stub()
     task.current_content = ""
     parsed = _sanitize_tool_args({"operation": "patch_section", "field_updates": {},
                                   "target": "第二段", "instruction": "补充经费依据。"})
-    svc._interpret = lambda *_args, **_kwargs: parsed
 
     async def interpret(*_args, **_kwargs):
         return parsed
 
     svc._interpret_async = interpret
-    if cls is AsyncWritingTaskService:
-        result = asyncio.run(svc.chat_async("task", "user", "第二段补充经费依据"))
-    else:
-        result = svc.chat("task", "user", "第二段补充经费依据")
+    result = asyncio.run(svc.chat_async("task", "user", "第二段补充经费依据"))
     assert "还没有草稿" in result["reply"]
     assert result["content_changed"] is False
     assert task.version_no == 1

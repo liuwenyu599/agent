@@ -1,5 +1,6 @@
 """公文文种、文号、排版与写作台性能关键路径回归测试。"""
 
+import asyncio
 from io import BytesIO
 
 from docx import Document
@@ -489,12 +490,36 @@ def test_document_number_with_retrieved_evidence_is_preserved():
     assert warnings == []
 
 
+class _StubResult:
+    rowcount = 1
+
+
+class _StubRows:
+    @staticmethod
+    def all():
+        return []
+
+
 class _StubDB:
+    """最小 DB 替身：条件更新（行锁）与逐段建议查询都给“无冲突”结果。"""
+
     def flush(self):
         pass
 
     def commit(self):
         pass
+
+    def rollback(self):
+        pass
+
+    def execute(self, *_args, **_kwargs):
+        return _StubResult()
+
+    def refresh(self, _obj):
+        pass
+
+    def scalars(self, *_args, **_kwargs):
+        return _StubRows()
 
 
 class _StubTask:
@@ -534,13 +559,20 @@ def test_revise_applies_user_date_to_context_and_keeps_body_chrome_free():
 
     svc._get_owned = lambda task_id, user_id: task
     svc._load_template = lambda template_id: None
-    svc._retrieve = lambda ctx_, user_id, extra_query="": []
-    svc._attachment_context = lambda t, ctx_: None
-    svc._llm_revise = lambda prompt, sources, attachment_ctx, user_id: old.replace(
-        "拟举办专题讲座。", "拟于十月举办专题讲座。")
-    svc._snapshot = lambda t, user_id, note=None: ("d-test", 2)
 
-    out = svc.revise("t-test", "u1", "落款日期改成2026年10月10日")
+    async def _retrieve(ctx_, user_id, extra_query=""):
+        return []
+
+    svc._retrieve_async = _retrieve
+    svc._attachment_context = lambda t, ctx_: None
+
+    async def _revise(prompt, sources, attachment_ctx, user_id, ctx=None):
+        return old.replace("拟举办专题讲座。", "拟于十月举办专题讲座。")
+
+    svc._llm_revise_async = _revise
+    svc._snapshot = lambda t, user_id, note=None, commit=False: ("d-test", 2)
+
+    out = asyncio.run(svc.revise_async("t-test", "u1", "落款日期改成2026年10月10日"))
 
     assert task.context["document_date"] == "2026年10月10日"
     assert task.current_content == "为提升业务能力，拟于十月举办专题讲座。"

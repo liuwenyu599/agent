@@ -13,6 +13,7 @@ F. 版本 docx 导出：可编辑、带格式、内容正确
 G. 格式校验：规则 CRUD、无规则 AI 校验、权限、跨用户隔离
 H. 写作任务隔离与边界：404、空草稿修改冲突、训练样本
 """
+import asyncio
 import hashlib
 import io
 import json
@@ -38,6 +39,9 @@ from app.infrastructure.database import Base, engine  # noqa: E402
 Base.metadata.create_all(bind=engine)
 from app.application.writing import task_parser  # noqa: E402
 from app.application.templates.builtin_data import BUILTIN_TEMPLATES  # noqa: E402
+from app.application.writing.async_intent_interpreter import (  # noqa: E402
+    AsyncWritingIntentInterpreter,
+)
 from app.application.writing.intent_interpreter import (  # noqa: E402
     WritingIntentInterpreter,
     _extract_json,
@@ -59,6 +63,9 @@ class ScriptedAssistant:
         if self.replies:
             return self.replies.pop(0)
         return "（Stub）默认回复"
+
+    async def acomplete(self, messages, temperature=0.7, max_tokens=4096):
+        return self.complete(messages, temperature=temperature, max_tokens=max_tokens)
 
     def chat(self, message, history=None, sources=None, user_role="user",
              system_prompt=None, attachment_context=None):
@@ -509,9 +516,9 @@ class TestServiceLevel:
         uid = make_db_user(db).id
         t = svc.create_task(uid, "写一个晋升报告")
         tid = t["task_id"]
-        svc.interpreter = WritingIntentInterpreter(ScriptedAssistant([intent_json(
+        svc.interpreter = AsyncWritingIntentInterpreter(ScriptedAssistant([intent_json(
             intent="update_context", reply="好的")]))
-        r = svc.chat(tid, uid, "时间是2026年10月15日")
+        r = asyncio.run(svc.chat_async(tid, uid, "时间是2026年10月15日"))
         assert r["task_context"]["document_date"] == "2026年10月15日"
         db.close()
 
@@ -534,8 +541,7 @@ class TestServiceLevel:
     def test_template_system_prompt_merged(self):
         db, svc, assistant = self._service(["（Stub）正文"])
         template = {"system_prompt": "必须使用三段式结构"}
-        svc._llm_draft("起草通知", [], None, "u1", template=template)
-        sys_prompt = assistant.calls[-1][0]["content"]
+        sys_prompt = svc._draft_system("u1", template)
         assert "不要编造文号" in sys_prompt       # 通用起草规则仍在
         assert "三段式" in sys_prompt             # 模板附加要求并入
         db.close()

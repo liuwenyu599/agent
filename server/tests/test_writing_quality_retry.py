@@ -1,7 +1,27 @@
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 
+from app.application.writing.async_task_service import AsyncWritingTaskService
 from app.application.writing.quality_retry_service import QualityRetryWritingTaskService
+
+
+class BareRetryService(AsyncWritingTaskService):
+    def __init__(self, assistant):
+        # Unit test only: the async revise chain needs assistant and no DB/RAG activity.
+        self.assistant = assistant
+        self.long_form_assistant = None
+        self.rag = None
+        self.attachments = None
+        self._draft_memory_cache = {}
+        self._draft_style_cache = {}
+
+    def _agent_prompt(self, user_id):
+        return ""
+
+    def _example_style_block(self, query, user_id):
+        return ""
 
 
 BAD = "一、工作目标\n此处略去。\n二、工作任务\n此处略去。"
@@ -23,26 +43,15 @@ class SequenceAssistant:
             raise AssertionError("unexpected extra model call")
         return self.outputs.pop(0)
 
-
-class BareRetryService(QualityRetryWritingTaskService):
-    def __init__(self, assistant):
-        # Unit test only: _llm_revise needs assistant and no database/RAG activity.
-        self.assistant = assistant
-        self.rag = None
-        self.attachments = None
-
-    def _agent_prompt(self, user_id):
-        return ""
-
-    def _example_style_block(self, query, user_id):
-        return ""
+    async def achat(self, message, **kwargs):
+        return self.chat(message, **kwargs)
 
 
 def test_revise_retries_with_concrete_quality_issues_then_accepts_good_candidate():
     assistant = SequenceAssistant([BAD, GOOD])
     service = BareRetryService(assistant)
 
-    result = service._llm_revise("原始修改要求", [], "", "u1")
+    result = asyncio.run(service._llm_revise_async("原始修改要求", [], "", "u1"))
 
     assert result == GOOD
     assert len(assistant.calls) == 2
@@ -51,6 +60,9 @@ def test_revise_retries_with_concrete_quality_issues_then_accepts_good_candidate
     assert "提纲式退化" in retry_prompt
     assert "此处略去" in retry_prompt
     assert "上一版未通过正文" in retry_prompt
+    # 修复动作来自 quality_policy 的规则表，而不是原样重试
+    assert "本次修复动作" in retry_prompt
+    assert "补回被" in retry_prompt
 
 
 def test_revise_stops_after_two_retries_and_raises_without_returning_d_candidate():
@@ -58,7 +70,7 @@ def test_revise_stops_after_two_retries_and_raises_without_returning_d_candidate
     service = BareRetryService(assistant)
 
     with pytest.raises(HTTPException) as exc:
-        service._llm_revise("原始修改要求", [], "", "u1")
+        asyncio.run(service._llm_revise_async("原始修改要求", [], "", "u1"))
 
     assert len(assistant.calls) == 3  # initial + retry 1 + retry 2
     assert exc.value.status_code == 422
@@ -71,13 +83,9 @@ def test_finalizer_rejects_d_before_calling_persistence_parent():
     service = BareRetryService(SequenceAssistant([]))
 
     with pytest.raises(HTTPException) as exc:
-        service._finalize_draft(
-            t=object(),
-            ctx={"title": "测试通知"},
-            text=BAD,
-            sources=[],
-            user_id="u1",
-        )
+        # 直接调用质量门这一层的 fail-closed 守卫：D 级在触碰持久化父类之前就被拒收。
+        QualityRetryWritingTaskService._finalize_draft(
+            service, object(), {"title": "测试通知"}, BAD, [], "u1")
 
     assert exc.value.status_code == 422
     assert exc.value.detail["code"] == "WRITING_QUALITY_GATE_D"

@@ -109,15 +109,15 @@ def test_one_sentence_speech_is_not_a_plan_or_a_required_field_form():
 
 def test_speech_rejects_scheme_shaped_model_plan():
     class Assistant:
-        def complete(self, *args, **kwargs):
+        async def acomplete(self, *args, **kwargs):
             return '[{"heading":"一、总体要求","focus":"明确工作目标","target_chars":600},' \
                    '{"heading":"二、实施步骤","focus":"安排各阶段任务","target_chars":600},' \
                    '{"heading":"三、保障措施","focus":"明确责任分工","target_chars":600}]'
 
-    svc = SectionedGenerationWritingTaskService.__new__(SectionedGenerationWritingTaskService)
+    svc = AsyncWritingTaskService.__new__(AsyncWritingTaskService)
     svc.assistant = Assistant()
-    plan = svc._section_plan({"document_type": "致辞稿", "topic": "法治宣传活动",
-                              "word_count_target": 1800})
+    plan = asyncio.run(svc._section_plan_async(
+        {"document_type": "致辞稿", "topic": "法治宣传活动", "word_count_target": 1800}))
     assert all(not item["heading"] for item in plan)
     assert "欢迎" in plan[0]["focus"]
 
