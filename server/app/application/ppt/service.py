@@ -147,10 +147,12 @@ class PPTService:
 
     @staticmethod
     def sanitize_outline(outline: Dict[str, Any], target_count: Optional[int] = None,
-                         ensure_toc: bool = True) -> Dict[str, Any]:
-        """纯规则净化：封面/目录/结束页的视觉字段由系统控制，不交给模型自由发挥。"""
+                         ensure_toc: bool = True,
+                         enforce_bookends: bool = True) -> Dict[str, Any]:
+        """清理页面字段；自由生成保留模型选定的页面角色。"""
         normalized = ppt_engine.normalize_outline(
-            dict(outline or {}), target_count=target_count)
+            dict(outline or {}), target_count=target_count,
+            require_bookends=enforce_bookends)
         slides = [dict(s) for s in (normalized.get("slides") or [])]
         if not slides:
             return normalized
@@ -187,8 +189,9 @@ class PPTService:
                 out["layout"] = src["layout"]
             return out
 
-        slides[0] = cover_clean(slides[0])
-        if len(slides) > 1:
+        if slides[0].get("type") == "cover":
+            slides[0] = cover_clean(slides[0])
+        if len(slides) > 1 and slides[-1].get("type") == "closing":
             slides[-1] = closing_clean(slides[-1])
 
         toc_index: Optional[int] = None
@@ -228,20 +231,26 @@ class PPTService:
             logger.info("[PPT] 大纲净化：自动插入目录页并保持总页数")
 
         normalized["slides"] = slides
-        normalized["title"] = slides[0].get("title") or normalized.get("title") or "演示文稿"
-        normalized["subtitle"] = slides[0].get("subtitle") or normalized.get("subtitle") or ""
+        normalized["title"] = (slides[0].get("title") if enforce_bookends else
+                               normalized.get("title")) or "演示文稿"
+        normalized["subtitle"] = (slides[0].get("subtitle") if enforce_bookends else
+                                  normalized.get("subtitle")) or ""
         return normalized
 
-    def _audit_and_repair_outline(self, outline: Dict[str, Any], target_count: int,
+    def _audit_and_repair_outline(self, outline: Dict[str, Any], target_count: Optional[int],
                                   content: str) -> Dict[str, Any]:
-        """大纲给用户确认前自动审查一次；模型失败时只降级为规则净化，不阻塞用户。"""
-        clean = self.sanitize_outline(outline, target_count=target_count, ensure_toc=True)
+        """检查模型规划，保留其选择的封面、目录及结束页。"""
+        clean = self.sanitize_outline(outline, target_count=None,
+                                      ensure_toc=False, enforce_bookends=False)
         prompt = (
             "你是司法行政机关 PPT 大纲质量检查员。检查并在必要时直接修正大纲。\n"
-            "重点检查：页面注水或重复、封面杂乱、6页以上缺目录、章节顺序不合理、"
-            "一页要点过多、结束页夹带正文内容。不得新增材料中不存在的事实或数据。\n"
-            f"最终页数必须严格等于 {target_count} 页。封面和结束页均计入页数。\n"
-            "只输出 JSON："
+            "重点检查：页面注水或重复、章节顺序不合理、一页要点过多。"
+            "封面、目录和结束页由任务需要决定，不要为套格式强行添加。"
+            "不得新增材料中不存在的事实或数据。\n"
+            + (f"用户明确要求 {target_count} 页，最终页数必须一致。\n"
+               if target_count is not None else
+               "用户未指定页数，请按内容完整性决定页数，不要凑页。\n")
+            + "只输出 JSON："
             '{"needs_fix":true或false,"issues":["问题"],"outline":{"title":"","subtitle":"","slides":[]}}。'
             "\n若无需修正，outline 原样返回。\n"
             f"【材料节选】\n{(content or '')[:1800]}\n"
@@ -253,16 +262,20 @@ class PPTService:
             data = _parse_json_object(raw or "")
         except Exception as e:  # noqa: BLE001
             logger.warning("[PPT] 大纲自动审查失败，保留规则净化结果：%s", e)
-            return clean
+            data = {}
         if not data:
             logger.warning("[PPT] 大纲自动审查返回不可解析内容，保留规则净化结果")
-            return clean
+            data = {}
         issues = [str(x)[:160] for x in (data.get("issues") or []) if str(x).strip()]
         repaired = data.get("outline")
         if data.get("needs_fix") and isinstance(repaired, dict) and repaired.get("slides"):
             logger.info("[PPT] 大纲自动审查触发修正：%s", "；".join(issues) or "结构质量")
-            return self.sanitize_outline(
-                repaired, target_count=target_count, ensure_toc=True)
+            clean = self.sanitize_outline(
+                repaired, target_count=None, ensure_toc=False,
+                enforce_bookends=False)
+        if target_count is not None and len(clean.get("slides") or []) != target_count:
+            raise RuntimeError(
+                f"AI 页面规划未达到指定的 {target_count} 页，请重试或调整页数要求")
         logger.info("[PPT] 大纲自动审查通过%s",
                     f"（提示：{'；'.join(issues)}）" if issues else "")
         return clean
@@ -834,8 +847,11 @@ class PPTService:
         """
         d = self._get_doc_checked(doc_id, user)
         changed = False
+        effective_template_id = (body.template_id if "template_id" in body.model_fields_set
+                                 else d.template_id)
         if body.outline is not None:
-            normalized = ppt_engine.normalize_outline(body.outline)
+            normalized = ppt_engine.normalize_outline(
+                body.outline, require_bookends=bool(effective_template_id))
             if normalized != (d.outline or {}):
                 changed = True
             d.outline = normalized
@@ -1049,6 +1065,7 @@ class PPTService:
             dict(document.outline),
             target_count=len((document.outline or {}).get("slides") or []) or None,
             ensure_toc=False,
+            enforce_bookends=bool(document.template_id),
         )
         selected_ids = outline.get("material_ids")
         outline = ppt_engine.resolve_slide_images(
@@ -1445,9 +1462,10 @@ class PPTService:
                 self._ppt_assistant(), source_type, topic, content, images,
                 target_count, audience, scene,
                 material_names=material_names,
-                # 用户未填页数时也由服务端先算出权威页数，再执行同一硬约束。
-                enforce_exact_count=True)
-            outline = self._audit_and_repair_outline(outline, target_count, content)
+                # 未填页数时仅给建议，由模型按材料决定实际页数。
+                enforce_exact_count=enforce_exact_count, free_structure=True)
+            outline = self._audit_and_repair_outline(
+                outline, target_count if enforce_exact_count else None, content)
             # 大纲阶段自动为流程页挂接 drawio 原生图示（固化进 blocks.drawio_xml，
             # 后续渲染链路自动取用；未配置/失败则静默回退原生步骤条）。
             outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
@@ -1460,7 +1478,7 @@ class PPTService:
             # 后续 PPTAgent 必须能看到真实材料；topic 不能覆盖 material content。
             source_content=(content or topic or "")[:8000],
             theme_id=DEFAULT_GOV_TEMPLATE_ID,
-            outline=outline, status="draft", slide_count=target_count))
+            outline=outline, status="draft", slide_count=len(outline.get("slides") or [])))
         logger.info("[PPT] 权威大纲已创建：doc_id=%s pages=%d source=%s",
                     d.id, len(outline.get("slides") or []), source_type)
         return {"doc_id": d.id, "outline": outline}
@@ -1508,9 +1526,10 @@ class PPTService:
                 self._ppt_assistant(), body.source_type, body.topic, content,
                 images, target_count, body.audience, body.scene,
                 material_names=material_names,
-                enforce_exact_count=True)
+                enforce_exact_count=explicit_count, free_structure=True)
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
-            outline = self._audit_and_repair_outline(outline, target_count, content)
+            outline = self._audit_and_repair_outline(
+                outline, target_count if explicit_count else None, content)
             # 仅在 drawio 真正开启时提示图示生成进度，避免无配置环境多出 stage 事件
             if (settings.DRAWIO_MCP_URL or "").strip():
                 yield _sse({"type": "stage", "text": "正在为流程页生成原生图示…"})
@@ -1529,7 +1548,7 @@ class PPTService:
             subtitle=outline.get("subtitle", ""), source_type=body.source_type,
             source_content=(content or body.topic or "")[:8000],
             theme_id=DEFAULT_GOV_TEMPLATE_ID,
-            outline=outline, status="draft", slide_count=target_count))
+            outline=outline, status="draft", slide_count=len(outline.get("slides") or [])))
         logger.info("[PPT] 流式权威大纲已创建：doc_id=%s pages=%d",
                     d.id, len(outline.get("slides") or []))
         yield _sse({"type": "done", "data": {"doc_id": d.id, "outline": outline}})
@@ -1787,7 +1806,7 @@ class PPTService:
         template, _ = self._resolve_template(None, d.theme_id or "")
         clean = self.sanitize_outline(
             outline, target_count=len((outline or {}).get("slides") or []) or None,
-            ensure_toc=False)
+            ensure_toc=False, enforce_bookends=False)
         selected_ids = clean.get("material_ids")
         clean = ppt_engine.resolve_slide_images(
             clean, self._user_images(user_id, selected_ids, strict=False))
@@ -1803,11 +1822,12 @@ class PPTService:
         用户在确认页明确把目录改成正文时不重新强制补目录。
         """
         target = len((outline or {}).get("slides") or []) or None
+        selected_template_id = template_id or d.template_id
         outline = self.sanitize_outline(
-            outline, target_count=target, ensure_toc=False)
+            outline, target_count=target, ensure_toc=False,
+            enforce_bookends=bool(selected_template_id))
         logger.info("[PPT] 渲染前规则净化完成：doc_id=%s pages=%d",
                     d.id, len(outline.get("slides") or []))
-        selected_template_id = template_id or d.template_id
         if selected_template_id:
             self._get_visible_template(selected_template_id, user)
         template, trow = self._resolve_template(selected_template_id, d.theme_id or "")
@@ -1844,7 +1864,9 @@ class PPTService:
         d = self._get_doc_checked(body.doc_id, user)
         if "template_id" in getattr(body, "model_fields_set", set()) and body.template_id is None:
             d.template_id = None
-        outline = ppt_engine.normalize_outline(body.outline) if body.outline else d.outline
+        outline = (ppt_engine.normalize_outline(
+            body.outline, require_bookends=bool(body.template_id or d.template_id))
+            if body.outline else d.outline)
         if not outline:
             raise AppError(400, "大纲为空")
         warnings: List[str] = []
@@ -1955,7 +1977,8 @@ class PPTService:
                 self._ppt_assistant(), body.outline, body.instruction)
             # 仍清理封面/结束页脏字段，但 respect 用户“把目录改成正文”等显式修改。
             outline = self.sanitize_outline(
-                outline, target_count=None, ensure_toc=False)
+                outline, target_count=None, ensure_toc=False,
+                enforce_bookends=False)
             logger.info("[PPT] AI 大纲调整完成：pages=%d",
                         len(outline.get("slides") or []))
             return {"outline": outline}

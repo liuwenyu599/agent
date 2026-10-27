@@ -597,11 +597,10 @@ class PptViewModel(private val repo: PptRepository) {
      *
      * 两条路径共用这一段，避免「AI 智能设计」另写一套简化校验而漏掉防重复/预检：
      *
-     * @param aiTarget null = 普通「生成大纲」：拿到大纲后停在确认页，让用户逐页改；
-     *                 非 null = 「AI 智能设计」：拿到大纲后不停留，直接由 PPTAgent 逐页设计，
-     *                 产物写到这个位置。
+     * @param autoGenerate true 时生成页面方案后直接提交 PPT 任务；false 时停在确认页。
+     * @param aiTarget 可选的本地导出位置；留空时生成结果保存在“我的作品”。
      */
-    private fun beginOutline(aiTarget: File?) {
+    private fun beginOutline(autoGenerate: Boolean, aiTarget: File? = null) {
         val requestedPages = slideCount.toIntOrNull()
         if (slideCount.isNotBlank() && (requestedPages == null || requestedPages !in 2..18)) {
             status = "页数请输入 2–18，或留空由系统根据内容安排"
@@ -619,11 +618,11 @@ class PptViewModel(private val repo: PptRepository) {
         }
         if (pendingConfirm != null) return // 确认框还开着，等用户选择
         // 一次性标志统一在这里赋值：普通「生成大纲」顺带清掉上一次可能残留的标志
-        autoDesignAfterOutline = aiTarget != null
+        autoDesignAfterOutline = autoGenerate
         aiDesignTarget = aiTarget
         busy = true
         AppState.pptLastError = null
-        outlineStage = if (aiTarget != null) "AI 智能设计：正在检查关键信息是否齐全…"
+        outlineStage = if (autoGenerate) "正在理解需求并规划页面…"
         else "正在检查关键信息是否齐全…"
         status = null
         val body = outlineBody()
@@ -654,12 +653,12 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     /** 普通路径：只生成大纲，停在确认页供用户逐页确认与修改 */
-    fun startOutline() = beginOutline(null)
+    fun startOutline() = beginOutline(false)
 
     /**
-     * 「AI 智能设计」：跳过手动确认，一条龙跑完「生成大纲 → 提交 PPTAgent 设计」。
+     * 跳过页面方案确认，生成方案后直接提交 PPT 任务。
      *
-     * **为什么不能直接跳到生成**：PPTAgent 只读服务端已存的 `doc.outline` 来算页数、拼需求，
+     * 后台任务读取服务端已存的 `doc.outline` 来确定页数与内容，
      * 而 `doc_id` 只有大纲生成（SSE 的 done 事件）才会给——`startGenerateAsync` 开头
      * `val id = docId ?: return` 就是死在这上面。所以只能串行：先拿 docId，
      * 再在 [launchOutline] 末尾续接提交（见 [submitAiDesign]）。
@@ -667,10 +666,9 @@ class PptViewModel(private val repo: PptRepository) {
      * 预检发现信息不足时仍会弹确认框（[pendingConfirm]），用户明确确认后
      * 走 [confirmAndGenerate] 继续——那条路径同样认这个标志，所以仍能自动提交。
      *
-     * @param target 生成完成后 pptx 的保存位置；由界面先用 pickSaveFile 选好，
-     *               用户取消保存对话框时不应调用本方法。
+     * @param target 可选的本地保存位置；留空时结果保存在“我的作品”。
      */
-    fun startAiDesign(target: File) {
+    fun startAiDesign(target: File? = null) {
         // 已经有任务在跑（生成中，或正卡在等用户回答追问）：再提交一份会顶掉在跑的那个，
         // 服务端也多半直接拒。在入口页就说清楚，好过点了之后没反应
         val running = job
@@ -678,7 +676,7 @@ class PptViewModel(private val repo: PptRepository) {
             status = "有一个 AI 设计任务正在进行（${running.stageText}），请先等它完成或取消"
             return
         }
-        beginOutline(target)
+        beginOutline(true, target)
     }
 
     /** 取消本次大纲生成：取消协程（底层 HTTP 请求随之中断），界面回到入口页 */
@@ -734,7 +732,7 @@ class PptViewModel(private val repo: PptRepository) {
         // 全局标记：切到别的页面再切回时据此显示「正在生成中」；生成结束（无论成败）复位
         AppState.pptOutlineGenerating = true
         AppState.pptLastError = null
-        outlineStage = if (autoDesign) "AI 智能设计：正在生成大纲…"
+        outlineStage = if (autoDesign) "正在规划页面并准备生成 PPT…"
         else "正在理解材料与任务要求…"
         var ok = false
         try {
@@ -759,7 +757,7 @@ class PptViewModel(private val repo: PptRepository) {
         else status?.takeIf { it.isNotBlank() } ?: "大纲生成未完成，请重试"
         // 「AI 智能设计」续接：走到这里说明 ok == true，applyOutline 已执行、docId 已有值，
         // 跳过确认页直接提交 PPTAgent 任务；大纲失败则不提交，停在原地把原因显示出来
-        if (ok && autoDesign && autoTarget != null) submitAiDesign(autoTarget)
+        if (ok && autoDesign) submitAiDesign(autoTarget)
     }
 
     /**
@@ -848,16 +846,16 @@ class PptViewModel(private val repo: PptRepository) {
 
     /**
      * 「AI 智能设计」的第二段：大纲刚生成完（[applyOutline] 已写入 docId），
-     * 这里**不停在确认页**，直接把活交给 PPTAgent。
+     * 这里**不停在确认页**，直接提交后台 PPT 任务。
      *
      * 复用 [startGenerateAsync] 而不是另写一份：那条路径已经处理了
-     * 提交前落草稿（PPTAgent 读服务端 doc.outline，不落就是上一次的大纲）、
+     * 提交前落草稿（任务读取服务端 doc.outline，不落就是上一次的大纲）、
      * 提交即返回、以及后端没部署 /ppt/jobs 时回退同步导出——这里不该改回退策略。
      *
      * 与工作台顶部「AI 生成 PPT」的区别只是少了「再改改」那一步确认：
      * 用户在入口页点「AI 智能设计」时就已经表达过"直接设计"的意图。
      */
-    private fun submitAiDesign(target: File) {
+    private fun submitAiDesign(target: File?) {
         if (docId == null) {
             // 流式接口没回 doc_id（一次性回退同样可能为空）：提交不了任务。
             // 至少停在确认页让用户看到已经生成的大纲，而不是点了之后什么都不发生
@@ -868,7 +866,7 @@ class PptViewModel(private val repo: PptRepository) {
         // 直接进工作台：任务一提交，界面就切到异步生成工作台（逐页出图 + 进度 + 可取消）；
         // 后端没部署 /ppt/jobs 时会回退同步导出，同样在工作台里看 exportStage 进度
         step = PptStep.WORKBENCH
-        status = "大纲已生成（${slides.size} 页），正在提交 AI 设计任务…"
+        status = "页面方案已生成（${slides.size} 页），正在生成 PPT…"
         startGenerateAsync(target)
     }
 

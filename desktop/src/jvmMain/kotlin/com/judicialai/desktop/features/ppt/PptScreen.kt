@@ -388,10 +388,13 @@ private fun PptEntryPane(
                 val canGenerate = !vm.busy &&
                     (vm.topic.isNotBlank() || vm.materials.isNotEmpty() ||
                         vm.selectedKbIds.isNotEmpty())
+                TextButton(enabled = canGenerate, onClick = { vm.startOutline() }) {
+                    Text("先看页面方案", fontSize = 12.sp, color = Primary)
+                }
                 GenerateButton(
                     enabled = canGenerate && !vm.busy,
-                    label = if (vm.busy) vm.outlineStage.ifBlank { "正在生成…" } else "生成大纲 →",
-                    onClick = { vm.startOutline() },
+                    label = if (vm.busy) vm.outlineStage.ifBlank { "正在生成…" } else "直接生成 PPT →",
+                    onClick = { vm.startAiDesign() },
                 )
             }
         }
@@ -401,7 +404,7 @@ private fun PptEntryPane(
             Text("主题、材料、知识库有其一即可开始",
                 fontSize = 11.sp, color = Muted)
             Spacer(Modifier.weight(1f))
-            Text("大纲确认后再进行 AI 视觉设计",
+            Text("35B 自动组织内容与页面，生成后可逐页修改",
                 fontSize = 11.sp, color = Primary, fontWeight = FontWeight.SemiBold)
         }
 
@@ -576,7 +579,7 @@ private fun ComposerTool(
     )
 }
 
-/** 渐变主按钮（生成大纲 →） */
+/** PPT 生成主按钮 */
 @Composable
 private fun GenerateButton(enabled: Boolean, label: String, onClick: () -> Unit) {
     Box(
@@ -812,11 +815,12 @@ private fun OutlineGeneratingPanel(vm: PptViewModel) {
         Column(Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("正在生成大纲", style = MaterialTheme.typography.subtitle2,
+                Text(if (vm.autoDesignAfterOutline) "正在生成 PPT" else "正在规划页面",
+                    style = MaterialTheme.typography.subtitle2,
                     color = MaterialTheme.colors.primary)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    vm.outlineStage.ifBlank { "正在整理内容，完成后自动进入大纲确认" },
+                    vm.outlineStage.ifBlank { "正在整理内容与页面结构" },
                     style = MaterialTheme.typography.caption, color = SecondaryText,
                     modifier = Modifier.weight(1f))
                 TextButton(onClick = { vm.cancelOutline() }) {

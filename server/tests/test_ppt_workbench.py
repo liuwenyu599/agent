@@ -559,7 +559,12 @@ def outline_payload():
 def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
                                                 outline_payload):
     """SSE：显式要求 8 页时，done 返回严格 8 页且保留来源标注。"""
-    payload = outline_payload
+    payload = {**outline_payload, "slides": [
+        outline_payload["slides"][0], outline_payload["slides"][1],
+        *[{"type": "content", "title": f"专题{i}", "points": [f"事项{i}"]}
+          for i in range(2, 7)],
+        outline_payload["slides"][-1],
+    ]}
     fake_llm._responder = lambda m: json.dumps(payload, ensure_ascii=False)
 
     r = client.post(f"{BASE}/ppt/outline/stream", json={
@@ -587,13 +592,12 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert len(slides) == 8
     assert slides[0]["type"] == "cover"
     assert "points" not in slides[0] and "blocks" not in slides[0]
-    assert slides[1]["type"] == "toc"
+    assert slides[1]["type"] == "content"  # 自由生成不再强插目录
     original = next(s for s in slides if s["title"] == "案件办理情况")
     assert original["sources"] == ["材料A.txt"]
     assert slides[-1]["type"] == "closing"
     assert "points" not in slides[-1] and "blocks" not in slides[-1]
-    fillers = [s for s in slides if s["title"] == "补充内容"]
-    assert all("待根据已确认材料补充" in " ".join(s["points"]) for s in fillers)
+    assert all(s["title"] != "补充内容" for s in slides)
 
     # 来源标注要求确实下发给首次大纲模型；最后一次调用已是自动审查。
     prompts = [call["messages"][-1]["content"] for call in fake_llm.calls]
@@ -607,9 +611,9 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert got.json()["outline"]["title"] == "行政复议工作汇报"
 
 
-def test_outline_stream_without_explicit_slide_count_uses_server_default(
+def test_outline_stream_without_explicit_slide_count_keeps_model_page_count(
         client, accounts, fake_llm, outline_payload):
-    """未填页数时服务端按材料长度确定权威页数；纯主题默认 6 页。"""
+    """未填页数时服务端只给建议，不把模型的页面方案凑成六页。"""
     fake_llm._responder = lambda m: json.dumps(outline_payload, ensure_ascii=False)
 
     r = client.post(f"{BASE}/ppt/outline/stream", json={
@@ -622,9 +626,9 @@ def test_outline_stream_without_explicit_slide_count_uses_server_default(
     events = _parse_sse(r.text)
     assert events[-1]["type"] == "done"
     slides = events[-1]["data"]["outline"]["slides"]
-    assert len(slides) == 6
+    assert len(slides) == len(outline_payload["slides"])
     assert slides[0]["type"] == "cover"
-    assert slides[1]["type"] == "toc"
+    assert slides[1]["type"] == "content"
     assert slides[-1]["type"] == "closing"
     assert any(s.get("sources") == ["材料A.txt"] for s in slides)
 
@@ -688,7 +692,11 @@ def test_outline_stream_rescues_malformed_json_without_retry(client, accounts, f
 def test_outline_stream_slide_count_clamped(client, accounts, fake_llm,
                                             outline_payload):
     """slide_count 越界时按 6~18 夹紧后下发给模型。"""
-    fake_llm._responder = lambda m: json.dumps(outline_payload, ensure_ascii=False)
+    payload = {**outline_payload, "slides": [outline_payload["slides"][0]] + [
+        {"type": "content", "title": f"专题{i}", "points": [f"事项{i}"]}
+        for i in range(16)
+    ] + [outline_payload["slides"][-1]]}
+    fake_llm._responder = lambda m: json.dumps(payload, ensure_ascii=False)
     r = client.post(f"{BASE}/ppt/outline/stream", json={
         "source_type": "topic", "topic": "主题", "slide_count": 99,
     }, headers=_hdr(accounts["a"]))

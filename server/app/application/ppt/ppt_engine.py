@@ -391,17 +391,17 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 {image_list}
 
 【页面类型】（按内容需要选用，不要全是 content）
-- cover 封面（必有且仅第 1 页）：title、subtitle
-- toc 目录页（超过 8 页时建议有）：points 为章节名（3~5 条）
+- cover 封面（{cover_rule}）：title、subtitle
+- toc 目录页（只有内容分组确实有助于阅读时使用）：points 为章节名
 - section 章节页：title
-- content 正文页：title、points（3~5 条，每条 15~40 字的完整句子）
+- content 正文页：title、points（按内容密度组织，避免为了凑条数拆句）
 - data 数据页：title、blocks={{"cards":[{{"label":"指标名","value":"数值"}},...]}}（材料里有具体数据时用，3~4 张卡）
 - chart 图表页：title、blocks={{"chart":{{"chart_type":"bar或pie或line","categories":["类别"...],"series":[{{"name":"系列名","values":[数值...]}}]}}}}（材料有对比/趋势数据时用）
 - case 案例页：title、points（案例背景→做法→结果，3~4 条）
 - timeline 时间轴页：title、blocks={{"timeline":[{{"time":"时间点","text":"事项"}},...]}}（有时间线内容时用）
 - process 流程页：title、blocks={{"process":["步骤1","步骤2",...]}}（讲工作流程时用，3~5 步）
 - summary 总结页：title、points（2~4 条结论/展望）
-- closing 结束页（必有且仅最后一页）：title（如"谢谢聆听，请批评指正"）
+- closing 结束页（{closing_rule}）：title（如"谢谢聆听，请批评指正"）
 
 【版式选择】每页可加 "layout" 字段指定版式；不写则系统按内容自动选。系统会做可行性校验，
 点数不符或数据缺失时自动降级，所以只在有把握时指定：
@@ -419,9 +419,9 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 
 【输出要求】
 1. 只输出 JSON，不要用 markdown 代码块包裹，不要输出其他文字：
-{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","slides":[{{"type":"cover","title":"...","subtitle":"..."}},...]}}
+{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","slides":[{outline_example},...]}}
 2. 每页 slide 的字段：type、title、points、blocks、image_name、note（演讲备注，一句话）；
-3. ⚠️ 页数硬约束：slides 数组必须严格等于 {slide_count} 页，不得多一页、少一页；封面和结束页均计入总页数；
+3. {count_rule}
 4. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
 5. 图片规则：仅当某页内容与素材库图片明显相关时设 image_name（必须严格等于素材库中的图片名称），否则为 null；
 6. 不要虚构材料中没有的事实和数据。"""
@@ -431,7 +431,8 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
                      images: List[Dict], slide_count: int = 10,
                      audience: str = "", scene: str = "",
                      material_names: Optional[List[str]] = None,
-                     enforce_exact_count: bool = True) -> Dict:
+                     enforce_exact_count: bool = True,
+                     free_structure: bool = False) -> Dict:
     image_list = "\n".join(f"- {im['name']}：{im.get('caption') or '（无说明）'}" for im in images) \
         or "（素材库为空）"
     extra = ""
@@ -443,6 +444,16 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
         source_type=source_type, topic=(topic or "（未指定，依据材料自拟）") + extra,
         content=(content or "")[:6000], image_list=image_list,
         slide_count=slide_count,
+        cover_rule=("由你判断是否需要；需要时放在第一页" if free_structure else
+                    "必有且仅第 1 页"),
+        closing_rule=("由你判断是否需要；需要时放在最后一页" if free_structure else
+                      "必有且仅最后一页"),
+        outline_example=('{"type":"content","title":"...","points":["..."]}'
+                         if free_structure else
+                         '{"type":"cover","title":"...","subtitle":"..."}'),
+        count_rule=(f"用户指定 {slide_count} 页，slides 必须正好 {slide_count} 页。"
+                    if enforce_exact_count else
+                    f"建议约 {slide_count} 页；请根据材料自行确定 2–18 页，不为凑页数添加空页。"),
     )
     # 事实约束（provenance）：给出材料清单时，要求每页标注内容依据，
     # 防止模型把旧材料/记忆中的数据当作本次数据
@@ -485,7 +496,8 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             raise RuntimeError(_OUTLINE_PARSE_FAILED_MSG)
     return normalize_outline(
         outline,
-        target_count=slide_count if enforce_exact_count else None,
+        target_count=(slide_count if enforce_exact_count and not free_structure else None),
+        require_bookends=not free_structure,
     )
 
 
@@ -651,7 +663,8 @@ def _loads_ai_json(raw: str, err_msg: str) -> Dict:
     return parsed
 
 
-def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict:
+def normalize_outline(outline: Dict, target_count: Optional[int] = None,
+                      require_bookends: bool = True) -> Dict:
     """规范化 + 兼容旧页型，并可强制最终页数。\n\n    target_count 用于新建 PPT 链路的页数硬约束。模型偶尔仍会多/少页：\n    - 多页：只裁中间正文，永远保留封面与结束页；\n    - 少页：补空的“补充内容”页，明确标记为待补充，不制造事实。\n    导入已有 PPT / 空白 PPT 等未传 target_count 的链路保持原行为。\n    """
     type_alias = {"bullets": "content", "image_text": "content"}
     norm = []
@@ -677,13 +690,13 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict
             # 内容依据（材料名清单），编辑器右侧 AI 面板可展示
             "sources": [str(x)[:80] for x in (s.get("sources") or [])][:4],
         })
-    if not norm or norm[0]["type"] != "cover":
+    if require_bookends and (not norm or norm[0]["type"] != "cover"):
         norm.insert(0, {"id": uuid.uuid4().hex[:8], "type": "cover",
                         "title": outline.get("title", "演示文稿"),
                         "subtitle": outline.get("subtitle", ""), "layout": None,
                         "points": [], "blocks": {}, "image_name": None, "image_hint": "",
                         "note": "", "sources": []})
-    if norm[-1]["type"] != "closing":
+    if require_bookends and norm[-1]["type"] != "closing":
         norm.append({"id": uuid.uuid4().hex[:8], "type": "closing", "title": "谢谢聆听，请批评指正",
                      "subtitle": "", "layout": None, "points": [], "blocks": {},
                      "image_name": None, "image_hint": "", "note": "", "sources": []})
@@ -701,6 +714,8 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None) -> Dict
                 "blocks": {}, "image_name": None, "image_hint": "",
                 "note": "页数硬约束补位页；不得自行编造事实或数据", "sources": [],
             })
+    if not norm:
+        raise RuntimeError("AI 未生成有效页面，请重试")
     outline["slides"] = norm
     outline.setdefault("title", norm[0]["title"])
     outline.setdefault("subtitle", norm[0].get("subtitle", ""))
@@ -1741,7 +1756,8 @@ def ai_structure_action(assistant, action: str, slides: List[Dict], index: int,
     else:
         raise RuntimeError("不支持的操作")
 
-    return normalize_outline({"title": "", "slides": slides})["slides"]
+    return normalize_outline({"title": "", "slides": slides},
+                             require_bookends=False)["slides"]
 
 
 def ai_outline_adjust(assistant, outline: Dict, instruction: str) -> Dict:
@@ -1751,8 +1767,7 @@ def ai_outline_adjust(assistant, outline: Dict, instruction: str) -> Dict:
     「统一把章节页标题改成动宾结构」——这类需求用单页修改要点很多次，
     用结构增删又表达不了，所以把整份大纲交给模型一次性改写。
 
-    页数不做硬性约束：指令本身可能要求增减页；normalize_outline 仍会
-    恒定保证首屏封面、末屏结束页，并规整每个 slide 的字段结构。
+    页数不做硬性约束；保留原有页面角色，只规整字段结构。
 
     Args:
         assistant: 模型助手（PPT 专用或主模型）。
@@ -1799,7 +1814,7 @@ def ai_outline_adjust(assistant, outline: Dict, instruction: str) -> Dict:
         raise RuntimeError("AI 没有返回有效的页面列表，大纲未被修改，请重试")
     result.setdefault("title", clean["title"] or "演示文稿")
     result.setdefault("subtitle", clean["subtitle"])
-    return normalize_outline(result)
+    return normalize_outline(result, require_bookends=False)
 
 
 # ================= 上传模板：从 pptx 提取视觉风格 =================
