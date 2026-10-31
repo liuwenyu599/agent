@@ -161,6 +161,29 @@ def test_drawio_native_export_uses_template_palette_for_unspecified_colors():
     assert str(unstyled.line.color.rgb) == "123456"
 
 
+def test_drawio_native_export_keeps_text_size_weight_and_alignment():
+    import io
+    from pptx import Presentation
+    from pptx.enum.text import PP_ALIGN
+    from app.application.ppt.drawio_native import render_diagram
+
+    xml = NATIVE_XML.replace(
+        'rounded=1;fillColor=#E8F0FA;',
+        'rounded=1;fillColor=#E8F0FA;fontSize=22;fontStyle=1;align=left;'
+    )
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    render_diagram(slide, xml, 0, 0, presentation.slide_width,
+                   presentation.slide_height)
+    node = next(shape for shape in slide.shapes if shape.has_text_frame
+                and shape.text == "受理")
+    run = node.text_frame.paragraphs[0].runs[0]
+
+    assert run.font.size.pt == 22
+    assert run.font.bold is True
+    assert node.text_frame.paragraphs[0].alignment == PP_ALIGN.LEFT
+
+
 def test_drawio_source_keeps_each_diagram_as_an_editable_page():
     from xml.etree import ElementTree as ET
     from app.application.ppt.drawio_native import build_drawio_source
@@ -307,6 +330,98 @@ def test_drawio_native_generation_uses_mcp_and_validates_before_return(monkeypat
     assert result["blocks"]["process"] == ["受理", "审核"]
 
 
+def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypatch):
+    from app.application.ppt import drawio_skill_layout
+    from app.application.ppt.drawio_native import parse_diagram
+
+    monkeypatch.setattr(drawio_skill_layout.shutil, "which", lambda _name: "dot")
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source:
+                        (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
+    slide = {"title": "办理流程", "blocks": {
+        "diagram_nodes": [{"id": "a", "label": "受理"},
+                          {"id": "b", "label": "审核"}],
+        "diagram_edges": [{"source": "a", "target": "b"}],
+    }}
+
+    xml = drawio_skill_layout.layout_slide_graph(
+        slide, "process", {"primary": "123456"})
+    parsed = parse_diagram(xml)
+    assert [node["label"] for node in parsed["nodes"]] == ["受理", "审核"]
+    assert len(parsed["edges"]) == 1
+    assert parsed["nodes"][0]["style"]["strokeColor"] == "#123456"
+
+    svc = DrawioService(base_url="")
+    class NoModel:
+        def complete(self, *_args, **_kwargs):
+            pytest.fail("planned graph must not call the model twice")
+    result = svc.generate_native_diagram(
+        NoModel(), slide, kind="process", style={"colors": {"primary": "123456"}})
+    assert result["blocks"]["drawio_xml"] == xml
+    from pptx import Presentation
+    from app.application.ppt.drawio_native import render_diagram
+    deck = Presentation()
+    page = deck.slides.add_slide(deck.slide_layouts[6])
+    render_diagram(page, xml, 0, 0, 8_000_000, 4_000_000)
+    assert len(page.shapes) >= 3
+    assert all(shape.shape_type != 13 for shape in page.shapes)  # no raster picture
+
+
+def test_agents365_linter_rejects_duplicate_root_cells():
+    from app.application.ppt.drawio_native import validate_generated_layout
+    duplicate = NATIVE_XML.replace('<mxCell id="1" parent="0"/>',
+                                   '<mxCell id="1" parent="0"/><mxCell id="1" parent="0"/>')
+    with pytest.raises(ValueError, match="E-DUP-ID"):
+        validate_generated_layout(duplicate)
+
+
+def test_page_action_uses_35b_plan_then_skill_layout_without_mcp(monkeypatch):
+    from app.application.ppt import drawio_skill_layout, drawio_service
+    monkeypatch.setattr(drawio_skill_layout.shutil, "which", lambda _name: "dot")
+    monkeypatch.setattr(drawio_service.shutil, "which", lambda _name: "dot")
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source:
+                        (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
+    calls = []
+    class Assistant:
+        def complete(self, messages, **_kwargs):
+            calls.append(messages[-1]["content"])
+            return json.dumps({
+                "diagram_nodes": [{"id": "a", "label": "受理"},
+                                  {"id": "b", "label": "审核"}],
+                "diagram_edges": [{"source": "a", "target": "b"}],
+            }, ensure_ascii=False)
+
+    svc = DrawioService(base_url="")
+    result = svc.generate_native_diagram(
+        Assistant(), {"title": "案件办理", "points": ["受理后审核"]},
+        kind="process")
+
+    assert len(calls) == 1
+    assert result["blocks"]["diagram_nodes"][0]["label"] == "受理"
+    assert result["blocks"]["drawio_xml"].startswith("<mxGraphModel")
+
+
+def test_drawio_reference_is_reused_across_pages(monkeypatch):
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    calls = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_reference(self, fmt):
+            calls.append(fmt)
+            return "mxGraphModel reference"
+
+    monkeypatch.setattr(svc, "_client", lambda: FakeClient())
+
+    assert svc.get_reference() == "mxGraphModel reference"
+    assert svc.get_reference() == "mxGraphModel reference"
+    assert calls == ["xml"]
+
+
 def test_drawio_generation_uses_template_style_and_relation_kind(monkeypatch):
     svc = DrawioService(base_url="http://drawio-mcp:3001")
     monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
@@ -327,6 +442,91 @@ def test_drawio_generation_uses_template_style_and_relation_kind(monkeypatch):
     assert result["blocks"]["drawio_kind"] == "relationship"
     assert result["blocks"]["diagram_labels"] == ["受理", "审核"]
     assert "process" not in result["blocks"]
+
+
+def test_drawio_generation_rejects_missing_explicit_relationship(monkeypatch):
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
+
+    class Assistant:
+        def complete(self, *_args, **_kwargs):
+            return json.dumps({"xml": NATIVE_XML}, ensure_ascii=False)
+
+    slide = {"type": "process", "title": "部门协作", "blocks": {
+        "drawio_kind": "relationship",
+        "diagram_nodes": [{"id": "a", "label": "司法局"},
+                          {"id": "b", "label": "司法所"}],
+        "diagram_edges": [{"source": "a", "target": "b"}],
+    }}
+
+    with pytest.raises(RuntimeError, match="未通过结构检查"):
+        svc.generate_native_diagram(Assistant(), slide, kind="relationship")
+
+
+def test_drawio_generation_keeps_explicit_nodes_and_edge(monkeypatch):
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
+
+    class Assistant:
+        def complete(self, *_args, **_kwargs):
+            return json.dumps({"xml": NATIVE_XML}, ensure_ascii=False)
+
+    slide = {"type": "process", "title": "办理关系", "blocks": {
+        "diagram_nodes": [{"id": "first", "label": "受理"},
+                          {"id": "second", "label": "审核"}],
+        "diagram_edges": [{"source": "first", "target": "second"}],
+    }}
+
+    result = svc.generate_native_diagram(Assistant(), slide, kind="relationship")
+
+    assert result["blocks"]["drawio_kind"] == "relationship"
+    assert result["blocks"]["diagram_edges"] == slide["blocks"]["diagram_edges"]
+
+
+def test_outline_enrichment_uses_model_selected_diagram_kind(monkeypatch):
+    from app.application.ppt import ppt_engine
+
+    calls = []
+
+    class FakeDrawio:
+        enabled = True
+        native_available = True
+
+        def generate_native_diagram(self, _assistant, slide, kind="process"):
+            calls.append((slide["title"], kind))
+            return {**slide, "blocks": {**slide["blocks"], "drawio_xml": NATIVE_XML}}
+
+    monkeypatch.setattr("app.application.ppt.drawio_service.DrawioService", FakeDrawio)
+    outline = {"slides": [
+        {"type": "process", "title": "审批链", "blocks": {"process": ["受理", "审核"]}},
+        {"type": "process", "title": "部门关系", "blocks": {
+            "drawio_kind": "relationship", "diagram_nodes": [
+                {"id": "a", "label": "司法局"}, {"id": "b", "label": "司法所"}],
+            "diagram_edges": [{"source": "a", "target": "b"}]}},
+    ]}
+
+    ppt_engine.enrich_outline_with_diagrams(object(), outline)
+
+    assert calls == [("审批链", "process"), ("部门关系", "relationship")]
+
+
+def test_relationship_page_keeps_node_labels_when_mcp_is_unavailable():
+    import io
+    from pptx import Presentation
+    from app.application.ppt.ppt_engine import build_pptx, DEFAULT_COLORS, DEFAULT_LAYOUTS
+
+    outline = {"title": "部门协作", "slides": [{
+        "type": "process", "title": "部门关系", "points": [],
+        "blocks": {"drawio_kind": "relationship", "diagram_nodes": [
+            {"id": "a", "label": "司法局"}, {"id": "b", "label": "司法所"}],
+            "diagram_edges": [{"source": "a", "target": "b"}]},
+    }]}
+
+    data = build_pptx(outline, {"colors": DEFAULT_COLORS, "layouts": DEFAULT_LAYOUTS})
+    visible = " ".join(shape.text for shape in Presentation(io.BytesIO(data)).slides[0].shapes
+                       if shape.has_text_frame)
+
+    assert "司法局" in visible and "司法所" in visible
 
 class TestDrawioServiceConfigured:
     def test_enabled_returns_text(self, monkeypatch):

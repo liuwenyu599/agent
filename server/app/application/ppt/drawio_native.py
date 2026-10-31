@@ -13,6 +13,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Pt
 
 from app.core.fonts import DEFAULT_CJK_FONT
+from app.application.ppt.third_party.drawio_skill.validate import check_page
 
 
 def _label(value: str) -> str:
@@ -86,6 +87,19 @@ def validate_generated_layout(xml: str, canvas_width: int = 1000,
                               canvas_height: int = 550) -> dict:
     """Check the editable diagram's page bounds and material node overlap."""
     diagram = parse_diagram(xml)
+    # Reuse Agents365 drawio-skill's deterministic XML linter before the local
+    # PPTX-specific checks. The upstream PPTX exporter rasterizes each page;
+    # native PowerPoint shapes are still rendered by this module.
+    model = ET.fromstring(xml)
+    if model is not None:
+        if model.tag != "mxGraphModel":
+            model = next(model.iter("mxGraphModel"), None)
+        if model is not None:
+            page = ET.Element("diagram", {"name": "PPT 图示"})
+            page.append(model)
+            errors, _warnings = check_page(page)
+            if errors:
+                raise ValueError("图示结构错误：" + str(errors[0]["code"]))
     nodes = diagram["nodes"]
     if len(nodes) > 12:
         raise ValueError("AI 图示最多包含 12 个节点")
@@ -149,12 +163,30 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
     def put_text(shape, value, style):
         shape.text_frame.text = value
         shape.text_frame.word_wrap = True
-        shape.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+        shape.text_frame.vertical_anchor = {
+            "top": MSO_ANCHOR.TOP,
+            "bottom": MSO_ANCHOR.BOTTOM,
+        }.get(style.get("verticalAlign"), MSO_ANCHOR.MIDDLE)
+        try:
+            requested_size = float(style.get("fontSize", 14))
+            font_size = requested_size if math.isfinite(requested_size) else 14
+        except (TypeError, ValueError):
+            font_size = 14
+        font_size = max(8, min(font_size, 32))
+        try:
+            font_style = int(style.get("fontStyle", 0))
+        except (TypeError, ValueError):
+            font_style = 0
         for paragraph in shape.text_frame.paragraphs:
-            paragraph.alignment = PP_ALIGN.CENTER
+            paragraph.alignment = {
+                "left": PP_ALIGN.LEFT,
+                "right": PP_ALIGN.RIGHT,
+            }.get(style.get("align"), PP_ALIGN.CENTER)
             for run in paragraph.runs:
                 run.font.name = font
-                run.font.size = Pt(14)
+                run.font.size = Pt(font_size)
+                run.font.bold = bool(font_style & 1)
+                run.font.italic = bool(font_style & 2)
                 run.font.color.rgb = color(style.get("fontColor"), text_default)
 
     rendered = {}

@@ -228,7 +228,8 @@ def _layout_point_count(slide: Dict) -> int:
     if stype == "timeline":
         return len(blocks.get("timeline") or [])
     if stype == "process":
-        steps = blocks.get("process") or []
+        steps = (blocks.get("process") or blocks.get("diagram_labels") or
+                 blocks.get("diagram_nodes") or [])
         if steps:
             return len(steps)
     return len(slide.get("points") or [])
@@ -254,7 +255,9 @@ def _layout_usable(spec: Dict, slide: Dict) -> bool:
         return False
     if need == "timeline" and not (blocks.get("timeline") or []):
         return False
-    if need == "process" and not (blocks.get("process") or []):
+    if need == "process" and not (blocks.get("process") or
+                                  blocks.get("diagram_labels") or
+                                  blocks.get("diagram_nodes") or []):
         return False
     return True
 
@@ -399,7 +402,12 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 - chart 图表页：title、blocks={{"chart":{{"chart_type":"bar或pie或line","categories":["类别"...],"series":[{{"name":"系列名","values":[数值...]}}]}}}}（材料有对比/趋势数据时用）
 - case 案例页：title、points（案例背景→做法→结果，3~4 条）
 - timeline 时间轴页：title、blocks={{"timeline":[{{"time":"时间点","text":"事项"}},...]}}（有时间线内容时用）
-- process 流程页：title、blocks={{"process":["步骤1","步骤2",...]}}（讲工作流程时用，3~5 步）
+- process 图示页：办理顺序用 blocks={{"process":["步骤1","步骤2",...]}}；
+  关系图用 blocks={{"drawio_kind":"relationship",
+  "diagram_nodes":[{{"id":"a","label":"节点名称"}},...],
+  "diagram_edges":[{{"source":"a","target":"b"}},...]}}。
+  组织架构和系统架构分别把 drawio_kind 设为 organization、architecture。
+  只在连接关系确实有助于解释内容时选图示页；节点与连线须来自材料，不凭空编造。
 - summary 总结页：title、points（2~4 条结论/展望）
 - closing 结束页（{closing_rule}）：title（如"谢谢聆听，请批评指正"）
 
@@ -502,10 +510,10 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
 
 
 def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
-    """大纲阶段自动为流程页生成 drawio 原生图示，并固化进 ``blocks.drawio_xml``。
+    """大纲阶段自动为图示页生成 drawio 原生形状，并固化进 ``blocks.drawio_xml``。
 
-    与「大脑+手脚」架构一致：35B 只决定“这是流程页、这几步”（已由大纲的
-    ``type=process`` + ``blocks.process`` 表达），drawio 负责把语义翻译成可编辑的
+    35B 决定哪些页面需要流程、关系、组织或架构图及其中的节点连线；
+    drawio 负责把这些语义翻译成可编辑的
     原生图示；本函数只做编排与兜底，不触碰任何绘图坐标。
 
     固化的 ``drawio_xml`` 随大纲落库，因此无论是编辑器同步渲染（``generate``）
@@ -513,33 +521,36 @@ def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
     都会优先渲染该原生图示，失败时回退原生步骤条——天然覆盖全部渲染链路。
 
     兜底纪律（绝不拖垮整份大纲）：
-    - ``DRAWIO_MCP_URL`` 未配置 → 直接跳过（后续走原生步骤条）；
+    - MCP 与 Graphviz 均不可用 → 直接跳过（后续走原生步骤条）；
     - 任一页生成失败（MCP 断连 / 结构校验不过 / 超时）→ 仅跳过该页；
     - 已含 ``drawio_xml`` 的页不重复生成（支持编辑后局部重生成）。
     """
     from app.application.ppt.drawio_service import DrawioService
     drawio = DrawioService()
-    if not drawio.enabled:
+    if not getattr(drawio, "native_available", drawio.enabled):
         return outline
     for s in (outline.get("slides") or []):
         if (s.get("blocks") or {}).get("drawio_xml"):
             continue
-        # 大纲阶段 35B 仅产出 process 类型图示页；relationship/organization/
-        # architecture 三类走手动 ai_visual（其生成逻辑会强制 type=process，不宜自动套用）。
+        # 图示页统一用 process 页型承载；具体语义由 drawio_kind 区分。
         if s.get("type") != "process":
             continue
         blocks = s.get("blocks") or {}
+        kind = str(blocks.get("drawio_kind") or "process")
+        if kind not in {"process", "relationship", "organization", "architecture"}:
+            continue
         # 必须有可画内容：流程步骤 / 要点 / 图示标签
-        if not (blocks.get("process") or s.get("points") or blocks.get("diagram_labels")):
+        if not (blocks.get("process") or s.get("points") or
+                blocks.get("diagram_labels") or blocks.get("diagram_nodes")):
             continue
         try:
-            updated = drawio.generate_native_diagram(assistant, s, kind="process")
+            updated = drawio.generate_native_diagram(assistant, s, kind=kind)
             if updated:
                 s.clear()
                 s.update(updated)
         except Exception as exc:  # noqa: BLE001 - 单页失败不影响整份大纲
-            logger.warning("PPT 自动图示生成跳过页(type=process, title=%s): %s",
-                           s.get("title"), type(exc).__name__)
+            logger.warning("PPT 自动图示生成跳过页(kind=%s, title=%s): %s",
+                           kind, s.get("title"), type(exc).__name__)
     return outline
 
 
@@ -874,7 +885,7 @@ def _try_drawio_render(slide, data: Dict, box: tuple, font: str, warnings: list,
         warnings.append(message)
         logger.warning("PPT 图示回退基础版式: %s", type(exc).__name__)
         items = (blocks.get("process") if is_process else
-                 (blocks.get("diagram_labels") or blocks.get("process"))) or data.get("points") or []
+                 (_diagram_fallback_labels(blocks) or blocks.get("process"))) or data.get("points") or []
         label = "原流程内容" if is_process else "原图示节点"
         slide.notes_slide.notes_text_frame.text = message + f"\n{label}：\n" + "\n".join(map(str, items))
         return False
@@ -1532,7 +1543,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             blocks = s.get("blocks") or {}
             is_process = (blocks.get("drawio_kind") or "process") == "process"
             items = (blocks.get("process") if is_process else
-                     (blocks.get("diagram_labels") or blocks.get("process"))) or s.get("points") or []
+                     (_diagram_fallback_labels(blocks) or blocks.get("process"))) or s.get("points") or []
             rows = max(1, (len(items) + 1) // 2)
             for index, value in enumerate(items):
                 column, row = divmod(index, rows)
@@ -1544,7 +1555,17 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 text(slide, lx(.06), ly(.3), lx(.88), ly(.15),
                      "该页图示暂无法显示，请核对原内容。", 16, False, GRAY)
             return slide
-        all_steps = (s.get("blocks") or {}).get("process") or s["points"]
+        blocks = s.get("blocks") or {}
+        if blocks.get("drawio_kind") not in (None, "process"):
+            items = _diagram_fallback_relations(blocks) or s.get("points") or []
+            rows = max(1, (len(items) + 1) // 2)
+            for index, value in enumerate(items):
+                column, row = divmod(index, rows)
+                text(slide, lx(.06 + column * .45), ly(.24 + row * .64 / rows),
+                     lx(.42), ly(.64 / rows), str(value),
+                     14 if rows <= 8 else 11, False, DARK)
+            return slide
+        all_steps = blocks.get("process") or s["points"]
         if (lay_of(s) or "chevron") == "vertical" and len(all_steps) >= 3:
             steps = all_steps[:7]
             step_h = 0.60 / len(steps)

@@ -1466,7 +1466,7 @@ class PPTService:
                 enforce_exact_count=enforce_exact_count, free_structure=True)
             outline = self._audit_and_repair_outline(
                 outline, target_count if enforce_exact_count else None, content)
-            # 大纲阶段自动为流程页挂接 drawio 原生图示（固化进 blocks.drawio_xml，
+            # 大纲阶段自动为适合图示的页面挂接 drawio 原生图示（固化进 blocks.drawio_xml，
             # 后续渲染链路自动取用；未配置/失败则静默回退原生步骤条）。
             outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
             outline["material_ids"] = [item["id"] for item in images]
@@ -1531,8 +1531,9 @@ class PPTService:
             outline = self._audit_and_repair_outline(
                 outline, target_count if explicit_count else None, content)
             # 仅在 drawio 真正开启时提示图示生成进度，避免无配置环境多出 stage 事件
-            if (settings.DRAWIO_MCP_URL or "").strip():
-                yield _sse({"type": "stage", "text": "正在为流程页生成原生图示…"})
+            from app.application.ppt.drawio_service import DrawioService
+            if DrawioService().native_available:
+                yield _sse({"type": "stage", "text": "正在为图示页生成可编辑图形…"})
             outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
             outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
@@ -1936,7 +1937,7 @@ class PPTService:
                     self._get_visible_template(body.template_id, user)
                 style, _ = self._resolve_template(body.template_id)
                 drawio = DrawioService()
-                if drawio.enabled:
+                if drawio.native_available:
                     diagram = drawio.generate_native_diagram(
                         self._ppt_assistant(), body.slide, body.instruction,
                         kind=body.kind, style=style)
