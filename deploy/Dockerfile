@@ -25,7 +25,7 @@ WORKDIR /app
 #   curl                健康检查
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       antiword curl poppler-utils \
+       antiword curl poppler-utils graphviz \
        libreoffice-writer libreoffice-impress fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
