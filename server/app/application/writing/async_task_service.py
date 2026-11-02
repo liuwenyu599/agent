@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 
 from app.application.writing import task_parser
+from app.application.writing.postprocessor import local_date_string
 from app.application.writing import prompt_snapshot
 from app.application.writing.async_intent_interpreter import AsyncWritingIntentInterpreter
 from app.application.writing.intent_interpreter import placement_fallback
@@ -51,6 +52,14 @@ from app.infrastructure.database.models.writing_suggestion import WritingSuggest
 from app.infrastructure.database.models.writing_task import WritingTaskModel
 
 logger = logging.getLogger(__name__)
+
+# 用户明确「写/填/补/加落款日期」却没给具体日期时，落款日期默认用今天；
+# 用来覆盖 LLM 把这类请求幻觉成旧年份（如 2024 年）的故障。
+# 只取正向（动词在前）模式，避免把「落款日期应该写在哪里」这类疑问误判成命令。
+_SIGN_DATE_RE = re.compile(
+    r"(?:写|填|补|加|生成|加上|落).{0,4}(?:落款|成文|署名|签发|发文).{0,4}(?:日期|时间)"
+)
+
 _rag_heavy_slots = threading.BoundedSemaphore(2)
 _rag_breaker_lock = threading.Lock()
 _rag_degraded_until = 0.0
@@ -1312,28 +1321,96 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         return store.public_dict(run)
 
     # ---------------------------------------------------------------- chat ops
+    def _reconcile_literal_fields(self, ctx: Dict[str, Any], message: str,
+                                 has_draft: bool) -> List[str]:
+        """把用户明确说的结构化约束确定性地落到 ctx，不被 LLM 漏抽或幻觉年份覆盖。
+
+        只覆盖用户显式提及的安全字段（字数 / 落款日期 / 发文机关 / 主送 / 文号），
+        不与 LLM 对文种、主题的语义判断互相覆盖。修复两类已发生故障：
+          - 「200字以内」被 LLM 漏抽 → 草稿仍按旧目标（如 800 字）生成，字数毫无变化；
+          - 「写落款日期」被 LLM 幻觉成旧年份（如 2024年5月20日）→ 落款日期错。
+        """
+        msg = message or ""
+        parsed = task_parser.parse_message(msg)
+        safe = ("word_count_target", "document_date", "document_number_enabled",
+                "document_number", "authority", "recipient")
+        update: Dict[str, Any] = {k: parsed[k] for k in safe
+                                  if k in parsed and parsed[k] is not None}
+        # 「写落款日期 / 补全落款日期」这类没给具体日期的请求 → 用今天，覆盖 LLM 幻觉的旧年份。
+        if "document_date" not in update and _SIGN_DATE_RE.search(msg):
+            update["document_date"] = local_date_string()
+        if not update:
+            return []
+        changes = task_parser.merge_context(ctx, update)
+        # 用户要写落款日期时，发文机关缺省由系统补齐，避免只写了一半落款。
+        if "document_date" in update:
+            self._complete_default_authority(ctx)
+            if ctx.get("authority") and not any("发文机关" in c for c in changes):
+                changes = changes + [f"发文机关：{ctx['authority']}"]
+        return changes
+
     async def chat_async(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
         prompt_snapshot.enter_task(
             task_id, user_id, session_id=getattr(task, "session_id", "") or "")
         ctx = dict(task.context or {})
         has_draft = bool((task.current_content or "").strip())
+        before_ctx = dict(ctx)
         self._push_history(ctx, "user", message)
         interpreted = await self._interpret_async(message, ctx, has_draft=has_draft)
-        if not interpreted:
-            reply = await self._answer_only_async(message, ctx, task.current_content or "")
-            self._push_history(ctx, "assistant", reply)
-            task.context = ctx
-            self.db.commit()
-            return {**self._to_dict(task), "reply": reply, "content_changed": False}
+        had_interpretation = bool(interpreted)
 
-        before_ctx = dict(ctx)
-        changes = self._merge_interpretation(ctx, interpreted)
+        if not had_interpretation:
+            # 规则兜底先算：抽到了字段变化（如「写落款日期」）就合成一次字段路由，
+            # 否则纯回答。
+            literal_changes = self._reconcile_literal_fields(ctx, message, has_draft)
+            if not literal_changes:
+                reply = await self._answer_only_async(message, ctx, task.current_content or "")
+                self._push_history(ctx, "assistant", reply)
+                task.context = ctx
+                task.updated_at = now_local()
+                self.db.commit()
+                return {**self._to_dict(task), "reply": reply, "content_changed": False}
+            interpreted = {
+                "operation": ("rewrite_document"
+                             if has_draft and any("字数目标" in c for c in literal_changes)
+                             else "set_fields"),
+                "reply": "",
+                "revision_instruction": (
+                    f"按新的字数目标（{ctx['word_count_target']} 字左右）重写全文，"
+                    "保留全部必要事实、措施与执行要求，删去冗余套话与重复表述，"
+                    "不新增未提及的内容。"
+                ) if has_draft and any("字数目标" in c for c in literal_changes) else None,
+                "revision_mode": "rewrite" if has_draft and any(
+                    "字数目标" in c for c in literal_changes) else None,
+                "patch_target": None, "position": "after", "end_target": None,
+                "routing": "literal_override",
+            }
+            had_interpretation = False
+
+        # LLM 解释先合并进 ctx，规则兜底后合并（规则优先，覆盖 LLM 漏抽或幻觉年份）。
+        if had_interpretation:
+            changes = self._merge_interpretation(ctx, interpreted)
+            literal_changes = self._reconcile_literal_fields(ctx, message, has_draft)
+            changes = changes + literal_changes
+        else:
+            # 已无 LLM 解释：规则抽到的字段变化即全部变更（避免重复调用兜底）。
+            changes = literal_changes or []
         task_parser.compute_missing(ctx)
         task.context = ctx
         task.updated_at = now_local()
         self.db.commit()
         operation = interpreted.get("operation") or "answer"
+
+        # 用户明确改写字数目标且已有草稿：只改字段不会缩短正文，必须走重写。
+        if (has_draft and operation in ("set_fields", "answer", "clarify")
+                and ctx.get("word_count_target") != before_ctx.get("word_count_target")):
+            operation = "rewrite_document"
+            interpreted["revision_instruction"] = (
+                f"按新的字数目标（{ctx['word_count_target']} 字左右）重写全文，"
+                "保留全部必要事实、措施与执行要求，删去冗余套话与重复表述，"
+                "不新增未提及的内容。")
+            interpreted["revision_mode"] = "rewrite"
 
         if operation in (*LOCAL_OPERATIONS, "rewrite_document") and not has_draft:
             reply = "当前还没有草稿，请先起草，再告诉我需要修改的段落或内容。"
@@ -1366,7 +1443,12 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 content_changed = bool(note)
                 if note:
                     changes = list(changes) + [note]
-            reply = interpreted.get("reply") or await self._answer_only_async(message, ctx, task.current_content or "")
+            # 落款被规则纠正时，用准确的落款信息回覆，不沿用 LLM 可能写错的日期。
+            if any("落款日期" in c or "发文机关" in c for c in literal_changes):
+                reply = "已为你补齐/更新落款信息（发文机关与成文日期）。"
+            else:
+                reply = interpreted.get("reply") or await self._answer_only_async(
+                    message, ctx, task.current_content or "")
             if changes:
                 reply += "\n\n已应用：" + "；".join(changes) + "。"
             self._push_history(ctx, "assistant", reply)
