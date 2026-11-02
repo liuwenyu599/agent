@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -378,7 +379,9 @@ private fun VersionPreviewDialog(vm: WritingViewModel, v: JsonObject) {
         if (body.isBlank()) {
             Text("（该版本无正文内容）", fontSize = 13.sp, color = Muted)
         } else {
-            MarkdownText(body, vm.renderProfile)
+            SelectionContainer {
+                MarkdownText(body, vm.renderProfile)
+            }
         }
     }
 }
@@ -617,10 +620,14 @@ private fun FormattedBodyEditor(
         vm.markParagraphEditing(false)
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
+    // 框选复制只覆盖排版正文。编辑态必须退出框选：段内格式工具栏的
+    // 字体/字号下拉是独立窗口层级，处于 SelectionContainer 内会触发
+    // "layouts are not part of the same hierarchy"（CMP-7112）桌面端崩溃。
+    val bodyContent: @Composable () -> Unit = {
+        LazyColumn(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
         item {
             Spacer(Modifier.height(topInset))
             header()
@@ -746,7 +753,9 @@ private fun FormattedBodyEditor(
             }
         }
         item { Spacer(Modifier.height(bottomInset)) }
+        }
     }
+    if (editIdx == null) SelectionContainer { bodyContent() } else bodyContent()
 }
 
 // ---------------- 零门槛入口 ----------------

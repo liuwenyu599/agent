@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.CompositionLocalProvider
@@ -42,8 +41,11 @@ fun App() {
     val session = LocalWindowSession.current
     CompositionLocalProvider(LocalToastState provides session.toastState) {
         AppTheme {
-            SelectionContainer {
-                Box(Modifier.fillMaxSize()) {
+            // 注意：这里绝不能包 SelectionContainer——下拉菜单/对话框在桌面上
+            // 是独立窗口层级，其内部文本一旦可被框选就会抛
+            // "layouts are not part of the same hierarchy"（CMP-7112）。
+            // 框选复制只放在需要它的正文区域（WritingScreen）内部。
+            Box(Modifier.fillMaxSize()) {
                     if (!AppState.loggedIn) {
                         LoginScreen()
                     } else {
@@ -81,7 +83,6 @@ fun App() {
                         session.toastState,
                         Modifier.align(Alignment.TopEnd).padding(16.dp).widthIn(max = 420.dp),
                     )
-                }
             }
         }
     }

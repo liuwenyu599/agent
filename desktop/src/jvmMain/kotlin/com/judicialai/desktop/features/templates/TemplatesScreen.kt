@@ -452,8 +452,6 @@ private fun UsePanel(vm: TemplatesViewModel, t: JsonObject, modifier: Modifier) 
             n to (label to preset)
         })
     }
-    // 必填要素未填时的拦截提示（点「生成」时校验）
-    var requiredError by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier.fillMaxHeight()
@@ -472,7 +470,7 @@ private fun UsePanel(vm: TemplatesViewModel, t: JsonObject, modifier: Modifier) 
         }
 
         Spacer(Modifier.height(Dimens.space3))
-        InlineNotice("填好要素后点「生成」，将进入智能写作工作台自动起草，可继续对话修改、保存版本与导出")
+        InlineNotice("要素均可留空：AI 只按已填内容写作，不虚构未填部分；标题、主送等排版要素留空时成稿会缺省，导出前请人工补齐")
 
         Spacer(Modifier.height(Dimens.space3))
         if (fields.isEmpty()) {
@@ -493,26 +491,11 @@ private fun UsePanel(vm: TemplatesViewModel, t: JsonObject, modifier: Modifier) 
 
         Spacer(Modifier.height(Dimens.space3))
         AppButton("生成，进入写作工作台", onClick = {
-            // 必填要素（params_schema 中 required=true）不允许留空，否则主送机关等
-            // 排版字段缺失会直接导致生成公文漏掉标题/主送，必须先在表单层强制。
-            val missing = fields.filter { f ->
-                f["required"].bool() &&
-                values[f["name"].str()]?.second?.trim().orEmpty().isEmpty()
-            }.map { f -> f["label"].str().ifBlank { f["name"].str() } }
-            if (missing.isNotEmpty()) {
-                requiredError = "请先填写必填要素：${missing.joinToString("、")}"
-            } else {
-                requiredError = null
-                vm.launchWorkspace(values)
-            }
+            vm.launchWorkspace(values)
         }, kind = AppButtonKind.AI, fill = true, icon = Icons.Default.AutoAwesome)
         Spacer(Modifier.height(Dimens.space2))
         AppButton("返回预览", onClick = { vm.cancelUse() },
             kind = AppButtonKind.SECONDARY, fill = true)
-        requiredError?.let {
-            Spacer(Modifier.height(Dimens.space2))
-            FieldError(it)
-        }
         vm.status?.let {
             Spacer(Modifier.height(Dimens.space2))
             FieldError(it)
