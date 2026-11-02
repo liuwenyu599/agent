@@ -117,9 +117,9 @@ class DrawioService:
 
     def generate_native_diagram(self, assistant, slide: dict, instruction: str = "",
                                 kind: str = "process", style: Optional[dict] = None) -> Optional[dict]:
-        """Return None on MCP outage so the caller can use the local visual generator.
+        """Build an editable diagram with MCP first, then local Graphviz.
 
-        Invalid model output still raises: infrastructure fallback must not bypass XML checks.
+        Invalid graph data remains subject to the same node and edge checks.
         """
         import json
         import re
@@ -159,37 +159,8 @@ class DrawioService:
                             "diagram_edges": plan.get("diagram_edges") or []}}
                 except Exception as exc:
                     logger.warning("图示语义规划失败，改走基础版式: %s", type(exc).__name__)
-        # The 35B outline or page-level plan decides which entities and links matter.
-        # Reuse the skill's graph placement when Graphviz is available instead
-        # of asking the model to guess coordinates in another long call.
-        try:
-            skill_xml = layout_slide_graph(
-                source_slide, kind, (style or {}).get("colors") or {})
-        except (RuntimeError, ValueError) as exc:
-            logger.warning("Draw.io Skill 布局失败，改用 MCP/模型路径: %s", type(exc).__name__)
-            skill_xml = None
-        if skill_xml:
-            from app.application.ppt.drawio_native import parse_diagram
-            nodes = parse_diagram(skill_xml)["nodes"]
-            updated = dict(source_slide)
-            updated["type"] = "process"
-            labels = [node["label"] for node in nodes if node["label"]]
-            original_nodes = (source_slide.get("blocks") or {}).get("diagram_nodes") or []
-            original_labels = ([str(node.get("label") or "") for node in original_nodes
-                                if isinstance(node, dict)] if original_nodes else
-                               [str(value) for value in
-                                ((source_slide.get("blocks") or {}).get("process") or
-                                 source_slide.get("points") or [])])
-            details = [label for label in original_labels if len(label) > 20]
-            updated["blocks"] = {**(source_slide.get("blocks") or {}),
-                "drawio_xml": skill_xml, "drawio_kind": kind,
-                "diagram_engine": "graphviz",
-                "diagram_details": details,
-                "process" if kind == "process" else "diagram_labels": labels}
-            return updated
-        # drawio-mcp accepts Mermaid and may return laid-out draw.io XML. Use it
-        # as the second layout engine only when its output preserves the planned
-        # graph; plain reference text is not a layout engine.
+        # MCP lays out the 35B-planned graph first; the local skill is the
+        # bounded fallback if MCP is unavailable or its output is invalid.
         planned = (source_slide.get("blocks") or {})
         raw_nodes = planned.get("diagram_nodes") or []
         raw_edges = planned.get("diagram_edges") or []
@@ -199,7 +170,9 @@ class DrawioService:
                          for index, step in enumerate(steps)]
             raw_edges = [{"source": str(index), "target": str(index + 1)}
                          for index in range(max(0, len(raw_nodes) - 1))]
-        if self.enabled and 2 <= len(raw_nodes) <= 12:
+        mcp_rejected = False
+        if (self.enabled and time.monotonic() >= self._reference_retry_at
+                and 2 <= len(raw_nodes) <= 12):
             aliases = {str(node.get("id")): f"n{index}" for index, node in enumerate(raw_nodes)
                        if isinstance(node, dict) and node.get("id") is not None}
             if len(aliases) == len(raw_nodes):
@@ -223,6 +196,11 @@ class DrawioService:
                     raw_mcp = self.create_diagram(mermaid="\n".join(mermaid))
                     obj = loads_lenient(raw_mcp) if raw_mcp and raw_mcp.lstrip().startswith("{") else None
                     mcp_xml = obj.get("xml") if isinstance(obj, dict) else raw_mcp
+                    from app.application.ppt.drawio_native import apply_diagram_theme
+                    from app.core.fonts import DEFAULT_CJK_FONT
+                    mcp_xml = apply_diagram_theme(
+                        mcp_xml, (style or {}).get("colors"),
+                        str((style or {}).get("font") or DEFAULT_CJK_FONT))
                     diagram = validate_generated_layout(mcp_xml)
                     from collections import Counter
                     expected = Counter(short_label(node.get("label")) for node in raw_nodes)
@@ -251,10 +229,42 @@ class DrawioService:
                         "diagram_details": details,
                         "process" if kind == "process" else "diagram_labels": labels}
                     return updated
-                except (ValueError, TypeError, AttributeError) as exc:
-                    logger.warning("MCP 排版结果未通过校验，回退基础步骤版式: %s",
+                except (ValueError, TypeError, AttributeError, DrawioMcpError,
+                        httpx.TimeoutException) as exc:
+                    logger.warning("MCP 排版结果未通过校验，改用本地布局: %s",
                                    type(exc).__name__)
-                    return None
+                    mcp_rejected = isinstance(exc, (ValueError, TypeError, AttributeError))
+        # No MCP output, timeout, or rejected layout: keep the graph and its
+        # source facts, then lay it out locally without another model call.
+        try:
+            skill_xml = layout_slide_graph(
+                source_slide, kind, (style or {}).get("colors") or {})
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("Draw.io Skill 布局失败，改用模型路径: %s", type(exc).__name__)
+            skill_xml = None
+        if skill_xml:
+            from app.application.ppt.drawio_native import parse_diagram
+            nodes = parse_diagram(skill_xml)["nodes"]
+            updated = dict(source_slide)
+            updated["type"] = "process"
+            labels = [node["label"] for node in nodes if node["label"]]
+            original_nodes = (source_slide.get("blocks") or {}).get("diagram_nodes") or []
+            original_labels = ([str(node.get("label") or "") for node in original_nodes
+                                if isinstance(node, dict)] if original_nodes else
+                               [str(value) for value in
+                                ((source_slide.get("blocks") or {}).get("process") or
+                                 source_slide.get("points") or [])])
+            details = [label for label in original_labels if len(label) > 20]
+            updated["blocks"] = {**(source_slide.get("blocks") or {}),
+                "drawio_xml": skill_xml, "drawio_kind": kind,
+                "diagram_engine": "graphviz",
+                "diagram_details": details,
+                "process" if kind == "process" else "diagram_labels": labels}
+            return updated
+        if mcp_rejected:
+            # An invalid MCP graph must not be replaced by a model graph that
+            # may silently drop the planned entities or relationships.
+            return None
         reference = self.get_reference()
         if not reference:
             return None
@@ -266,11 +276,12 @@ class DrawioService:
             raise ValueError("不支持的图示类型")
         style = style or {}
         colors = style.get("colors") or {}
-        primary = str(colors.get("primary", "17365D")).lstrip("#")
+        primary = str(colors.get("primary", "2A5CAA")).lstrip("#")
         accent = str(colors.get("accent", "4A78AD")).lstrip("#")
-        primary = primary if re.fullmatch(r"[0-9a-fA-F]{6}", primary) else "17365D"
+        primary = primary if re.fullmatch(r"[0-9a-fA-F]{6}", primary) else "2A5CAA"
         accent = accent if re.fullmatch(r"[0-9a-fA-F]{6}", accent) else "4A78AD"
-        font = str(style.get("font") or "思源黑体")[:40]
+        from app.core.fonts import DEFAULT_CJK_FONT
+        font = str(style.get("font") or DEFAULT_CJK_FONT)[:40]
         prompt = (
             f"根据页面内容生成简洁的{diagram_names[kind]}。只输出 JSON 对象 {{\"xml\": \"...\"}}。"
             "xml 必须是未压缩的单页 mxGraphModel，根节点 id=0、图层 id=1。"
@@ -280,6 +291,10 @@ class DrawioService:
             "禁止图片、图标、自定义 stencil、嵌套分组和外部资源。"
             "页面坐标范围 0..1000 × 0..550；主要内容放在 x=40..960、y=30..520 的安全区。"
             "节点之间至少留20坐标单位，节点不得重叠；文字放进节点 value，不另叠文字框。"
+            "样式示例：节点 style=\"rounded=1;shadow=1;fillColor=#2A5CAA;"
+            "fontColor=#FFFFFF;fontFamily=Microsoft YaHei;whiteSpace=wrap;\"；"
+            "连线 style=\"edgeStyle=orthogonalEdgeStyle;rounded=1;"
+            "strokeColor=#6C757D;strokeWidth=2;endArrow=block;\"。"
             "若本页提供 diagram_nodes 和 diagram_edges，完整表达这些节点与连线，"
             "不得自行添加未经材料支持的关系。"
             f"模板主色 #{primary}、强调色 #{accent}、中文字体 {font}；"
@@ -295,6 +310,8 @@ class DrawioService:
                  {"role": "user", "content": prompt}], temperature=0.2, max_tokens=3000)
             result = loads_lenient(raw or "")
             xml = result.get("xml") if isinstance(result, dict) else None
+            from app.application.ppt.drawio_native import apply_diagram_theme
+            xml = apply_diagram_theme(xml, colors, font)
             diagram = validate_generated_layout(xml)
             source_blocks = slide.get("blocks") or {}
             expected_nodes = {

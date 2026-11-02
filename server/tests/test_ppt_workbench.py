@@ -1012,7 +1012,10 @@ def test_ai_process_routes_to_drawio_when_configured(client, accounts, fake_llm,
         "kind": "process", "slide": {"id": "s1", "title": "办理流程", "points": ["受理"]},
     }, headers=_hdr(accounts["a"]))
     assert response.status_code == 200, response.text
-    assert response.json()["slide"]["blocks"]["drawio_xml"] == xml
+    from app.application.ppt.drawio_native import parse_diagram
+    nodes = parse_diagram(response.json()["slide"]["blocks"]["drawio_xml"])["nodes"]
+    assert [node["label"] for node in nodes] == ["受理"]
+    assert nodes[0]["style"]["shadow"] == "1"
     assert "mxGraphModel reference" in fake_llm.last_prompt
 
 

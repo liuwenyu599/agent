@@ -185,6 +185,39 @@ def test_drawio_native_export_keeps_text_size_weight_and_alignment():
     assert node.text_frame.paragraphs[0].alignment == PP_ALIGN.LEFT
 
 
+def test_drawio_native_keeps_editable_visual_styles_in_pptx():
+    import io
+    from pptx import Presentation
+    from pptx.enum.dml import MSO_FILL_TYPE
+    from app.application.ppt.drawio_native import render_diagram
+
+    xml = (NATIVE_XML.replace(
+        'rounded=1;fillColor=#E8F0FA;',
+        'rounded=1;fillColor=#E8F0FA;gradientColor=#FFFFFF;'
+        'strokeColor=#123456;strokeWidth=2.5;shadow=1;'
+        'fontFamily=Noto Sans CJK SC;')
+        .replace('id="edge" edge="1"',
+                 'id="edge" style="strokeWidth=3;strokeColor=#123456;" edge="1"'))
+    deck = Presentation()
+    page = deck.slides.add_slide(deck.slide_layouts[6])
+    render_diagram(page, xml, 0, 0, deck.slide_width, deck.slide_height)
+    output = io.BytesIO()
+    deck.save(output)
+    reloaded = Presentation(io.BytesIO(output.getvalue()))
+    shapes = reloaded.slides[0].shapes
+    node = next(shape for shape in shapes if shape.has_text_frame and shape.text == "受理")
+    edge = next(shape for shape in shapes if shape.shape_type == 9)
+
+    assert node.fill.type == MSO_FILL_TYPE.GRADIENT
+    assert str(node.fill.gradient_stops[0].color.rgb) == "E8F0FA"
+    assert str(node.fill.gradient_stops[-1].color.rgb) == "FFFFFF"
+    assert node.line.width.pt == 2.5
+    assert node.text_frame.paragraphs[0].runs[0].font.name == "Noto Sans CJK SC"
+    assert "outerShdw" in node._element.xml
+    assert edge.line.width.pt == 3
+    assert all(shape.shape_type != 13 for shape in shapes)
+
+
 def test_drawio_source_keeps_each_diagram_as_an_editable_page():
     from xml.etree import ElementTree as ET
     from app.application.ppt.drawio_native import build_drawio_source
@@ -327,7 +360,11 @@ def test_drawio_native_generation_uses_mcp_and_validates_before_return(monkeypat
 
     result = svc.generate_native_diagram(Assistant(), {"title": "审批流程"})
     assert calls == ["reference", "model"]
-    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+    from app.application.ppt.drawio_native import parse_diagram
+    nodes = parse_diagram(result["blocks"]["drawio_xml"])["nodes"]
+    assert [node["label"] for node in nodes] == ["受理", "审核"]
+    assert nodes[0]["style"]["shadow"] == "1"
+    assert nodes[0]["style"]["fontColor"] == "#15365D"
     assert result["blocks"]["process"] == ["受理", "审核"]
 
 
@@ -350,6 +387,8 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     assert [node["label"] for node in parsed["nodes"]] == ["受理", "审核"]
     assert len(parsed["edges"]) == 1
     assert parsed["nodes"][0]["style"]["strokeColor"] == "#123456"
+    assert parsed["nodes"][0]["style"]["shadow"] == "1"
+    assert parsed["edges"][0]["style"]["strokeWidth"] == "2"
 
     svc = DrawioService(base_url="")
     class NoModel:
@@ -362,9 +401,11 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     from app.application.ppt.drawio_native import render_diagram
     deck = Presentation()
     page = deck.slides.add_slide(deck.slide_layouts[6])
-    render_diagram(page, xml, 0, 0, 8_000_000, 4_000_000)
+    render_diagram(page, xml, 0, 0, 8_000_000, 4_000_000, font="模板字体")
     assert len(page.shapes) >= 3
     assert all(shape.shape_type != 13 for shape in page.shapes)  # no raster picture
+    first = next(shape for shape in page.shapes if shape.has_text_frame and shape.text == "受理")
+    assert first.text_frame.paragraphs[0].runs[0].font.name == "模板字体"
 
 
 def test_graphviz_dot_setting_enables_skill_without_system_path(monkeypatch, tmp_path):
@@ -503,8 +544,21 @@ def test_mcp_mermaid_layout_is_used_when_dot_is_unavailable(monkeypatch):
         "diagram_edges": [{"source": "first", "target": "second"}],
     }}
     result = service.generate_native_diagram(NoModel(), slide)
-    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+    from app.application.ppt.drawio_native import parse_diagram
+    assert parse_diagram(result["blocks"]["drawio_xml"])["nodes"][0]["style"]["shadow"] == "1"
     assert "flowchart LR" in requests[0]["mermaid"]
+    from io import BytesIO
+    from pptx import Presentation
+    from pptx.enum.dml import MSO_FILL_TYPE
+    from app.application.ppt import ppt_engine
+    result["title"] = "办理流程"
+    data = ppt_engine.build_pptx(
+        {"title": "办理流程", "slides": [result]},
+        {"colors": ppt_engine.DEFAULT_COLORS, "layouts": ppt_engine.DEFAULT_LAYOUTS})
+    node = next(shape for shape in Presentation(BytesIO(data)).slides[0].shapes
+                if shape.has_text_frame and shape.text == "受理")
+    assert node.fill.type == MSO_FILL_TYPE.GRADIENT
+    assert "outerShdw" in node._element.xml
 
 
 def test_points_already_in_diagram_are_not_repeated_below_it():
@@ -556,14 +610,15 @@ def test_page_action_uses_35b_plan_then_skill_layout_without_mcp(monkeypatch):
     assert result["blocks"]["drawio_xml"].startswith("<mxGraphModel")
 
 
-def test_skill_keeps_priority_when_mcp_is_also_configured(monkeypatch):
+def test_mcp_takes_priority_when_skill_is_also_available(monkeypatch):
     from app.application.ppt import drawio_skill_layout
     monkeypatch.setattr(drawio_skill_layout, "ensure_dot", lambda: "dot")
     monkeypatch.setattr(drawio_skill_layout, "layout_slide_graph",
-                        lambda *_args: NATIVE_XML)
+                        lambda *_args: pytest.fail("MCP success must skip Graphviz"))
     svc = DrawioService(base_url="http://drawio-mcp:3001")
-    monkeypatch.setattr(svc, "get_reference", lambda: (_ for _ in ()).throw(
-        AssertionError("MCP must not run after skill succeeds")))
+    calls = []
+    monkeypatch.setattr(svc, "create_diagram", lambda **kwargs:
+                        calls.append(kwargs) or json.dumps({"xml": NATIVE_XML}))
 
     class Assistant:
         def complete(self, _messages, **_kwargs):
@@ -574,7 +629,29 @@ def test_skill_keeps_priority_when_mcp_is_also_configured(monkeypatch):
 
     result = svc.generate_native_diagram(
         Assistant(), {"title": "办理流程", "points": ["受理后审核"]})
-    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+    assert result["blocks"]["diagram_engine"] == "mcp"
+    assert calls and "flowchart LR" in calls[0]["mermaid"]
+    from app.application.ppt.drawio_native import parse_diagram
+    graph = parse_diagram(result["blocks"]["drawio_xml"])
+    assert graph["nodes"][0]["style"]["shadow"] == "1"
+    assert graph["edges"][0]["style"]["edgeStyle"] == "orthogonalEdgeStyle"
+    assert graph["edges"][0]["style"]["strokeColor"] == "#6C757D"
+
+
+def test_mcp_outage_falls_back_to_graphviz(monkeypatch):
+    from app.application.ppt import drawio_skill_layout
+    calls = []
+    monkeypatch.setattr(drawio_skill_layout, "layout_slide_graph",
+                        lambda *_args: calls.append("graphviz") or NATIVE_XML)
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    monkeypatch.setattr(svc, "create_diagram", lambda **_kwargs: None)
+    slide = {"title": "办理流程", "blocks": {
+        "diagram_nodes": [{"id": "a", "label": "受理"},
+                          {"id": "b", "label": "审核"}],
+        "diagram_edges": [{"source": "a", "target": "b"}]}}
+    result = svc.generate_native_diagram(object(), slide)
+    assert calls == ["graphviz"]
+    assert result["blocks"]["diagram_engine"] == "graphviz"
 
 
 def test_drawio_reference_is_reused_across_pages(monkeypatch):

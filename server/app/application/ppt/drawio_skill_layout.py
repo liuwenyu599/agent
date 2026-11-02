@@ -66,12 +66,12 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
             return None
         ids[source_id] = f"n{index + 1}"
         labels.append(label[:19] + "…" if len(label) > 20 else label)
-    primary = str(colors.get("primary") or "17365D").lstrip("#")
+    primary = str(colors.get("primary") or "2A5CAA").lstrip("#")
     accent = str(colors.get("accent") or "4A78AD").lstrip("#")
     light = str(colors.get("light") or "E8F0FA").lstrip("#")
     dark = str(colors.get("dark") or "15365D").lstrip("#")
     palette = [v if re.fullmatch(r"[0-9A-Fa-f]{6}", v) else fallback
-               for v, fallback in ((primary, "17365D"), (accent, "4A78AD"), (light, "E8F0FA"),
+               for v, fallback in ((primary, "2A5CAA"), (accent, "4A78AD"), (light, "E8F0FA"),
                                    (dark, "15365D"))]
     primary, accent, light, dark = palette
     incoming = {str(edge.get("target")) for edge in raw_edges if isinstance(edge, dict)}
@@ -86,8 +86,10 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
             fill, stroke, foreground = accent, primary, "FFFFFF"
         else:
             fill, stroke, foreground = light, accent if kind == "architecture" else primary, dark
+        gradient = ("FFFFFF" if fill == light else fill)
         return ("rounded=1;whiteSpace=wrap;html=1;"
-                f"fillColor=#{fill};strokeColor=#{stroke};"
+                f"fillColor=#{fill};gradientColor=#{gradient};strokeColor=#{stroke};"
+                f"strokeWidth=1.6;shadow=1;"
                 f"fontColor=#{foreground};fontSize=12;")
     graph = {
         "direction": "LR" if kind == "process" else "TB",
@@ -107,7 +109,8 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
             return None
         graph["edges"].append({"source": source, "target": target,
                                "label": str(edge.get("label") or "")[:20],
-                               "style": f"html=1;strokeColor=#{primary};endArrow=block;"})
+                               "style": "html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;"
+                                        "strokeColor=#6C757D;strokeWidth=2;endArrow=block;"})
     height, positions, edge_points = autolayout.layout(
         autolayout.build_dot(graph), dot_path=dot_path)
     xml = autolayout.to_drawio(graph, height, positions, edge_points)

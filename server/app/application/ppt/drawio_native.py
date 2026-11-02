@@ -120,6 +120,55 @@ def validate_generated_layout(xml: str, canvas_width: int = 1000,
     return diagram
 
 
+def apply_diagram_theme(xml: str, colors: dict | None = None,
+                        font: str = DEFAULT_CJK_FONT) -> str:
+    """Add editable PowerPoint-friendly styles to a validated MCP/model diagram."""
+    diagram = parse_diagram(xml)
+    palette = colors or {}
+    def hex_color(key: str, fallback: str) -> str:
+        value = str(palette.get(key) or "").lstrip("#")
+        return value.upper() if re.fullmatch(r"[0-9a-fA-F]{6}", value) else fallback
+    primary = hex_color("primary", "2A5CAA")
+    accent = hex_color("accent", "4A78AD")
+    light = hex_color("light", "E8F0FA")
+    dark = hex_color("dark", "15365D")
+    incoming = {edge["target"] for edge in diagram["edges"]}
+    outgoing = {edge["source"] for edge in diagram["edges"]}
+    model = ET.fromstring(xml)
+    family = font if len(font) <= 48 and re.fullmatch(
+        r"[\w\u4e00-\u9fff .-]+", font) else DEFAULT_CJK_FONT
+    for cell in model.iter("mxCell"):
+        if cell.get("vertex") != "1" and cell.get("edge") != "1":
+            continue
+        style = cell.get("style", "")
+        bare = [part for part in style.split(";") if part and "=" not in part]
+        values = dict(part.split("=", 1) for part in style.split(";") if "=" in part)
+        if cell.get("edge") == "1":
+            values.update({"edgeStyle": "orthogonalEdgeStyle", "rounded": "1",
+                           "strokeColor": "#6C757D", "strokeWidth": "2",
+                           "endArrow": "block"})
+        elif values.get("shape") != "text" and "text" not in bare:
+            root = cell.get("id") not in incoming
+            terminal = cell.get("id") not in outgoing
+            fill = primary if root else accent if terminal else light
+            values.setdefault("fillColor", f"#{fill}")
+            values["rounded"] = "1"
+            values.setdefault("strokeColor", f"#{primary}")
+            if values["fillColor"] != "none":
+                actual = str(values["fillColor"]).lstrip("#")
+                if not re.fullmatch(r"[0-9a-fA-F]{6}", actual):
+                    actual = fill
+                rgb = [int(actual[i:i + 2], 16) for i in (0, 2, 4)]
+                bright = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) >= 145
+                values.setdefault("gradientColor", f"#{'FFFFFF' if bright else actual}")
+                values["shadow"] = "1"
+                values.setdefault("fontColor", f"#{dark if bright else 'FFFFFF'}")
+            values.setdefault("strokeWidth", "1.6")
+            values.setdefault("fontFamily", family)
+        cell.set("style", ";".join(bare + [f"{key}={value}" for key, value in values.items()]) + ";")
+    return ET.tostring(model, encoding="unicode")
+
+
 def build_drawio_source(outline: dict) -> bytes:
     """Export validated diagram pages as one editable, uncompressed .drawio file."""
     source = ET.Element("mxfile", {"host": "app.diagrams.net"})
@@ -157,8 +206,37 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
     offset_y = top + (height - span_y * scale) / 2
 
     def color(value, default):
-        return RGBColor.from_string(value.lstrip("#")) if re.fullmatch(
-            r"#?[0-9a-fA-F]{6}", value or "") else RGBColor.from_string(default)
+        chosen = value if re.fullmatch(r"#?[0-9a-fA-F]{6}", value or "") else default
+        chosen = str(chosen).lstrip("#")
+        return RGBColor.from_string(chosen if re.fullmatch(r"[0-9a-fA-F]{6}", chosen)
+                                    else "17365D")
+
+    def line_width(style, default=1.5):
+        try:
+            requested = float(style.get("strokeWidth", default))
+        except (TypeError, ValueError):
+            requested = default
+        return Pt(max(0.5, min(requested, 4.0)) if math.isfinite(requested) else default)
+
+    def add_shadow(shape):
+        # DrawingML effect is kept in the PPTX as an editable shape effect.
+        sp_pr = shape._element.spPr
+        if sp_pr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}effectLst") is not None:
+            return
+        effects = OxmlElement("a:effectLst")
+        shadow = OxmlElement("a:outerShdw")
+        for key, value in (("blurRad", "50800"), ("dist", "25400"),
+                           ("dir", "5400000"), ("algn", "ctr"),
+                           ("rotWithShape", "0")):
+            shadow.set(key, value)
+        shade = OxmlElement("a:srgbClr")
+        shade.set("val", "17365D")
+        alpha = OxmlElement("a:alpha")
+        alpha.set("val", "18000")
+        shade.append(alpha)
+        shadow.append(shade)
+        effects.append(shadow)
+        sp_pr.append(effects)
 
     def put_text(shape, value, style):
         shape.text_frame.text = value
@@ -183,7 +261,9 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
                 "right": PP_ALIGN.RIGHT,
             }.get(style.get("align"), PP_ALIGN.CENTER)
             for run in paragraph.runs:
-                run.font.name = font
+                family = str(style.get("fontFamily") or "").strip()
+                run.font.name = (family if len(family) <= 48 and re.fullmatch(
+                    r"[\w\u4e00-\u9fff .-]+", family) else font)
                 run.font.size = Pt(font_size)
                 run.font.bold = bool(font_style & 1)
                 run.font.italic = bool(font_style & 2)
@@ -204,10 +284,19 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
             shape = slide.shapes.add_shape(kind, *box)
             if style.get("fillColor") == "none":
                 shape.fill.background()
+            elif re.fullmatch(r"#?[0-9a-fA-F]{6}", style.get("gradientColor") or ""):
+                shape.fill.gradient()
+                stops = shape.fill.gradient_stops
+                stops[0].color.rgb = color(style.get("fillColor"), fill_default)
+                stops[-1].color.rgb = color(style["gradientColor"], fill_default)
+                shape.fill.gradient_angle = 90
             else:
                 shape.fill.solid()
                 shape.fill.fore_color.rgb = color(style.get("fillColor"), fill_default)
             shape.line.color.rgb = color(style.get("strokeColor"), line_default)
+            shape.line.width = line_width(style)
+            if style.get("shadow") == "1":
+                add_shadow(shape)
         put_text(shape, node["label"], style)
         rendered[node["id"]] = shape
     for edge in diagram["edges"]:
@@ -219,6 +308,7 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         connector.begin_connect(source, start_site)
         connector.end_connect(target, end_site)
         connector.line.color.rgb = color(edge["style"].get("strokeColor"), line_default)
+        connector.line.width = line_width(edge["style"], 2.0)
         if edge["style"].get("endArrow") != "none":
             arrow = OxmlElement("a:tailEnd")
             arrow.set("type", "triangle")

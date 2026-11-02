@@ -438,7 +438,12 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
   "diagram_nodes":[{{"id":"a","label":"节点名称"}},...],
   "diagram_edges":[{{"source":"a","target":"b"}},...]}}。
   组织架构和系统架构分别把 drawio_kind 设为 organization、architecture。
-  只在连接关系确实有助于解释内容时选图示页；节点与连线须来自材料，不凭空编造。
+  页面涉及流程步骤、办理顺序、时间阶段、组织层级或系统架构时，必须优先设为 process，
+  并在 blocks.process 或 diagram_nodes/diagram_edges 中给出可绘制的结构。时间阶段可用
+  drawio_kind=process 表示阶段推进，组织层级用 drawio_kind=organization。
+  页面涉及有来源的数值对比时，必须优先设为 data（指标卡）或 chart（可绘制图表），
+  不能只把数字写进 content.points。缺少真实数值时不要编造数据，可用 process 展示关系。
+  严禁把适合图示或数据展示的页面全部堆成纯文字 content；节点与连线须来自材料，不凭空编造。
 - summary 总结页：title、points（2~4 条结论/展望）
 - closing 结束页（{closing_rule}）：title（如"谢谢聆听，请批评指正"）
 
