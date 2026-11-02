@@ -41,7 +41,7 @@ from app.application.writing.quality_policy import (
     retry_prompt,
 )
 from app.application.writing.sectioned_generation_service import SectionedGenerationWritingTaskService
-from app.application.writing.section_policy import is_speech_type
+from app.application.writing.section_policy import brief_length_range, is_speech_type
 from app.application.writing.task_service import REVISE_MODES, _sse
 from app.core.timeutil import now_local
 from app.core.config import settings
@@ -438,7 +438,13 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         """改写候选；D 级按 quality_policy 的针对性动作最多修复两次。"""
         candidate = await self._llm_revise_once_async(prompt, sources, attachment_ctx, user_id)
         topic = str((ctx or {}).get("title") or (ctx or {}).get("topic") or "")
-        quality = quality_result(candidate, topic=topic)
+        # 文种/目标字数必须带进质量门：缺了它们，偏短偏长判断对任何文种都退化成
+        # 800 字一把尺，改稿后「通知被写长」永远不会被提示。
+        quality_kwargs = {
+            "document_type": str((ctx or {}).get("document_type") or ""),
+            "word_count_target": (ctx or {}).get("word_count_target"),
+        }
+        quality = quality_result(candidate, topic=topic, **quality_kwargs)
         retry_no = 0
         while quality.get("level") == "D" and retry_no < MAX_QUALITY_RETRIES:
             retry_no += 1
@@ -452,7 +458,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 prompt, candidate, quality, retry_no, decision.action)
             candidate = await self._llm_revise_once_async(
                 repair_prompt, sources, attachment_ctx, user_id)
-            quality = quality_result(candidate, topic=topic)
+            quality = quality_result(candidate, topic=topic, **quality_kwargs)
         if quality.get("level") == "D":
             raise_quality_gate(quality, "生成结果连续两次修复后仍存在硬伤，未保存该版本。")
         return candidate
@@ -802,13 +808,29 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 )
             )
         )
-        if degenerate or compact_letter:
+        # 未指定字数的事务性公文（通知/请示/批复/通报/纪要）跑偏成年度方案时，
+        # 只给提示不压缩等于把问题留给用户；这里按文种惯例区间自动精简一次。
+        brief = brief_length_range(doc_type)
+        char_count = len(re.sub(r"\s+", "", candidate))
+        overlong_brief = bool(
+            brief and not word_target and not compact_letter
+            and char_count > int(brief[1] * 1.5)
+        )
+        if degenerate or compact_letter or overlong_brief:
             retries_used = 1
             if degenerate:
                 retry_instruction = instruction + (
                     "\n\n【重写要求】上一版只有章节标题和占位说明，是提纲不是公文。"
                     "逐节展开为完整段落，不得出现‘略’‘待补充’等占位文字。")
                 reason = "检测到初稿只有提纲，已自动重写为完整成文。"
+            elif overlong_brief:
+                retry_instruction = instruction + (
+                    f"\n\n【精简要求】上一版 {char_count} 字，明显超出{doc_type}的常规篇幅。"
+                    f"按 {brief[0]}-{brief[1]} 字重写：保留发文缘由、具体事项、执行要求"
+                    "（含时限和责任单位）三部分，删去工作背景铺陈、年度任务部署以及"
+                    "“加强领导”“督导考核”一类泛化章节，能合并的事项合并成一条。")
+                reason = (
+                    f"检测到{doc_type}篇幅超出常规（{char_count} 字），已自动精简。")
             else:
                 target_rule = (
                     f"仍然不少于 {word_target} 字，同时把一级条目合并到 3-5 个。"
@@ -820,14 +842,21 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             try:
                 retried = self._clean_markdown(await self._llm_draft_async(
                     retry_instruction, sources, attachment_ctx, user_id, template=template))
-                if retried.strip() and not detect_outline_degeneration(retried):
+                acceptable = bool(retried.strip()) and not detect_outline_degeneration(retried)
+                if overlong_brief:
+                    # 只接受确实变短的版本：重写反而更长说明模型没听进去，
+                    # 保留原稿并让质量门给出「偏长」提示，而不是悄悄换成更长的稿。
+                    acceptable = acceptable and (
+                        len(re.sub(r"\s+", "", retried)) < char_count)
+                if acceptable:
                     candidate = retried
                     reasons.append(reason)
             except Exception:
                 pass
 
         quality = quality_result(
-            candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
+            candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""),
+            document_type=doc_type, word_count_target=word_target)
         topic = str(ctx.get("title") or ctx.get("topic") or "")
         while quality.get("level") == "D" and retries_used < MAX_QUALITY_RETRIES:
             retries_used += 1
@@ -845,7 +874,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             except Exception as exc:
                 logger.warning("[写作质量门] D 级修复重试调用失败: %s", exc)
                 break
-            quality = quality_result(candidate, topic=topic)
+            quality = quality_result(candidate, topic=topic,
+                                     document_type=doc_type,
+                                     word_count_target=word_target)
             reasons.append(
                 f"QualityGate 检测到硬伤，已按针对性策略自动修复第 {retries_used} 次"
                 f"（{decision.source} 决策）。")

@@ -403,7 +403,9 @@ class WritingAgentGraph:
             candidate = str(state.get("candidate") or "")
             ctx = dict(state.get("context") or {})
             quality = self.service._quality_result(
-                candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""))
+                candidate, topic=str(ctx.get("title") or ctx.get("topic") or ""),
+                document_type=str(ctx.get("document_type") or ""),
+                word_count_target=ctx.get("word_count_target"))
             content_check = ContentChecker().check(
                 candidate,
                 sources=list(state.get("sources") or []),

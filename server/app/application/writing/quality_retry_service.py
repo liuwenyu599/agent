@@ -37,8 +37,9 @@ class QualityRetryWritingTaskService(OpsWritingTaskService):
     """Block D-level drafts/revisions and retry with a *targeted* repair action."""
 
     @staticmethod
-    def _quality_result(text: str, topic: str = "") -> Dict[str, Any]:
-        return quality_result(text, topic)
+    def _quality_result(text: str, topic: str = "", **kwargs) -> Dict[str, Any]:
+        """透传文种/目标字数：缺了它们，长度判断对所有文种都退化成 800 字一把尺。"""
+        return quality_result(text, topic, **kwargs)
 
     @staticmethod
     def _critical_issue_lines(quality: Dict[str, Any]) -> List[str]:

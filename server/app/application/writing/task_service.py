@@ -26,7 +26,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.application.writing import task_parser
-from app.application.writing.section_policy import is_speech_type
+from app.application.writing.section_policy import brief_length_range, is_speech_type
 from app.application.writing.finalize_pipeline import finalize_text, persist_revision
 from app.application.documents.formatting import effective_formatting
 from app.infrastructure.database.models.knowledge import DocumentModel
@@ -875,6 +875,11 @@ class WritingTaskService:
             except (TypeError, ValueError):
                 target = 0
             if target > 0:
+                # 模板里的篇幅是"该文种一篇示例有多长"。通知模板默认 800 字，
+                # 直接当目标会把模型推向 1000+；按文种惯例区间收口后再下传。
+                rng = brief_length_range(str(effective.get("document_type") or ""))
+                if rng and target > rng[1]:
+                    target = rng[1]
                 effective["word_count_target"] = target
         return effective
 
@@ -939,12 +944,21 @@ class WritingTaskService:
             parts.append("主要工作内容：" + "、".join(ctx["key_facts"]) + "。")
         if ctx.get("requirements"):
             parts.append(f"写作要求：{ctx['requirements']}。")
-        target = ctx.get("word_count_target") or (template or {}).get("word_count")
+        doc_type = str(ctx.get("document_type") or "")
+        explicit_target = ctx.get("word_count_target")
+        target = explicit_target or (template or {}).get("word_count")
         if target and not outline_only:
             try:
                 target = max(50, min(100000, int(target)))
             except (TypeError, ValueError):
                 target = None
+        if target and not explicit_target:
+            # 模板里的篇幅是「该文种的一篇示例有多长」，不等于用户点名要的字数。
+            # 通知模板默认 800 字，模型会照着铺到 1000+，模板反而成了撑长的依据；
+            # 按事务性文种的惯例区间收口。用户显式给的字数从不夹紧。
+            rng = brief_length_range(doc_type)
+            if rng and target > rng[1]:
+                target = rng[1]
         if target:
             if outline_only:
                 parts.append(f"后续成稿的目标篇幅约 {target} 字；本次只输出提纲。")
@@ -954,6 +968,18 @@ class WritingTaskService:
                     "按事项的重要程度分配各部分篇幅，写足必要事实、措施与执行要求；"
                     "短文不硬拆章节，长文不靠套话和重复段落凑字数。"
                     "用户另有明确篇幅或压缩要求时以本次要求为准。"
+                )
+        elif not outline_only:
+            # 用户没给字数、也没有模板可参照时，给一个文种惯例区间作锚点。
+            # 缺了这段，35B 对「通知」没有篇幅概念，会写成上千字的年度方案。
+            rng = brief_length_range(doc_type)
+            if rng:
+                parts.append(
+                    f"正文篇幅按{doc_type}的常规体例控制，通常 {rng[0]}-{rng[1]} 字"
+                    "（不计标题、主送、落款和日期）。"
+                    "写清发文缘由、具体事项和执行要求（含时限、责任单位）即收束；"
+                    "不铺陈工作背景，不展开年度任务部署，不增设无实质内容的章节。"
+                    "用户另有明确篇幅要求时以本次要求为准。"
                 )
         if template:
             parts.append(
@@ -965,7 +991,6 @@ class WritingTaskService:
         if ctx.get("tone"):
             parts.append(f"语气风格：{ctx['tone']}。")
         if not outline_only:
-            doc_type = str(ctx.get("document_type") or "")
             original_request = original_request or str(ctx.get("requirements") or "")
             wants_sections = any(cue in original_request for cue in ("小标题", "分章节", "分节", "分条", "一二三"))
             if doc_type == "函":
@@ -995,7 +1020,21 @@ class WritingTaskService:
                 )
                 ending_rule = ""
             else:
-                length_rule = "3) 按文种组织必要结构，避免机械凑章节；除用户另有字数要求外，以完整、精炼为准；\n"
+                brief_rng = brief_length_range(doc_type)
+                if brief_rng and explicit_target:
+                    length_rule = (
+                        f"3) {doc_type}是一事一文的文种：按用户指定字数写足，"
+                        "字数要通过把每件事写实写细来达标，不得靠增加章节条目凑字数；\n"
+                    )
+                elif brief_rng:
+                    length_rule = (
+                        f"3) {doc_type}是一事一文的文种：发文缘由一两句交代清楚，"
+                        "具体事项逐条写实（时间、地点、对象、办理方式、报送时限），"
+                        "按上文篇幅执行；不铺陈工作背景，不罗列全年任务，"
+                        "不设“加强领导”“督导考核”式空泛章节；\n"
+                    )
+                else:
+                    length_rule = "3) 按文种组织必要结构，避免机械凑章节；除用户另有字数要求外，以完整、精炼为准；\n"
                 ending_rule = ""
             if is_speech_type(doc_type) and not wants_sections:
                 structure_rule = "按现场讲话体例写连贯自然段，不硬设公文章节标题；\n"

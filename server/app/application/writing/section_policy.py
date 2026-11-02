@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 # 现场宣读类文种：致辞、讲话、发言、主持词。它们按自然段推进，不套公文小标题。
 SPEECH_KINDS: tuple[str, ...] = ("致辞", "讲话", "发言", "主持词")
@@ -16,6 +16,32 @@ LONG_DOC_TYPES = {
     "报告", "工作报告", "工作情况报告", "工作总结", "总结", "方案", "实施方案",
     "工作方案", "调研报告",
 }
+
+# 事务性公文（一事一文）的常规正文篇幅，单位：字，不含标题/主送/落款/日期。
+# 用户不指定字数时，模型对「通知」没有任何篇幅锚点，会按训练语料里的长篇模板
+# 铺成年度方案（实测 35B 常出 1000+ 字）。这里给出文种惯例区间作为锚点，
+# 让「能合并的事项不拆分、说清即收束」成为默认行为，而不是等用户来纠。
+# 只收录短篇事务文种；报告、方案、总结等长篇文种不设默认，保持自由篇幅。
+BRIEF_LENGTH_RANGES: Dict[str, Tuple[int, int]] = {
+    "通知": (450, 650),
+    "请示": (400, 600),
+    "批复": (300, 500),
+    "通报": (500, 800),
+    "会议纪要": (600, 900),
+    "纪要": (600, 900),
+}
+
+
+def brief_length_range(document_type: str) -> Optional[Tuple[int, int]]:
+    """事务性公文的常规篇幅区间；长篇文种或未知文种返回 None（不擅自限长）。"""
+    dt = (document_type or "").strip()
+    if not dt or dt in LONG_DOC_TYPES:
+        return None
+    for key, rng in BRIEF_LENGTH_RANGES.items():
+        if key in dt:
+            return rng
+    return None
+
 
 # 分节计划模型不可用时的确定性兜底骨架。heading 一律为空：不硬塞报告式小标题，
 # 只声明「本节写什么」，层次交给模型按文种体例决定。

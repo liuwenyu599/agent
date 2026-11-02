@@ -19,11 +19,19 @@ def test_notification_template_has_concrete_outline():
 
 
 def test_every_builtin_template_gets_length_and_genre_rules():
+    from app.application.writing.section_policy import brief_length_range
+
     svc = WritingTaskService.__new__(WritingTaskService)
     for template in BUILTIN_TEMPLATES:
         prompt = svc._build_draft_instruction(
             {"document_type": template["name"], "history": []}, False, template)
-        assert f"正文目标约 {template['word_count']} 字" in prompt, template["name"]
+        # 模板篇幅是「该文种一篇示例有多长」，事务性文种（通知/请示/批复…）的模板
+        # 默认值偏长，会按惯例区间收口；长篇文种照模板值原样下传。
+        expected = template["word_count"]
+        rng = brief_length_range(template["name"])
+        if rng:
+            expected = min(expected, rng[1])
+        assert f"正文目标约 {expected} 字" in prompt, template["name"]
         assert "按所选文种写作" in prompt, template["name"]
         assert "不输出空字段标签" in prompt, template["name"]
 

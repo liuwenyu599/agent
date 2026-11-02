@@ -571,7 +571,7 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
             async def _regenerate_if_needed_async(self, *_args):
                 return _args[-2], None
 
-            def _quality_result(self, _candidate, topic=""):
+            def _quality_result(self, _candidate, topic="", **_kwargs):
                 self.reviews += 1
                 if mode == "repair" and self.reviews <= 2:
                     return {"level": "D", "issues": []}
@@ -707,7 +707,7 @@ def test_review_node_keeps_user_content_rules_advisory():
 
         class FakeService:
             @staticmethod
-            def _quality_result(_candidate, topic=""):
+            def _quality_result(_candidate, topic="", **_kwargs):
                 return {"level": "A", "passed": True, "issues": []}
 
         store = AgentRunStore(db)

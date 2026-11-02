@@ -16,7 +16,7 @@ from app.application.writing.postprocessor import (
     detect_repetition,
     detect_truncation,
 )
-from app.application.writing.section_policy import is_speech_type
+from app.application.writing.section_policy import brief_length_range, is_speech_type
 
 MIN_BODY_CHARS = 800
 
@@ -84,6 +84,7 @@ class QualityGate:
                 review.append("缺少成文日期")
 
         char_count = len(re.sub(r"\s+", "", text))
+        brief = brief_length_range(document_type)
         min_chars = MIN_BODY_CHARS
         if "函" in document_type:
             min_chars = 200
@@ -92,12 +93,21 @@ class QualityGate:
         # 判成"偏短"——而偏短本是 B 级提示，不该在这种文种上无端触发。
         elif is_speech_type(document_type):
             min_chars = 300
+        elif brief:
+            # 通知/请示/批复同理：一文一事，500 字可能是完全合格的稿子。
+            min_chars = brief[0]
         if word_count_target:
             min_chars = max(100, int(word_count_target * 0.8))
         if char_count < min_chars:
             review.append(f"正文偏短（{char_count} 字 < {min_chars}）")
         if word_count_target and char_count > int(word_count_target * 1.3):
             review.append(f"正文偏长（{char_count} 字 > 目标 {word_count_target} 字的 130%）")
+        elif brief and char_count > int(brief[1] * 1.3):
+            # 未指定字数时按文种惯例区间判长：通知写到 1000+ 属于把通知
+            # 写成了年度方案，提示改用可核对的成果口径压缩。
+            review.append(
+                f"正文偏长（{char_count} 字，{document_type}通常 {brief[0]}-{brief[1]} 字）"
+            )
 
         # 主题相关性：主题词至少出现 2 次
         if topic and not body_only:
