@@ -255,7 +255,8 @@ class RagService:
         return results
 
     def search_examples(self, query: str, user_id: str, top_k: int = 2,
-                        max_chars: int = 2500, dept_code: str = None) -> list:
+                        max_chars: int = 2500, dept_code: str = None,
+                        document_type: str = "") -> list:
         dept_code = self._dept_code_of(user_id)
         admin = self._is_admin(user_id)
         scopes = self.resolve_scopes(dept_code, admin, user_id)
@@ -273,18 +274,69 @@ class RagService:
                     if doc_id in seen:
                         continue
                     doc = self.db.get(DocumentModel, doc_id)
-                    if not self._document_is_accessible(doc, kb_ids) or not getattr(doc, "content", None):
+                    if (not self._document_is_accessible(doc, kb_ids)
+                            or not getattr(doc, "content", None)
+                            or not admin and (getattr(doc, "department_code", "") or "")
+                            not in ("", dept_code)):
                         logger.warning("[RAG] 丢弃越权/失效范文索引命中: doc=%s", doc_id)
                         continue
+                    if document_type and not self._same_genre(doc, document_type):
+                        continue
                     seen.add(doc_id)
-                    examples.append({"title": doc.title, "content": doc.content[:max_chars]})
+                    examples.append({"title": doc.title, "content": doc.content[:max_chars],
+                                     "doc_type": doc.doc_type})
                     if len(examples) >= top_k:
                         break
                 if examples:
                     return examples
             except Exception as exc:
                 logger.warning("[RAG] 向量范文检索失败，回退关键词: %s", exc)
-        return self._keyword_examples(query, kb_ids, top_k, max_chars)
+        return self._keyword_examples(query, kb_ids, top_k, max_chars,
+                                      document_type, dept_code, admin)
+
+    @staticmethod
+    def _same_genre(doc: DocumentModel, kind: str) -> bool:
+        return (doc.doc_type == kind or
+                doc.doc_type == "公文" and kind in (doc.title or ""))
+
+    def exemplar_length_range(self, user_id: str, document_type: str,
+                              selected_kb_ids: list[str] | None = None) -> tuple[int, int] | None:
+        """Use complete, published documents of the same form within this user's KB scope."""
+        from statistics import median
+        kind = (document_type or "").strip()
+        if not kind or kind == "公文":
+            return None
+        dept = self._dept_code_of(user_id)
+        allowed = set(self._get_accessible_kb_ids(user_id, dept, self._is_admin(user_id)))
+        if selected_kb_ids:
+            allowed.intersection_update(selected_kb_ids)
+        if not allowed:
+            return None
+        filters = [
+            DocumentModel.kb_id.in_(allowed), DocumentModel.status == "published",
+            DocumentModel.content.isnot(None),
+            or_(DocumentModel.doc_type == kind,
+                (DocumentModel.doc_type == "公文") & DocumentModel.title.contains(kind)),
+        ]
+        if not self._is_admin(user_id):
+            filters.append(or_(DocumentModel.department_code == "",
+                               DocumentModel.department_code == dept))
+        docs = self.db.scalars(select(DocumentModel).where(
+            *filters).order_by(DocumentModel.updated_at.desc()).limit(120)).all()
+        lengths = []
+        for doc in docs:
+            if doc.doc_type != kind and not (doc.doc_type == "公文" and kind in (doc.title or "")):
+                continue
+            body = (doc.content or "").strip()
+            count = len(re.sub(r"\s+", "", body))
+            if 100 <= count <= 20000:
+                lengths.append(count)
+            if len(lengths) >= 12:
+                break
+        if len(lengths) < 2:
+            return None
+        center = int(median(lengths))
+        return max(100, int(center * .8)), int(center * 1.2)
 
     @staticmethod
     def _expand_neighbors(chunk: ChunkModel) -> str:
@@ -349,7 +401,9 @@ class RagService:
         scored.sort(key=lambda item: item["score"], reverse=True)
         return scored[:top_k]
 
-    def _keyword_examples(self, query: str, kb_ids: List[str], top_k: int, max_chars: int) -> list:
+    def _keyword_examples(self, query: str, kb_ids: List[str], top_k: int,
+                          max_chars: int, document_type: str = "",
+                          dept_code: str = "", admin: bool = False) -> list:
         tokens = self._tokenize(query)
         if not tokens:
             return []
@@ -362,11 +416,17 @@ class RagService:
         ).all()
         scored = []
         for doc in docs:
-            count = sum(1 for token in tokens if token in (doc.content or ""))
+            if not admin and (getattr(doc, "department_code", "") or "") not in ("", dept_code):
+                continue
+            if document_type and not self._same_genre(doc, document_type):
+                continue
+            searchable = (doc.title or "") + "\n" + (doc.content or "")
+            count = sum(1 for token in tokens if token in searchable)
             if count == 0:
                 continue
             score = min(1.0, count / len(tokens))
             scored.append((score, doc))
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [{"title": doc.title, "content": doc.content[:max_chars]}
+        return [{"title": doc.title, "content": doc.content[:max_chars],
+                 "doc_type": doc.doc_type}
                 for _, doc in scored[:top_k]]

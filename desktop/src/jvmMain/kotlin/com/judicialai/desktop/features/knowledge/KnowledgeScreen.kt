@@ -101,10 +101,12 @@ fun KnowledgeScreen() {
     if (vm.docDialogId != null) {
         KnowledgeDocDialog(
             title = vm.docDialogTitle,
+            docType = vm.docDialogDocType,
             content = vm.docDialogContent,
             busy = vm.docDialogBusy,
             editable = vm.currentKb?.let(::canWriteKb) ?: false,
             onTitleChange = { vm.docDialogTitle = it },
+            onDocTypeChange = { vm.docDialogDocType = it },
             onContentChange = { vm.docDialogContent = it },
             onSave = { vm.saveDocument() },
             onClose = { vm.closeDocument() },
@@ -124,10 +126,12 @@ fun KnowledgeScreen() {
 @Composable
 fun KnowledgeDocDialog(
     title: String,
+    docType: String,
     content: String,
     busy: Boolean,
     editable: Boolean = true,
     onTitleChange: (String) -> Unit,
+    onDocTypeChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
@@ -147,6 +151,15 @@ fun KnowledgeDocDialog(
         OutlinedTextField(
             value = title, onValueChange = onTitleChange,
             label = { Text("标题", fontSize = 13.sp) }, singleLine = true,
+            enabled = editable,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(fontSize = 14.sp, color = Ink),
+            shape = RoundedCornerShape(Dimens.radiusControl),
+            colors = docFieldColors(),
+        )
+        OutlinedTextField(
+            value = docType, onValueChange = onDocTypeChange,
+            label = { Text("文种（可修改）", fontSize = 13.sp) }, singleLine = true,
             enabled = editable,
             modifier = Modifier.fillMaxWidth(),
             textStyle = TextStyle(fontSize = 14.sp, color = Ink),

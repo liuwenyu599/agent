@@ -25,7 +25,7 @@ class ReviewRequest(BaseModel):
 
 class DocUpdateRequest(BaseModel):
     title: Optional[str] = None
-    doc_type: Optional[str] = None
+    doc_type: Optional[str] = Field(default=None, min_length=1, max_length=50)
     status: Optional[str] = None
     department: Optional[str] = None
     doc_number: Optional[str] = None

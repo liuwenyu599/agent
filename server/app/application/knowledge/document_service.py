@@ -39,18 +39,26 @@ class DocumentService:
         self.legal_chunker = LegalChunker()
         self.official_chunker = OfficialChunker()
 
-    def _detect_doc_type(self, text: str) -> str:
+    def _detect_doc_type(self, text: str, title: str = "") -> str:
         sample = text[:10000]
-        if re.search(r'第[一二三四五六七八九十百千零\d]+条[、\.\s]', sample):
-            if any(k in sample for k in ["办法", "规定", "条例", "细则", "章程", "通则", "规则"]):
-                return "法规"
-        if any(k in sample for k in ["笔录", "告知书", "决定书", "执法", "行政处罚", "责令改正"]):
+        from app.application.writing.task_parser import explicit_document_type
+        clean_title = re.sub(r"\.(?:docx?|pdf|wps|txt|md|rtf|odt|ofd)$", "", title or "", flags=re.I)
+        clean_title = re.sub(r"[（(][^）)]{0,20}[）)]$", "", clean_title)
+        detected = explicit_document_type(clean_title)
+        if detected:
+            return detected
+        if any(k in clean_title for k in ["笔录", "告知书", "决定书", "行政处罚", "责令改正"]):
             return "执法文书"
-        official_keywords = ["通知", "通报", "报告", "请示", "批复", "函", "纪要", "决定", "意见",
-                             "工作总结", "工作计划", "实施方案", "工作要点", "年度总结", "述职报告",
-                             "会议纪要", "会议记录", "领导讲话", "调研报告", "情况汇报"]
-        if any(k in sample for k in official_keywords):
-            return "公文"
+        heading = next((line.strip() for line in sample.splitlines()[:8]
+                        if line.strip()), "")
+        detected = explicit_document_type(heading)
+        if detected:
+            return detected
+        if re.search(r'第[一二三四五六七八九十百千零\d]+条[、\.\s]', sample):
+            if any(k in clean_title + heading for k in ["办法", "规定", "条例", "细则", "章程", "通则", "规则"]):
+                return "法规"
+        if any(k in sample for k in ["笔录", "告知书", "决定书", "行政处罚", "责令改正"]):
+            return "执法文书"
         return "公文"
 
     # ========== 公共入库流程（文件 / 网页共用） ==========
@@ -65,7 +73,7 @@ class DocumentService:
                           doc_number: Optional[str] = None) -> Dict:
         doc_id = new_doc_id()
 
-        auto_doc_type = self._detect_doc_type(text)
+        auto_doc_type = self._detect_doc_type(text, title)
         final_doc_type = doc_type if doc_type else auto_doc_type
 
         if final_doc_type == "法规":

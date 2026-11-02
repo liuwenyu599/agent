@@ -24,7 +24,8 @@ def test_explicit_formula_is_repaired():
 
 
 class _FakeRag:
-    def search_examples(self, query, user_id, top_k=2, max_chars=2600):
+    def search_examples(self, query, user_id, top_k=2, max_chars=2600,
+                        document_type=""):
         return [
             {
                 "title": "白云区司法局工作情况报告",
@@ -76,6 +77,23 @@ def test_speech_does_not_copy_a_scheme_as_style_exemplar():
     svc = GroundedWritingTaskService.__new__(GroundedWritingTaskService)
     svc.rag = WrongFormRag()
     assert svc._example_style_block("文种：致辞稿\n主题：法治宣传活动", "u1") == ""
+
+
+def test_notice_style_uses_notice_exemplar_and_keeps_structural_cues():
+    class Rag:
+        def search_examples(self, **kwargs):
+            return [
+                {"title": "关于工作的方案", "doc_type": "方案", "content": "一、目标任务"},
+                {"title": "关于会议安排的通知", "doc_type": "通知",
+                 "content": "各司法所：\n请按时参会。\n联系人：办公室。\n测试司法局"},
+            ]
+
+    svc = GroundedWritingTaskService.__new__(GroundedWritingTaskService)
+    svc.rag = Rag()
+    block = svc._example_style_block("文种：通知\n主题：会议安排", "u1")
+    assert "各司法所" in block and "联系人" in block
+    assert "一、目标任务" not in block
+    assert "主送、落款和联系人" in block
 
 
 def test_draft_retrieves_topic_and_norms_with_same_knowledge_scope():

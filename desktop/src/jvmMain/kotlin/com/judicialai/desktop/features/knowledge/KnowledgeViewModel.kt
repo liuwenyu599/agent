@@ -62,6 +62,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     var docDialogId by mutableStateOf<String?>(null)
         private set
     var docDialogTitle by mutableStateOf("")
+    var docDialogDocType by mutableStateOf("")
     var docDialogContent by mutableStateOf("")
     var docDialogBusy by mutableStateOf(false)
         private set
@@ -274,6 +275,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
                     if (d != null) {
                         docDialogId = docId
                         docDialogTitle = d["title"].str()
+                        docDialogDocType = d["doc_type"].str().ifBlank { "公文" }
                         docDialogContent = d["content"].str()
                     } else {
                         status = "文档内容为空"
@@ -288,6 +290,7 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun closeDocument() {
         docDialogId = null
         docDialogTitle = ""
+        docDialogDocType = ""
         docDialogContent = ""
     }
 
@@ -295,9 +298,14 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun saveDocument() {
         val id = docDialogId ?: return
         if (docDialogBusy) return
+        if (docDialogDocType.isBlank()) {
+            status = "请填写文种，例如通知、请示或讲话稿"
+            return
+        }
         docDialogBusy = true
         scope.launch {
-            when (val r = repo.updateDocument(id, docDialogTitle, docDialogContent)) {
+            when (val r = repo.updateDocument(id, docDialogTitle, docDialogContent,
+                    docDialogDocType.trim())) {
                 is ApiResult.Ok -> {
                     status = "已保存，检索内容已同步更新"
                     closeDocument()

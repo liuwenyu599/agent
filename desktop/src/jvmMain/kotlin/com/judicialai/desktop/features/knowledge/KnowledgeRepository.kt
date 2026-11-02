@@ -76,11 +76,12 @@ class KnowledgeRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
-    /** PUT /knowledge/documents/{id} 编辑标题/正文；正文变化时后端重新分块并重建该文档向量 */
-    suspend fun updateDocument(docId: String, title: String?, content: String?) =
+    /** PUT /knowledge/documents/{id} 编辑标题/文种/正文；正文变化时重建该文档向量 */
+    suspend fun updateDocument(docId: String, title: String?, content: String?, docType: String? = null) =
         api.put(Endpoints.Knowledge.document(docId), buildMap<String, Any?> {
             if (title != null) put("title", title)
             if (content != null) put("content", content)
+            if (docType != null) put("doc_type", docType)
         })
 
     suspend fun upload(kbId: String, files: List<File>) =
