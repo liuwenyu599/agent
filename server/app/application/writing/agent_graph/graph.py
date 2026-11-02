@@ -166,9 +166,9 @@ class WritingAgentGraph:
             if not ctx.get("title"):
                 ctx["title"] = task_parser.build_title(ctx) or ""
             self.service._complete_default_authority(ctx)
-            if ctx.get("template_id"):
-                template = self.service._load_template(ctx["template_id"])
-                ctx = self.service._effective_draft_context(ctx, template)
+            template = (self.service._load_template(ctx["template_id"])
+                        if ctx.get("template_id") else None)
+            ctx = self.service._effective_draft_context(ctx, template, str(state["user_id"]))
             task_parser.compute_missing(ctx)
             section_plan = []
             if self.service._should_section(ctx, bool(state.get("outline_only"))):

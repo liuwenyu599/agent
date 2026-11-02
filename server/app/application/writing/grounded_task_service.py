@@ -43,6 +43,7 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
             "document_number_enabled",
             "document_number",
             "word_count_target",
+            "word_count_max",
         )
         return {k: parsed[k] for k in allowed if k in parsed}
 
@@ -86,26 +87,24 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         """
         if not self.rag:
             return ""
+        requested_type = self._requested_type(query)
         try:
             examples = self.rag.search_examples(
                 query=self._exemplar_query(query),
                 user_id=user_id,
                 top_k=max(8, self._EXCERPT_TOP_K),
                 max_chars=2500,
+                document_type=requested_type,
             ) or []
         except Exception:
             self._rag_failed = True
             examples = []
-        # A semantically nearby work plan is a harmful style exemplar for a speech.
-        # Keep only matching speech forms; otherwise let the model write without an exemplar.
-        requested_type = self._requested_type(query)
-        if any(kind in requested_type for kind in ("致辞", "讲话", "发言")):
-            examples = [ex for ex in examples if any(
-                kind in str(ex.get("title") or "")
-                for kind in ("致辞", "讲话", "发言")
+        # Nearby topics in a different genre are poor format examples.
+        if requested_type:
+            examples = [ex for ex in examples if (
+                str(ex.get("doc_type") or "") == requested_type
+                or requested_type in str(ex.get("title") or "")
             )]
-        elif requested_type:
-            examples.sort(key=lambda ex: requested_type not in str(ex.get("title") or ""))
         examples = examples[:self._EXCERPT_TOP_K]
         if not examples:
             return ""
@@ -129,7 +128,8 @@ class GroundedWritingTaskService(SemanticWritingTaskService):
         return (
             "\n\n【知识库范文参考】\n"
             + "\n\n".join(parts)
-            + "\n\n使用方式：学习其章节组织、句式、过渡与本单位行文习惯，"
+            + "\n\n使用方式：学习同文种范文的章节组织、主送、落款和联系人等要素"
+            "是否出现及其位置，并根据本次任务决定是否需要；学习句式、过渡与本单位行文习惯，"
             "可复用其中属于本单位的专有表述；"
             "但严禁把范文里具体的数据、日期、人名、文号与个案事实当作本次事实"
             "照搬——本次事实只能来自用户输入、附件与本轮检索到的资料。"

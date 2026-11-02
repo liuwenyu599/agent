@@ -142,6 +142,8 @@ def empty_context() -> Dict[str, Any]:
         "requirements": None,
         "tone": None,
         "word_count_target": None,
+        "word_count_source": None,
+        "word_count_max": None,
         "document_number_enabled": False,
         "document_number": None,
         "document_date": None,
@@ -229,6 +231,8 @@ def parse_message(message: str) -> Dict[str, Any]:
     m = WORD_COUNT_RE.search(msg)
     if m and not re.search(r"第[一二三四五六七八九十0-9]+(部分|段|章)|这段|那段|一段", msg):
         upd["word_count_target"] = int(m.group(1))
+        if re.search(r"(?:以内|以下|不超过|最多|至多)", msg[max(0, m.start()-5):m.end()+8]):
+            upd["word_count_max"] = int(m.group(1))
 
     m = re.search(r"主要是([^，。；\n]{2,60})", msg)
     if m:

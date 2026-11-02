@@ -429,10 +429,14 @@ class WritingTaskService:
         """用户直接编辑左侧结构化字段，同步进 task context。"""
         t = self._get_owned(task_id, user_id)
         ctx = dict(t.context or {})
-        allowed = set(task_parser.empty_context().keys())
+        allowed = set(task_parser.empty_context().keys()) - {"word_count_source"}
         for k, v in patch.items():
             if k in allowed:
                 ctx[k] = v
+        if "word_count_target" in patch:
+            ctx["word_count_source"] = "user" if patch["word_count_target"] else None
+            if "word_count_max" not in patch:
+                ctx.pop("word_count_max", None)
         # 模板绑定：由 template_id 解析名称，前端无需关心
         if "template_id" in patch:
             tmpl = self._load_template(ctx.get("template_id")) if ctx.get("template_id") else None
@@ -576,7 +580,7 @@ class WritingTaskService:
     def _complete_default_authority(self, ctx: Dict[str, Any]) -> None:
         """Use the configured issuing organization for official documents when omitted."""
         doc_type = str(ctx.get("document_type") or "")
-        if not ctx.get("authority") and doc_type in task_parser.FORMAL_DOC_TYPES:
+        if not ctx.get("authority") and (doc_type in task_parser.FORMAL_DOC_TYPES or "通知" in doc_type):
             ctx["authority"] = self._default_authority() or None
 
     def _finalize_draft(self, t, ctx: Dict[str, Any], text: str,
@@ -860,27 +864,41 @@ class WritingTaskService:
         t = re.sub(r"\n{3,}", "\n\n", t)                         # 多余空行
         return t.strip()
 
-    @staticmethod
-    def _effective_draft_context(ctx: Dict[str, Any],
-                                 template: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _effective_draft_context(self, ctx: Dict[str, Any],
+                                 template: Optional[Dict[str, Any]],
+                                 user_id: str = "") -> Dict[str, Any]:
         """Use the selected template's length for every generation path.
 
         Keep the task's saved context untouched; a later explicit user target
         must always take precedence over the template default.
         """
         effective = dict(ctx)
+        model_target = None
+        if effective.get("word_count_source") == "model":
+            model_target = effective.pop("word_count_target", None)
+        if (user_id and not effective.get("word_count_target")
+                and getattr(self, "rag", None) and ctx.get("document_type")):
+            try:
+                rng = self.rag.exemplar_length_range(
+                    user_id,
+                    str(ctx["document_type"]), ctx.get("kb_ids") or None)
+                if rng:
+                    effective["reference_length_range"] = list(rng)
+                    effective["word_count_target"] = (rng[0] + rng[1]) // 2
+                    effective["word_count_source"] = "knowledge"
+            except Exception as exc:
+                logger.warning("同类范文篇幅查询失败，使用模板/常规篇幅: %s", type(exc).__name__)
         if not effective.get("word_count_target") and template:
             try:
                 target = int(template.get("word_count") or 0)
             except (TypeError, ValueError):
                 target = 0
             if target > 0:
-                # 模板里的篇幅是"该文种一篇示例有多长"。通知模板默认 800 字，
-                # 直接当目标会把模型推向 1000+；按文种惯例区间收口后再下传。
-                rng = brief_length_range(str(effective.get("document_type") or ""))
-                if rng and target > rng[1]:
-                    target = rng[1]
                 effective["word_count_target"] = target
+                effective["word_count_source"] = "template"
+        if (not effective.get("word_count_target") and model_target
+                and not brief_length_range(str(effective.get("document_type") or ""))):
+            effective["word_count_target"] = model_target
         return effective
 
     def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool,
@@ -952,23 +970,23 @@ class WritingTaskService:
                 target = max(50, min(100000, int(target)))
             except (TypeError, ValueError):
                 target = None
-        if target and not explicit_target:
-            # 模板里的篇幅是「该文种的一篇示例有多长」，不等于用户点名要的字数。
-            # 通知模板默认 800 字，模型会照着铺到 1000+，模板反而成了撑长的依据；
-            # 按事务性文种的惯例区间收口。用户显式给的字数从不夹紧。
-            rng = brief_length_range(doc_type)
-            if rng and target > rng[1]:
-                target = rng[1]
         if target:
             if outline_only:
                 parts.append(f"后续成稿的目标篇幅约 {target} 字；本次只输出提纲。")
             else:
+                origin = ("知识库同类文" if ctx.get("reference_length_range") else "本次要求/模板")
                 parts.append(
-                    f"正文目标约 {target} 字（不计标题、主送、落款和日期）。"
+                    f"正文目标约 {target} 字（依据：{origin}；不计标题、主送、落款和日期）。"
                     "按事项的重要程度分配各部分篇幅，写足必要事实、措施与执行要求；"
                     "短文不硬拆章节，长文不靠套话和重复段落凑字数。"
                     "用户另有明确篇幅或压缩要求时以本次要求为准。"
                 )
+                if ctx.get("reference_length_range"):
+                    low, high = ctx["reference_length_range"]
+                    parts.append(f"同文种知识库材料的参考篇幅为 {low}-{high} 字，"
+                                 "仅作篇幅和体例参考，不复制其中的事实、姓名和日期。")
+                if ctx.get("word_count_max"):
+                    parts.append(f"用户要求的硬上限：正文不得超过 {ctx['word_count_max']} 字。")
         elif not outline_only:
             # 用户没给字数、也没有模板可参照时，给一个文种惯例区间作锚点。
             # 缺了这段，35B 对「通知」没有篇幅概念，会写成上千字的年度方案。
@@ -1082,7 +1100,10 @@ class WritingTaskService:
                              ctx: Dict[str, Any]) -> str:
         parts = [f"修改方式：{mode_desc}。", f"用户修改要求：{instruction}。"]
         if ctx.get("word_count_target"):
-            parts.append(f"全文控制在 {ctx['word_count_target']} 字左右。")
+            if ctx.get("word_count_max"):
+                parts.append(f"全文不得超过 {ctx['word_count_max']} 字，不计标题、主送、落款和日期。")
+            else:
+                parts.append(f"全文控制在 {ctx['word_count_target']} 字左右。")
         if selection:
             parts.append(f"只修改以下选中段落：\n「{selection}」\n其余内容原样保留。")
         parts.append(f"当前文档全文：\n{current}")

@@ -298,6 +298,7 @@ class WritingViewModel(
     var docDialogId by mutableStateOf<String?>(null)
         private set
     var docDialogTitle by mutableStateOf("")
+    var docDialogDocType by mutableStateOf("")
     var docDialogContent by mutableStateOf("")
     var docDialogBusy by mutableStateOf(false)
         private set
@@ -1304,6 +1305,7 @@ class WritingViewModel(
                     if (d != null) {
                         docDialogId = docId
                         docDialogTitle = d["title"].str()
+                        docDialogDocType = d["doc_type"].str()
                         docDialogContent = d["content"].str()
                     } else {
                         status = "文档内容为空"
@@ -1318,6 +1320,7 @@ class WritingViewModel(
     fun closeDocument() {
         docDialogId = null
         docDialogTitle = ""
+        docDialogDocType = ""
         docDialogContent = ""
     }
 

@@ -102,7 +102,7 @@ class QualityGate:
             review.append(f"正文偏短（{char_count} 字 < {min_chars}）")
         if word_count_target and char_count > int(word_count_target * 1.3):
             review.append(f"正文偏长（{char_count} 字 > 目标 {word_count_target} 字的 130%）")
-        elif brief and char_count > int(brief[1] * 1.3):
+        elif brief and not word_count_target and char_count > int(brief[1] * 1.3):
             # 未指定字数时按文种惯例区间判长：通知写到 1000+ 属于把通知
             # 写成了年度方案，提示改用可核对的成果口径压缩。
             review.append(

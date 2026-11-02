@@ -22,7 +22,7 @@ def _service() -> WritingTaskService:
 def test_notice_without_word_count_gets_genre_length_anchor():
     prompt = _service()._build_draft_instruction(
         {"document_type": "通知", "history": []}, False)
-    assert "450-650 字" in prompt
+    assert "500-600 字" in prompt
     assert "一事一文" in prompt
     assert "不展开年度任务部署" in prompt
 
@@ -31,21 +31,20 @@ def test_explicit_word_count_wins_over_genre_anchor():
     prompt = _service()._build_draft_instruction(
         {"document_type": "通知", "word_count_target": 1200, "history": []}, False)
     assert "正文目标约 1200 字" in prompt
-    assert "450-650 字" not in prompt
+    assert "500-600 字" not in prompt
 
 
-def test_template_length_is_clamped_to_brief_genre_range():
-    """通知模板默认 800 字 → 实际下传 650，否则模板成了撑长的依据。"""
+def test_selected_template_length_precedes_genre_fallback():
+    """An explicitly selected template is a stronger source than generic genre defaults."""
     svc = _service()
     prompt = svc._build_draft_instruction(
         {"document_type": "通知", "history": []}, False,
         {"name": "通知", "word_count": 800})
-    assert "正文目标约 650 字" in prompt
-    assert "正文目标约 800 字" not in prompt
+    assert "正文目标约 800 字" in prompt
 
     original = {"document_type": "通知"}
     context = svc._effective_draft_context(original, {"word_count": 800})
-    assert context["word_count_target"] == 650
+    assert context["word_count_target"] == 800
     # 不污染调用方上下文（任务里保存的仍是"用户没指定字数"）
     assert "word_count_target" not in original
 
@@ -57,6 +56,32 @@ def test_user_target_still_overrides_template_after_clamp():
     assert context["word_count_target"] == 3000
 
 
+def test_same_type_kb_length_precedes_template_and_user_precedes_both():
+    svc = _service()
+    class Rag:
+        def __init__(self):
+            self.calls = []
+        def exemplar_length_range(self, user_id, kind, kb_ids):
+            self.calls.append((user_id, kind, kb_ids))
+            return (480, 720)
+    svc.rag = Rag()
+    base = {"document_type": "通知", "kb_ids": ["selected"]}
+    effective = svc._effective_draft_context(base, {"word_count": 800}, "u1")
+    assert effective["word_count_target"] == 600
+    assert effective["reference_length_range"] == [480, 720]
+    assert "480-720 字" in svc._build_draft_instruction(effective, False)
+    assert svc.rag.calls == [("u1", "通知", ["selected"])]
+    assert "word_count_target" not in base
+    assert svc._effective_draft_context({**base, "word_count_target": 200},
+                                        {"word_count": 800}, "u1")["word_count_target"] == 200
+    inferred = {**base, "word_count_target": 1200, "word_count_source": "model"}
+    assert svc._effective_draft_context(inferred, {"word_count": 800}, "u1")["word_count_target"] == 600
+    svc.rag = None
+    fallback = svc._effective_draft_context(inferred, None, "u1")
+    assert not fallback.get("word_count_target")
+    assert "500-600 字" in svc._build_draft_instruction(fallback, False)
+
+
 def test_long_form_genre_keeps_free_length():
     prompt = _service()._build_draft_instruction(
         {"document_type": "工作总结", "history": []}, False)
@@ -64,8 +89,8 @@ def test_long_form_genre_keeps_free_length():
 
 
 def test_brief_range_only_covers_transactional_forms():
-    assert brief_length_range("通知") == (450, 650)
-    assert brief_length_range("工作通知") == (450, 650)
+    assert brief_length_range("通知") == (500, 600)
+    assert brief_length_range("工作通知") == (500, 600)
     assert brief_length_range("请示") == (400, 600)
     assert brief_length_range("报告") is None
     assert brief_length_range("工作总结") is None
@@ -88,7 +113,7 @@ def test_quality_gate_flags_overlong_notice_without_explicit_target():
 
 
 def test_quality_gate_accepts_conventional_notice_length():
-    body = "各司法所：\n\n" + _padded(14)
+    body = "各司法所：\n\n" + _padded(15)
     result = QualityGate().evaluate(body, body_only=True, document_type="通知")
     assert not any("正文偏长" in issue["message"] for issue in result["issues"])
     assert not any("正文偏短" in issue["message"] for issue in result["issues"])
@@ -118,6 +143,6 @@ def test_overlong_notice_is_compacted_once():
 
     assert calls, "超出常规篇幅应触发一次精简重写"
     assert "精简要求" in calls[0]
-    assert "450-650 字" in calls[0]
+    assert "500-600 字" in calls[0]
     assert candidate == short_draft
     assert reason and "精简" in reason

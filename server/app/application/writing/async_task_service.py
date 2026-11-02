@@ -505,6 +505,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         ctx["document_date"] = task_parser.parse_message(message).get("document_date")
         ctx["document_type"] = task_parser.resolved_document_type(
             message, ctx.get("document_type"))
+        if not ctx.get("word_count_source") and ctx.get("word_count_target"):
+            ctx["word_count_source"] = (
+                "user" if task_parser.parse_message(message).get("word_count_target") else "model")
 
         if not ctx.get("title"):
             derived = task_parser.build_title(ctx)
@@ -554,6 +557,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                         "document_number_enabled", "document_number", "document_date")
         task_parser.merge_context(ctx, {k: literal_plan[k] for k in literal_keys
                                         if k in literal_plan})
+        if ctx.get("word_count_target"):
+            ctx["word_count_source"] = (
+                "user" if literal_plan.get("word_count_target") else "model")
         ctx["document_date"] = literal_plan.get("document_date")
         ctx["document_type"] = task_parser.resolved_document_type(
             message, ctx.get("document_type"))
@@ -584,6 +590,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                            ("authority", "发文机关"), ("time_range", "时间范围"),
                            ("purpose", "用途"), ("topic", "主题"),
                            ("word_count_target", "字数目标")):
+            if key == "word_count_target" and ctx.get("word_count_source") == "model":
+                continue
             value = ctx.get(key)
             if value:
                 fields.append({"label": label, "value": str(value)})
@@ -747,6 +755,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         literal_changes = []
         if literal:
             literal_changes = task_parser.merge_context(ctx, literal)
+            if "word_count_target" in literal:
+                ctx["word_count_source"] = "user"
             task_parser.compute_missing(ctx)
         mode_desc = REVISE_MODES.get(mode, REVISE_MODES["revise"])
         prompt = self._build_revise_prompt(current, instruction, mode_desc, None, ctx)
@@ -759,6 +769,16 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         changes = task_parser.merge_context(ctx, task_parser.parse_message(instruction))
         task_parser.compute_missing(ctx)
         context_changes = list(dict.fromkeys([*literal_changes, *changes]))
+        max_chars = int(ctx.get("word_count_max") or 0)
+        if max_chars and len(re.sub(r"\s+", "", revised)) > max_chars:
+            retry_instruction = (f"上次正文超过用户明确要求的 {max_chars} 字上限。"
+                                 f"请压缩到不超过 {max_chars} 字，保留必要事实，不输出说明。")
+            revised = await self._llm_revise_async(
+                self._build_revise_prompt(revised, retry_instruction, mode_desc, None, ctx),
+                sources, attachment_ctx, user_id, ctx)
+            revised = self._canonicalize_body(revised or "", ctx)
+            if len(re.sub(r"\s+", "", revised)) > max_chars or not revised.strip():
+                raise HTTPException(status_code=422, detail=f"正文未能压缩到 {max_chars} 字以内，未保存新版本")
         if revised.strip() == current and current == (task.current_content or "").strip():
             self._claim_revision_state(task, user_id, expected_state)
             if context_changes:
@@ -777,6 +797,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         finalized = finalize_text(
             self, revised, ctx, sources, keep_previous_references=True)
         revised = finalized.text
+        if max_chars and len(re.sub(r"\s+", "", revised)) > max_chars:
+            raise HTTPException(status_code=422, detail=f"最终正文超过 {max_chars} 字，未保存新版本")
         version, suggestions_reset = persist_revision(
             self, task, ctx, revised, user_id,
             note=f"AI 修改：{instruction[:30]}",
@@ -1038,7 +1060,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         expected_state = (task.current_content, task.version_no)
         ctx = dict(task.context or {})
         template = self._load_template(ctx.get("template_id"))
-        ctx = self._effective_draft_context(ctx, template)
+        ctx = self._effective_draft_context(ctx, template, user_id)
         attachment_ctx = self._attachment_context(task, ctx)
         if self._should_section(ctx, outline_only):
             plan = await self._section_plan_async(ctx)
@@ -1153,7 +1175,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             expected_state = (task.current_content, task.version_no)
             ctx = dict(task.context or {})
             template = self._load_template(ctx.get("template_id"))
-            ctx = self._effective_draft_context(ctx, template)
+            ctx = self._effective_draft_context(ctx, template, user_id)
             attachment_ctx = self._attachment_context(task, ctx)
             if self._should_section(ctx, outline_only):
                 yield _sse({"type": "stage", "key": "planner", "label": "正在安排正文结构", "status": "running"})
@@ -1332,22 +1354,36 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         """
         msg = message or ""
         parsed = task_parser.parse_message(msg)
-        safe = ("word_count_target", "document_date", "document_number_enabled",
+        safe = ("word_count_target", "word_count_max", "document_date", "document_number_enabled",
                 "document_number", "authority", "recipient")
         update: Dict[str, Any] = {k: parsed[k] for k in safe
                                   if k in parsed and parsed[k] is not None}
         # 「写落款日期 / 补全落款日期」这类没给具体日期的请求 → 用今天，覆盖 LLM 幻觉的旧年份。
         if "document_date" not in update and _SIGN_DATE_RE.search(msg):
             update["document_date"] = local_date_string()
+        if "word_count_target" in update and "word_count_max" not in update:
+            update["word_count_max"] = None
         if not update:
             return []
         changes = task_parser.merge_context(ctx, update)
+        if "word_count_target" in update and update.get("word_count_max") is None:
+            ctx.pop("word_count_max", None)
+        if "word_count_target" in update:
+            ctx["word_count_source"] = "user"
         # 用户要写落款日期时，发文机关缺省由系统补齐，避免只写了一半落款。
         if "document_date" in update:
             self._complete_default_authority(ctx)
             if ctx.get("authority") and not any("发文机关" in c for c in changes):
                 changes = changes + [f"发文机关：{ctx['authority']}"]
         return changes
+
+    @staticmethod
+    def _length_revision_instruction(ctx: Dict[str, Any]) -> str:
+        limit = ctx.get("word_count_max")
+        target = ctx.get("word_count_target")
+        length = f"严格不超过 {limit} 字" if limit else f"约 {target} 字"
+        return (f"将正文重写为{length}（不计标题、主送和落款），"
+                "保留必要事实、措施和执行要求，删除重复套话，不新增未经提供的事实。")
 
     async def chat_async(self, task_id: str, user_id: str, message: str) -> Dict[str, Any]:
         task = self._get_owned(task_id, user_id)
@@ -1376,11 +1412,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                              if has_draft and any("字数目标" in c for c in literal_changes)
                              else "set_fields"),
                 "reply": "",
-                "revision_instruction": (
-                    f"按新的字数目标（{ctx['word_count_target']} 字左右）重写全文，"
-                    "保留全部必要事实、措施与执行要求，删去冗余套话与重复表述，"
-                    "不新增未提及的内容。"
-                ) if has_draft and any("字数目标" in c for c in literal_changes) else None,
+                "revision_instruction": (self._length_revision_instruction(ctx)
+                    if has_draft and any("字数目标" in c for c in literal_changes) else None),
                 "revision_mode": "rewrite" if has_draft and any(
                     "字数目标" in c for c in literal_changes) else None,
                 "patch_target": None, "position": "after", "end_target": None,
@@ -1402,14 +1435,18 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         self.db.commit()
         operation = interpreted.get("operation") or "answer"
 
+        # A request only about the sign-off is a structured edit, not a new draft.
+        if (has_draft and (_SIGN_DATE_RE.search(message)
+                or any("落款日期" in c for c in literal_changes))
+                and not any(word in message for word in ("正文", "全文", "段落", "同时", "并且"))):
+            operation = "set_fields"
+
         # 用户明确改写字数目标且已有草稿：只改字段不会缩短正文，必须走重写。
         if (has_draft and operation in ("set_fields", "answer", "clarify")
-                and ctx.get("word_count_target") != before_ctx.get("word_count_target")):
+                and (ctx.get("word_count_target") != before_ctx.get("word_count_target")
+                     or ctx.get("word_count_max") != before_ctx.get("word_count_max"))):
             operation = "rewrite_document"
-            interpreted["revision_instruction"] = (
-                f"按新的字数目标（{ctx['word_count_target']} 字左右）重写全文，"
-                "保留全部必要事实、措施与执行要求，删去冗余套话与重复表述，"
-                "不新增未提及的内容。")
+            interpreted["revision_instruction"] = self._length_revision_instruction(ctx)
             interpreted["revision_mode"] = "rewrite"
 
         if operation in (*LOCAL_OPERATIONS, "rewrite_document") and not has_draft:
@@ -1438,14 +1475,17 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 task_id, user_id, outline_only=(operation == "outline"))
         else:
             content_changed = False
-            if has_draft and operation == "set_fields" and before_ctx != ctx:
+            if (has_draft and operation == "set_fields"
+                    and (before_ctx != ctx or _SIGN_DATE_RE.search(message))):
                 note = self._sync_structured_fields(task, user_id)
                 content_changed = bool(note)
                 if note:
                     changes = list(changes) + [note]
             # 落款被规则纠正时，用准确的落款信息回覆，不沿用 LLM 可能写错的日期。
-            if any("落款日期" in c or "发文机关" in c for c in literal_changes):
-                reply = "已为你补齐/更新落款信息（发文机关与成文日期）。"
+            if (_SIGN_DATE_RE.search(message)
+                    or any("落款日期" in c or "发文机关" in c for c in literal_changes)):
+                reply = ("已更新成文日期及发文机关。" if ctx.get("authority")
+                         else "已更新成文日期；本单位名称未配置，请核对发文机关。")
             else:
                 reply = interpreted.get("reply") or await self._answer_only_async(
                     message, ctx, task.current_content or "")

@@ -312,10 +312,12 @@ fun WritingScreen() {
     if (vm.docDialogId != null) {
         KnowledgeDocDialog(
             title = vm.docDialogTitle,
+            docType = vm.docDialogDocType,
             content = vm.docDialogContent,
             busy = vm.docDialogBusy,
             editable = false,
             onTitleChange = { vm.docDialogTitle = it },
+            onDocTypeChange = { vm.docDialogDocType = it },
             onContentChange = { vm.docDialogContent = it },
             onSave = { vm.saveDocument() },
             onClose = { vm.closeDocument() },

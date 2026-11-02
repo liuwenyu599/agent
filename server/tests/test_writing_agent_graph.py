@@ -74,6 +74,7 @@ def test_agent_planner_reuses_ai_plan_only_for_unchanged_request(same_request):
     graph.service = SimpleNamespace(
         _interpret_async=interpret,
         _complete_default_authority=lambda _ctx: None,
+        _effective_draft_context=lambda ctx, _template, _user: ctx,
         _should_section=lambda *_args: False,
     )
     graph._durable = durable
@@ -83,7 +84,7 @@ def test_agent_planner_reuses_ai_plan_only_for_unchanged_request(same_request):
         "planning_request_hash": content_hash(request if same_request else "另一个旧需求"),
         "history": [{"role": "user", "content": request}],
     }
-    output = asyncio.run(graph._planner({"context": context}))
+    output = asyncio.run(graph._planner({"context": context, "user_id": "user"}))
     assert len(calls) == (0 if same_request else 1)
     assert output["context"]["document_type"] == "倡议书"
 
@@ -375,6 +376,10 @@ def test_planner_enriches_a_fuzzy_request_without_a_closed_genre_list():
                 return None
 
             @staticmethod
+            def _effective_draft_context(ctx, _template, _user):
+                return ctx
+
+            @staticmethod
             def _should_section(*_args):
                 return False
 
@@ -506,6 +511,10 @@ def test_langgraph_run_persists_once_and_is_idempotent(use_streaming, entry, mod
 
             def _draft_prompt(self, *_args):
                 return "起草通知"
+
+            @staticmethod
+            def _effective_draft_context(ctx, _template, _user):
+                return ctx
 
             async def achat_stream(self, **_kwargs):
                 self.writer_calls += 1
