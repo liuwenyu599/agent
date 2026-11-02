@@ -34,13 +34,30 @@ fun pickSaveFile(defaultName: String): File? {
     return File(dir, f)
 }
 
-/** 从服务器加载图片为 Compose ImageBitmap（模板预览等） */
+/**
+ * 从服务器加载图片为 Compose ImageBitmap（模板预览、PPT 逐页预览等）。
+ *
+ * [refreshKey] 变化会强制重新请求：用于「URL 没变但上次请求失败」的场景——
+ * produceState 只认 key，URL 不变就永远不会重发，缩略图会一直空白。
+ *
+ * 请求失败在内部就地重试：PPT 生成中缩略图常在 png_ready 刚置位时打过去，
+ * 服务端忙或连接抖动都会失败，失败即放弃会让该页永久空白。
+ */
 @Composable
-fun rememberServerImage(api: ApiClient, pathOrUrl: String?): ImageBitmap? {
-    return produceState<ImageBitmap?>(null, pathOrUrl) {
+fun rememberServerImage(api: ApiClient, pathOrUrl: String?, refreshKey: Any? = null): ImageBitmap? {
+    return produceState<ImageBitmap?>(null, pathOrUrl, refreshKey) {
         if (pathOrUrl.isNullOrBlank()) return@produceState
-        val bytes = api.imageBytes(pathOrUrl) ?: return@produceState
-        value = runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }.getOrNull()
+        // 重试 3 次（1.5s / 3s / 4.5s 退避）；解码失败同样视为失败（坏图不值得缓存）
+        for (attempt in 0..2) {
+            val bytes = api.imageBytes(pathOrUrl)
+            if (bytes != null) {
+                value = runCatching {
+                    Image.makeFromEncoded(bytes).toComposeImageBitmap()
+                }.getOrNull()
+                if (value != null) return@produceState
+            }
+            kotlinx.coroutines.delay(1500L * (attempt + 1))
+        }
     }.value
 }
 

@@ -36,6 +36,7 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +82,10 @@ private const val LAZY_WINDOW = 2
 @Composable
 fun PptAsyncWorkbench(vm: PptViewModel) {
     val job = vm.job ?: return
+    // 生成完成：补拉一次页面清单 + 放开缩略图懒加载，确保每一页都出图
+    LaunchedEffect(job.status) {
+        if (job.status == PptJobStatus.DONE) vm.refreshJobPages()
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.weight(1f).fillMaxWidth()) {
             JobThumbRail(vm, job)
@@ -162,10 +167,15 @@ private fun JobThumbItem(job: PptJobProgress, n: Int) {
     val selected = n == job.selectedPage
     val page = job.pageOf(n)
     val ready = page?.pngReady == true
-    // 懒加载：只请求当前页 ±2 页的 PNG；未出图的页不发请求，直接占位
-    val inWindow = abs(n - job.selectedPage) <= LAZY_WINDOW
+    // 懒加载：生成中只请求当前页 ±2 页的 PNG；完成后放开全量——
+    // 否则从未进入过窗口的页永远不发请求，右侧整列灰块
+    val inWindow = job.status == PptJobStatus.DONE || abs(n - job.selectedPage) <= LAZY_WINDOW
+    // refreshKey = 状态：转入 DONE 时窗口内所有缩略图强制重发一次，
+    // 兜住「早期请求失败后 URL 不变、produceState 不再重试」的永久空白
+    // （点击后大图正常、缩略图空白）。生成中的偶发失败由加载原语内部重试。
     val img = rememberServerImage(AppState.api,
-        if (inWindow) pptJobImageUrl(job.jobId, page) else null)
+        if (inWindow) pptJobImageUrl(job.jobId, page) else null,
+        refreshKey = job.status)
     Box(Modifier.fillMaxWidth().clickable { job.selectedPage = n }) {
         Box(
             Modifier.fillMaxWidth()
@@ -211,7 +221,8 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
     val total = job.displayTotal(vm.slides.size)
     val n = job.selectedPage.coerceIn(1, total)
     val page = job.pageOf(n)
-    val img = rememberServerImage(AppState.api, pptJobImageUrl(job.jobId, page))
+    val img = rememberServerImage(AppState.api, pptJobImageUrl(job.jobId, page),
+        refreshKey = job.status)
 
     Column(
         Modifier.fillMaxHeight().verticalScroll(rememberScrollState())

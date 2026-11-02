@@ -413,8 +413,19 @@ object PptJobEngine {
         }
     }
 
-    private fun finish(p: PptJobProgress, s: PptJobStatusSnapshot) {
-        // 兜底：任务跑到终态时账号已经换过，不能把旧账号的结果写回全局标记
+    /**
+     * DONE 后由界面补拉一次页面清单。
+     * 终态前最后一轮 [fetchPreview] 若失败就没人再补了（轮询已停），
+     * 表现就是「生成完成但部分缩略图永远空白」；界面转入 DONE 时调用这里兜底。
+     */
+    fun refreshPreviewOnce() {
+        val p = current ?: return
+        val r = repo ?: return
+        if (p.status != PptJobStatus.DONE || p.jobId.isBlank()) return
+        scope.launch { fetchPreview(r, p) }
+    }
+
+    private fun finish(p: PptJobProgress, s: PptJobStatusSnapshot) {        // 兜底：任务跑到终态时账号已经换过，不能把旧账号的结果写回全局标记
         if (!AppState.loggedIn || !isSameOwner()) {
             dropForWrongOwner(p)
             return

@@ -1324,6 +1324,11 @@ class PptViewModel(private val repo: PptRepository) {
         startGenerateAsync(target, message)
     }
 
+    /** 生成完成：补拉一次页面清单，兜住终态前最后一轮预览拉取失败导致的缺页缩略图 */
+    fun refreshJobPages() {
+        PptJobEngine.refreshPreviewOnce()
+    }
+
     /**
      * DONE 状态下再下一份 pptx。
      * [target] 为 null 表示沿用提交时选好的位置；两者都没有时提示用户先选位置。
