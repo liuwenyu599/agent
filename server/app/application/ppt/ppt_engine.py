@@ -47,52 +47,52 @@ BUILTIN_TEMPLATES = [
     {"id": "gov_report_blue", "name": "政务工作汇报（深蓝）", "category": "工作汇报", "is_official": True,
      "description": "庄重政务深蓝，适用：司法行政工作汇报、年度总结、专项汇报",
      "colors": {"primary": "17365D", "accent": "2F75B5", "light": "EEF3F8", "dark": "0E243E"},
-     "layouts": {"cover": "band_bottom", "toc": "numbered_list", "section": "left_block",
-                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "center"}},
+     "layouts": {"cover": "cover.band", "toc": "toc.list", "section": "section.side",
+                  "content": "content.bullets", "data": "data.cards", "chart": "chart.full",
+                  "case": "case.block", "timeline": "timeline.horizontal", "process": "process.chevron",
+                  "summary": "summary.cards", "closing": "closing.center"}},
     {"id": "gov_report_red", "name": "政务工作汇报", "category": "工作汇报", "is_official": True,
      "description": "庄重政务红，适用：工作汇报、阶段总结",
      "colors": {"primary": "C00000", "accent": "E8B54D", "light": "FDF2F2", "dark": "7A0000"},
-     "layouts": {"cover": "band_bottom", "toc": "numbered_list", "section": "left_block",
-                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "center"}},
+     "layouts": {"cover": "cover.minimal", "toc": "toc.list", "section": "section.number",
+                  "content": "content.two_col", "data": "data.table", "chart": "chart.split",
+                  "case": "case.block", "timeline": "timeline.vertical", "process": "process.vertical",
+                  "summary": "summary.list", "closing": "closing.center"}},
     {"id": "policy_blue", "name": "政策解读", "category": "政策解读", "is_official": True,
      "description": "沉稳政策蓝，适用：政策解读、方案宣讲",
      "colors": {"primary": "1F4E9C", "accent": "5B9BD5", "light": "EEF4FC", "dark": "12325F"},
-     "layouts": {"cover": "left_block", "toc": "numbered_list", "section": "center",
-                  "content": "top_band", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "brand_band"}},
+     "layouts": {"cover": "cover.side", "toc": "toc.cards", "section": "section.center",
+                  "content": "content.compare", "data": "data.cards", "chart": "chart.split",
+                  "case": "case.split", "timeline": "timeline.vertical", "process": "process.chevron",
+                  "summary": "summary.list", "closing": "closing.band"}},
     {"id": "training_blue", "name": "培训课件", "category": "培训课件", "is_official": True,
      "description": "明快培训蓝，适用：业务培训、知识讲座",
      "colors": {"primary": "2E75B6", "accent": "9DC3E6", "light": "F0F7FD", "dark": "1B4F82"},
-     "layouts": {"cover": "band_bottom", "toc": "cards", "section": "left_block",
-                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "center"}},
+     "layouts": {"cover": "cover.band", "toc": "toc.grid", "section": "section.number",
+                  "content": "content.three_cards", "data": "data.kpi", "chart": "chart.full",
+                  "case": "case.split", "timeline": "timeline.horizontal", "process": "process.vertical",
+                  "summary": "summary.cards", "closing": "closing.center"}},
     {"id": "exp_share_red", "name": "经验交流", "category": "经验交流", "is_official": True,
      "description": "热烈交流红，适用：经验交流、工作分享",
      "colors": {"primary": "B01E23", "accent": "F2C14E", "light": "FBF1F1", "dark": "6E1114"},
-     "layouts": {"cover": "left_block", "toc": "cards", "section": "center",
-                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "center"}},
+     "layouts": {"cover": "cover.side", "toc": "toc.cards", "section": "section.side",
+                  "content": "content.quote", "data": "data.cards", "chart": "chart.split",
+                  "case": "case.block", "timeline": "timeline.vertical", "process": "process.chevron",
+                  "summary": "summary.list", "closing": "closing.center"}},
     {"id": "summary_brown", "name": "总结汇报", "category": "总结汇报", "is_official": True,
      "description": "厚重棕红，适用：年度总结、专项总结",
      "colors": {"primary": "8E1B1B", "accent": "D9A441", "light": "FAF3EE", "dark": "5C1010"},
-     "layouts": {"cover": "band_bottom", "toc": "numbered_list", "section": "left_block",
-                  "content": "top_band", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "brand_band"}},
+     "layouts": {"cover": "cover.band", "toc": "toc.list", "section": "section.number",
+                  "content": "content.two_col", "data": "data.table", "chart": "chart.full",
+                  "case": "case.split", "timeline": "timeline.vertical", "process": "process.vertical",
+                  "summary": "summary.cards", "closing": "closing.band"}},
     {"id": "publicity_cyan", "name": "法治宣传", "category": "宣传展示", "is_official": True,
      "description": "清新宣传青，适用：法治宣传、普法教育",
      "colors": {"primary": "0F6E8C", "accent": "3FA7B8", "light": "ECF7F9", "dark": "0A4A5E"},
-     "layouts": {"cover": "left_block", "toc": "cards", "section": "center",
-                  "content": "bar_title", "data": "cards_row", "chart": "chart_area",
-                  "case": "header_text", "timeline": "horizontal", "process": "chevron",
-                  "summary": "cards", "closing": "center"}},
+     "layouts": {"cover": "cover.minimal", "toc": "toc.cards", "section": "section.center",
+                  "content": "content.icon_grid", "data": "data.kpi", "chart": "chart.split",
+                  "case": "case.block", "timeline": "timeline.horizontal", "process": "process.chevron",
+                  "summary": "summary.list", "closing": "closing.center"}},
 ]
 
 DEFAULT_LAYOUTS = BUILTIN_TEMPLATES[0]["layouts"]
@@ -332,11 +332,8 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
     recent = list(recent or [])[-2:]
     used = used or {}
 
-    # 模板级版式偏好只用于"皮肤位"页型（每篇各一页）；内容页一律按结构打分，
-    # 否则同一模板会把所有正文页钉死成同一种版式，正是"模板感"的来源。
     prefers = [slide.get("layout")]
-    if stype in ("cover", "section", "closing"):
-        prefers.append((template_layouts or {}).get(stype))
+    prefers.append((template_layouts or {}).get(stype))
     for raw in prefers:
         want = _normalize_layout_id(raw, stype)
         if not want:
@@ -362,21 +359,55 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
     return next((sp["id"] for sp in specs if not sp.get("needs_image")), specs[0]["id"])
 
 
+def normalize_template_colors(colors: Optional[Dict]) -> Dict[str, str]:
+    """Accept optional # prefixes while keeping python-pptx's six-digit format."""
+    result = dict(DEFAULT_COLORS)
+    for key, value in (colors or {}).items():
+        if key not in DEFAULT_COLORS:
+            raise ValueError(f"未知模板颜色：{key}")
+        normalized = str(value).strip().lstrip("#").upper()
+        if not re.fullmatch(r"[0-9A-F]{6}", normalized):
+            raise ValueError(f"模板颜色 {key} 需要六位十六进制色值")
+        result[key] = normalized
+    return result
+
+
+def normalize_template_layouts(layouts: Optional[Dict]) -> Dict[str, str]:
+    result = dict(DEFAULT_LAYOUTS)
+    for page_type, value in (layouts or {}).items():
+        if page_type not in LAYOUT_CATALOG:
+            raise ValueError(f"未知模板页型：{page_type}")
+        raw = str(value or "").strip()
+        if re.fullmatch(r"L\d+", raw):
+            result[page_type] = raw  # 用户上传模板的学习版式 id
+            continue
+        resolved = _normalize_layout_id(raw, page_type) or _LEGACY_LAYOUT_ALIAS.get((page_type, raw))
+        if not resolved or resolved not in layout_ids(page_type):
+            raise ValueError(f"页型 {page_type} 不支持版式 {raw}")
+        result[page_type] = resolved
+    return result
+
+
 def template_to_dict(t) -> Dict:
     """ORM 实体/字典 → 渲染用统一结构。"""
     if isinstance(t, dict):
         return {
             "id": t.get("id"), "name": t.get("name", "模板"), "category": t.get("category", "其他"),
-            "colors": {**DEFAULT_COLORS, **(t.get("colors") or {})},
+            "colors": normalize_template_colors(t.get("colors")),
             "font": t.get("font") or DEFAULT_CJK_FONT,
-            "layouts": {**DEFAULT_LAYOUTS, **(t.get("layouts") or {})},
+            "layouts": normalize_template_layouts(t.get("layouts")),
             "layout_library": t.get("layout_library") or [],
         }
+    if getattr(t, "is_official", False):
+        spec = next((item for item in BUILTIN_TEMPLATES
+                     if item["id"] == getattr(t, "builtin_id", None)), None)
+        if spec:
+            return {**template_to_dict(spec), "id": t.id}
     return {
         "id": t.id, "name": t.name, "category": t.category,
-        "colors": {**DEFAULT_COLORS, **(t.colors or {})},
+        "colors": normalize_template_colors(t.colors),
         "font": t.font or DEFAULT_CJK_FONT,
-        "layouts": {**DEFAULT_LAYOUTS, **(t.layouts or {})},
+        "layouts": normalize_template_layouts(t.layouts),
         "layout_library": t.layout_library or [],
     }
 
@@ -528,6 +559,9 @@ def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
     from app.application.ppt.drawio_service import DrawioService
     drawio = DrawioService()
     if not getattr(drawio, "native_available", drawio.enabled):
+        for slide in outline.get("slides") or []:
+            if slide.get("type") == "process" and not (slide.get("blocks") or {}).get("drawio_xml"):
+                slide.setdefault("diagram_warning", "图示排版服务暂不可用，本页使用基础步骤排版")
         return outline
     for s in (outline.get("slides") or []):
         if (s.get("blocks") or {}).get("drawio_xml"):
@@ -548,9 +582,12 @@ def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
             if updated:
                 s.clear()
                 s.update(updated)
+            else:
+                s.setdefault("diagram_warning", "可编辑图示暂不可用，本页将使用基础步骤排版")
         except Exception as exc:  # noqa: BLE001 - 单页失败不影响整份大纲
             logger.warning("PPT 自动图示生成跳过页(kind=%s, title=%s): %s",
                            kind, s.get("title"), type(exc).__name__)
+            s.setdefault("diagram_warning", "图示生成未成功，本页将使用基础步骤排版")
     return outline
 
 
@@ -1536,7 +1573,28 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         page_header(slide, s["title"])
         diagram_xml = (s.get("blocks") or {}).get("drawio_xml")
         if diagram_xml:
-            if _try_drawio_render(slide, s, (lx(.06), ly(.23), lx(.88), ly(.64)), FONT, warnings, colors):
+            blocks = s.get("blocks") or {}
+            steps = [str(item) for item in (blocks.get("process") or [])]
+            try:
+                from app.application.ppt.drawio_native import parse_diagram
+                visual_labels = {node["label"] for node in parse_diagram(diagram_xml)["nodes"]}
+            except ValueError:
+                visual_labels = set()
+            covered = set(steps) | visual_labels
+            extras = [str(item) for item in (s.get("points") or [])
+                      if str(item).strip() and str(item) not in covered]
+            extras.extend(str(item) for item in blocks.get("diagram_details") or []
+                          if str(item).strip() and str(item) not in extras)
+            diagram_height = .53 if extras else .64
+            if _try_drawio_render(slide, s, (lx(.06), ly(.23), lx(.88), ly(diagram_height)), FONT, warnings, colors):
+                if extras:
+                    rows = min(len(extras), 3)
+                    for index, item in enumerate(extras[:rows]):
+                        text(slide, lx(.07), ly(.78 + index * .055), lx(.86), ly(.05),
+                             item, 11 if len(item) > 50 else 13, False, DARK)
+                    if len(extras) > rows:
+                        warnings.append(f"「{s.get('title') or '图示'}」有 {len(extras) - rows} 条补充说明转入页面备注")
+                        slide.notes_slide.notes_text_frame.text += "\n补充说明：\n" + "\n".join(extras[rows:])
                 return slide
             # A fallback must retain every supplied step, rather than silently
             # truncating a richer diagram to the five-chevron layout below.
@@ -1565,7 +1623,15 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                      lx(.42), ly(.64 / rows), str(value),
                      14 if rows <= 8 else 11, False, DARK)
             return slide
-        all_steps = blocks.get("process") or s["points"]
+        all_steps = blocks.get("process") or s.get("points") or []
+        if len(all_steps) > 7:
+            rows = (len(all_steps) + 1) // 2
+            for index, step in enumerate(all_steps):
+                column, row = divmod(index, rows)
+                text(slide, lx(.06 + column * .45), ly(.24 + row * .62 / rows),
+                     lx(.42), ly(.62 / rows), f"{index + 1}. {step}",
+                     12 if rows > 6 else 14, False, DARK)
+            return slide
         if (lay_of(s) or "chevron") == "vertical" and len(all_steps) >= 3:
             steps = all_steps[:7]
             step_h = 0.60 / len(steps)
@@ -1599,7 +1665,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             _font(r, 13, True, WHITE)
             text(slide, lx(cx), ly(0.53), lx(cw - 0.008), ly(0.07), f"第{i+1}步", 12, False,
                  GRAY, align=PP_ALIGN.CENTER)
-        for j, p in enumerate(s["points"][:3]):
+        for j, p in enumerate((s.get("points") or [])[:3]):
             text(slide, lx(0.07), ly(0.70 + j * 0.06), lx(0.86), ly(0.05), p, 14, False, GRAY)
         return slide
 
@@ -2230,6 +2296,26 @@ def analyze_template(file_bytes: bytes) -> Dict:
     return result
 
 
+def validate_learned_template(learned: Dict) -> None:
+    """Reject source decks that cannot hold a title and real page content.
+
+    A decorative cover alone is not a reusable content template.  Checking
+    this at import time avoids a successful upload that later exports blank
+    or silently falls back to a different design.
+    """
+    layouts = learned.get("layouts") or []
+    if not any(layout.get("detected_type") not in {"cover", "toc", "closing"} and
+               sum(1 for element in (layout.get("element_schema") or [])
+                   if element.get("kind") == "text" and
+                   element.get("role") != "fixed") >= 2
+               for layout in layouts):
+        raise ValueError("模板需要至少一页可替换的标题和正文文本框")
+    for layout in layouts:
+        size = layout.get("slide_size") or {}
+        if size and (size.get("w", 0) <= 0 or size.get("h", 0) <= 0):
+            raise ValueError("模板页面尺寸无效")
+
+
 # ================= 模板学习渲染：按版式库克隆页面并填充内容 =================
 
 def _pick_layout(layouts: list, slide_type: str, used: Dict,
@@ -2523,7 +2609,9 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         # 模板槽位少于内容条目时，多出来的内容无处安放：显式提示，不静默丢弃。
         dropped = len(points) - len(used_points) - body_index
         if dropped > 0:
-            warnings.append(f"「{title or '本页'}」有 {dropped} 条内容超出模板文本框数量，未能放入")
+            warnings.append(f"「{title or '本页'}」有 {dropped} 条内容超出模板文本框，正在改用该页基础排版")
+            raise ValueError("learned template has insufficient text regions")
+
 
     for pi, (shp, e) in enumerate(pics):
         if pi == 0 and not image_drawn and img_path and os.path.exists(img_path):
@@ -2552,6 +2640,47 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         if texts and len(texts) > 1:
             shp, e = texts[1]
             _fill_text_region(shp, points + [f"（图表数据：{names}）"] if points else [f"（图表数据：{names}）"])
+
+
+def _fill_basic_page(slide, sdata: Dict, colors: Dict, font: str, sw: int, sh: int) -> None:
+    """Keep a failed learned page local to that page; retain its full text."""
+    from pptx.dml.color import RGBColor
+    from pptx.util import Pt
+    for shape in list(slide.shapes):
+        _delete_shape(shape)
+    dark = RGBColor.from_string(colors.get("dark", "15365D"))
+    primary = RGBColor.from_string(colors.get("primary", "17365D"))
+    title = slide.shapes.add_textbox(int(sw * .06), int(sh * .08),
+                                     int(sw * .88), int(sh * .11))
+    title.text = str(sdata.get("title") or "")
+    for paragraph in title.text_frame.paragraphs:
+        for run in paragraph.runs:
+            run.font.name = font
+            run.font.size = Pt(26)
+            run.font.bold = True
+            run.font.color.rgb = primary
+    blocks = sdata.get("blocks") or {}
+    points = [str(value) for value in sdata.get("points") or []]
+    points.extend(f"{item.get('label', '')}：{item.get('value', '')}"
+                  for item in blocks.get("cards") or [])
+    points.extend(f"{item.get('time', '')}　{item.get('event') or item.get('text') or ''}"
+                  for item in blocks.get("timeline") or [])
+    points.extend(str(value) for value in blocks.get("process") or [])
+    points.extend(_diagram_fallback_relations(blocks) if
+                  blocks.get("drawio_kind") not in (None, "process") else [])
+    rows = max(1, (len(points) + 1) // 2)
+    for index, point in enumerate(points):
+        col, row = divmod(index, rows)
+        box = slide.shapes.add_textbox(int(sw * (.07 + col * .45)),
+                                       int(sh * (.24 + row * .67 / rows)),
+                                       int(sw * .40), int(sh * .67 / rows))
+        box.text_frame.word_wrap = True
+        box.text = point
+        for paragraph in box.text_frame.paragraphs:
+            for run in paragraph.runs:
+                run.font.name = font
+                run.font.size = Pt(12 if rows > 6 or len(point) > 55 else 16)
+                run.font.color.rgb = dark
 
 
 def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
@@ -2625,9 +2754,9 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                                               if key != "drawio_xml"}}
                     _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs, warnings)
         except Exception as e:
-            if (s.get("blocks") or {}).get("drawio_xml"):
-                raise
             logger.warning("页面填充失败: %s", e)
+            warnings.append(f"「{s.get('title') or '本页'}」模板内容区不足，已为该页使用基础排版")
+            _fill_basic_page(ns, s, colors, font, sw, sh)
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
@@ -2642,4 +2771,6 @@ def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             return build_pptx_learned(outline, template, base_pptx, library, warnings=warnings)
         except Exception as e:
             logger.warning("模板学习渲染失败，回退默认渲染: %s", e)
+            if warnings is not None:
+                warnings.append("模板版式无法完整容纳本次内容，已改用保留全部内容的基础排版")
     return build_pptx(outline, template, base_pptx=base_pptx, warnings=warnings)

@@ -57,7 +57,7 @@ fun SplashScreen() {
             )
             Spacer(Modifier.height(24.dp))
             Text(
-                "白云司法局智慧办公平台",
+                "白云司法局智能写作助手",
                 color = Color.White, fontSize = 24.sp,
                 fontWeight = FontWeight.Bold, letterSpacing = 4.sp,
             )

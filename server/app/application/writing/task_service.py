@@ -860,6 +860,24 @@ class WritingTaskService:
         t = re.sub(r"\n{3,}", "\n\n", t)                         # 多余空行
         return t.strip()
 
+    @staticmethod
+    def _effective_draft_context(ctx: Dict[str, Any],
+                                 template: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Use the selected template's length for every generation path.
+
+        Keep the task's saved context untouched; a later explicit user target
+        must always take precedence over the template default.
+        """
+        effective = dict(ctx)
+        if not effective.get("word_count_target") and template:
+            try:
+                target = int(template.get("word_count") or 0)
+            except (TypeError, ValueError):
+                target = 0
+            if target > 0:
+                effective["word_count_target"] = target
+        return effective
+
     def _build_draft_instruction(self, ctx: Dict[str, Any], outline_only: bool,
                                  template: Optional[Dict[str, Any]] = None) -> str:
         parts = ["请起草一份提纲。" if outline_only else "请起草一份完整材料。"]
@@ -921,10 +939,29 @@ class WritingTaskService:
             parts.append("主要工作内容：" + "、".join(ctx["key_facts"]) + "。")
         if ctx.get("requirements"):
             parts.append(f"写作要求：{ctx['requirements']}。")
-        if ctx.get("word_count_target"):
-            parts.append(f"全文约 {ctx['word_count_target']} 字。")
-        elif template and template.get("word_count"):
-            parts.append(f"全文约 {template['word_count']} 字。")
+        target = ctx.get("word_count_target") or (template or {}).get("word_count")
+        if target and not outline_only:
+            try:
+                target = max(50, min(100000, int(target)))
+            except (TypeError, ValueError):
+                target = None
+        if target:
+            if outline_only:
+                parts.append(f"后续成稿的目标篇幅约 {target} 字；本次只输出提纲。")
+            else:
+                parts.append(
+                    f"正文目标约 {target} 字（不计标题、主送、落款和日期）。"
+                    "按事项的重要程度分配各部分篇幅，写足必要事实、措施与执行要求；"
+                    "短文不硬拆章节，长文不靠套话和重复段落凑字数。"
+                    "用户另有明确篇幅或压缩要求时以本次要求为准。"
+                )
+        if template:
+            parts.append(
+                "按所选文种写作：法定公文遵循党政机关公文格式及该文种的行文规则，"
+                "不把模板示例中的机关、数字、日期或政策名称当作本次事实；"
+                "标题、主送、落款和成文日期按文种及用户提供的信息判断，"
+                "不输出空字段标签，也不为讲话稿等非公文材料强加公文落款。"
+            )
         if ctx.get("tone"):
             parts.append(f"语气风格：{ctx['tone']}。")
         if not outline_only:

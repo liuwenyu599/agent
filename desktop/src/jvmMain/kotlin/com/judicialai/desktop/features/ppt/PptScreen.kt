@@ -1141,8 +1141,14 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
 
     var cover by remember(id) { mutableStateOf(originalLayouts["cover"].str()) }
     var toc by remember(id) { mutableStateOf(originalLayouts["toc"].str()) }
+    var section by remember(id) { mutableStateOf(originalLayouts["section"].str()) }
     var content by remember(id) { mutableStateOf(originalLayouts["content"].str()) }
     var data by remember(id) { mutableStateOf(originalLayouts["data"].str()) }
+    var chart by remember(id) { mutableStateOf(originalLayouts["chart"].str()) }
+    var caseLayout by remember(id) { mutableStateOf(originalLayouts["case"].str()) }
+    var timeline by remember(id) { mutableStateOf(originalLayouts["timeline"].str()) }
+    var process by remember(id) { mutableStateOf(originalLayouts["process"].str()) }
+    var summary by remember(id) { mutableStateOf(originalLayouts["summary"].str()) }
     var closing by remember(id) { mutableStateOf(originalLayouts["closing"].str()) }
 
     AppDialog(
@@ -1162,8 +1168,14 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
                     val mappings = mapOf(
                         "cover" to cover,
                         "toc" to toc,
+                        "section" to section,
                         "content" to content,
                         "data" to data,
+                        "chart" to chart,
+                        "case" to caseLayout,
+                        "timeline" to timeline,
+                        "process" to process,
+                        "summary" to summary,
                         "closing" to closing,
                     )
                     vm.saveTemplateEditor(id, name, category, description, font, mappings)
@@ -1187,7 +1199,7 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
                 description, { description = it }, label = { Text("模板说明") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("核心版式骨架", style = MaterialTheme.typography.subtitle2)
+            Text("各页型版式骨架", style = MaterialTheme.typography.subtitle2)
             Text(
                 if (library.isEmpty()) "该模板尚未识别到可编辑版式；可重新上传结构更完整的 PPTX。"
                 else "系统已识别 ${library.size} 种实际页面版式。为核心页型指定来源页后，生成时会优先克隆对应骨架。",
@@ -1196,8 +1208,14 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
             if (library.isNotEmpty()) {
                 TemplateLayoutSelector("封面", cover, library) { cover = it }
                 TemplateLayoutSelector("目录", toc, library) { toc = it }
+                TemplateLayoutSelector("章节页", section, library) { section = it }
                 TemplateLayoutSelector("正文", content, library) { content = it }
                 TemplateLayoutSelector("数据页", data, library) { data = it }
+                TemplateLayoutSelector("图表页", chart, library) { chart = it }
+                TemplateLayoutSelector("案例页", caseLayout, library) { caseLayout = it }
+                TemplateLayoutSelector("时间线", timeline, library) { timeline = it }
+                TemplateLayoutSelector("流程页", process, library) { process = it }
+                TemplateLayoutSelector("总结页", summary, library) { summary = it }
                 TemplateLayoutSelector("结束页", closing, library) { closing = it }
             }
         }

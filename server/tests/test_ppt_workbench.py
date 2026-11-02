@@ -150,6 +150,61 @@ def test_private_template_is_visible_only_to_owner(client, accounts):
     assert blank.status_code == 404
 
 
+def test_template_configuration_is_validated_before_save(client, accounts):
+    headers = _hdr(accounts["a"])
+    invalid_color = client.post(f"{BASE}/ppt/templates", headers=headers, json={
+        "name": "非法配色", "colors": {"primary": "red"},
+    })
+    assert invalid_color.status_code == 400
+    invalid_layout = client.post(f"{BASE}/ppt/templates", headers=headers, json={
+        "name": "非法版式", "layouts": {"content": "missing"},
+    })
+    assert invalid_layout.status_code == 400
+    created = client.post(f"{BASE}/ppt/templates", headers=headers, json={
+        "name": "有效模板", "colors": {"primary": "#17365d"},
+        "layouts": {"content": "content.compare"},
+    })
+    assert created.status_code == 200, created.text
+    detail = client.get(f"{BASE}/ppt/templates/{created.json()['id']}", headers=headers)
+    assert detail.json()["colors"]["primary"] == "17365D"
+    assert detail.json()["layouts"]["content"] == "content.compare"
+
+
+def test_copied_uploaded_template_keeps_learned_layouts(client, accounts, monkeypatch):
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", lambda *_args: None)
+    data = _make_pptx_bytes([
+        ("封面", []), ("工作安排", ["第一项", "第二项"]), ("结束", []),
+    ])
+    headers = _hdr(accounts["a"])
+    uploaded = client.post(f"{BASE}/ppt/templates/upload", headers=headers,
+                           data={"name": "自制版式", "category": "汇报"},
+                           files={"file": ("layout.pptx", data,
+                                           "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
+    assert uploaded.status_code == 200, uploaded.text
+    source_id = uploaded.json()["id"]
+    copied = client.post(f"{BASE}/ppt/templates/{source_id}/copy", headers=headers)
+    assert copied.status_code == 200, copied.text
+    copy_id = copied.json()["id"]
+    detail = client.get(f"{BASE}/ppt/templates/{copy_id}", headers=headers).json()
+    assert detail["layout_count"] == uploaded.json()["layout_count"]
+    assert detail["layout_library"]
+
+
+def test_official_template_has_real_cover_preview_when_renderer_available(client, accounts):
+    import shutil
+    if not shutil.which("soffice") or not shutil.which("pdftoppm"):
+        pytest.skip("PPT preview renderer is unavailable")
+    token = _hdr(accounts["a"])
+    seeded = client.post(f"{BASE}/ppt/templates/seed", headers=token)
+    assert seeded.status_code == 200, seeded.text
+    listing = client.get(f"{BASE}/ppt/templates", headers=token)
+    official = next(item for item in listing.json()["items"] if item["is_official"])
+    assert official["layout_count"] > 0
+    preview = client.get(official["preview_url"], headers=token)
+    assert preview.status_code == 200, preview.text
+    assert preview.content.startswith(b"\x89PNG")
+
+
 @pytest.fixture(scope="module")
 def accounts(client):
     """系统管理员 + 两个互不相干的普通用户（用于越权断言）。"""
@@ -1302,6 +1357,107 @@ def test_learned_layout_explicit_binding_overrides_auto_match():
     assert auto["id"] == "L0"
 
 
+def test_template_import_requires_a_fillable_content_page():
+    from app.application.ppt import ppt_engine
+    import pytest
+
+    with pytest.raises(ValueError, match="标题和正文文本框"):
+        ppt_engine.validate_learned_template({"layouts": [{
+            "element_schema": [{"kind": "text", "role": "content"},
+                               {"kind": "picture", "role": "fixed"}]}]})
+
+
+def test_every_builtin_template_exports_core_page_types():
+    from io import BytesIO
+    from pptx import Presentation
+    from app.application.ppt import ppt_engine
+
+    outline = {"slides": [
+        {"type": "cover", "title": "测试封面"},
+        {"type": "content", "title": "工作重点", "points": ["第一项", "第二项"]},
+        {"type": "process", "title": "办理流程",
+         "blocks": {"process": ["受理", "审核", "办结"]}},
+    ]}
+    for spec in ppt_engine.BUILTIN_TEMPLATES:
+        data = ppt_engine.render_pptx(outline, ppt_engine.template_to_dict(spec))
+        slides = Presentation(BytesIO(data)).slides
+        assert len(slides) == 3, spec["id"]
+        text = "\n".join(shape.text for slide in slides for shape in slide.shapes
+                         if shape.has_text_frame)
+        assert all(word in text for word in ("工作重点", "第一项", "受理", "办结")), spec["id"]
+    fingerprints = {
+        tuple(ppt_engine.template_to_dict(spec)["layouts"][page]
+              for page in ("cover", "section", "content", "summary"))
+        for spec in ppt_engine.BUILTIN_TEMPLATES
+    }
+    assert len(fingerprints) == len(ppt_engine.BUILTIN_TEMPLATES)
+
+
+def test_official_template_uses_current_builtin_rules_after_code_update():
+    from types import SimpleNamespace
+    stale = SimpleNamespace(
+        id="row-1", is_official=True, builtin_id="policy_blue",
+        name="旧名称", colors={"primary": "000000"},
+        layouts={"content": "bar_title"}, font="旧字体")
+    design = ppt_engine.template_to_dict(stale)
+    assert design["id"] == "row-1"
+    assert design["colors"]["primary"] == "1F4E9C"
+    assert design["layouts"]["content"] == "content.compare"
+
+
+def test_learned_template_overflow_keeps_all_points():
+    from io import BytesIO
+    from pptx import Presentation
+    from pptx.util import Inches
+    from app.application.ppt import ppt_engine
+
+    source = Presentation()
+    page = source.slides.add_slide(source.slide_layouts[6])
+    page.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text = "示例标题"
+    page.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(3)).text = "示例正文"
+    buf = BytesIO()
+    source.save(buf)
+    learned = ppt_engine.analyze_template(buf.getvalue())
+    template = {**ppt_engine.template_to_dict(ppt_engine.BUILTIN_TEMPLATES[0]),
+                "layout_library": learned["layouts"]}
+    warnings = []
+    output = ppt_engine.render_pptx({"slides": [{"type": "content", "title": "新标题",
+        "points": ["第一项内容", "第二项内容", "第三项内容"]}]},
+        template, base_pptx=buf.getvalue(), warnings=warnings)
+    text = "\n".join(shape.text for slide in Presentation(BytesIO(output)).slides
+                     for shape in slide.shapes if shape.has_text_frame)
+    assert all(point in text for point in ("第一项内容", "第二项内容", "第三项内容"))
+    assert any("基础排版" in warning for warning in warnings)
+
+
+def test_failed_learned_page_falls_back_without_replacing_other_pages(monkeypatch):
+    from io import BytesIO
+    from pptx import Presentation
+    from app.application.ppt import ppt_engine
+    base = _make_pptx_bytes([("模板标题", ["模板正文"])])
+    learned = ppt_engine.analyze_template(base)
+    layout = {**learned["layouts"][0], "detected_type": "content"}
+    original_fill = ppt_engine._fill_learned_slide
+
+    def fill(slide, layout_arg, data, *args, **kwargs):
+        if data.get("title") == "第二页":
+            raise ValueError("page-specific overflow")
+        return original_fill(slide, layout_arg, data, *args, **kwargs)
+
+    monkeypatch.setattr(ppt_engine, "_fill_learned_slide", fill)
+    warnings = []
+    result = ppt_engine.build_pptx_learned({"slides": [
+        {"type": "content", "title": "第一页", "points": ["保留模板页"]},
+        {"type": "content", "title": "第二页", "points": ["完整内容"]},
+    ]}, ppt_engine.template_to_dict(ppt_engine.BUILTIN_TEMPLATES[0]),
+        base, [layout], warnings)
+    slides = Presentation(BytesIO(result)).slides
+    assert len(slides) == 2
+    assert "保留模板页" in " ".join(shape.text for shape in slides[0].shapes if shape.has_text_frame)
+    assert "完整内容" in " ".join(shape.text for shape in slides[1].shapes if shape.has_text_frame)
+    assert any("第二页" in warning and "基础排版" in warning for warning in warnings)
+
+
 def test_learned_layout_fills_each_template_region():
     from io import BytesIO
     from PIL import Image
@@ -1330,6 +1486,7 @@ def test_learned_layout_fills_each_template_region():
     prs.save(source)
     base = source.getvalue()
     learned = ppt_engine.analyze_template(base)
+    ppt_engine.validate_learned_template(learned)
     cards_layout = next(layout for layout in learned["layouts"]
                         if layout["source_slide_index"] == 1)
     assert cards_layout["element_schema"][1]["placeholder_keys"] == ["card1_title"]

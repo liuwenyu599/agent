@@ -177,7 +177,7 @@ private fun DrawerHeader(onDismiss: () -> Unit) {
             }
             Spacer(Modifier.width(Dimens.space3))
             Column(Modifier.weight(1f)) {
-                Text("白云司法局智慧办公平台", fontSize = 15.sp,
+                Text("白云司法局智能写作助手", fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold, color = OnDark)
                 Spacer(Modifier.height(2.dp))
                 Text(

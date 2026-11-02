@@ -1,4 +1,6 @@
 """PPT 助手应用服务：模板/素材/文档/生成/导出/云端生成的编排。"""
+import asyncio
+import copy
 import hashlib
 from app.core.fonts import DEFAULT_CJK_FONT
 import io
@@ -70,6 +72,13 @@ DEFAULT_DESIGN_PROMPT: Dict[str, str] = {
 }
 DEFAULT_GOV_TEMPLATE_ID = "gov_report_blue"
 _TOC_TITLE_RE = re.compile(r"^(目录|汇报提纲|内容提要|主要内容|汇报目录)$")
+
+
+def _official_preview_id(spec: dict) -> str:
+    fingerprint = _json.dumps({key: spec.get(key) for key in
+                               ("name", "colors", "layouts")},
+                              ensure_ascii=False, sort_keys=True)
+    return "official-" + hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:10]
 
 
 class _PreviewRenderError(Exception):
@@ -478,17 +487,29 @@ class PPTService:
     def template_dto(self, t: PPTTemplate, user_id: str) -> dict:
         fav = self.favorites.get(user_id, t.id) is not None
         library = t.layout_library or []
+        official_spec = next((spec for spec in BUILTIN_TEMPLATES
+                              if t.is_official and spec["id"] == t.builtin_id), None)
         preview_url = ""
         for lay in library:
             if lay.get("preview"):
                 preview_url = f"/api/v1/ppt/templates/{t.id}/layout-preview/{lay['id']}"
                 break
+        if official_spec and not preview_url:
+            preview_url = (f"/api/v1/ppt/templates/{t.id}/layout-preview/"
+                           f"{_official_preview_id(official_spec)}")
         return {
-            "id": t.id, "name": t.name, "category": t.category, "description": t.description,
+            "id": t.id,
+            "name": official_spec["name"] if official_spec else t.name,
+            "category": official_spec["category"] if official_spec else t.category,
+            "description": official_spec.get("description") if official_spec else t.description,
             "is_official": bool(t.is_official), "is_mine": t.created_by == user_id,
-            "colors": t.colors, "font": t.font, "layouts": t.layouts,
+            "colors": official_spec["colors"] if official_spec else t.colors,
+            "font": t.font,
+            "layouts": (ppt_engine.normalize_template_layouts(official_spec["layouts"])
+                        if official_spec else t.layouts),
             "use_count": t.use_count, "is_favorite": fav,
-            "layout_count": len(library),
+            "layout_count": (len(library) if library else
+                             len(official_spec["layouts"] if official_spec else (t.layouts or {}))),
             "preview_url": preview_url,
             "created_at": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "",
         }
@@ -523,11 +544,18 @@ class PPTService:
         return {"message": f"官方模板已同步（新增 {created} 个）"}
 
     def create_template(self, body, user: User) -> dict:
+        try:
+            colors = ppt_engine.normalize_template_colors(body.colors)
+            layouts = ppt_engine.normalize_template_layouts(body.layouts)
+            if any(re.fullmatch(r"L\d+", value) for value in layouts.values()):
+                raise ValueError("学习版式只能绑定到已上传的模板")
+        except ValueError as exc:
+            raise AppError(400, str(exc)) from exc
         t = self.templates.add(PPTTemplate(
             name=body.name, category=body.category, description=body.description,
             is_official=False, created_by=user.id,
-            colors={**DEFAULT_COLORS, **(body.colors or {})},
-            font=body.font, layouts={**DEFAULT_LAYOUTS, **(body.layouts or {})}))
+            colors=colors,
+            font=body.font, layouts=layouts))
         return {"id": t.id, "message": "模板已创建"}
 
     def _get_editable_template(self, template_id: str, user: User) -> PPTTemplate:
@@ -551,12 +579,19 @@ class PPTService:
 
     def update_template(self, template_id: str, body, user: User) -> dict:
         t = self._get_editable_template(template_id, user)
+        try:
+            colors = ppt_engine.normalize_template_colors({**(t.colors or {}), **(body.colors or {})})
+            layouts = ppt_engine.normalize_template_layouts({**(t.layouts or {}), **(body.layouts or {})})
+            learned_ids = {item.get("id") for item in (t.layout_library or [])}
+            if any(re.fullmatch(r"L\d+", value) and value not in learned_ids
+                   for value in layouts.values()):
+                raise ValueError("模板绑定了不存在的学习版式")
+        except ValueError as exc:
+            raise AppError(400, str(exc)) from exc
         t.name, t.category, t.description = body.name, body.category, body.description
-        if body.colors:
-            t.colors = {**(t.colors or {}), **body.colors}
+        t.colors = colors
         t.font = body.font or t.font
-        if body.layouts:
-            t.layouts = {**(t.layouts or {}), **body.layouts}
+        t.layouts = layouts
         self.templates.update(t)
         return {"message": "模板已更新"}
 
@@ -570,6 +605,10 @@ class PPTService:
                 p.unlink()
             except Exception:
                 pass
+        preview_dir = (self.ppt_dir / "tpl_prev" / template_id).resolve()
+        preview_root = (self.ppt_dir / "tpl_prev").resolve()
+        if preview_dir.parent == preview_root and preview_dir.is_dir():
+            shutil.rmtree(preview_dir)
         return {"message": "模板已删除"}
 
     def toggle_favorite(self, template_id: str, user: User) -> dict:
@@ -593,7 +632,8 @@ class PPTService:
         if not zipfile.is_zipfile(io.BytesIO(data)):
             raise AppError(400, "文件损坏或不是有效的 .pptx 文件")
         try:
-            learned = ppt_engine.analyze_template(data)
+            learned = await asyncio.to_thread(ppt_engine.analyze_template, data)
+            ppt_engine.validate_learned_template(learned)
         except Exception as e:
             raise AppError(400, f"模板解析失败：{e}")
         try:
@@ -605,7 +645,7 @@ class PPTService:
                 source_file=file.filename))
             self._save_tpl_source(t.id, data)
             library = learned.get("layouts") or []
-            self._gen_tpl_previews(t.id, data, library)
+            await asyncio.to_thread(self._gen_tpl_previews, t.id, data, library)
             t.layout_library = library
             self.templates.update(t)
         except (AppError, PermissionDeniedError):
@@ -631,7 +671,9 @@ class PPTService:
                 src = os.path.join(td, "tpl.pptx")
                 with open(src, "wb") as f:
                     f.write(data)
-                subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
+                profile = (Path(td) / "lo-profile").as_uri()
+                subprocess.run(["soffice", f"-env:UserInstallation={profile}",
+                                "--headless", "--convert-to", "pdf",
                                 "--outdir", td, src], timeout=180, capture_output=True)
                 pdf = os.path.join(td, "tpl.pdf")
                 if not os.path.exists(pdf):
@@ -648,8 +690,18 @@ class PPTService:
             logger.warning("模板预览图生成失败（不影响使用）: %s", e)
 
     def get_layout_preview(self, template_id: str, layout_id: str, user: User) -> Path:
-        self._get_visible_template(template_id, user)
+        template = self._get_visible_template(template_id, user)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", layout_id):
+            raise NotFoundError("预览图不存在")
         p = self._layout_preview_path(template_id, layout_id)
+        official_spec = next((spec for spec in BUILTIN_TEMPLATES
+                              if template.is_official and spec["id"] == template.builtin_id), None)
+        if official_spec and layout_id == _official_preview_id(official_spec) and not p.exists():
+            design = ppt_engine.template_to_dict(template)
+            sample = {"slides": [{"type": "cover", "title": design["name"],
+                                    "subtitle": template.description or "演示文稿模板"}]}
+            data = ppt_engine.render_pptx(sample, design)
+            self._gen_tpl_previews(template.id, data, [{"id": layout_id, "source_slide_index": 0}])
         if not p.exists():
             raise NotFoundError("预览图不存在")
         return p
@@ -675,26 +727,33 @@ class PPTService:
         nt = self.templates.add(PPTTemplate(
             name=t.name + "（副本）", category=t.category, description=t.description,
             is_official=False, created_by=user.id, colors=dict(t.colors or {}),
-            font=t.font, layouts=dict(t.layouts or {})))
+            font=t.font, layouts=dict(t.layouts or {}),
+            layout_library=copy.deepcopy(t.layout_library or [])))
         src = self._tpl_base_bytes(t)
         if src:
             self._save_tpl_source(nt.id, src)
+            source_previews = (self.ppt_dir / "tpl_prev" / t.id).resolve()
+            target_previews = (self.ppt_dir / "tpl_prev" / nt.id).resolve()
+            preview_root = (self.ppt_dir / "tpl_prev").resolve()
+            if (source_previews.parent == preview_root and target_previews.parent == preview_root
+                    and source_previews.is_dir()):
+                shutil.copytree(source_previews, target_previews, dirs_exist_ok=True)
         return {"id": nt.id, "message": "已复制到「我的模板」"}
 
     def import_template_url(self, body, user: User) -> dict:
         """从在线链接导入 pptx 模板（仅提取版式风格，不保存原始内容）。"""
-        if not body.url.lower().startswith(("http://", "https://")):
-            raise AppError(400, "请输入有效的 http(s) 链接")
         try:
-            import requests
-            resp = requests.get(body.url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            data = resp.content
+            from app.application.knowledge.web_fetcher import fetch_public_bytes
+            data = fetch_public_bytes(body.url, max_bytes=50 * 1024 * 1024, timeout=30)
         except Exception as e:
             raise AppError(400, f"下载失败：{e}")
         if len(data) > 50 * 1024 * 1024:
             raise AppError(400, "文件超过 50MB")
-        learned = ppt_engine.analyze_template(data)
+        try:
+            learned = ppt_engine.analyze_template(data)
+            ppt_engine.validate_learned_template(learned)
+        except Exception as e:
+            raise AppError(400, f"模板解析失败：{e}") from e
         name = body.name or os.path.splitext(
             os.path.basename(body.url.split("?")[0]))[0] or "在线导入模板"
         t = self.templates.add(PPTTemplate(
@@ -1532,9 +1591,16 @@ class PPTService:
                 outline, target_count if explicit_count else None, content)
             # 仅在 drawio 真正开启时提示图示生成进度，避免无配置环境多出 stage 事件
             from app.application.ppt.drawio_service import DrawioService
-            if DrawioService().native_available:
+            diagram_pages = [page for page in outline.get("slides") or []
+                             if page.get("type") == "process" and not
+                             (page.get("blocks") or {}).get("drawio_xml")]
+            if diagram_pages and DrawioService().native_available:
                 yield _sse({"type": "stage", "text": "正在为图示页生成可编辑图形…"})
             outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
+            for page in outline.get("slides") or []:
+                if page.get("diagram_warning"):
+                    yield _sse({"type": "stage", "text":
+                                f"{page.get('title') or '图示页'}：{page['diagram_warning']}"})
             outline["material_ids"] = [item["id"] for item in images]
         except RuntimeError as e:
             yield _sse({"type": "error", "message": str(e)})

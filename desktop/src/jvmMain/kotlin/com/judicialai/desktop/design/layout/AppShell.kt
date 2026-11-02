@@ -168,7 +168,7 @@ private fun AppHeader(
                 }
                 Spacer(Modifier.width(Dimens.space3))
                 Column {
-                    Text("白云司法局智慧办公平台", fontSize = 14.5.sp,
+                    Text("白云司法局智能写作助手", fontSize = 14.5.sp,
                         fontWeight = FontWeight.SemiBold, color = Color.White,
                         fontFamily = FontFamily.Serif, letterSpacing = 1.5.sp)
                     Spacer(Modifier.height(1.dp))

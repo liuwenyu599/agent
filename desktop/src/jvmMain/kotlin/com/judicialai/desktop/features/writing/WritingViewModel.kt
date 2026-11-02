@@ -774,6 +774,7 @@ class WritingViewModel(
         AppState.writingLastError = null
         planning = true
         status = null
+        agentProgress = "正在理解需求并规划写作…"
         planError = null
         messages = messages + TaskChatMessage("user", text)
         activeJob = scope.launch {
@@ -789,6 +790,7 @@ class WritingViewModel(
             }
             spec = specResult
             planning = false
+            agentProgress = "正在创建写作任务…"
             // 无论是否规划成功，都按用户的原话创建任务（不阻断写作）
             when (val r = repo.createTask(text, specResult)) {
                 is ApiResult.Ok -> {
@@ -828,6 +830,7 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = "正在按模板「${p.templateName}」创建写作任务…"
+        agentProgress = "正在准备模板写作任务…"
         messages = messages + TaskChatMessage("user", p.message)
         activeJob = scope.launch {
             val planned = WorkspaceSpec(
@@ -952,6 +955,7 @@ class WritingViewModel(
         val id = task.taskId
         if (text.isBlank() || busy || id == null) return
         busy = true
+        agentProgress = "正在理解修改要求并检查当前文稿…"
         AppState.writingGenerating = true
         AppState.writingLastError = null
         messages = messages + TaskChatMessage("user", text)
@@ -968,6 +972,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            agentProgress = null
             AppState.writingGenerating = false
         }
     }
@@ -990,7 +995,7 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
-        agentProgress = null
+        agentProgress = "正在检索可用资料并准备正文…"
         // 服务端语义是「按当前稿继续生成，旧正文自动归档为 v{n+1}」
         // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
         // 不是「在旧文后面续写」。所以开流前必须先清空编辑器：
@@ -1010,6 +1015,8 @@ class WritingViewModel(
                 outlineOnly,
                 onDelta = { delta ->
                     streamed = true
+                    if (agentProgress == "正在检索可用资料并准备正文…")
+                        agentProgress = "正在生成正文…"
                     if (!firstDeltaSeen) {
                         firstDeltaSeen = true
                         val totalMs = if (writingClickAtNanos > 0)
@@ -1083,6 +1090,7 @@ class WritingViewModel(
         val submittedVersion = versionNo
         val submittedServerContent = serverContent
         busy = true
+        agentProgress = "正在按要求修改并校验文稿…"
         AppState.writingGenerating = true
         AppState.writingLastError = null
         activeJob = scope.launch {
@@ -1097,6 +1105,7 @@ class WritingViewModel(
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
+            agentProgress = null
             AppState.writingGenerating = false
         }
     }

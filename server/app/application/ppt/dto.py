@@ -6,18 +6,18 @@ from app.core.fonts import DEFAULT_CJK_FONT
 
 
 class TemplateIn(BaseModel):
-    name: str
-    category: str = "其他"
-    description: str = ""
+    name: str = Field(min_length=1, max_length=100)
+    category: str = Field(default="其他", min_length=1, max_length=40)
+    description: str = Field(default="", max_length=500)
     colors: Optional[dict] = None
-    font: str = DEFAULT_CJK_FONT
+    font: str = Field(default=DEFAULT_CJK_FONT, min_length=1, max_length=80)
     layouts: Optional[dict] = None
 
 
 class ImportUrlIn(BaseModel):
-    url: str
-    name: str = ""
-    category: str = "其他"
+    url: str = Field(min_length=1, max_length=2048)
+    name: str = Field(default="", max_length=100)
+    category: str = Field(default="其他", min_length=1, max_length=40)
 
 
 class DraftIn(BaseModel):

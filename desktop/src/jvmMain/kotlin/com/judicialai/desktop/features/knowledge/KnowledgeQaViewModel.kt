@@ -77,7 +77,7 @@ class KnowledgeQaViewModel(
         val uploaded = attachments
         messages = messages + ChatMessage(role = "user", content = q, attachments = uploaded)
         sending = true
-        status = null
+        status = "正在检索知识库并整理回答…"
         scope.launch {
             when (val r = knowledge.ask(q, currentSessionId, uploaded.map { it.id })) {
                 is ApiResult.Ok -> {
@@ -89,6 +89,7 @@ class KnowledgeQaViewModel(
                     )
                     currentSessionId = r.data.sessionId ?: currentSessionId
                     attachments = emptyList()
+                    status = null
                     loadSessions()
                 }
                 is ApiResult.Err -> status = r.message

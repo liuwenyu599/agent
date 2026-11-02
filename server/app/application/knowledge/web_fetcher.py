@@ -130,6 +130,36 @@ def _fetch_html(url: str) -> str:
     raise UnsafeWebAddress("网页跳转次数过多")
 
 
+def fetch_public_bytes(url: str, *, max_bytes: int, timeout: int = FETCH_TIMEOUT) -> bytes:
+    """Download bounded bytes from public HTTP(S) only, checking each redirect."""
+    with requests.Session() as session:
+        session.trust_env = False
+        adapter = _PublicOnlyAdapter()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            _validate_web_url(current)
+            with session.get(current, headers={"User-Agent": UA}, timeout=timeout,
+                             allow_redirects=False, stream=True) as resp:
+                if resp.is_redirect:
+                    location = resp.headers.get("Location")
+                    if not location:
+                        raise UnsafeWebAddress("跳转链接缺少目标地址")
+                    current = urljoin(current, location)
+                    continue
+                resp.raise_for_status()
+                size = 0
+                chunks = []
+                for chunk in resp.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("文件超过大小限制")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+    raise UnsafeWebAddress("网页跳转次数过多")
+
+
 def _looks_blocked(html: str) -> Optional[str]:
     head = html[:3000]
     for hint in _ANTI_BOT_HINTS:

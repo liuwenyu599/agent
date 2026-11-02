@@ -125,6 +125,7 @@ class TrainingViewModel(private val repo: TrainingRepository) {
 
     fun generateSample(assetId: String) {
         busy = true
+        notify("正在读取材料并生成候选样本…")
         scope.launch {
             when (val r = repo.generateSample(assetId)) {
                 is ApiResult.Ok -> { notify("已生成候选样本，请到「样本审核」查看"); loadSamples() }

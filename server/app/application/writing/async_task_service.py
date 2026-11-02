@@ -998,6 +998,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
         expected_state = (task.current_content, task.version_no)
         ctx = dict(task.context or {})
         template = self._load_template(ctx.get("template_id"))
+        ctx = self._effective_draft_context(ctx, template)
         attachment_ctx = self._attachment_context(task, ctx)
         if self._should_section(ctx, outline_only):
             plan = await self._section_plan_async(ctx)
@@ -1112,6 +1113,7 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             expected_state = (task.current_content, task.version_no)
             ctx = dict(task.context or {})
             template = self._load_template(ctx.get("template_id"))
+            ctx = self._effective_draft_context(ctx, template)
             attachment_ctx = self._attachment_context(task, ctx)
             if self._should_section(ctx, outline_only):
                 yield _sse({"type": "stage", "key": "planner", "label": "正在安排正文结构", "status": "running"})

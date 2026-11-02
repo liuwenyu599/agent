@@ -215,7 +215,7 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         horizontal = abs(target.left - source.left) >= abs(target.top - source.top)
         start_site, end_site = ((3, 1) if target.left >= source.left else (1, 3)) if horizontal else (
             (2, 0) if target.top >= source.top else (0, 2))
-        connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 1, 1)
+        connector = slide.shapes.add_connector(MSO_CONNECTOR.ELBOW, 0, 0, 1, 1)
         connector.begin_connect(source, start_site)
         connector.end_connect(target, end_site)
         connector.line.color.rgb = color(edge["style"].get("strokeColor"), line_default)

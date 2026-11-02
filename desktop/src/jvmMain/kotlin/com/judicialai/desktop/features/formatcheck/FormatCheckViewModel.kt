@@ -247,7 +247,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
     fun check(file: File) {
         busy = true
         error = null
-        status = "校验中，请稍候…"
+        status = "正在上传文档并执行格式、内容与依据校验…"
         scope.launch {
             when (val r = repo.check(file, true)) {
                 is ApiResult.Ok -> {
@@ -510,7 +510,7 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             return
         }
         compilingRule = true
-        status = null
+        status = "正在理解规则描述并生成可执行校验项…"
         scope.launch {
             when (val r = repo.compileRule(form.target, form.description,
                 form.name.ifBlank { null })) {

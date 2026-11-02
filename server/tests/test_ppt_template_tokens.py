@@ -110,5 +110,6 @@ def test_overflow_content_is_reported_instead_of_dropped_silently():
             {"time": "四季度", "event": "总结验收"},
         ]}},
     ]}
-    _rendered, warnings, _analysis = _render(data, outline)
-    assert any("未能放入" in warning for warning in warnings)
+    rendered, warnings, _analysis = _render(data, outline)
+    assert "四季度　总结验收" in _all_text(rendered)
+    assert any("该页基础排版" in warning for warning in warnings)

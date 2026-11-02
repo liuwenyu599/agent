@@ -10,6 +10,7 @@
   drawio_native 负责在导出时将 XML 转成原生 PPTX 形状与连线。
 """
 from typing import Optional
+import time
 
 
 import httpx
@@ -33,6 +34,7 @@ class DrawioService:
         self._client_override = client
         self._enabled = bool(self.base_url)
         self._reference_cache: dict[str, str] = {}
+        self._reference_retry_at = 0.0
 
     @property
     def enabled(self) -> bool:
@@ -58,14 +60,21 @@ class DrawioService:
             return None
         if fmt in self._reference_cache:
             return self._reference_cache[fmt]
+        if time.monotonic() < self._reference_retry_at:
+            return None
         try:
-            with self._client() as c:
+            # A reference is advisory; do not spend the full page timeout on it.
+            with DrawioMcpClient(self.base_url, timeout=min(self.timeout, 8),
+                                 client=self._client_override) as c:
                 reference = c.get_reference(fmt=fmt)
             if reference:
                 self._reference_cache[fmt] = reference
+            else:
+                self._reference_retry_at = time.monotonic() + 60
             return reference
         except DrawioMcpError as e:
             logger.warning("drawio get_reference 失败，降级本地渲染: %s", e)
+            self._reference_retry_at = time.monotonic() + 60
             return None
 
     def search_shapes(self, query: str, limit: int = 20) -> Optional[str]:
@@ -85,11 +94,15 @@ class DrawioService:
         """把 .drawio XML（或 Mermaid）渲染为内联图文本（预览/校验，非 PNG）。"""
         if not self._enabled:
             return None
+        if time.monotonic() < self._reference_retry_at:
+            return None
         try:
-            with self._client() as c:
+            with DrawioMcpClient(self.base_url, timeout=min(self.timeout, 8),
+                                 client=self._client_override) as c:
                 return c.create_diagram(xml=xml, mermaid=mermaid)
         except DrawioMcpError as e:
             logger.warning("drawio create_diagram 失败: %s", e)
+            self._reference_retry_at = time.monotonic() + 60
             return None
 
     def health(self) -> bool:
@@ -118,10 +131,13 @@ class DrawioService:
             raise ValueError("不支持的图示类型")
         source_slide = slide
         blocks = slide.get("blocks") or {}
-        if (not self._enabled and not (blocks.get("diagram_nodes") or blocks.get("process"))
+        from app.application.ppt.drawio_skill_layout import ensure_dot
+        if (not (blocks.get("diagram_nodes") or blocks.get("process"))
                 and (slide.get("title") or slide.get("points"))):
-            from app.application.ppt.drawio_skill_layout import ensure_dot
-            if ensure_dot():
+            if (ensure_dot() or
+                    (self.enabled and time.monotonic() >= self._reference_retry_at and
+                     (len(slide.get("points") or []) >= 2 or
+                      len(blocks.get("diagram_labels") or []) >= 2))):
                 # Page-level user actions need a small semantic plan first. The
                 # vendored skill then positions the planned graph deterministically.
                 try:
@@ -158,10 +174,87 @@ class DrawioService:
             updated = dict(source_slide)
             updated["type"] = "process"
             labels = [node["label"] for node in nodes if node["label"]]
+            original_nodes = (source_slide.get("blocks") or {}).get("diagram_nodes") or []
+            original_labels = ([str(node.get("label") or "") for node in original_nodes
+                                if isinstance(node, dict)] if original_nodes else
+                               [str(value) for value in
+                                ((source_slide.get("blocks") or {}).get("process") or
+                                 source_slide.get("points") or [])])
+            details = [label for label in original_labels if len(label) > 20]
             updated["blocks"] = {**(source_slide.get("blocks") or {}),
                 "drawio_xml": skill_xml, "drawio_kind": kind,
+                "diagram_engine": "graphviz",
+                "diagram_details": details,
                 "process" if kind == "process" else "diagram_labels": labels}
             return updated
+        # drawio-mcp accepts Mermaid and may return laid-out draw.io XML. Use it
+        # as the second layout engine only when its output preserves the planned
+        # graph; plain reference text is not a layout engine.
+        planned = (source_slide.get("blocks") or {})
+        raw_nodes = planned.get("diagram_nodes") or []
+        raw_edges = planned.get("diagram_edges") or []
+        if not raw_nodes and kind == "process":
+            steps = planned.get("process") or source_slide.get("points") or []
+            raw_nodes = [{"id": str(index), "label": str(step)}
+                         for index, step in enumerate(steps)]
+            raw_edges = [{"source": str(index), "target": str(index + 1)}
+                         for index in range(max(0, len(raw_nodes) - 1))]
+        if self.enabled and 2 <= len(raw_nodes) <= 12:
+            aliases = {str(node.get("id")): f"n{index}" for index, node in enumerate(raw_nodes)
+                       if isinstance(node, dict) and node.get("id") is not None}
+            if len(aliases) == len(raw_nodes):
+                def short_label(value):
+                    label = str(value or "").strip()
+                    return label[:19] + "…" if len(label) > 20 else label
+                direction = "LR" if kind == "process" else "TB"
+                mermaid = [f"flowchart {direction}"]
+                for node in raw_nodes:
+                    label = short_label(node.get("label"))
+                    # Escape Mermaid delimiters; user text must remain a label.
+                    label = re.sub(r'["\[\]{}<>|\\\r\n]', " ", label)
+                    mermaid.append(f'{aliases[str(node["id"])]}["{label}"]')
+                for edge in raw_edges:
+                    if (isinstance(edge, dict) and
+                            str(edge.get("source")) in aliases and
+                            str(edge.get("target")) in aliases):
+                        mermaid.append(f'{aliases[str(edge["source"])]} --> '
+                                       f'{aliases[str(edge["target"])]}')
+                try:
+                    raw_mcp = self.create_diagram(mermaid="\n".join(mermaid))
+                    obj = loads_lenient(raw_mcp) if raw_mcp and raw_mcp.lstrip().startswith("{") else None
+                    mcp_xml = obj.get("xml") if isinstance(obj, dict) else raw_mcp
+                    diagram = validate_generated_layout(mcp_xml)
+                    from collections import Counter
+                    expected = Counter(short_label(node.get("label")) for node in raw_nodes)
+                    actual = Counter(node["label"] for node in diagram["nodes"])
+                    if any(actual[label] < count for label, count in expected.items()):
+                        raise ValueError("MCP 图示遗漏规划节点")
+                    labels_by_id = {node["id"]: node["label"] for node in diagram["nodes"]}
+                    actual_edges = {(labels_by_id[edge["source"]], labels_by_id[edge["target"]])
+                                    for edge in diagram["edges"]}
+                    planned_labels = {str(node["id"]): short_label(node.get("label"))
+                                      for node in raw_nodes}
+                    required_edges = {(planned_labels[str(edge["source"])],
+                                       planned_labels[str(edge["target"])])
+                                      for edge in raw_edges if isinstance(edge, dict) and
+                                      str(edge.get("source")) in planned_labels and
+                                      str(edge.get("target")) in planned_labels}
+                    if not required_edges.issubset(actual_edges):
+                        raise ValueError("MCP 图示遗漏规划连线")
+                    labels = [node["label"] for node in diagram["nodes"] if node["label"]]
+                    details = [str(node.get("label") or "") for node in raw_nodes
+                               if len(str(node.get("label") or "")) > 20]
+                    updated = dict(source_slide)
+                    updated["type"] = "process"
+                    updated["blocks"] = {**planned, "drawio_xml": mcp_xml,
+                        "drawio_kind": kind, "diagram_engine": "mcp",
+                        "diagram_details": details,
+                        "process" if kind == "process" else "diagram_labels": labels}
+                    return updated
+                except (ValueError, TypeError, AttributeError) as exc:
+                    logger.warning("MCP 排版结果未通过校验，回退基础步骤版式: %s",
+                                   type(exc).__name__)
+                    return None
         reference = self.get_reference()
         if not reference:
             return None

@@ -336,7 +336,7 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     from app.application.ppt.drawio_native import parse_diagram
 
     monkeypatch.setattr(drawio_skill_layout.shutil, "which", lambda _name: "dot")
-    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source:
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source, **_kwargs:
                         (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
     slide = {"title": "办理流程", "blocks": {
         "diagram_nodes": [{"id": "a", "label": "受理"},
@@ -376,15 +376,16 @@ def test_graphviz_dot_setting_enables_skill_without_system_path(monkeypatch, tmp
     fake_bin.mkdir()
     dot = fake_bin / ("dot.exe" if os.name == "nt" else "dot")
     dot.write_bytes(b"")
-    # ensure_dot 会改写 PATH；换成副本，避免污染同进程其他测试
+    # 配置绝对路径不应污染进程级 PATH。
     monkeypatch.setattr(drawio_skill_layout.os, "environ", {**os.environ})
+    original_path = drawio_skill_layout.os.environ["PATH"]
     monkeypatch.setattr(settings, "GRAPHVIZ_DOT", str(dot))
-    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _src:
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _src, **_kwargs:
                         (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
 
     resolved = drawio_skill_layout.ensure_dot()
     assert resolved and resolved.lower() == str(dot).lower()
-    assert str(fake_bin).lower() in drawio_skill_layout.os.environ["PATH"].lower()
+    assert drawio_skill_layout.os.environ["PATH"] == original_path
     assert DrawioService(base_url="").native_available
 
     xml = drawio_skill_layout.layout_slide_graph(
@@ -404,6 +405,124 @@ def test_graphviz_dot_setting_ignores_missing_file(monkeypatch, tmp_path):
     assert not DrawioService(base_url="").native_available
 
 
+@pytest.mark.parametrize("count", [6, 7, 8, 10, 12])
+def test_skill_keeps_all_steps_for_dense_process_pages(count):
+    from app.application.ppt.drawio_skill_layout import ensure_dot, layout_slide_graph
+    from app.application.ppt.drawio_native import parse_diagram
+    if not ensure_dot():
+        pytest.skip("Graphviz dot is not installed")
+    points = [f"第{i + 1}步办理事项" for i in range(count)]
+    xml = layout_slide_graph({"title": "办理流程", "points": points}, "process", {})
+    assert [node["label"] for node in parse_diagram(xml)["nodes"]] == points
+
+
+def test_skill_retains_long_label_as_visible_detail():
+    from app.application.ppt.drawio_skill_layout import ensure_dot
+    if not ensure_dot():
+        pytest.skip("Graphviz dot is not installed")
+    original = "全流程办理期限不得超过五个工作日并须记录办理责任人"
+    slide = {"title": "办理流程", "blocks": {"process": [original, "完成复核"]}}
+    result = DrawioService(base_url="").generate_native_diagram(None, slide)
+    assert result["blocks"]["diagram_details"] == [original]
+
+
+def test_template_config_rejects_unknown_geometry_and_normalizes_hash_colors():
+    from app.application.ppt import ppt_engine
+    assert ppt_engine.normalize_template_colors({"primary": "#17365d"})["primary"] == "17365D"
+    with pytest.raises(ValueError, match="模板颜色"):
+        ppt_engine.normalize_template_colors({"primary": "red"})
+    with pytest.raises(ValueError, match="版式"):
+        ppt_engine.normalize_template_layouts({"content": "nonexistent"})
+    assert ppt_engine.choose_layout(
+        {"type": "content", "points": ["第一项", "第二项"]},
+        {"content": "content.compare"}) == "content.compare"
+
+
+def test_template_url_import_rejects_loopback_before_network(monkeypatch):
+    import requests
+    from app.application.knowledge.web_fetcher import UnsafeWebAddress, fetch_public_bytes
+    monkeypatch.setattr(requests.Session, "get", lambda *_args, **_kwargs:
+                        pytest.fail("private URL must never be requested"))
+    with pytest.raises(UnsafeWebAddress):
+        fetch_public_bytes("http://127.0.0.1:8001/models", max_bytes=100)
+
+
+def test_template_url_import_rechecks_redirect_target(monkeypatch):
+    import requests
+    from app.application.knowledge import web_fetcher
+    monkeypatch.setattr(web_fetcher, "_public_address", lambda host:
+                        "93.184.215.14" if host == "example.com" else
+                        (_ for _ in ()).throw(web_fetcher.UnsafeWebAddress("private")))
+    calls = []
+    class Redirect:
+        is_redirect = True
+        headers = {"Location": "http://127.0.0.1:8001/models"}
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return None
+    monkeypatch.setattr(requests.Session, "get", lambda _self, url, **_kwargs:
+                        calls.append(url) or Redirect())
+    with pytest.raises(web_fetcher.UnsafeWebAddress):
+        web_fetcher.fetch_public_bytes("https://example.com/file.pptx", max_bytes=100)
+    assert calls == ["https://example.com/file.pptx"]
+
+
+def test_unavailable_mcp_reference_is_temporarily_short_circuited(monkeypatch):
+    from app.infrastructure.drawio.mcp_client import DrawioMcpError
+    calls = []
+    class BrokenClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return None
+        def get_reference(self, fmt):
+            calls.append(fmt)
+            raise DrawioMcpError("offline")
+    monkeypatch.setattr("app.application.ppt.drawio_service.DrawioMcpClient",
+                        lambda *_args, **_kwargs: BrokenClient())
+    service = DrawioService(base_url="http://drawio-mcp:3001")
+    assert service.get_reference() is None
+    assert service.get_reference() is None
+    assert calls == ["xml"]
+
+
+def test_mcp_mermaid_layout_is_used_when_dot_is_unavailable(monkeypatch):
+    from app.application.ppt import drawio_skill_layout
+    monkeypatch.setattr(drawio_skill_layout, "ensure_dot", lambda: None)
+    service = DrawioService(base_url="http://drawio-mcp:3001")
+    requests = []
+    monkeypatch.setattr(service, "create_diagram", lambda **kwargs:
+                        requests.append(kwargs) or json.dumps({"xml": NATIVE_XML}))
+    class NoModel:
+        def complete(self, *_args, **_kwargs):
+            pytest.fail("MCP layout should avoid model-generated coordinates")
+    slide = {"title": "办理流程", "blocks": {
+        "diagram_nodes": [{"id": "first", "label": "受理"},
+                          {"id": "second", "label": "审核"}],
+        "diagram_edges": [{"source": "first", "target": "second"}],
+    }}
+    result = service.generate_native_diagram(NoModel(), slide)
+    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+    assert "flowchart LR" in requests[0]["mermaid"]
+
+
+def test_points_already_in_diagram_are_not_repeated_below_it():
+    from io import BytesIO
+    from pptx import Presentation
+    from app.application.ppt import ppt_engine
+    outline = {"slides": [{"type": "process", "title": "办理流程",
+                            "points": ["受理", "审核"],
+                            "blocks": {"drawio_xml": NATIVE_XML,
+                                       "drawio_kind": "process"}}]}
+    data = ppt_engine.render_pptx(
+        outline, ppt_engine.template_to_dict(ppt_engine.BUILTIN_TEMPLATES[0]))
+    texts = [shape.text for shape in Presentation(BytesIO(data)).slides[0].shapes
+             if shape.has_text_frame]
+    assert texts.count("受理") == 1
+    assert texts.count("审核") == 1
+
+
 def test_agents365_linter_rejects_duplicate_root_cells():
     from app.application.ppt.drawio_native import validate_generated_layout
     duplicate = NATIVE_XML.replace('<mxCell id="1" parent="0"/>',
@@ -415,7 +534,7 @@ def test_agents365_linter_rejects_duplicate_root_cells():
 def test_page_action_uses_35b_plan_then_skill_layout_without_mcp(monkeypatch):
     from app.application.ppt import drawio_skill_layout
     monkeypatch.setattr(drawio_skill_layout.shutil, "which", lambda _name: "dot")
-    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source:
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source, **_kwargs:
                         (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
     calls = []
     class Assistant:
@@ -437,6 +556,27 @@ def test_page_action_uses_35b_plan_then_skill_layout_without_mcp(monkeypatch):
     assert result["blocks"]["drawio_xml"].startswith("<mxGraphModel")
 
 
+def test_skill_keeps_priority_when_mcp_is_also_configured(monkeypatch):
+    from app.application.ppt import drawio_skill_layout
+    monkeypatch.setattr(drawio_skill_layout, "ensure_dot", lambda: "dot")
+    monkeypatch.setattr(drawio_skill_layout, "layout_slide_graph",
+                        lambda *_args: NATIVE_XML)
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    monkeypatch.setattr(svc, "get_reference", lambda: (_ for _ in ()).throw(
+        AssertionError("MCP must not run after skill succeeds")))
+
+    class Assistant:
+        def complete(self, _messages, **_kwargs):
+            return json.dumps({"diagram_nodes": [
+                {"id": "a", "label": "受理"}, {"id": "b", "label": "审核"}],
+                "diagram_edges": [{"source": "a", "target": "b"}]},
+                ensure_ascii=False)
+
+    result = svc.generate_native_diagram(
+        Assistant(), {"title": "办理流程", "points": ["受理后审核"]})
+    assert result["blocks"]["drawio_xml"] == NATIVE_XML
+
+
 def test_drawio_reference_is_reused_across_pages(monkeypatch):
     svc = DrawioService(base_url="http://drawio-mcp:3001")
     calls = []
@@ -452,7 +592,8 @@ def test_drawio_reference_is_reused_across_pages(monkeypatch):
             calls.append(fmt)
             return "mxGraphModel reference"
 
-    monkeypatch.setattr(svc, "_client", lambda: FakeClient())
+    monkeypatch.setattr("app.application.ppt.drawio_service.DrawioMcpClient",
+                        lambda *_args, **_kwargs: FakeClient())
 
     assert svc.get_reference() == "mxGraphModel reference"
     assert svc.get_reference() == "mxGraphModel reference"
@@ -473,9 +614,9 @@ def test_drawio_generation_uses_template_style_and_relation_kind(monkeypatch):
         Assistant(), {"title": "单位关系", "points": ["受理", "审核"]},
         kind="relationship", style={"colors": {"primary": "123456", "accent": "ABCDEF"},
                                     "font": "思源黑体"})
-    assert "关系图" in prompts[0]
-    assert "#123456" in prompts[0] and "#ABCDEF" in prompts[0]
-    assert "思源黑体" in prompts[0]
+    assert "关系图" in prompts[-1]
+    assert "#123456" in prompts[-1] and "#ABCDEF" in prompts[-1]
+    assert "思源黑体" in prompts[-1]
     assert result["blocks"]["drawio_kind"] == "relationship"
     assert result["blocks"]["diagram_labels"] == ["受理", "审核"]
     assert "process" not in result["blocks"]
@@ -484,6 +625,7 @@ def test_drawio_generation_uses_template_style_and_relation_kind(monkeypatch):
 def test_drawio_generation_rejects_missing_explicit_relationship(monkeypatch):
     svc = DrawioService(base_url="http://drawio-mcp:3001")
     monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
+    monkeypatch.setattr(svc, "create_diagram", lambda **_kwargs: json.dumps({"xml": NATIVE_XML}))
 
     class Assistant:
         def complete(self, *_args, **_kwargs):
@@ -496,13 +638,13 @@ def test_drawio_generation_rejects_missing_explicit_relationship(monkeypatch):
         "diagram_edges": [{"source": "a", "target": "b"}],
     }}
 
-    with pytest.raises(RuntimeError, match="未通过结构检查"):
-        svc.generate_native_diagram(Assistant(), slide, kind="relationship")
+    assert svc.generate_native_diagram(Assistant(), slide, kind="relationship") is None
 
 
 def test_drawio_generation_keeps_explicit_nodes_and_edge(monkeypatch):
     svc = DrawioService(base_url="http://drawio-mcp:3001")
     monkeypatch.setattr(svc, "get_reference", lambda: "mxGraphModel reference")
+    monkeypatch.setattr(svc, "create_diagram", lambda **_kwargs: json.dumps({"xml": NATIVE_XML}))
 
     class Assistant:
         def complete(self, *_args, **_kwargs):

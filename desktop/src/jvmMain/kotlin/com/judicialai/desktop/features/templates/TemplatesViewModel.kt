@@ -162,12 +162,13 @@ class TemplatesViewModel(private val repo: TemplatesRepository) {
 
     fun adaptForDepartment(t: JsonObject, hints: String) {
         adapting = true
-        status = null
+        status = "正在读取模板要求并生成调整建议…"
         scope.launch {
             when (val r = repo.adaptForDept(t["id"].str(), hints)) {
                 is ApiResult.Ok -> {
                     draft = r.data.obj()
-                    if (draft == null) status = "未生成模板调整草案"
+                    status = if (draft == null) "未生成模板调整草案"
+                             else "模板调整草案已生成，请核对后保存"
                 }
                 is ApiResult.Err -> status = r.message
             }

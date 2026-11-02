@@ -146,7 +146,9 @@ fun KnowledgeQaScreen(
 
             vm.status?.let {
                 Spacer(Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colors.error, style = MaterialTheme.typography.caption)
+                Text(it, color = if (vm.sending) MaterialTheme.colors.primary
+                                 else MaterialTheme.colors.error,
+                    style = MaterialTheme.typography.caption)
             }
 
             if (vm.attachments.isNotEmpty()) {

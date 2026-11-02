@@ -149,7 +149,7 @@ def build_dot(graph):
     return "\n".join(lines)
 
 
-def layout(dot_src):
+def layout(dot_src, dot_path="dot"):
     """Run `dot -Tplain`; return (height_in, {id: (xc, yc)}, {(src, dst): [(x, y), ...]}).
 
     Node coords are inches (bottom-left origin); each edge's value is the list
@@ -157,7 +157,7 @@ def layout(dot_src):
     """
     try:
         proc = subprocess.run(
-            ["dot", "-Tplain"], input=dot_src,
+            [dot_path, "-Tplain"], input=dot_src,
             capture_output=True, text=True, check=True, timeout=5,
         )
     except FileNotFoundError:

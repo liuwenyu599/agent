@@ -217,7 +217,10 @@ fun TemplatesScreen() {
     }
 
     vm.status?.let {
-        Box(Modifier.padding(horizontal = Dimens.space6)) { FieldError(it) }
+        Box(Modifier.padding(horizontal = Dimens.space6)) {
+            if (vm.adapting || it.startsWith("已")) Text(it, color = Ink2)
+            else FieldError(it)
+        }
     }
 
     if (showCreate || editing != null) {

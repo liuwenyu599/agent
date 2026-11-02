@@ -62,7 +62,7 @@ compose.desktop {
             packageName = "YunFaZhiBan"   // 必须是纯 ASCII：决定包名与安装目录名
             packageVersion = "1.1.4"      // 必须是数字（MSI 与 deb 版本号限制）
             vendor = "云法智办"
-            description = "白云区司法局智慧办公平台"
+            description = "白云区司法局智能写作助手"
 
             windows {
                 // 图标仍由 jpackage 打进 app image，createDistributable 会用到

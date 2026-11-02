@@ -1,7 +1,8 @@
 # Draw.io MCP 服务（PPT 视觉增强层）
 
-配置后，PPT 工作台的「生成流程图」会先通过 MCP 取得 draw.io 语法参考，
-再由当前 35B 模型生成单页 XML。服务端验证节点和连线后，将 XML 转成 PPTX
+配置后，PPT 工作台优先用本地 Graphviz `dot` 布局；`dot` 不可用时，
+可把 35B 规划的节点和关系交给 MCP 的 Mermaid 图示工具排版。
+服务端验证节点和连线后，将 XML 转成 PPTX
 中的原生形状、文字和连接线，可在 PowerPoint/WPS 中分别编辑。
 
 官方镜像 [`jgraph/drawio-mcp`](https://hub.docker.com/r/jgraph/drawio-mcp)（Apache-2.0，
@@ -12,13 +13,13 @@
 - **只产出文本型工具结果**，不产出 `.pptx`。它提供：
   - `get_drawio_reference` —— draw.io XML/Mermaid 语法参考（模型在画第一张图前读一次）；
   - `search_shapes` —— 跨上千个 shape 库按关键词检索，返回可直接塞进 XML 的 `style` 字符串；
-  - `create_diagram` —— 把已有 XML/Mermaid 渲染为内联图；在**非 MCP-Apps 宿主**下以
-    「文本（XML）」形式返回，可作预览/校验，但**不是**我们生成图的主路径。
+  - `create_diagram` —— 把 Mermaid 转为图示；只有返回可解析、可校验的 XML 且
+    完整保留规划节点与连线时，才用作 `dot` 不可用时的排版结果。
 - 原生转换由 `server/app/application/ppt/drawio_native.py` 完成，支持矩形、圆角矩形、
   椭圆、菱形、文本及节点连线；单页最多 40 个节点和 40 条连线。图片、自定义图标、
   嵌套分组、压缩页面会明确拒绝，生成失败时原页面保持不变。
-- MCP 本身不导出 PPTX；本平台的转换器负责生成可编辑对象。未配置 MCP 时，
-  继续使用已有的本地原生流程图绘制。此变更不需要 PPTAgent。
+- MCP 本身不导出 PPTX；本平台的转换器负责生成可编辑对象。`dot` 和 MCP 都
+  不可用时，使用本地基础步骤版式。此变更不需要 PPTAgent。
 - 已配置 MCP 但临时不可达或未返回参考时，自动调用本地 `ai_generate_visual`，
   成功响应附 `warnings` 提示回退。模型返回非法图示 XML 时继续报错并保留原页面；
   本地生成本身失败时也保留正常错误，不伪造成功结果。
