@@ -1,6 +1,7 @@
 """Use the pinned drawio-skill layout engine for model-planned page graphs."""
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from xml.etree import ElementTree as ET
@@ -9,13 +10,41 @@ from app.application.ppt.drawio_native import validate_generated_layout
 from app.application.ppt.third_party.drawio_skill import autolayout
 
 
+def ensure_dot() -> str | None:
+    """Return the dot executable path, or None when Graphviz is unavailable.
+
+    Resolution order: system PATH first, then ``GRAPHVIZ_DOT`` from settings
+    (a dot.exe path or its bin directory). A configured location is prepended
+    to ``PATH`` once so the vendored autolayout's ``subprocess.run(["dot"])``
+    resolves without requiring a system-wide environment change.
+    """
+    found = shutil.which("dot")
+    if found:
+        return found
+    from app.core.config import settings
+    configured = (getattr(settings, "GRAPHVIZ_DOT", "") or "").strip()
+    if not configured:
+        return None
+    if os.path.isdir(configured):
+        dot = os.path.join(configured, "dot.exe" if os.name == "nt" else "dot")
+    else:
+        dot = configured
+    if not os.path.isfile(dot):
+        return None
+    bin_dir = os.path.dirname(dot)
+    path = os.environ.get("PATH", "")
+    if bin_dir.lower() not in {p.lower() for p in path.split(os.pathsep) if p}:
+        os.environ["PATH"] = bin_dir + os.pathsep + path
+    return dot
+
+
 def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
     """Return a bounded editable mxGraphModel, or None for the existing path.
 
     The model chooses graph semantics; drawio-skill places the nodes. We do not
     pass user supplied IDs, styles, file paths or shell text to Graphviz.
     """
-    if not shutil.which("dot"):
+    if not ensure_dot():
         return None
     blocks = slide.get("blocks") or {}
     raw_nodes = blocks.get("diagram_nodes") or []

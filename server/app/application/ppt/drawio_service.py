@@ -10,7 +10,7 @@
   drawio_native 负责在导出时将 XML 转成原生 PPTX 形状与连线。
 """
 from typing import Optional
-import shutil
+
 
 import httpx
 
@@ -42,7 +42,10 @@ class DrawioService:
     @property
     def native_available(self) -> bool:
         """MCP or the vendored skill's local Graphviz layout can draw a page."""
-        return self._enabled or bool(shutil.which("dot"))
+        if self._enabled:
+            return True
+        from app.application.ppt.drawio_skill_layout import ensure_dot
+        return bool(ensure_dot())
 
     def _client(self) -> DrawioMcpClient:
         return DrawioMcpClient(
@@ -115,30 +118,31 @@ class DrawioService:
             raise ValueError("不支持的图示类型")
         source_slide = slide
         blocks = slide.get("blocks") or {}
-        if (not self._enabled and shutil.which("dot") and
-                not (blocks.get("diagram_nodes") or blocks.get("process")) and
-                (slide.get("title") or slide.get("points"))):
-            # Page-level user actions need a small semantic plan first. The
-            # vendored skill then positions the planned graph deterministically.
-            try:
-                raw_plan = assistant.complete(
-                    [{"role": "system", "content": "你是PPT图示规划助手，只输出JSON。"},
-                     {"role": "user", "content": (
-                         f"根据本页内容规划{kind}图。只输出JSON："
-                         '{"diagram_nodes":[{"id":"a","label":"名称"}],'
-                         '"diagram_edges":[{"source":"a","target":"b"}]}。'
-                         "节点2至12个、标签不超过20字；关系只能来自页面内容，"
-                         "不得凭空添加事实或数字。\n"
-                         + json.dumps(slide, ensure_ascii=False)[:3500]
-                         + "\n补充要求：" + instruction[:500])}],
-                    temperature=0.2, max_tokens=1000)
-                plan = loads_lenient(raw_plan or "")
-                if isinstance(plan, dict) and isinstance(plan.get("diagram_nodes"), list):
-                    source_slide = {**slide, "blocks": {**blocks,
-                        "diagram_nodes": plan["diagram_nodes"],
-                        "diagram_edges": plan.get("diagram_edges") or []}}
-            except Exception as exc:
-                logger.warning("图示语义规划失败，改走基础版式: %s", type(exc).__name__)
+        if (not self._enabled and not (blocks.get("diagram_nodes") or blocks.get("process"))
+                and (slide.get("title") or slide.get("points"))):
+            from app.application.ppt.drawio_skill_layout import ensure_dot
+            if ensure_dot():
+                # Page-level user actions need a small semantic plan first. The
+                # vendored skill then positions the planned graph deterministically.
+                try:
+                    raw_plan = assistant.complete(
+                        [{"role": "system", "content": "你是PPT图示规划助手，只输出JSON。"},
+                         {"role": "user", "content": (
+                             f"根据本页内容规划{kind}图。只输出JSON："
+                             '{"diagram_nodes":[{"id":"a","label":"名称"}],'
+                             '"diagram_edges":[{"source":"a","target":"b"}]}。'
+                             "节点2至12个、标签不超过20字；关系只能来自页面内容，"
+                             "不得凭空添加事实或数字。\n"
+                             + json.dumps(slide, ensure_ascii=False)[:3500]
+                             + "\n补充要求：" + instruction[:500])}],
+                        temperature=0.2, max_tokens=1000)
+                    plan = loads_lenient(raw_plan or "")
+                    if isinstance(plan, dict) and isinstance(plan.get("diagram_nodes"), list):
+                        source_slide = {**slide, "blocks": {**blocks,
+                            "diagram_nodes": plan["diagram_nodes"],
+                            "diagram_edges": plan.get("diagram_edges") or []}}
+                except Exception as exc:
+                    logger.warning("图示语义规划失败，改走基础版式: %s", type(exc).__name__)
         # The 35B outline or page-level plan decides which entities and links matter.
         # Reuse the skill's graph placement when Graphviz is available instead
         # of asking the model to guess coordinates in another long call.

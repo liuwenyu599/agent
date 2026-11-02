@@ -108,6 +108,10 @@ class Settings:
         # 留空则 PPT 流程图仍走本地原生渲染，不依赖该服务（零侵入）。
         self.DRAWIO_MCP_URL = os.getenv("DRAWIO_MCP_URL", "")
         self.DRAWIO_MCP_TIMEOUT = int(os.getenv("DRAWIO_MCP_TIMEOUT", "30"))
+        # Graphviz dot 可执行文件（或其 bin 目录）。Windows 开发机往往没把
+        # Graphviz 加进 PATH，配置后无需改系统环境即可启用 drawio-skill 布局；
+        # 容器镜像已内置 graphviz，无需配置。留空则只认 PATH 里的 dot。
+        self.GRAPHVIZ_DOT = os.getenv("GRAPHVIZ_DOT", "")
 
         # 智能写作流水线
         self.WRITING_AUTO_QA = os.getenv("WRITING_AUTO_QA", "true").lower() == "true"

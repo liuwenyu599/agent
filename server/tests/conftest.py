@@ -118,6 +118,17 @@ def _seed_developer(module_name: str) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_host_graphviz(monkeypatch):
+    """宿主机 .env 可能配置 GRAPHVIZ_DOT（真实 dot）。
+
+    多数用例假定测试环境没有 Graphviz（图示退回步骤条、事件序列固定），
+    因此默认屏蔽；需要 dot 的用例在测试体内显式覆盖 settings.GRAPHVIZ_DOT。
+    """
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "GRAPHVIZ_DOT", "")
+
+
+@pytest.fixture(autouse=True)
 def _drain_ppt_job_threads_between_interface_tests(request):
     yield
     if request.module.__name__ != "test_ppt_agent_jobs":

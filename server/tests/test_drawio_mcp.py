@@ -7,6 +7,7 @@
 - DrawioService 在 URL 未配置时静默降级（返回 None），配置后正常返回，调用异常时降级。
 """
 import json
+import os
 
 import httpx
 import pytest
@@ -366,6 +367,43 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     assert all(shape.shape_type != 13 for shape in page.shapes)  # no raster picture
 
 
+def test_graphviz_dot_setting_enables_skill_without_system_path(monkeypatch, tmp_path):
+    """GRAPHVIZ_DOT 指向 dot 后，本机无需改系统 PATH 即可走 skill 布局。"""
+    from app.application.ppt import drawio_skill_layout
+    from app.core.config import settings
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    dot = fake_bin / ("dot.exe" if os.name == "nt" else "dot")
+    dot.write_bytes(b"")
+    # ensure_dot 会改写 PATH；换成副本，避免污染同进程其他测试
+    monkeypatch.setattr(drawio_skill_layout.os, "environ", {**os.environ})
+    monkeypatch.setattr(settings, "GRAPHVIZ_DOT", str(dot))
+    monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _src:
+                        (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
+
+    resolved = drawio_skill_layout.ensure_dot()
+    assert resolved and resolved.lower() == str(dot).lower()
+    assert str(fake_bin).lower() in drawio_skill_layout.os.environ["PATH"].lower()
+    assert DrawioService(base_url="").native_available
+
+    xml = drawio_skill_layout.layout_slide_graph(
+        {"title": "办理流程", "blocks": {
+            "diagram_nodes": [{"id": "a", "label": "受理"}, {"id": "b", "label": "审核"}],
+            "diagram_edges": [{"source": "a", "target": "b"}]}},
+        "process", {"primary": "123456"})
+    assert xml and "受理" in xml
+
+
+def test_graphviz_dot_setting_ignores_missing_file(monkeypatch, tmp_path):
+    from app.application.ppt import drawio_skill_layout
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "GRAPHVIZ_DOT", str(tmp_path / "nope" / "dot.exe"))
+    assert drawio_skill_layout.ensure_dot() is None
+    assert not DrawioService(base_url="").native_available
+
+
 def test_agents365_linter_rejects_duplicate_root_cells():
     from app.application.ppt.drawio_native import validate_generated_layout
     duplicate = NATIVE_XML.replace('<mxCell id="1" parent="0"/>',
@@ -375,9 +413,8 @@ def test_agents365_linter_rejects_duplicate_root_cells():
 
 
 def test_page_action_uses_35b_plan_then_skill_layout_without_mcp(monkeypatch):
-    from app.application.ppt import drawio_skill_layout, drawio_service
+    from app.application.ppt import drawio_skill_layout
     monkeypatch.setattr(drawio_skill_layout.shutil, "which", lambda _name: "dot")
-    monkeypatch.setattr(drawio_service.shutil, "which", lambda _name: "dot")
     monkeypatch.setattr(drawio_skill_layout.autolayout, "layout", lambda _source:
                         (4.0, {"n1": (1.0, 2.0), "n2": (4.0, 2.0)}, {}))
     calls = []
