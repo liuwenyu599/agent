@@ -377,10 +377,12 @@ private fun JobStatusBar(vm: PptViewModel, job: PptJobProgress) {
             // 服务端不知道总页数时（跨机部署）不显示「0/N 页」，只报已生成页数 + 阶段
             Text(
                 job.knownTotal?.let {
-                    // 生成成功但一张页图都没有：显示「已生成 N 页（无逐页预览）」，
-                    // 避免「0/6 页 · 生成完成」这种自相矛盾的进度
+                    // 生成成功但页图缺失（0 张=预览失败，部分=预览不全）：
+                    // PPTX 本身可下载，进度条不能显示自相矛盾的「5/5 · 无预览」
                     if (job.status == PptJobStatus.DONE && job.donePages == 0)
-                        "已生成 $it 页（无逐页预览）· ${job.stageText}"
+                        "已生成 $it 页（可下载，预览失败）· ${job.stageText}"
+                    else if (job.status == PptJobStatus.DONE && job.donePages < it)
+                        "已生成 $it 页（可下载，预览不全 ${job.donePages}/$it）· ${job.stageText}"
                     else "进度：${job.donePages}/$it 页 · ${job.stageText}"
                 }
                     ?: if (job.donePages > 0) "已生成 ${job.donePages} 页 · ${job.stageText}"

@@ -1100,3 +1100,64 @@ def test_submit_without_agent_url_falls_back_to_local_render(doc_and_token, monk
     final = _wait_terminal(token, doc_id)
     assert final["status"] == "succeeded", final
     assert final["renderer"] == "local", final
+
+
+# ============================ 本地渲染进度契约 ============================
+# 进度只认磁盘上真实存在的页图：页图 2/3 时 current_page=2，预览全失败时
+# current_page=0 且 job 仍成功（PPTX 可下载）。绝不虚报成 N/N。
+
+
+def _blank_doc_with_outline(token: str, n_slides: int) -> str:
+    r = client.post(f"{BASE}/ppt/blank", json={"title": "进度契约", "subtitle": ""},
+                    headers=_hdr(token))
+    assert r.status_code == 200, r.text
+    doc_id = r.json()["doc_id"]
+    slides = [{"type": "content", "title": f"第{i}页", "points": ["要点一", "要点二"]}
+              for i in range(1, n_slides + 1)]
+    r = client.put(f"{BASE}/ppt/documents/{doc_id}/draft",
+                   json={"title": "进度契约",
+                         "outline": {"title": "进度契约", "slides": slides}},
+                   headers=_hdr(token))
+    assert r.status_code == 200, r.text
+    return doc_id
+
+
+def test_local_render_current_page_counts_real_previews(monkeypatch):
+    """页图 2/3：job 成功，current_page=2（真值），total_pages=3。"""
+    token = _dev_token()
+    doc_id = _blank_doc_with_outline(token, 3)
+    seen_progress = []
+
+    def fake_preview(pptx_path, doc, on_progress=None):
+        for n in (1, 2):
+            if on_progress is not None:
+                on_progress(n)
+                seen_progress.append(n)
+        return 2
+
+    # _render_local_and_store 是 core 模块函数（包装层 __getattr__ 转发），
+    # 全局查找发生在 core 模块字典里，必须 patch core 而不是包装层
+    monkeypatch.setattr(agent_job._core, "_render_local_previews", fake_preview)
+    ok, why = agent_job._render_local_and_store(doc_id)
+    assert ok, why
+    assert seen_progress == [1, 2], "逐页回调必须真的被触发"
+    status = client.get(f"{BASE}/ppt/jobs/{doc_id}/status",
+                        headers=_hdr(token)).json()
+    assert status["status"] == "succeeded", status
+    assert status["current_page"] == 2, status
+    assert status["total_pages"] == 3, status
+
+
+def test_local_render_preview_failure_reports_zero_not_total(monkeypatch):
+    """预览全失败：job 仍成功（PPTX 可下载），current_page=0，不虚报成 3/3。"""
+    token = _dev_token()
+    doc_id = _blank_doc_with_outline(token, 3)
+    monkeypatch.setattr(agent_job._core, "_render_local_previews",
+                        lambda *args, **kwargs: 0)
+    ok, why = agent_job._render_local_and_store(doc_id)
+    assert ok, why
+    status = client.get(f"{BASE}/ppt/jobs/{doc_id}/status",
+                        headers=_hdr(token)).json()
+    assert status["status"] == "succeeded", status
+    assert status["current_page"] == 0, status
+    assert status["total_pages"] == 3, status

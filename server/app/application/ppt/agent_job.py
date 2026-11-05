@@ -35,7 +35,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -108,13 +108,18 @@ def _is_active(doc_id: str) -> bool:
 
 # 本地渲染是确定性排版，秒级完成，所以它既是「PPTAgent 失败后的兜底」，
 # 也是「没有 PPTAgent 时的正式路径」——两条路共用同一段落盘逻辑。
-def _render_local_previews(pptx_path: Path, doc_id: str) -> int:
-    """把生成的 pptx 逐页转 PNG（尽力而为，复用 soffice + pdftoppm 工具链）。
+def _render_local_previews(pptx_path: Path, doc_id: str,
+                           on_progress: Optional[Callable[[int], None]] = None) -> int:
+    """把生成的 pptx **逐页**转 PNG（尽力而为，复用 soffice + pdftoppm 工具链）。
 
     产出写入 ``ppt_dir/preview/{doc_id}/pg-*.png`` —— 与
     :meth:`PPTService.preview_document` 的缓存目录与命名**完全一致**，
     ``list_previews`` 优先从这里取图。命令缺失 / 超时 / 转换失败一律记日志
     后返回 0：预览缺失只影响工作台缩略图（前端有降级文案），不影响导出。
+
+    ``on_progress(done)`` 在每成功转换一页后回调，参数是**磁盘上实际存在**
+    的页图张数——调用方借此把 ``job_current_page`` 逐页推进，前端才能看到
+    「第 N/M 页」真实增长，而不是整份转完一次性跳到 5/5。
     """
     import glob
     import subprocess
@@ -127,6 +132,10 @@ def _render_local_previews(pptx_path: Path, doc_id: str) -> int:
         return 0
     prev_dir = settings.ppt_dir / "preview" / doc_id
     prev_dir.mkdir(parents=True, exist_ok=True)
+
+    def _count() -> int:
+        return len(glob.glob(os.path.join(str(prev_dir), "pg-*.png")))
+
     try:
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "gen.pptx")
@@ -139,14 +148,44 @@ def _render_local_previews(pptx_path: Path, doc_id: str) -> int:
                 return 0
             for old in prev_dir.glob("pg-*.png"):
                 old.unlink()
-            subprocess.run([pdftoppm, "-png", "-r", "90", pdf,
-                            os.path.join(str(prev_dir), "pg")],
-                           timeout=120, capture_output=True)
-        # pdftoppm 会在总页数≥10 时补零（pg-01…），数字序排序两种都正确
-        pages = sorted(glob.glob(os.path.join(str(prev_dir), "pg-*.png")),
-                       key=lambda p: (len(os.path.basename(p)), p))
-        logger.info("PPT 本地页图完成：%d 张（doc_id=%s）", len(pages), doc_id)
-        return len(pages)
+            # 总页数取自 PDF 本身（pdfinfo 与 pdftoppm 同属 poppler-utils，
+            # 有 pdftoppm 就有 pdfinfo；万一缺失则退回一次性全量转换）
+            total = 0
+            pdfinfo = shutil.which("pdfinfo")
+            if pdfinfo:
+                try:
+                    out = subprocess.run([pdfinfo, pdf], timeout=15,
+                                         capture_output=True, text=True)
+                    for line in (out.stdout or "").splitlines():
+                        if line.startswith("Pages:"):
+                            total = int(line.split(":", 1)[1].strip() or 0)
+                            break
+                except Exception as e:  # noqa: BLE001 - 拿不到总页数就走全量回退
+                    logger.info("PPT 本地页图 pdfinfo 失败，回退全量转换：%s", e)
+            if total <= 0:
+                subprocess.run([pdftoppm, "-png", "-r", "90", pdf,
+                                os.path.join(str(prev_dir), "pg")],
+                               timeout=120, capture_output=True)
+                pages = _count()
+                logger.info("PPT 本地页图完成（全量）：%d 张（doc_id=%s）",
+                            pages, doc_id)
+                return pages
+            # 逐页转换：每页落盘即回调，缩略图随之逐页出现在前端轮询里。
+            # pdftoppm 的补零宽度按 PDF 总页数决定，逐页调用命名与全量一致。
+            for i in range(1, total + 1):
+                subprocess.run([pdftoppm, "-png", "-r", "90",
+                                "-f", str(i), "-l", str(i), pdf,
+                                os.path.join(str(prev_dir), "pg")],
+                               timeout=60, capture_output=True)
+                done = _count()
+                if on_progress is not None:
+                    try:
+                        on_progress(done)
+                    except Exception as e:  # noqa: BLE001 - 进度回调绝不拖垮转换
+                        logger.info("PPT 页图进度回调失败（忽略）：%s", e)
+        pages = _count()
+        logger.info("PPT 本地页图完成：%d/%d 张（doc_id=%s）", pages, total, doc_id)
+        return pages
     except Exception as e:  # noqa: BLE001 - 预览失败绝不能拖垮 job
         logger.warning("PPT 本地页图渲染失败（不影响导出，doc_id=%s）：%s: %s",
                        doc_id, type(e).__name__, e)
@@ -195,13 +234,22 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         # 逐页预览图（尽力而为）：与 preview_document 共用同一缓存目录约定
         # （ppt_dir/preview/{doc_id}/pg-*.png）。缺 soffice/pdftoppm 或渲染失败
         # 只影响工作台缩略图（前端有降级文案），绝不影响 job 成功与 pptx 导出。
-        _render_local_previews(path, doc_id)
+        # 每成功一页即把 job_current_page 推进到**磁盘上真实存在**的张数：
+        # 前端「正在生成第 N/M 页」与完成后「X/M」都只认真值，绝不虚报。
+        def _on_page(done: int) -> None:
+            _update_job(doc_id, job_current_page=done, job_progress_at=now_local())
+
+        pages = _render_local_previews(path, doc_id, on_progress=_on_page)
+        if pages < slides:
+            logger.warning("PPT 本地渲染完成但页图不全：job_id=%s 页图 %d/%d"
+                           "（PPTX 可正常下载，预览缺失见前端降级文案）",
+                           doc_id, pages, slides)
         _update_job(doc_id, file_path=str(path), outline=adjusted_outline,
                     status="generated",
                     slide_count=slides, job_status="succeeded",
                     job_phase="succeeded", job_renderer=renderer,
                     job_event_id="", job_error="", job_question="",
-                    job_total_pages=slides, job_current_page=slides,
+                    job_total_pages=slides, job_current_page=pages,
                     job_finished_at=now_local(), job_progress_at=now_local())
         logger.info("PPT 本地渲染完成：job_id=%s，%d 字节", doc_id, len(data))
         return True, ""
@@ -232,8 +280,11 @@ class LocalRenderJobRunner:
                 self._set(job_status="cancelled", job_phase="cancelled",
                           job_finished_at=now_local())
                 return
+            # 总页数在渲染开始前就写入：前端「正在生成第 N/M 页」需要 M，
+            # 否则整个渲染期只能显示无数字的「正在生成页面…」
+            total = len((doc.outline or {}).get("slides") or [])
             self._set(job_status="running", job_phase="designing",
-                      job_progress_at=now_local())
+                      job_total_pages=total, job_progress_at=now_local())
             ok, why = _render_local_and_store(self.doc_id)
             if not ok:
                 self._fail(why)

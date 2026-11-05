@@ -1230,6 +1230,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                         sections.append(later)
                         source_groups.append(later_sources)
                         yield _sse({"type": "delta", "text": "\n\n" + later})
+                yield _sse({"type": "stage", "key": "review",
+                            "label": "正在终检与排版修正", "status": "running"})
                 payload = self._finalize_draft(
                     task, ctx, "\n\n".join(sections).strip(),
                     self._merge_sources(source_groups), user_id,
@@ -1259,6 +1261,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 return
             text, retry_reason = await self._regenerate_if_needed_async(
                 instruction, sources, attachment_ctx, user_id, template, text, ctx)
+            yield _sse({"type": "stage", "key": "review",
+                        "label": "正在终检与排版修正", "status": "running"})
             payload = self._finalize_draft(task, ctx, text, sources, user_id,
                                            expected_state=expected_state)
             if retry_reason:

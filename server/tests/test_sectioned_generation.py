@@ -261,8 +261,12 @@ def test_short_speech_streams_without_a_second_model_plan():
                 service.draft_stream_async("task-a", "user-a")]
 
     events = asyncio.run(collect())
-    assert [event["type"] for event in events] == ["stage", "stage", "delta", "delta", "done"]
+    assert [event["type"] for event in events] == [
+        "stage", "stage", "delta", "delta", "stage", "done"]
     assert events[2]["text"] == "各位来宾，"
+    # 正文流结束、落库前必须有终检阶段，不能一直停在「正在生成正文」
+    assert events[4]["key"] == "review"
+    assert events[4]["label"] == "正在终检与排版修正"
     assert "致辞" in service._build_draft_instruction(task.context, False, None)
     service._section_plan_async.assert_not_awaited()
 
@@ -591,9 +595,9 @@ def test_sectioned_sse_replaces_provisional_first_section_before_done(monkeypatc
         return first_event, [decode(part) async for part in stream]
 
     first_event, rest = asyncio.run(collect())
-    assert [event["type"] for event in rest] == ["replace", "delta", "done"]
+    assert [event["type"] for event in rest] == ["replace", "delta", "stage", "done"]
     assert rest[0]["text"] == "通过校验的首段"
-    assert rest[0]["text"] + rest[1]["text"] == rest[2]["data"]["current_content"]
+    assert rest[0]["text"] + rest[1]["text"] == rest[3]["data"]["current_content"]
 
 
 def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
