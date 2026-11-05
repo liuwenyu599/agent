@@ -191,3 +191,7 @@ deliverables/样稿预览/
 !server/app/application/ppt/templates/library/manifest.json
 deliverables/fixed_preview*/
 deliverables/template-audit/*/
+
+# 演示成品（汇报/样稿 pptx、介绍与简历 html）不入库；已跟踪文件不受影响
+deliverables/*.pptx
+deliverables/*.html
