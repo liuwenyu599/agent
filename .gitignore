@@ -189,3 +189,5 @@ deliverables/样稿预览/
 
 # 图库清单是部署依赖（seed 脚本与镜像内都要用），例外放行
 !server/app/application/ppt/templates/library/manifest.json
+deliverables/fixed_preview*/
+deliverables/template-audit/*/
