@@ -18,6 +18,7 @@ from app.application.ppt.dto import (
     DocRenameIn,
     DraftIn,
     GenerateIn,
+    ImageCaptionIn,
     ImportUrlIn,
     JobClarifyIn,
     JobSubmitIn,
@@ -34,7 +35,7 @@ from app.core.exceptions import AppError, NotFoundError
 from app.domain.identity.entities import User
 from app.infrastructure.ai import get_llm_gateway
 from app.infrastructure.database import get_db
-from app.interfaces.deps import get_current_user
+from app.interfaces.deps import get_current_user, require_admin_or_above
 
 # PPTX（OOXML 演示文稿）MIME，供导出/下载响应使用
 _PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -113,10 +114,12 @@ def toggle_favorite(template_id: str, user: User = Depends(get_current_user),
 
 @router.post("/templates/upload")
 async def upload_template(file: UploadFile = File(...), name: str = Form(""),
-                          category: str = Form("其他"),
+                          category: str = Form("其他"), shared: bool = Form(False),
+                          license_note: str = Form(""),
                           user: User = Depends(get_current_user),
                           svc: PPTService = Depends(get_ppt_service)):
-    return await svc.upload_template(file, name, category, user)
+    return await svc.upload_template(file, name, category, user,
+                                     shared=shared, license_note=license_note)
 
 
 @router.get("/templates/{template_id}/layout-preview/{layout_id}")
@@ -154,6 +157,52 @@ def list_themes(user: User = Depends(get_current_user),
 
 # ================= 素材库 =================
 
+@router.get("/library/images")
+def list_library_images(category: str = "", keyword: str = "",
+                        user: User = Depends(get_current_user),
+                        svc: PPTService = Depends(get_ppt_service)):
+    return svc.list_library_images(category, keyword)
+
+
+@router.post("/library/images")
+async def upload_library_image(file: UploadFile = File(...), name: str = Form(""),
+                               caption: str = Form(""), category: str = Form("其他"),
+                               tags: str = Form(""), source: str = Form(""),
+                               license_note: str = Form(""),
+                               admin: User = Depends(require_admin_or_above),
+                               svc: PPTService = Depends(get_ppt_service)):
+    return await svc.upload_library_image(file, name, caption, category, tags,
+                                          source, license_note)
+
+
+@router.get("/library/images/{image_id}/file")
+def library_image_file(image_id: str, user: User = Depends(get_current_user),
+                       svc: PPTService = Depends(get_ppt_service)):
+    path, mime = svc.library_image_file(image_id)
+    return FileResponse(str(path), media_type=mime)
+
+
+@router.get("/library/images/{image_id}/thumb")
+def library_image_thumb(image_id: str, user: User = Depends(get_current_user),
+                        svc: PPTService = Depends(get_ppt_service)):
+    path, mime = svc.library_image_file(image_id, thumbnail=True)
+    return FileResponse(str(path), media_type=mime)
+
+
+@router.delete("/library/images/{image_id}")
+def disable_library_image(image_id: str,
+                          admin: User = Depends(require_admin_or_above),
+                          svc: PPTService = Depends(get_ppt_service)):
+    return svc.disable_library_image(image_id)
+
+
+@router.patch("/library/images/{image_id}/caption")
+def update_library_image_caption(image_id: str, body: ImageCaptionIn,
+                                 admin: User = Depends(require_admin_or_above),
+                                 svc: PPTService = Depends(get_ppt_service)):
+    return svc.update_library_image_caption(image_id, body.caption)
+
+
 @router.get("/materials")
 def list_materials(user: User = Depends(get_current_user),
                    svc: PPTService = Depends(get_ppt_service)):
@@ -185,6 +234,13 @@ def update_material(mid: str, name: str = Form(...), caption: str = Form(""),
                     user: User = Depends(get_current_user),
                     svc: PPTService = Depends(get_ppt_service)):
     return svc.update_material(mid, name, caption, user)
+
+
+@router.patch("/materials/{mid}/caption")
+def update_material_caption(mid: str, body: ImageCaptionIn,
+                            user: User = Depends(get_current_user),
+                            svc: PPTService = Depends(get_ppt_service)):
+    return svc.update_material_caption(mid, body.caption, user)
 
 
 @router.delete("/materials/{mid}")

@@ -811,14 +811,19 @@ def test_gradio_contract_conflict_is_reported_but_not_fatal():
 
 @pytest.fixture()
 def doc_and_token(monkeypatch):
-    """准备：开启 PPTAgent 配置 + 建一个带大纲的文档。"""
+    """准备显式模板任务，覆盖仍保留的 PPTAgent 兼容路径。"""
     monkeypatch.setattr(settings, "PPT_AGENT_URL", AGENT_URL)
     monkeypatch.setattr(settings, "PPT_AGENT_PROGRESS_INTERVAL", 1)
     monkeypatch.setattr(settings, "PPT_AGENT_TOTAL_TIMEOUT", 60)
     monkeypatch.setattr(settings, "PPT_AGENT_STALL_TIMEOUT", 20)
     token = _dev_token()
+    template = client.post(f"{BASE}/ppt/templates", headers=_hdr(token), json={
+        "name": f"旧版作业契约 {uuid.uuid4().hex[:8]}", "category": "汇报",
+    })
+    assert template.status_code == 200, template.text
     r = client.post(f"{BASE}/ppt/blank", json={"title": "司法局工作汇报",
-                                               "subtitle": "2026 年度"},
+                                               "subtitle": "2026 年度",
+                                               "template_id": template.json()["id"]},
                     headers=_hdr(token))
     assert r.status_code == 200, r.text
     return token, r.json()["doc_id"]

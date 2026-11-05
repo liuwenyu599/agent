@@ -25,7 +25,7 @@ from app.infrastructure.database.models.ppt import (
 
 _TPL_FIELDS = ["id", "name", "builtin_id", "category", "description", "is_official",
                "created_by", "colors", "font", "layouts", "layout_library",
-               "source_file", "use_count", "created_at", "updated_at"]
+               "source_file", "license_note", "use_count", "created_at", "updated_at"]
 _MAT_FIELDS = ["id", "user_id", "name", "caption", "file_path", "file_size",
                "width", "height", "mime_type", "created_at"]
 _DOC_FIELDS = ["id", "user_id", "title", "subtitle", "source_content", "template_id",
@@ -103,7 +103,8 @@ class SqlAlchemyPPTTemplateRepository(PPTTemplateRepository):
             description=tpl.description, is_official=tpl.is_official,
             created_by=tpl.created_by, colors=tpl.colors, font=tpl.font,
             layouts=tpl.layouts, layout_library=tpl.layout_library,
-            source_file=tpl.source_file, use_count=tpl.use_count,
+            source_file=tpl.source_file, license_note=tpl.license_note,
+            use_count=tpl.use_count,
         )
         self.db.add(m)
         self.db.commit()

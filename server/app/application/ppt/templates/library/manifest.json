@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "note": "公共图库离线图片包清单。images 为空表示尚未导入图片；拿到授权图片后按 README 填写并运行 deploy/seed_ppt_library_images.py。",
+  "categories": ["法治宣传", "党建", "办公", "会议", "调解", "其他"],
+  "defaults": {
+    "source": "",
+    "license_note": ""
+  },
+  "images": []
+}

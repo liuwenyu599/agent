@@ -395,6 +395,9 @@ def test_prompt_rag_timeout_keeps_base_rules_and_template(monkeypatch):
     service = AsyncWritingTaskService(
         outer, assistant=Assistant(),
         rag=SimpleNamespace(embedder=None, vector_store=None), attachments=None)
+    # Production may route long drafts through a separate gateway. Keep this
+    # unit test on its controllable assistant so it never calls the live model.
+    service.long_form_assistant = Assistant()
     try:
         assert asyncio.run(service._llm_draft_async(
             "写通知", [], None, "u1", {"name": "通知模板"}))

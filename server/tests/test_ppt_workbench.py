@@ -181,6 +181,7 @@ def test_copied_uploaded_template_keeps_learned_layouts(client, accounts, monkey
                            files={"file": ("layout.pptx", data,
                                            "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
     assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["prepare_notes"]  # 上传即预处理已生效
     source_id = uploaded.json()["id"]
     copied = client.post(f"{BASE}/ppt/templates/{source_id}/copy", headers=headers)
     assert copied.status_code == 200, copied.text
@@ -188,6 +189,63 @@ def test_copied_uploaded_template_keeps_learned_layouts(client, accounts, monkey
     detail = client.get(f"{BASE}/ppt/templates/{copy_id}", headers=headers).json()
     assert detail["layout_count"] == uploaded.json()["layout_count"]
     assert detail["layout_library"]
+
+
+def test_shared_pptx_template_requires_admin_and_license(client, accounts, monkeypatch):
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", lambda *_args: None)
+    data = _make_pptx_bytes([("封面", []), ("工作安排", ["事项一", "事项二"])])
+    files = {"file": ("licensed.pptx", data,
+                       "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
+    endpoint = f"{BASE}/ppt/templates/upload"
+    denied = client.post(endpoint, headers=_hdr(accounts["a"]),
+                         data={"shared": "true", "license_note": "内部授权"}, files=files)
+    assert denied.status_code == 403
+    missing = client.post(endpoint, headers=_hdr(accounts["dev"]),
+                          data={"shared": "true"}, files=files)
+    assert missing.status_code == 400
+    uploaded = client.post(endpoint, headers=_hdr(accounts["dev"]),
+                           data={"shared": "true", "license_note": "允许内网重复生成及修改"},
+                           files=files)
+    assert uploaded.status_code == 200, uploaded.text
+    listing = client.get(f"{BASE}/ppt/templates", headers=_hdr(accounts["a"])).json()["items"]
+    assert any(item["id"] == uploaded.json()["id"] and item["is_learned"]
+               for item in listing)
+
+
+def test_public_gallery_requires_license_and_respects_selection(client, accounts):
+    from PIL import Image
+    from app.infrastructure.database import SessionLocal
+    from app.infrastructure.database.models.identity import UserModel
+    from sqlalchemy import select
+
+    image = io.BytesIO()
+    Image.new("RGB", (640, 360), "#345678").save(image, format="PNG")
+    files = {"file": ("meeting.png", image.getvalue(), "image/png")}
+    endpoint = f"{BASE}/ppt/library/images"
+    data = {"name": "调解会议", "category": "调解", "caption": "基层调解会议现场",
+            "source": "单位自摄", "license_note": "允许本系统内部使用和修改"}
+    assert client.post(endpoint, headers=_hdr(accounts["a"]),
+                       data=data, files=files).status_code == 403
+    assert client.post(endpoint, headers=_hdr(accounts["dev"]),
+                       data={**data, "license_note": ""}, files=files).status_code == 400
+    uploaded = client.post(endpoint, headers=_hdr(accounts["dev"]),
+                           data=data, files=files)
+    assert uploaded.status_code == 200, uploaded.text
+    image_id = uploaded.json()["id"]
+    listed = client.get(f"{BASE}/ppt/materials", headers=_hdr(accounts["a"])).json()["items"]
+    assert any(item["id"] == image_id and item["source"] == "library" for item in listed)
+    assert client.get(f"{endpoint}/{image_id}/thumb",
+                      headers=_hdr(accounts["a"])).content.startswith(b"\xff\xd8")
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(UserModel).where(UserModel.username == "pptusera"))
+        svc = PPTService(db, None)
+        assert [item["id"] for item in svc._user_images(user.id, [image_id])] == [image_id]
+    finally:
+        db.close()
+    assert client.delete(f"{endpoint}/{image_id}", headers=_hdr(accounts["dev"])).status_code == 200
+    assert client.get(f"{endpoint}/{image_id}/file",
+                      headers=_hdr(accounts["a"])).status_code == 404
 
 
 def test_official_template_has_real_cover_preview_when_renderer_available(client, accounts):
@@ -198,7 +256,8 @@ def test_official_template_has_real_cover_preview_when_renderer_available(client
     seeded = client.post(f"{BASE}/ppt/templates/seed", headers=token)
     assert seeded.status_code == 200, seeded.text
     listing = client.get(f"{BASE}/ppt/templates", headers=token)
-    official = next(item for item in listing.json()["items"] if item["is_official"])
+    official = next(item for item in listing.json()["items"]
+                    if item["is_official"] and not item.get("is_shared"))
     assert official["layout_count"] > 0
     preview = client.get(official["preview_url"], headers=token)
     assert preview.status_code == 200, preview.text
@@ -235,9 +294,10 @@ def accounts(client):
 def _make_pptx_bytes(pages):
     """用 python-pptx 生成最小可解析 pptx：[(标题, [要点...]), ...]。"""
     from pptx import Presentation
-    from pptx.util import Pt
+    from pptx.util import Inches, Pt
 
     prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
     blank = prs.slide_layouts[6]
     for title, bullets in pages:
         slide = prs.slides.add_slide(blank)
@@ -321,6 +381,225 @@ def test_outline_uses_only_explicitly_selected_library_materials(
     assert response.status_code == 200, response.text
     assert [item["name"] for item in captured["images"]] == ["社区矫正现场"]
     assert response.json()["outline"]["material_ids"] == [first.json()["id"]]
+
+
+def test_upload_image_uses_visual_description_when_caption_is_missing(
+        client, accounts, monkeypatch):
+    from app.application.ppt import image_analysis
+
+    captured = {}
+
+    class Vision:
+        async def acomplete(self, messages, **_kwargs):
+            captured["messages"] = messages
+            return '{"caption":"群众在室内听工作人员讲解法律知识"}'
+
+    monkeypatch.setattr(image_analysis, "get_vision_gateway", lambda: Vision())
+    response = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]),
+        data={"name": "自动识别测试"},
+        files={"file": ("scene.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["analysis_status"] == "ready"
+    assert "群众" in response.json()["caption"]
+    content = captured["messages"][0]["content"]
+    assert any(item["type"] == "image_url" for item in content)
+    listed = client.get(f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]))
+    assert any(item["caption"] == response.json()["caption"]
+               for item in listed.json()["items"])
+
+
+def test_upload_image_keeps_file_when_vision_is_unavailable(
+        client, accounts, monkeypatch):
+    from app.application.ppt import image_analysis
+
+    monkeypatch.setattr(image_analysis, "get_vision_gateway", lambda: None)
+    response = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]),
+        data={"name": "待说明图片"},
+        files={"file": ("scene.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["analysis_status"] == "unavailable"
+    assert response.json()["caption"] == ""
+    assert "补写图片说明" in response.json()["message"]
+
+
+def test_image_caption_can_be_corrected_only_by_owner_or_admin(
+        client, accounts, monkeypatch):
+    from app.application.ppt import image_analysis
+
+    monkeypatch.setattr(image_analysis, "get_vision_gateway", lambda: None)
+    own = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]),
+        data={"name": "待修正"},
+        files={"file": ("own.png", _png_bytes(), "image/png")},
+    )
+    assert own.status_code == 200, own.text
+    image_id = own.json()["id"]
+    denied = client.patch(f"{BASE}/ppt/materials/{image_id}/caption",
+                          headers=_hdr(accounts["b"]),
+                          json={"caption": "错误说明"})
+    assert denied.status_code == 404
+    corrected = client.patch(f"{BASE}/ppt/materials/{image_id}/caption",
+                             headers=_hdr(accounts["a"]),
+                             json={"caption": "工作人员在室内讲解法律知识"})
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["caption"] == "工作人员在室内讲解法律知识"
+    public = client.post(
+        f"{BASE}/ppt/library/images", headers=_hdr(accounts["dev"]),
+        data={"name": "活动图", "caption": "原说明", "category": "法治宣传",
+              "source": "测试素材", "license_note": "测试环境内使用"},
+        files={"file": ("public.png", _png_bytes(), "image/png")},
+    )
+    assert public.status_code == 200, public.text
+    public_id = public.json()["id"]
+    denied_public = client.patch(
+        f"{BASE}/ppt/library/images/{public_id}/caption",
+        headers=_hdr(accounts["a"]), json={"caption": "非法改动"})
+    assert denied_public.status_code in (401, 403)
+    updated_public = client.patch(
+        f"{BASE}/ppt/library/images/{public_id}/caption",
+        headers=_hdr(accounts["dev"]), json={"caption": "群众在室内参加普法活动"})
+    assert updated_public.status_code == 200, updated_public.text
+
+
+def test_outline_automatically_selects_owned_and_licensed_images(
+        client, accounts, monkeypatch):
+    from pptx import Presentation
+    from app.application.ppt import image_analysis
+
+    monkeypatch.setattr(image_analysis, "get_vision_gateway", lambda: None)
+    own = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["a"]),
+        data={"name": "宪法宣誓", "caption": "工作人员进行宪法宣誓"},
+        files={"file": ("own.png", _png_bytes(), "image/png")},
+    )
+    foreign = client.post(
+        f"{BASE}/ppt/materials", headers=_hdr(accounts["b"]),
+        data={"name": "他人私图", "caption": "宪法宣誓现场"},
+        files={"file": ("foreign.png", _png_bytes(), "image/png")},
+    )
+    public = client.post(
+        f"{BASE}/ppt/library/images", headers=_hdr(accounts["dev"]),
+        data={"name": "普法照片", "caption": "群众参加普法活动",
+              "category": "法治宣传", "source": "测试素材",
+              "license_note": "测试环境内使用"},
+        files={"file": ("public.png", _png_bytes(), "image/png")},
+    )
+    assert own.status_code == foreign.status_code == public.status_code == 200
+    captured = {}
+
+    def fake_generate(_assistant, _source_type, topic, _content, images,
+                      *_args, **_kwargs):
+        captured["ids"] = {item["id"] for item in images}
+        return {"title": topic, "slides": [
+            {"type": "content", "title": "宪法宣誓",
+             "points": ["工作人员庄严宣誓"], "image_id": own.json()["id"]},
+        ]}
+
+    monkeypatch.setattr(ppt_engine, "generate_outline", fake_generate)
+    monkeypatch.setattr(PPTService, "_audit_and_repair_outline",
+                        lambda self, outline, *_args: outline)
+    response = client.post(f"{BASE}/ppt/outline", headers=_hdr(accounts["a"]),
+                           json={"topic": "法治宣传工作", "material_ids": []})
+    assert response.status_code == 200, response.text
+    assert own.json()["id"] in captured["ids"]
+    assert public.json()["id"] in captured["ids"]
+    assert foreign.json()["id"] not in captured["ids"]
+    assert response.json()["outline"]["material_ids"] == [own.json()["id"]]
+    assert response.json()["outline"]["image_selection_mode"] == "auto"
+    draft = client.put(
+        f"{BASE}/ppt/documents/{response.json()['doc_id']}/draft",
+        headers=_hdr(accounts["a"]),
+        json={"outline": {"title": response.json()["outline"]["title"],
+                          "slides": response.json()["outline"]["slides"],
+                          "image_selection_mode": "auto"}})
+    assert draft.status_code == 200, draft.text
+    generated = client.post(f"{BASE}/ppt/generate", headers=_hdr(accounts["a"]),
+                            json={"doc_id": response.json()["doc_id"]})
+    assert generated.status_code == 200, generated.text
+    exported = client.get(
+        f"{BASE}/ppt/documents/{response.json()['doc_id']}/download",
+        headers=_hdr(accounts["a"]))
+    assert exported.status_code == 200, exported.text
+    deck = Presentation(io.BytesIO(exported.content))
+    assert any("PICTURE" in str(shape.shape_type)
+               for slide in deck.slides for shape in slide.shapes)
+    disabled = client.post(f"{BASE}/ppt/outline", headers=_hdr(accounts["a"]),
+                           json={"topic": "法治宣传工作", "material_ids": [],
+                                 "auto_images": False})
+    assert disabled.status_code == 200, disabled.text
+    assert captured["ids"] == set()
+    assert disabled.json()["outline"]["material_ids"] == []
+    assert disabled.json()["outline"]["image_selection_mode"] == "off"
+
+
+def test_saved_outline_without_material_ids_still_exports_library_image(
+        client, accounts, monkeypatch):
+    """客户端只回传 slides 时，文档级图片授权范围不能被清空。
+
+    公共图库图片只能通过 material_ids 解析；一旦保存草稿把它丢掉，导出
+    重新渲染时图片会静默消失，用户只会看到「图没了」。
+    """
+    from pptx import Presentation
+
+    from app.application.ppt import image_analysis
+
+    monkeypatch.setattr(image_analysis, "get_vision_gateway", lambda: None)
+    public = client.post(
+        f"{BASE}/ppt/library/images", headers=_hdr(accounts["dev"]),
+        data={"name": "归档普法照", "caption": "工作人员向群众发放普法资料",
+              "category": "法治宣传", "source": "测试素材",
+              "license_note": "测试环境内使用"},
+        files={"file": ("arch.png", _png_bytes((200, 120, 30)), "image/png")})
+    assert public.status_code == 200, public.text
+    pid = public.json()["id"]
+    caption = public.json()["caption"]
+
+    def fake_generate(_assistant, _source_type, topic, _content, images,
+                      *_args, **_kwargs):
+        assert any(item["id"] == pid for item in images)
+        return {"title": topic, "slides": [
+            {"type": "content", "title": caption,
+             "points": ["工作人员向群众发放普法资料"], "image_id": pid},
+        ]}
+
+    monkeypatch.setattr(ppt_engine, "generate_outline", fake_generate)
+    monkeypatch.setattr(PPTService, "_audit_and_repair_outline",
+                        lambda self, outline, *_args: outline)
+    made = client.post(f"{BASE}/ppt/outline", headers=_hdr(accounts["a"]),
+                       json={"topic": "普法进社区", "material_ids": [pid]})
+    assert made.status_code == 200, made.text
+    doc_id = made.json()["doc_id"]
+    outline = made.json()["outline"]
+
+    # 第三方客户端只回传页面内容，不回传 material_ids
+    saved = client.put(f"{BASE}/ppt/documents/{doc_id}/draft",
+                       headers=_hdr(accounts["a"]),
+                       json={"title": outline["title"],
+                             "outline": {"title": outline["title"],
+                                         "slides": outline["slides"]}})
+    assert saved.status_code == 200, saved.text
+    stored = client.get(f"{BASE}/ppt/documents/{doc_id}",
+                        headers=_hdr(accounts["a"])).json()["outline"]
+    assert stored["material_ids"] == [pid]
+
+    exported = client.post(f"{BASE}/ppt/documents/{doc_id}/export",
+                           headers=_hdr(accounts["a"]))
+    assert exported.status_code == 200, exported.text
+    deck = Presentation(io.BytesIO(exported.content))
+    assert any("PICTURE" in str(shape.shape_type)
+               for slide in deck.slides for shape in slide.shapes)
+
+
+def test_model_cannot_attach_an_image_outside_candidate_ids():
+    outline = {"slides": [{"type": "content", "title": "普法活动",
+                           "image_id": "unauthorized", "points": ["开展普法"]}]}
+    ppt_engine.resolve_slide_images(outline, [{"id": "allowed", "name": "普法活动",
+                                               "caption": "群众参与普法活动"}])
+    assert outline["slides"][0]["_image"] is None
 
 
 def test_outline_rejects_another_users_library_material(client, accounts, fake_llm):
@@ -627,6 +906,8 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
         "topic": "行政复议工作汇报",
         "slide_count": 8,
         "material_names": ["材料A.txt", "材料B.csv"],
+        # 本测试聚焦 SSE 事件序列；自动配图会多一个图库挑选 stage，另测
+        "auto_images": False,
     }, headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     assert "text/event-stream" in r.headers["content-type"]
@@ -666,6 +947,20 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
     assert got.json()["outline"]["title"] == "行政复议工作汇报"
 
 
+def test_outline_stream_auto_images_emits_gallery_stage(client, accounts,
+                                                        fake_llm, outline_payload):
+    """auto_images 默认开启且未勾选图片：事件序列多一个图库挑选 stage。"""
+    fake_llm._responder = lambda m: json.dumps(outline_payload, ensure_ascii=False)
+    r = client.post(f"{BASE}/ppt/outline/stream", json={
+        "source_type": "topic", "topic": "随便一个主题",
+    }, headers=_hdr(accounts["a"]))
+    assert r.status_code == 200, r.text
+    events = _parse_sse(r.text)
+    assert events[-1]["type"] == "done", events
+    texts = [e.get("text") for e in events if e["type"] == "stage"]
+    assert "正在从图库挑选相关图片…" in texts, texts
+
+
 def test_outline_stream_without_explicit_slide_count_keeps_model_page_count(
         client, accounts, fake_llm, outline_payload):
     """未填页数时服务端只给建议，不把模型的页面方案凑成六页。"""
@@ -696,7 +991,7 @@ def test_outline_stream_emits_error_without_done(client, accounts, fake_llm):
     """
     fake_llm._responder = lambda m: "抱歉，我无法完成这个请求。"
     r = client.post(f"{BASE}/ppt/outline/stream", json={
-        "source_type": "topic", "topic": "随便一个主题",
+        "source_type": "topic", "topic": "随便一个主题", "auto_images": False,
     }, headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     events = _parse_sse(r.text)
@@ -730,7 +1025,7 @@ def test_outline_stream_rescues_malformed_json_without_retry(client, accounts, f
     )
     fake_llm._responder = lambda m: malformed
     r = client.post(f"{BASE}/ppt/outline/stream", json={
-        "source_type": "topic", "topic": "随便一个主题",
+        "source_type": "topic", "topic": "随便一个主题", "auto_images": False,
     }, headers=_hdr(accounts["a"]))
     assert r.status_code == 200, r.text
     events = _parse_sse(r.text)
@@ -1365,7 +1660,7 @@ def test_template_import_requires_a_fillable_content_page():
     import pytest
 
     with pytest.raises(ValueError, match="标题和正文文本框"):
-        ppt_engine.validate_learned_template({"layouts": [{
+        ppt_engine.validate_learned_template({"slide_size": {"w": 13.333, "h": 7.5}, "layouts": [{
             "element_schema": [{"kind": "text", "role": "content"},
                                {"kind": "picture", "role": "fixed"}]}]})
 
@@ -1430,7 +1725,7 @@ def test_learned_template_overflow_keeps_all_points():
     text = "\n".join(shape.text for slide in Presentation(BytesIO(output)).slides
                      for shape in slide.shapes if shape.has_text_frame)
     assert all(point in text for point in ("第一项内容", "第二项内容", "第三项内容"))
-    assert any("基础排版" in warning for warning in warnings)
+    assert not any("已省略" in warning for warning in warnings)
 
 
 def test_failed_learned_page_falls_back_without_replacing_other_pages(monkeypatch):
@@ -1458,7 +1753,7 @@ def test_failed_learned_page_falls_back_without_replacing_other_pages(monkeypatc
     assert len(slides) == 2
     assert "保留模板页" in " ".join(shape.text for shape in slides[0].shapes if shape.has_text_frame)
     assert "完整内容" in " ".join(shape.text for shape in slides[1].shapes if shape.has_text_frame)
-    assert any("第二页" in warning and "基础排版" in warning for warning in warnings)
+    assert any("第二页" in warning and "可读版式" in warning for warning in warnings)
 
 
 def test_learned_layout_fills_each_template_region():
@@ -1469,6 +1764,7 @@ def test_learned_layout_fills_each_template_region():
     from app.application.ppt import ppt_engine
 
     prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
     cover = prs.slides.add_slide(prs.slide_layouts[6])
     cover.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text = "封面样例"
     slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -1515,7 +1811,7 @@ def test_learned_layout_never_uses_cover_for_unmatched_summary():
     assert ppt_engine._pick_layout(layouts, "summary", {}) is None
 
 
-def test_learned_layout_spreads_points_across_untagged_regions():
+def test_toc_without_matching_layout_uses_readable_page():
     from io import BytesIO
     from pptx import Presentation
     from pptx.util import Inches, Pt
@@ -1534,12 +1830,17 @@ def test_learned_layout_spreads_points_across_untagged_regions():
     prs.save(source)
     base = source.getvalue()
     learned = ppt_engine.analyze_template(base)
+    without_toc = [layout for layout in learned["layouts"]
+                   if layout.get("detected_type") != "toc"]
+    warnings = []
     out = ppt_engine.build_pptx_learned(
         {"slides": [{"type": "toc", "title": "本次汇报", "points": ["背景", "措施", "成效"]}]},
-        {"colors": learned["colors"], "font": learned["font"]}, base, learned["layouts"])
+        {"colors": learned["colors"], "font": learned["font"]}, base, without_toc, warnings)
     rendered = Presentation(BytesIO(out))
-    texts = [shape.text for shape in rendered.slides[0].shapes if shape.has_text_frame]
-    assert texts == ["本次汇报", "背景", "措施", "成效"]
+    text = " ".join(shape.text for shape in rendered.slides[0].shapes if shape.has_text_frame)
+    assert all(value in text for value in ("本次汇报", "背景", "措施", "成效"))
+    assert "示例" not in text
+    assert any("可读版式" in warning for warning in warnings)
 
 
 def test_learned_layout_distinguishes_timeline_from_process():
@@ -1584,6 +1885,33 @@ def test_visual_review_endpoint_returns_page_level_findings(client, accounts):
                for item in result["issues"])
 
 
+def test_public_library_image_selected_by_user_appears_in_export(client, accounts):
+    from pptx import Presentation
+
+    uploaded = client.post(
+        f"{BASE}/ppt/library/images", headers=_hdr(accounts["dev"]),
+        data={"name": "普法活动配图", "caption": "普法活动现场", "category": "法治宣传",
+              "source": "测试素材", "license_note": "测试环境内使用"},
+        files={"file": ("activity.png", _png_bytes(), "image/png")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    image_id = uploaded.json()["id"]
+    doc_id = _blank_doc(client, accounts["a"], "普法活动")
+    headers = _hdr(accounts["a"])
+    generated = client.post(f"{BASE}/ppt/generate", headers=headers, json={
+        "doc_id": doc_id, "outline": {"title": "普法活动", "material_ids": [image_id],
+            "slides": [{"type": "content", "title": "普法活动现场",
+                        "points": ["向群众发放普法材料"],
+                        "image_name": "普法活动配图"}]},
+    })
+    assert generated.status_code == 200, generated.text
+    exported = client.get(f"{BASE}/ppt/documents/{doc_id}/download", headers=headers)
+    assert exported.status_code == 200, exported.text
+    deck = Presentation(io.BytesIO(exported.content))
+    assert any("PICTURE" in str(shape.shape_type)
+               for slide in deck.slides for shape in slide.shapes)
+
+
 def test_visual_review_respects_document_ownership(client, accounts):
     doc_id = _blank_doc(client, accounts["a"], "私有复检")
     response = client.post(
@@ -1605,3 +1933,84 @@ def test_visual_review_accepts_standard_government_layout():
                   "layouts": ppt_engine.DEFAULT_LAYOUTS})
     result = PPTService.review_pptx_visuals(data)
     assert result == {"status": "passed", "pages_checked": 3, "issues": []}
+
+
+def test_visual_review_accepts_clipped_background_picture_but_flags_text():
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    sample = io.BytesIO()
+    Image.new("RGB", (80, 20), "blue").save(sample, format="PNG")
+    sample.seek(0)
+    slide.shapes.add_picture(sample, Inches(0), Inches(7.3),
+                             Inches(13.333), Inches(.35))
+    data = io.BytesIO()
+    prs.save(data)
+    assert PPTService.review_pptx_visuals(data.getvalue())["issues"] == []
+
+    slide.shapes.add_textbox(Inches(12.9), Inches(1), Inches(.8), Inches(.5)).text = "越界文字"
+    data = io.BytesIO()
+    prs.save(data)
+    assert any(issue["code"] == "out_of_bounds" for issue in
+               PPTService.review_pptx_visuals(data.getvalue())["issues"])
+
+
+def test_generation_does_not_save_a_deck_with_severe_visual_errors(
+        client, accounts, monkeypatch):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    doc_id = _blank_doc(client, accounts["a"], "待校验的演示文稿")
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(12), Inches(1), Inches(2), Inches(.5)).text = "越界内容"
+    broken = io.BytesIO()
+    prs.save(broken)
+    monkeypatch.setattr(PPTService, "_render_pptx_bytes",
+                        lambda self, *_args, **_kwargs: (broken.getvalue(), "test"))
+    response = client.post(
+        f"{BASE}/ppt/generate", headers=_hdr(accounts["a"]),
+        json={"doc_id": doc_id, "outline": {"title": "测试", "slides": [
+            {"type": "content", "title": "测试", "points": ["正常要点"]},
+        ]}},
+    )
+    assert response.status_code == 422, response.text
+    assert "越界" in response.text
+    assert client.get(f"{BASE}/ppt/documents/{doc_id}/download",
+                      headers=_hdr(accounts["a"])).status_code != 200
+
+
+def test_selected_template_recovers_from_severe_visual_error(
+        client, accounts, monkeypatch):
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    headers = _hdr(accounts["a"])
+    template = client.post(f"{BASE}/ppt/templates", headers=headers, json={
+        "name": "回退校验模板", "category": "汇报",
+    })
+    assert template.status_code == 200, template.text
+    doc_id = _blank_doc(client, accounts["a"], "模板回退")
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(12), Inches(1), Inches(2), Inches(.5)).text = "越界内容"
+    broken = io.BytesIO()
+    prs.save(broken)
+    monkeypatch.setattr(PPTService, "_render_pptx_bytes",
+                        lambda self, *_args, **_kwargs: (broken.getvalue(), "test"))
+    response = client.post(f"{BASE}/ppt/generate", headers=headers,
+                           json={"doc_id": doc_id, "template_id": template.json()["id"],
+                                 "outline": {"title": "测试", "slides": [
+                                     {"type": "content", "title": "工作情况",
+                                      "points": ["依法履职", "规范管理"]},
+                                 ]}})
+    assert response.status_code == 200, response.text
+    assert any("重新排版" in warning for warning in response.json()["warnings"])
+    saved = client.get(f"{BASE}/ppt/documents/{doc_id}/download", headers=headers)
+    assert saved.status_code == 200
+    assert not any(item["severity"] == "error" for item in
+                   PPTService.review_pptx_visuals(saved.content)["issues"])

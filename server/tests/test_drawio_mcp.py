@@ -654,6 +654,26 @@ def test_mcp_outage_falls_back_to_graphviz(monkeypatch):
     assert result["blocks"]["diagram_engine"] == "graphviz"
 
 
+def test_mcp_mermaid_source_only_falls_back_without_validation_warning(monkeypatch, caplog):
+    from app.application.ppt import drawio_skill_layout
+    monkeypatch.setattr(drawio_skill_layout, "layout_slide_graph",
+                        lambda *_args: NATIVE_XML)
+    svc = DrawioService(base_url="http://drawio-mcp:3001")
+    calls = []
+    monkeypatch.setattr(svc, "create_diagram", lambda **kwargs:
+                        calls.append(kwargs) or json.dumps({
+                            "mermaid": kwargs["mermaid"], "_buildId": "test"})
+                        + "\nOpen in draw.io: https://app.diagrams.net/#create=example")
+    slide = {"title": "办理流程", "blocks": {
+        "diagram_nodes": [{"id": "a", "label": "受理"},
+                          {"id": "b", "label": "审核"}],
+        "diagram_edges": [{"source": "a", "target": "b"}]}}
+    assert svc.generate_native_diagram(object(), slide)["blocks"]["diagram_engine"] == "graphviz"
+    assert svc.generate_native_diagram(object(), slide)["blocks"]["diagram_engine"] == "graphviz"
+    assert len(calls) == 1
+    assert "MCP 排版结果未通过校验" not in caplog.text
+
+
 def test_drawio_reference_is_reused_across_pages(monkeypatch):
     svc = DrawioService(base_url="http://drawio-mcp:3001")
     calls = []

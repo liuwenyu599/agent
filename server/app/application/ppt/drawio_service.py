@@ -22,6 +22,10 @@ from app.infrastructure.drawio.mcp_client import DrawioMcpClient, DrawioMcpError
 logger = get_logger(__name__)
 
 
+class _MermaidSourceOnly(Exception):
+    """The MCP host returned source for its viewer, not server-rendered XML."""
+
+
 class DrawioService:
     def __init__(
         self,
@@ -35,6 +39,7 @@ class DrawioService:
         self._enabled = bool(self.base_url)
         self._reference_cache: dict[str, str] = {}
         self._reference_retry_at = 0.0
+        self._mermaid_source_only = False
 
     @property
     def enabled(self) -> bool:
@@ -171,7 +176,8 @@ class DrawioService:
             raw_edges = [{"source": str(index), "target": str(index + 1)}
                          for index in range(max(0, len(raw_nodes) - 1))]
         mcp_rejected = False
-        if (self.enabled and time.monotonic() >= self._reference_retry_at
+        if (self.enabled and not self._mermaid_source_only
+                and time.monotonic() >= self._reference_retry_at
                 and 2 <= len(raw_nodes) <= 12):
             aliases = {str(node.get("id")): f"n{index}" for index, node in enumerate(raw_nodes)
                        if isinstance(node, dict) and node.get("id") is not None}
@@ -195,6 +201,9 @@ class DrawioService:
                 try:
                     raw_mcp = self.create_diagram(mermaid="\n".join(mermaid))
                     obj = loads_lenient(raw_mcp) if raw_mcp and raw_mcp.lstrip().startswith("{") else None
+                    if isinstance(obj, dict) and obj.get("mermaid") and not obj.get("xml"):
+                        self._mermaid_source_only = True
+                        raise _MermaidSourceOnly
                     mcp_xml = obj.get("xml") if isinstance(obj, dict) else raw_mcp
                     from app.application.ppt.drawio_native import apply_diagram_theme
                     from app.core.fonts import DEFAULT_CJK_FONT
@@ -229,10 +238,12 @@ class DrawioService:
                         "diagram_details": details,
                         "process" if kind == "process" else "diagram_labels": labels}
                     return updated
+                except _MermaidSourceOnly:
+                    logger.info("drawio-mcp 返回仅供交互式查看器转换的 Mermaid 源码；改用本地布局")
                 except (ValueError, TypeError, AttributeError, DrawioMcpError,
                         httpx.TimeoutException) as exc:
-                    logger.warning("MCP 排版结果未通过校验，改用本地布局: %s",
-                                   type(exc).__name__)
+                    logger.warning("MCP 排版结果未通过校验，改用本地布局: %s: %s",
+                                   type(exc).__name__, str(exc)[:160])
                     mcp_rejected = isinstance(exc, (ValueError, TypeError, AttributeError))
         # No MCP output, timeout, or rejected layout: keep the graph and its
         # source facts, then lay it out locally without another model call.

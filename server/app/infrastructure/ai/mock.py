@@ -277,6 +277,7 @@ class MockLLMGateway:
                 return json.dumps({
                     "title": "（Mock）司法行政工作汇报",
                     "subtitle": "（Mock）副标题",
+                    "style": "工作汇报",
                     "slides": [
                         {"type": "cover", "title": "司法行政工作汇报", "subtitle": "阶段总结"},
                         {"type": "content", "title": "主要工作", "points": ["完成法治宣传20场", "调解纠纷120件"]},

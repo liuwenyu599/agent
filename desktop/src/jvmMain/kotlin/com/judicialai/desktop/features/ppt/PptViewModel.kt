@@ -43,6 +43,8 @@ data class MaterialsTotals(val materials: Int = 0, val keyPoints: Int = 0, val t
 
 data class PptLibraryMaterial(
     val id: String, val name: String, val caption: String, val url: String,
+    val source: String = "personal", val category: String = "我的图片",
+    val credit: String = "",
 )
 
 data class PptVisualIssue(
@@ -179,6 +181,7 @@ class PptViewModel(private val repo: PptRepository) {
     var libraryMaterials by mutableStateOf(listOf<PptLibraryMaterial>())
         private set
     val selectedMaterialIds = mutableStateListOf<String>()
+    var autoImagesEnabled by mutableStateOf(true)
     var materialLibraryBusy by mutableStateOf(false)
         private set
 
@@ -298,7 +301,11 @@ class PptViewModel(private val repo: PptRepository) {
             when (val result = repo.libraryMaterials()) {
                 is ApiResult.Ok -> libraryMaterials = result.data.map {
                     PptLibraryMaterial(it["id"].str(), it["name"].str(),
-                        it["caption"].str(), it["url"].str())
+                        it["caption"].str(),
+                        it["thumb_url"].str().ifBlank { it["url"].str() },
+                        it["source"].str().ifBlank { "personal" },
+                        it["category"].str().ifBlank { "我的图片" },
+                        it["credit"].str())
                 }
                 is ApiResult.Err -> status = result.message
             }
@@ -309,12 +316,12 @@ class PptViewModel(private val repo: PptRepository) {
     fun uploadLibraryMaterial(file: File) {
         if (materialLibraryBusy) return
         materialLibraryBusy = true
-        status = "正在加入图片素材库…"
+        status = "正在识别图片并加入素材库…"
         scope.launch {
             var reload = false
             when (val result = repo.uploadLibraryMaterial(file)) {
                 is ApiResult.Ok -> {
-                    status = "图片已加入素材库"
+                    status = result.data.obj()?.get("message").str().ifBlank { "图片已加入素材库" }
                     reload = true
                 }
                 is ApiResult.Err -> status = result.message
@@ -324,9 +331,52 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
+    fun uploadPublicImage(file: File, category: String, caption: String,
+                          source: String, licenseNote: String) {
+        if (materialLibraryBusy) return
+        materialLibraryBusy = true
+        status = "正在识别图片并加入公共图库…"
+        scope.launch {
+            when (val result = repo.uploadPublicImage(file, category, caption,
+                                                       source, licenseNote)) {
+                is ApiResult.Ok -> {
+                    status = result.data.obj()?.get("message").str().ifBlank { "公共图片已上架" }
+                    materialLibraryBusy = false
+                    loadLibraryMaterials()
+                }
+                is ApiResult.Err -> { status = result.message; materialLibraryBusy = false }
+            }
+        }
+    }
+
+    fun updateImageCaption(material: PptLibraryMaterial, caption: String) {
+        if (materialLibraryBusy) return
+        materialLibraryBusy = true
+        status = "正在更新图片说明…"
+        scope.launch {
+            when (val result = repo.updateImageCaption(material.id, material.source, caption)) {
+                is ApiResult.Ok -> {
+                    status = "图片说明已更新"
+                    materialLibraryBusy = false
+                    loadLibraryMaterials()
+                }
+                is ApiResult.Err -> {
+                    status = result.message
+                    materialLibraryBusy = false
+                }
+            }
+        }
+    }
+
     fun toggleLibraryMaterial(id: String) {
+        autoImagesEnabled = false
         if (id in selectedMaterialIds) selectedMaterialIds.remove(id)
         else selectedMaterialIds.add(id)
+    }
+
+    fun toggleAutoImages() {
+        autoImagesEnabled = !autoImagesEnabled
+        if (autoImagesEnabled) selectedMaterialIds.clear()
     }
 
     private fun loadLayoutOptions(id: String?) {
@@ -354,11 +404,11 @@ class PptViewModel(private val repo: PptRepository) {
         }
     }
 
-    fun uploadTemplate(file: File) {
+    fun uploadTemplate(file: File, shared: Boolean = false, licenseNote: String = "") {
         busy = true
         status = "上传并学习模板中…"
         scope.launch {
-            when (val r = repo.uploadTemplate(file)) {
+            when (val r = repo.uploadTemplate(file, shared, licenseNote)) {
                 is ApiResult.Ok -> { status = "模板学习完成"; loadTemplates() }
                 is ApiResult.Err -> status = r.message
             }
@@ -583,7 +633,8 @@ class PptViewModel(private val repo: PptRepository) {
             "audience" to "",
             "scene" to "",
             "material_names" to materials.map { it.filename },
-            "material_ids" to selectedMaterialIds.toList(),
+            "material_ids" to if (autoImagesEnabled) emptyList<String>() else selectedMaterialIds.toList(),
+            "auto_images" to autoImagesEnabled,
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -797,10 +848,12 @@ class PptViewModel(private val repo: PptRepository) {
             val materialNames = (body["material_names"] as? List<String>) ?: emptyList()
             @Suppress("UNCHECKED_CAST")
             val materialIds = (body["material_ids"] as? List<String>) ?: emptyList()
+            val autoImages = body["auto_images"] as? Boolean ?: true
             when (val r2 = repo.outline(
                 body["source_type"] as String, body["topic"] as String,
                 body["content"] as String, slideCount, audience, scene,
-                kbIds = kbIds, materialNames = materialNames, materialIds = materialIds)) {
+                kbIds = kbIds, materialNames = materialNames,
+                materialIds = materialIds, autoImages = autoImages)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
@@ -827,6 +880,7 @@ class PptViewModel(private val repo: PptRepository) {
         selectedMaterialIds.clear()
         selectedMaterialIds.addAll(outline["material_ids"].arr().map { it.str() }
             .filter { it.isNotBlank() })
+        autoImagesEnabled = outline["image_selection_mode"].str() == "auto"
         slides.clear()
         outline["slides"].arr().mapNotNull { it.obj() }.forEach { slides.add(SlideEdit.fromJson(it)) }
         if (slides.isEmpty()) {
@@ -950,6 +1004,7 @@ class PptViewModel(private val repo: PptRepository) {
         visualReviewSummary = null
         layoutOptions = emptyList()
         selectedMaterialIds.clear()
+        autoImagesEnabled = true
         selected = 0
         status = null
         AppState.pendingPptDocId = null
@@ -1027,7 +1082,14 @@ class PptViewModel(private val repo: PptRepository) {
     private fun outlineJson(): JsonObject = buildJsonObject {
         put("title", outlineTitle)
         put("subtitle", outlineSubtitle)
-        putJsonArray("material_ids") { selectedMaterialIds.forEach { add(it) } }
+        put("image_selection_mode",
+            if (autoImagesEnabled) "auto" else if (selectedMaterialIds.isEmpty()) "off" else "manual")
+        // 自动配图的候选范围由服务端决定，客户端不要回传空数组：
+        // 空数组表示「明确不使用图片」，会把文档已记录的 material_ids 清掉，
+        // 导致重新导出时公共图库图片无法解析。
+        if (!autoImagesEnabled) {
+            putJsonArray("material_ids") { selectedMaterialIds.forEach { add(it) } }
+        }
         putJsonArray("slides") { slides.forEach { add(it.toJson()) } }
     }
 

@@ -1,9 +1,10 @@
 # Draw.io MCP 服务（PPT 视觉增强层）
 
-配置后，PPT 工作台优先用本地 Graphviz `dot` 布局；`dot` 不可用时，
-可把 35B 规划的节点和关系交给 MCP 的 Mermaid 图示工具排版。
-服务端验证节点和连线后，将 XML 转成 PPTX
-中的原生形状、文字和连接线，可在 PowerPoint/WPS 中分别编辑。
+PPT 工作台会先尝试 drawio-mcp 的 `create_diagram`。该工具接受 Mermaid，
+但官方 app-server 返回 Mermaid 源码，由 MCP Apps 查看器在客户端转换，
+不会向本平台后端返回排版后的 XML。因此此时自动使用本地 Graphviz `dot`
+布局，再将 XML 转成 PPTX 中可编辑的原生形状、文字和连接线。
+若 MCP 将来直接返回 XML，后端会验证节点和连线并使用该结果。
 
 官方镜像 [`jgraph/drawio-mcp`](https://hub.docker.com/r/jgraph/drawio-mcp)（Apache-2.0，
 已构建 amd64 + arm64），与 `https://mcp.draw.io/mcp` 是同一套代码。
@@ -13,8 +14,8 @@
 - **只产出文本型工具结果**，不产出 `.pptx`。它提供：
   - `get_drawio_reference` —— draw.io XML/Mermaid 语法参考（模型在画第一张图前读一次）；
   - `search_shapes` —— 跨上千个 shape 库按关键词检索，返回可直接塞进 XML 的 `style` 字符串；
-  - `create_diagram` —— 把 Mermaid 转为图示；只有返回可解析、可校验的 XML 且
-    完整保留规划节点与连线时，才用作 `dot` 不可用时的排版结果。
+  - `create_diagram` —— Mermaid 模式的当前结果是源码及查看链接，排版在 MCP Apps
+    查看器内完成。只有工具直接返回可解析、可校验的 XML，后端才能将其用于 PPTX。
 - 原生转换由 `server/app/application/ppt/drawio_native.py` 完成，支持矩形、圆角矩形、
   椭圆、菱形、文本及节点连线；单页最多 40 个节点和 40 条连线。图片、自定义图标、
   嵌套分组、压缩页面会明确拒绝，生成失败时原页面保持不变。

@@ -3,6 +3,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKUP = REPO_ROOT / "deploy" / "backup-production.sh"
@@ -34,6 +36,7 @@ def test_production_compose_passes_agent_flags_and_uses_one_image():
     assert api_image.startswith("${SERVER_IMAGE:?")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="生产备份脚本依赖 Linux flock；在 Linux CI 验证")
 def test_sqlite_backup_includes_vector_index_and_restores(tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()

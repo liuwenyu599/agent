@@ -165,3 +165,27 @@ deploy/.env
 # =========================
 desktop/.gradle/
 desktop/.kotlin/
+
+# =========================
+# PPT 模板源/素材照片与本地调试产物（不入库）
+# =========================
+pic/
+ppttem/
+README.local.md
+deliverables/_*.png
+deliverables/_*.pptx
+deliverables/rp_*/
+deliverables/*_preview/
+deliverables/previews/
+deliverables/gate*/
+deliverables/adaptive_sample*
+deliverables/sample_wide_image.png
+deliverables/tpl_*.pptx
+deliverables/bad_template_*.pptx
+deliverables/template-audit-v2/
+deliverables/template-audit-v3/
+deliverables/ppt_delivery_qa/
+deliverables/样稿预览/
+
+# 图库清单是部署依赖（seed 脚本与镜像内都要用），例外放行
+!server/app/application/ppt/templates/library/manifest.json

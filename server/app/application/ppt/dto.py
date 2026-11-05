@@ -33,6 +33,10 @@ class DocRenameIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class ImageCaptionIn(BaseModel):
+    caption: str = Field(max_length=500)
+
+
 class OutlineIn(BaseModel):
     source_type: str = "topic"          # topic / text / document / kb
     topic: str = ""
@@ -43,9 +47,9 @@ class OutlineIn(BaseModel):
     # 本次参与生成的材料文件名清单（材料分析步骤返回），
     # 用于要求模型为每页标注 sources 内容依据（provenance）
     material_names: List[str] = Field(default_factory=list)
-    # 本次允许 AI 使用的个人图片素材。None 兼容旧客户端（使用全部素材），
-    # 空数组表示用户明确不使用素材库图片。
+    # 手动指定图片时仅使用这些图片；空数组由 auto_images 决定是否自动配图。
     material_ids: Optional[List[str]] = Field(default=None, max_length=30)
+    auto_images: bool = True
     # 结合知识库生成：所选知识库 id 列表。服务端按主题做 RAG 语义检索，
     # 命中片段作为大纲内容依据；权限范围由服务端解析（与可访问库取交集），
     # 客户端传值无法扩大检索范围

@@ -154,6 +154,7 @@ object Endpoints {
         const val MATERIALS_ANALYZE = "/ppt/materials/analyze"
         /** 个人图片素材库：生成时只使用本次勾选的图片 */
         const val MATERIALS = "/ppt/materials"
+        const val LIBRARY_IMAGES = "/ppt/library/images"
         const val GENERATE = "/ppt/generate"
         const val DOCUMENTS = "/ppt/documents"
         /** 上传已有 .pptx 继续修改：解析为可编辑大纲 */

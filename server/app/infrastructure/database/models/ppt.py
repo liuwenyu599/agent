@@ -25,6 +25,7 @@ class PPTTemplateModel(Base, IdMixin):
     layouts: Mapped[Optional[dict]] = mapped_column(JSON)
     layout_library: Mapped[Optional[list]] = mapped_column(JSON)
     source_file: Mapped[Optional[str]] = mapped_column(String(500))
+    license_note: Mapped[str] = mapped_column(String(500), default="")
     use_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_local, onupdate=now_local)
@@ -49,6 +50,25 @@ class PPTMaterialModel(Base, IdMixin):
     width: Mapped[Optional[int]] = mapped_column(Integer)
     height: Mapped[Optional[int]] = mapped_column(Integer)
     mime_type: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
+
+
+class PPTLibraryImageModel(Base, IdMixin):
+    __tablename__ = "ppt_library_images"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    caption: Mapped[str] = mapped_column(String(500), default="")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    thumb_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    source: Mapped[str] = mapped_column(String(200), nullable=False)
+    license_note: Mapped[str] = mapped_column(String(500), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_local)
 
 

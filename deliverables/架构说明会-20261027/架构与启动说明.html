@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>云法智办 · 代码架构 / 模型架构 / 启动位置说明（2026-10-27）</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#eef2f7;color:#0f172a;
+       font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;line-height:1.6}
+  .wrap{max-width:1220px;margin:0 auto;padding:28px 20px 60px}
+  .hero{background:linear-gradient(135deg,#0f2547,#1d3a6b);color:#fff;border-radius:16px;
+        padding:30px 34px;box-shadow:0 8px 24px rgba(15,37,71,.18)}
+  .hero h1{margin:0 0 6px;font-size:27px;letter-spacing:.4px}
+  .hero p{margin:0;color:#c7d7ee;font-size:13.5px}
+  .hero .meta{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}
+  .hero .meta span{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);
+        border-radius:999px;padding:3px 12px;font-size:12px}
+  .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+  .kpi{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px}
+  .kpi b{display:block;font-size:21px;color:#1d4ed8;line-height:1.3}
+  .kpi small{color:#64748b;font-size:12px}
+  section{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:24px 26px;
+        margin-top:22px;box-shadow:0 2px 10px rgba(15,23,42,.04)}
+  h2{display:flex;align-items:center;gap:10px;font-size:20px;margin:0 0 6px}
+  h2 .no{background:#1d4ed8;color:#fff;width:28px;height:28px;border-radius:8px;
+        display:grid;place-items:center;font-size:14px;flex:0 0 auto}
+  h3{font-size:15px;margin:22px 0 8px;color:#1e293b}
+  .lead{color:#475569;font-size:13.5px;margin:0 0 16px}
+  .figure{background:#fbfcfe;border:1px solid #e6edf6;border-radius:12px;padding:10px}
+  .figure svg{width:100%;height:auto;display:block}
+  .cap{color:#64748b;font-size:12px;margin:8px 2px 0}
+  table{width:100%;border-collapse:collapse;font-size:12.6px;margin-top:12px}
+  th{background:#f1f5f9;color:#334155;text-align:left;padding:8px 10px;
+     border:1px solid #e2e8f0;font-weight:600;white-space:nowrap}
+  td{padding:7px 10px;border:1px solid #e8eef5;vertical-align:top}
+  tbody tr:nth-child(even) td{background:#fbfdff}
+  code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:1px 5px;
+       font-family:Consolas,"Courier New",monospace;font-size:12px}
+  .tag{display:inline-block;border-radius:999px;padding:1px 8px;font-size:11.5px;
+       border:1px solid;white-space:nowrap}
+  .ok{background:#ecfdf5;color:#047857;border-color:#a7f3d0}
+  .warn{background:#fffbeb;color:#b45309;border-color:#fde68a}
+  .bad{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
+  .dev{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
+  .treegrid{background:#0f172a;border-radius:12px;padding:16px 20px;
+       font-size:12.4px;line-height:1.95}
+  .treegrid .row{display:grid;grid-template-columns:322px 1fr;gap:14px;align-items:start}
+  .treegrid .p{font-family:Consolas,"Courier New",monospace;color:#e2e8f0;white-space:nowrap}
+  .treegrid .d{color:#94a3b8}
+  .treegrid .c{color:#7dd3fc}
+  .treegrid .g{color:#86efac}
+  .treegrid .y{color:#fcd34d}
+  .treegrid .rd{color:#fca5a5}
+  .note{background:#eff6ff;border-left:4px solid #3b82f6;padding:12px 16px;
+        border-radius:0 8px 8px 0;font-size:13px;color:#1e3a8a;margin:14px 0}
+  .danger{background:#fffbeb;border-left-color:#f59e0b;color:#92400e}
+  .foot{color:#94a3b8;font-size:12px;text-align:center;margin-top:24px}
+  @media print{
+    body{background:#fff;font-size:12px}
+    .wrap{padding:0;max-width:1040px;margin:0 auto}
+    section,.hero{box-shadow:none;border-radius:0;padding:14px 16px;margin-top:0}
+    .hero{padding:18px 22px}
+    .hero h1{font-size:23px}
+    .hero p{font-size:12.5px}
+    .hero .meta{margin-top:10px}
+    .summary{margin-top:10px;gap:10px}
+    .kpi{padding:10px 12px}
+    .kpi b{font-size:18px}
+    h2{font-size:17px;margin:0 0 4px}
+    h2 .no{width:24px;height:24px;font-size:12px}
+    h3{font-size:13.5px;margin:12px 0 6px}
+    .lead{font-size:11.8px;margin:0 0 8px}
+    .figure{padding:4px;border-radius:0}
+    .figure svg{max-height:520px}
+    .cap{font-size:10.5px;margin:5px 2px 0}
+    table{font-size:10.8px;margin-top:8px}
+    th,td{padding:4px 6px}
+    code{font-size:10.5px}
+    .tag{font-size:10px}
+    .note{margin:8px 0;padding:8px 12px;font-size:11.5px}
+    .treegrid{font-size:10.6px;line-height:1.7;padding:10px 12px}
+    .treegrid .row{grid-template-columns:290px 1fr;gap:10px}
+    .foot{margin-top:8px;font-size:10.5px}
+    section{break-inside:auto}
+    h2,h3,.lead{break-after:avoid}
+    .figure,.note,.treegrid,.summary,.kpi{break-inside:avoid}
+    tr{break-inside:avoid}
+    @page{size:A4 landscape;margin:9mm}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <h1>云法智办 · 架构现状说明</h1>
+    <p>代码架构 / 模型架构 / 启动脚本位置 —— 一页对齐「东西在哪、怎么跑起来」</p>
+    <div class="meta">
+      <span>2026-10-27</span>
+      <span>仓库 D:\Projects\judicial_app（分支 app）</span>
+      <span>生产 10.128.85.133 · 银河麒麟 V10 · ARM64</span>
+      <span>内部汇报用</span>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="kpi"><b>1 个后端</b><small>FastAPI 单体，内部分 4 层</small></div>
+    <div class="kpi"><b>2 套 Compose</b><small>API+DB / 模型池，分开编排</small></div>
+    <div class="kpi"><b>8 张卡</b><small>310P，当前实际只占 5 张</small></div>
+    <div class="kpi"><b>1 套模型</b><small>35B 同时接管文本/视觉/长文</small></div>
+  </div>
+
+  <!-- ================= 结论 ================= -->
+  <section>
+    <h2><span class="no">0</span>先讲四句话</h2>
+    <p class="lead">会上如果只记四件事，记这四件。</p>
+    <table>
+      <thead><tr><th style="width:150px">问题</th><th>答案</th></tr></thead>
+      <tbody>
+        <tr><td>系统跑在哪</td>
+            <td>生产服务器 <code>10.128.85.133</code> 上两个 Docker 世界：<b>业务编排</b>（API + PostgreSQL）和 <b>模型池</b>（35B / BGE）；客户端是装在办公电脑上的桌面程序，默认连 <code>http://10.128.85.133:8000</code>。</td></tr>
+        <tr><td>代码怎么分</td>
+            <td>后端 <code>server/app</code> 按 接口层 → 应用层 → 领域层 → 基础设施层 四层切，横切 <code>core</code>；桌面端 <code>desktop</code> 按 15 个功能页切。业务新增只动应用层 + 接口层，不碰技术实现。</td></tr>
+        <tr><td>模型怎么用</td>
+            <td>只有一套在线模型：35B（<code>:8010</code>，占 2 卡），文本、视觉、长文三条链路全指向它；向量化走 bge-m3（<code>:8006</code>）。PPT 的 9B 栈已退出正式链路，但容器还在占卡。</td></tr>
+        <tr><td>脚本在哪</td>
+            <td>生产权威脚本全在 <code>deploy/</code>：<code>deploy_latest.sh</code> 负责部署，<code>production.docker-compose.yml</code> + <code>model-pool/docker-compose.yml</code> 负责编排。<b>仓库根目录那批 <code>start_all.sh</code> / <code>start_services.sh</code> 是 14B 裸进程时代的遗留，已不可用。</b></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= 图1 运行时拓扑 ================= -->
+  <section>
+    <h2><span class="no">1</span>运行时拓扑：谁在跑、跑在哪台机器</h2>
+    <p class="lead">这张图回答「点一下按钮，请求经过了哪几个进程」。注意模型不在 API 容器里，是宿主机上独立的一套 Docker。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 1160 690" role="img" aria-label="运行时部署拓扑图">
+        <defs>
+          <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+          <marker id="ar1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#60a5fa"/></marker>
+        </defs>
+
+        <!-- 客户端 -->
+        <rect x="20" y="80" width="250" height="252" rx="14" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+        <text x="40" y="110" font-size="15" font-weight="700" fill="#9a3412">① 用户终端</text>
+        <text x="40" y="132" font-size="11.5" fill="#b45309">Windows / 银河麒麟 V10</text>
+
+        <rect x="36" y="148" width="218" height="76" rx="8" fill="#ffffff" stroke="#fdba74"/>
+        <text x="48" y="172" font-size="13" font-weight="700" fill="#9a3412">云法智办 桌面端</text>
+        <text x="48" y="192" font-size="11" fill="#b45309">Compose Desktop（Kotlin / JVM）</text>
+        <text x="48" y="210" font-size="11" fill="#b45309">83 个 .kt · 15 个功能页</text>
+
+        <rect x="36" y="236" width="218" height="76" rx="8" fill="#ffffff" stroke="#fdba74"/>
+        <text x="48" y="260" font-size="13" font-weight="700" fill="#9a3412">浏览器 / 其他客户端</text>
+        <text x="48" y="280" font-size="11" fill="#b45309">同一套 REST API</text>
+        <text x="48" y="298" font-size="11" fill="#b45309">Bearer Token 鉴权</text>
+
+        <text x="36" y="356" font-size="11" fill="#9a3412">安装包：desktop/installer（EXE / deb）</text>
+        <text x="36" y="374" font-size="11" fill="#9a3412">服务器地址可在「设置 → 服务器连接」改</text>
+
+        <!-- 客户端到服务端 -->
+        <line x1="270" y1="206" x2="350" y2="206" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar1)"/>
+        <text x="310" y="192" font-size="10.5" fill="#475569" text-anchor="middle">HTTP /api/v1</text>
+        <text x="310" y="226" font-size="10.5" fill="#475569" text-anchor="middle">JSON + SSE</text>
+
+        <!-- 服务器外框 -->
+        <rect x="352" y="64" width="790" height="600" rx="16" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+        <text x="376" y="94" font-size="15" font-weight="700" fill="#0f172a">② 生产服务器 10.128.85.133</text>
+        <text x="376" y="115" font-size="11.5" fill="#64748b">司法局内网 · 严禁出网 · 不依赖任何外网服务</text>
+
+        <!-- API -->
+        <rect x="376" y="136" width="310" height="146" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="394" y="162" font-size="14" font-weight="700" fill="#1d4ed8">接入层 · justice-api 容器</text>
+        <text x="394" y="184" font-size="11.5" fill="#1e40af">uvicorn app.main:app  :8000</text>
+        <text x="394" y="203" font-size="11.5" fill="#1e40af">CORS / JWT / 登录限流 / Prometheus</text>
+        <text x="394" y="222" font-size="11.5" fill="#1e40af">16 个 router · 159 个端点</text>
+        <text x="394" y="246" font-size="11" fill="#2563eb">create_app() 装配 + lifespan 初始化</text>
+        <text x="394" y="265" font-size="11" fill="#2563eb">DB_AUTO_MIGRATE=false（生产禁用自迁移）</text>
+
+        <!-- DB -->
+        <rect x="706" y="136" width="196" height="146" rx="10" fill="#f5f3ff" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="722" y="162" font-size="14" font-weight="700" fill="#6d28d9">数据层 · justice-db</text>
+        <text x="722" y="184" font-size="11.5" fill="#5b21b6">PostgreSQL 15（ARM64）</text>
+        <text x="722" y="203" font-size="11.5" fill="#5b21b6">容器内 :5432</text>
+        <text x="722" y="222" font-size="11.5" fill="#5b21b6">卷 pg-data 持久化</text>
+        <text x="722" y="246" font-size="11" fill="#7c3aed">独立容器，备份不走 API 容器</text>
+
+        <!-- migrate -->
+        <rect x="922" y="136" width="196" height="146" rx="10" fill="#f0fdf4" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="938" y="162" font-size="14" font-weight="700" fill="#15803d">迁移 · justice-migrate</text>
+        <text x="938" y="184" font-size="11.5" fill="#166534">一次性容器（restart: no）</text>
+        <text x="938" y="203" font-size="11.5" fill="#166534">python -m</text>
+        <text x="938" y="220" font-size="11.5" fill="#166534">app.migrations.migrator</text>
+        <text x="938" y="237" font-size="11.5" fill="#166534">upgrade</text>
+        <text x="938" y="262" font-size="11" fill="#15803d">成功后退出(0)，API 才允许启动</text>
+
+        <line x1="688" y1="209" x2="704" y2="209" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar1)"/>
+        <line x1="920" y1="266" x2="906" y2="266" stroke="#94a3b8" stroke-width="1.6"
+              stroke-dasharray="4 3" marker-end="url(#ar1)"/>
+
+        <!-- 数据卷 -->
+        <rect x="376" y="306" width="742" height="86" rx="10" fill="#fffbeb" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="394" y="332" font-size="13.5" font-weight="700" fill="#b45309">本地数据卷 /data/justice（挂载自宿主机 HOST_DATA_DIR）</text>
+        <text x="394" y="354" font-size="11.3" fill="#92400e">uploads/ 附件 · ppt/ 生成物与逐页预览 · format-check/ · generated/ · faiss/ 向量索引 · logs/server.log</text>
+        <text x="394" y="376" font-size="11" fill="#b45309">业务数据全在这里；备份走 deploy/backup-production.sh，恢复走 restore-drill.sh</text>
+        <line x1="531" y1="284" x2="531" y2="304" stroke="#94a3b8" stroke-width="2" marker-end="url(#ar1)"/>
+        <text x="539" y="300" font-size="10.5" fill="#64748b">挂载</text>
+
+        <!-- 模型池 -->
+        <rect x="376" y="416" width="742" height="214" rx="10" fill="#ecfdf5" stroke="#34d399" stroke-width="1.5"/>
+        <text x="394" y="442" font-size="13.5" font-weight="700" fill="#047857">模型池 · 宿主机 Docker（昇腾 310P ×8，单卡 43GB）</text>
+
+        <rect x="394" y="456" width="136" height="78" rx="8" fill="#eff6ff" stroke="#60a5fa"/>
+        <text x="462" y="480" font-size="12.5" font-weight="700" fill="#1d4ed8" text-anchor="middle">35B 主模型</text>
+        <text x="462" y="499" font-size="10.3" fill="#2563eb" text-anchor="middle">Qwen3.6-35B-A3B</text>
+        <text x="462" y="516" font-size="10.3" fill="#2563eb" text-anchor="middle">:8010</text>
+        <text x="462" y="531" font-size="10" fill="#3b82f6" text-anchor="middle">davinci0,1</text>
+
+        <rect x="540" y="456" width="136" height="78" rx="8" fill="#f5f3ff" stroke="#a78bfa"/>
+        <text x="608" y="480" font-size="12.5" font-weight="700" fill="#6d28d9" text-anchor="middle">BGE 向量</text>
+        <text x="608" y="499" font-size="10.3" fill="#7c3aed" text-anchor="middle">bge-m3 · 1024 维</text>
+        <text x="608" y="516" font-size="10.3" fill="#7c3aed" text-anchor="middle">:8006</text>
+        <text x="608" y="531" font-size="10" fill="#8b5cf6" text-anchor="middle">davinci2</text>
+
+        <rect x="686" y="456" width="136" height="78" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+        <text x="754" y="480" font-size="12.5" font-weight="700" fill="#9a3412" text-anchor="middle">14B 回滚</text>
+        <text x="754" y="499" font-size="10.3" fill="#b45309" text-anchor="middle">Qwen2.5-14B</text>
+        <text x="754" y="516" font-size="10.3" fill="#b45309" text-anchor="middle">:8003</text>
+        <text x="754" y="531" font-size="10" fill="#d97706" text-anchor="middle">davinci7 · 按需</text>
+
+        <rect x="832" y="456" width="136" height="78" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-dasharray="5 3"/>
+        <text x="900" y="480" font-size="12.5" font-weight="700" fill="#b91c1c" text-anchor="middle">PPT 9B</text>
+        <text x="900" y="499" font-size="10.3" fill="#dc2626" text-anchor="middle">DeepPresenter</text>
+        <text x="900" y="516" font-size="10.3" fill="#dc2626" text-anchor="middle">:8004</text>
+        <text x="900" y="531" font-size="10" fill="#ef4444" text-anchor="middle">davinci5,6 · 待停</text>
+
+        <rect x="978" y="456" width="136" height="78" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+        <text x="1046" y="480" font-size="12.5" font-weight="700" fill="#334155" text-anchor="middle">Draw.io MCP</text>
+        <text x="1046" y="499" font-size="10.3" fill="#475569" text-anchor="middle">关系图 / 流程 XML</text>
+        <text x="1046" y="516" font-size="10.3" fill="#475569" text-anchor="middle">:3001</text>
+        <text x="1046" y="531" font-size="10" fill="#64748b" text-anchor="middle">不占 NPU</text>
+
+        <line x1="531" y1="392" x2="531" y2="414" stroke="#60a5fa" stroke-width="2" marker-end="url(#ar1b)"/>
+        <text x="539" y="408" font-size="10.5" fill="#2563eb">OpenAI 兼容 /v1</text>
+
+        <text x="394" y="560" font-size="11" fill="#b45309" font-weight="700">⚠ MODEL_SERVICE_URL 必须填宿主 LAN IP —— 容器内 127.0.0.1 是容器自身回环，够不到 vllm。</text>
+        <text x="394" y="582" font-size="11" fill="#475569">文本 / 视觉 / 长文三条链路都指向同一 35B 实例；PPT 只借它出大纲与分页 JSON，渲染在本机确定性排版引擎完成。</text>
+        <text x="394" y="604" font-size="11" fill="#475569">预留试用位：27B → :8011（davinci2,3，与 bge 互斥）· flash-next → :8012（davinci4）· PPTAgent Host → :7861</text>
+      </svg>
+    </div>
+    <p class="cap">图 1｜部署视图。绿色区是模型池，和业务编排是两套独立 compose，互不 restart 牵连。</p>
+
+    <div class="note danger">
+      <b>会上要强调的一点：</b>业务容器里没有模型。模型是宿主机上单独跑的 vllm 服务，API 只通过 HTTP 调它。所以「重启后端」不会影响模型，「模型挂了」也不会让后端进程退出——只会让 AI 功能超时。
+    </div>
+  </section>
+
+  <!-- ================= 图2 代码架构 ================= -->
+  <section class="page">
+    <h2><span class="no">2</span>代码架构：四层，一条依赖方向</h2>
+    <p class="lead">后端是单体，但内部严格分层。判断一段代码该写在哪，看它「碰什么」：碰 HTTP 去 interfaces，碰业务流程去 application，碰专业规则去 domain，碰数据库/模型/文件去 infrastructure。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 1160 660" role="img" aria-label="后端代码分层架构图">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+        </defs>
+
+        <!-- L1 接口层 -->
+        <rect x="20" y="60" width="170" height="112" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+        <text x="36" y="88" font-size="14" font-weight="700" fill="#1d4ed8">接口层</text>
+        <text x="36" y="108" font-size="11" fill="#3b82f6">interfaces/</text>
+        <text x="36" y="128" font-size="11" fill="#3b82f6">16 个 router</text>
+        <text x="36" y="146" font-size="11" fill="#3b82f6">159 个端点</text>
+        <text x="36" y="164" font-size="10.5" fill="#60a5fa">/api/v1 统一前缀</text>
+
+        <rect x="200" y="60" width="940" height="112" rx="10" fill="#f8fbff" stroke="#dbeafe"/>
+        <rect x="208" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="263" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">auth</text>
+        <rect x="324.5" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="379.5" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">users</text>
+        <rect x="441" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="496" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">chat</text>
+        <rect x="557.5" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="612.5" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">documents</text>
+        <rect x="674" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="729" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">files</text>
+        <rect x="790.5" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="845.5" y="96" font-size="10" fill="#1e40af" text-anchor="middle">format_check</text>
+        <rect x="907" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="962" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">knowledge</text>
+        <rect x="1023.5" y="76" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="1078.5" y="96" font-size="10.5" fill="#1e40af" text-anchor="middle">references</text>
+
+        <rect x="208" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="263" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">templates</text>
+        <rect x="324.5" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="379.5" y="136" font-size="10" fill="#1e40af" text-anchor="middle">writing_tasks</text>
+        <rect x="441" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="496" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">workflow</text>
+        <rect x="557.5" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="612.5" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">ppt</text>
+        <rect x="674" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="729" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">dashboard</text>
+        <rect x="790.5" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="845.5" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">system</text>
+        <rect x="907" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="962" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">organization</text>
+        <rect x="1023.5" y="116" width="110" height="30" rx="6" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="1078.5" y="136" font-size="10.5" fill="#1e40af" text-anchor="middle">preferences</text>
+        <text x="208" y="166" font-size="10.5" fill="#64748b">每个文件 = APIRouter + deps.py 依赖注入 + DTO 出入参；具名端点必须注册在 /{id} 之前</text>
+
+        <line x1="660" y1="174" x2="660" y2="188" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ar2)"/>
+
+        <!-- L2 应用层 -->
+        <rect x="20" y="190" width="170" height="132" rx="10" fill="#f5f3ff" stroke="#c4b5fd" stroke-width="1.5"/>
+        <text x="36" y="218" font-size="14" font-weight="700" fill="#6d28d9">应用层</text>
+        <text x="36" y="238" font-size="11" fill="#7c3aed">application/</text>
+        <text x="36" y="257" font-size="11" fill="#7c3aed">15 个业务模块</text>
+        <text x="36" y="276" font-size="11" fill="#7c3aed">用例编排</text>
+        <text x="36" y="298" font-size="10.5" fill="#8b5cf6">不写 SQL / 不碰 HTTP</text>
+
+        <rect x="200" y="190" width="940" height="132" rx="10" fill="#fcfbff" stroke="#ede9fe"/>
+        <rect x="208" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="263" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">writing</text>
+        <rect x="324.5" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="379.5" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">ppt</text>
+        <rect x="441" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="496" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">knowledge</text>
+        <rect x="557.5" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="612.5" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">documents</text>
+        <rect x="674" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="729" y="226" font-size="10" fill="#5b21b6" text-anchor="middle">format_check</text>
+        <rect x="790.5" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="845.5" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">chat</text>
+        <rect x="907" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="962" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">workflow</text>
+        <rect x="1023.5" y="206" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="1078.5" y="226" font-size="10.5" fill="#5b21b6" text-anchor="middle">identity</text>
+
+        <rect x="208" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="263" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">system</text>
+        <rect x="324.5" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="379.5" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">templates</text>
+        <rect x="441" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="496" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">references</text>
+        <rect x="557.5" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="612.5" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">audit</text>
+        <rect x="674" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="729" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">organization</text>
+        <rect x="790.5" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="845.5" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">training</text>
+        <rect x="907" y="248" width="110" height="30" rx="6" fill="#ffffff" stroke="#ddd6fe"/>
+        <text x="962" y="268" font-size="10.5" fill="#5b21b6" text-anchor="middle">shared</text>
+        <text x="1023.5" y="268" font-size="10.5" fill="#a78bfa">← 公共能力</text>
+        <text x="208" y="300" font-size="10.5" fill="#64748b">模块内三件套：service.py（编排） + dto.py（契约） + 领域规则调用；writing 另有 agent_graph / quality_gate / postprocessor</text>
+
+        <line x1="660" y1="322" x2="660" y2="336" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#ar2)"/>
+
+        <!-- L3 领域层 -->
+        <rect x="20" y="340" width="170" height="92" rx="10" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
+        <text x="36" y="368" font-size="14" font-weight="700" fill="#047857">领域层</text>
+        <text x="36" y="388" font-size="11" fill="#059669">domain/</text>
+        <text x="36" y="407" font-size="11" fill="#059669">规则与实体</text>
+        <text x="36" y="425" font-size="10.5" fill="#10b981">零外部依赖</text>
+
+        <rect x="200" y="340" width="940" height="92" rx="10" fill="#f7fefb" stroke="#d1fae5"/>
+        <rect x="208" y="356" width="226" height="60" rx="6" fill="#ffffff" stroke="#a7f3d0"/>
+        <text x="321" y="380" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">official_document_format.py</text>
+        <text x="321" y="400" font-size="10.5" fill="#059669" text-anchor="middle">GB/T 9704 · 21 条格式项</text>
+        <rect x="442" y="356" width="226" height="60" rx="6" fill="#ffffff" stroke="#a7f3d0"/>
+        <text x="555" y="380" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">content_quality_rules.py</text>
+        <text x="555" y="400" font-size="10.5" fill="#059669" text-anchor="middle">质量门 · 字数 / 结构 / 退化检测</text>
+        <rect x="676" y="356" width="226" height="60" rx="6" fill="#ffffff" stroke="#a7f3d0"/>
+        <text x="789" y="380" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">presentation_quality.py</text>
+        <text x="789" y="400" font-size="10.5" fill="#059669" text-anchor="middle">PPT 版式与内容校验</text>
+        <rect x="910" y="356" width="222" height="60" rx="6" fill="#ffffff" stroke="#a7f3d0"/>
+        <text x="1021" y="380" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">base.py + 9 个上下文包</text>
+        <text x="1021" y="400" font-size="10.5" fill="#059669" text-anchor="middle">identity / chat / knowledge…</text>
+
+        <line x1="660" y1="432" x2="660" y2="446" stroke="#94a3b8" stroke-width="1.6"
+              stroke-dasharray="4 3" marker-end="url(#ar2)"/>
+
+        <!-- L4 基础设施层 -->
+        <rect x="20" y="450" width="170" height="124" rx="10" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+        <text x="36" y="478" font-size="14" font-weight="700" fill="#9a3412">基础设施层</text>
+        <text x="36" y="498" font-size="11" fill="#b45309">infrastructure/</text>
+        <text x="36" y="517" font-size="11" fill="#b45309">技术实现</text>
+        <text x="36" y="536" font-size="11" fill="#b45309">可整体替换</text>
+        <text x="36" y="558" font-size="10.5" fill="#d97706">唯一碰外部的地方</text>
+
+        <rect x="200" y="450" width="940" height="124" rx="10" fill="#fffdf8" stroke="#fed7aa"/>
+        <rect x="208" y="466" width="300" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="222" y="486" font-size="11.5" font-weight="700" fill="#9a3412">ai/ 网关</text>
+        <text x="222" y="504" font-size="10.5" fill="#b45309">qwen.py（真实） + mock.py（离线）</text>
+        <rect x="516" y="466" width="300" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="530" y="486" font-size="11.5" font-weight="700" fill="#9a3412">rag/ 检索</text>
+        <text x="530" y="504" font-size="10.5" fill="#b45309">embedder（mock/http/auto） + FAISS</text>
+        <rect x="824" y="466" width="308" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="838" y="486" font-size="11.5" font-weight="700" fill="#9a3412">repositories/ 仓储</text>
+        <text x="838" y="504" font-size="10.5" fill="#b45309">11 个，把 ORM 挡在业务之外</text>
+
+        <rect x="208" y="520" width="300" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="222" y="540" font-size="11.5" font-weight="700" fill="#9a3412">database/ 持久化</text>
+        <text x="222" y="558" font-size="10.5" fill="#b45309">20 个 ORM 模型 · session · Base</text>
+        <rect x="516" y="520" width="300" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="530" y="540" font-size="11.5" font-weight="700" fill="#9a3412">drawio/ 图形</text>
+        <text x="530" y="558" font-size="10.5" fill="#b45309">MCP 客户端，只产 .drawio XML</text>
+        <rect x="824" y="520" width="308" height="48" rx="6" fill="#ffffff" stroke="#fdba74"/>
+        <text x="838" y="540" font-size="11.5" font-weight="700" fill="#9a3412">ppt/ 外部栈</text>
+        <text x="838" y="558" font-size="10.5" fill="#b45309">PPTAgent 客户端（已旁路，仅实验）</text>
+
+        <!-- 横切 -->
+        <rect x="20" y="592" width="1120" height="40" rx="8" fill="#fef2f2" stroke="#fca5a5"/>
+        <text x="36" y="617" font-size="11.3" fill="#b91c1c">横切 core/：config 配置 · security JWT/加密 · logging · monitoring Prometheus · exceptions · timeutil 本地时区 · fonts · llm_json 容错解析</text>
+        <text x="1122" y="617" font-size="11" fill="#dc2626" text-anchor="end">依赖倒置：application/ports.py 定协议，infrastructure 实现</text>
+      </svg>
+    </div>
+    <p class="cap">图 2｜代码分层。虚线箭头表示依赖倒置：基础设施实现应用层定义的端口，领域层谁都不依赖。</p>
+
+    <div class="note">
+      <b>一句话判断法：</b>新功能加在哪一层，看它最外侧碰什么。要新增一个「公文格式检查项」——规则进 <code>domain/</code>，流程进 <code>application/format_check/</code>，开接口进 <code>interfaces/format_check.py</code>，三处都不用改别的模块。
+    </div>
+  </section>
+
+  <!-- ================= 图3 模型架构 ================= -->
+  <section class="page">
+    <h2><span class="no">3</span>模型架构：一套 35B，四套网关，8 张卡</h2>
+    <p class="lead">这里最容易讲乱。抓住一句：<b>网关有四个，模型只有一个。</b>四套网关只是四种参数策略（超时、温度、上下文、是否带图），终点都是同一个 <code>:8010</code>。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 1160 640" role="img" aria-label="模型架构与昇腾卡位图">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#60a5fa"/></marker>
+        </defs>
+
+        <text x="20" y="42" font-size="13" font-weight="700" fill="#0f172a">后端网关（app/infrastructure/ai/__init__.py）</text>
+
+        <rect x="20" y="60" width="310" height="76" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="36" y="86" font-size="12.5" font-weight="700" fill="#1d4ed8">get_llm_gateway()</text>
+        <text x="36" y="106" font-size="10.8" fill="#1e40af">文本：写作 / 问答 / 意图识别 / 工具调用</text>
+        <text x="36" y="124" font-size="10.3" fill="#3b82f6">MODEL_SERVICE_URL(S) · timeout 300s</text>
+
+        <rect x="20" y="146" width="310" height="76" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="36" y="172" font-size="12.5" font-weight="700" fill="#1d4ed8">get_vision_gateway()</text>
+        <text x="36" y="192" font-size="10.8" fill="#1e40af">视觉：图片理解 / 扫描件识别</text>
+        <text x="36" y="210" font-size="10.3" fill="#3b82f6">VISION_MODEL_URL · 最多 4 张图 · 180s</text>
+
+        <rect x="20" y="232" width="310" height="76" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="36" y="258" font-size="12.5" font-weight="700" fill="#1d4ed8">get_long_form_gateway()</text>
+        <text x="36" y="278" font-size="10.8" fill="#1e40af">长文：正文主体分段生成</text>
+        <text x="36" y="296" font-size="10.3" fill="#3b82f6">留空则静默回退主模型 · 8192 tokens</text>
+
+        <rect x="20" y="318" width="310" height="76" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="36" y="344" font-size="12.5" font-weight="700" fill="#1d4ed8">get_ppt_gateway()</text>
+        <text x="36" y="364" font-size="10.8" fill="#1e40af">PPT：大纲 + 分页 JSON（只要结构）</text>
+        <text x="36" y="382" font-size="10.3" fill="#3b82f6">PPT_MODEL_URL · 渲染不经过模型</text>
+
+        <rect x="20" y="412" width="310" height="76" rx="10" fill="#f5f3ff" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="36" y="438" font-size="12.5" font-weight="700" fill="#6d28d9">get_embedder() / get_vector_store()</text>
+        <text x="36" y="458" font-size="10.8" fill="#5b21b6">RAG 检索链路（不是网关）</text>
+        <text x="36" y="476" font-size="10.3" fill="#7c3aed">EMBEDDING_PROVIDER=http → :8006</text>
+
+        <text x="20" y="520" font-size="11" fill="#64748b">AI_PROVIDER=mock 时全部替换为 MockLLMGateway，</text>
+        <text x="20" y="538" font-size="11" fill="#64748b">用于无模型的离线演示与自动化测试。</text>
+        <text x="20" y="562" font-size="11" fill="#64748b">同步 complete() 禁止在 event loop 内调用；</text>
+        <text x="20" y="580" font-size="11" fill="#64748b">线上统一走 acomplete / acomplete_stream。</text>
+
+        <!-- 汇流干线 -->
+        <line x1="330" y1="98" x2="350" y2="98" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="330" y1="184" x2="350" y2="184" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="330" y1="270" x2="350" y2="270" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="330" y1="356" x2="350" y2="356" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="350" y1="98" x2="350" y2="356" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="350" y1="184" x2="366" y2="184" stroke="#60a5fa" stroke-width="2" marker-end="url(#ar3)"/>
+
+        <!-- 35B -->
+        <rect x="370" y="64" width="350" height="240" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+        <text x="388" y="94" font-size="15" font-weight="700" fill="#1e3a8a">Qwen3.6-35B-A3B-W8A8</text>
+        <text x="388" y="118" font-size="11.5" fill="#1d4ed8">:8010（宿主 LAN IP）</text>
+        <text x="388" y="144" font-size="11.3" fill="#1e40af">TP=2 · davinci0,1 · W8A8 量化</text>
+        <text x="388" y="168" font-size="11.3" fill="#1e40af">max-model-len 16384 · max-num-seqs 8</text>
+        <text x="388" y="192" font-size="11.3" fill="#1e40af">enable_thinking=false · gpu-util 0.90</text>
+        <text x="388" y="216" font-size="11.3" fill="#1e40af">多模态：文本 + 图片 + 长文 共用一套权重</text>
+        <line x1="388" y1="232" x2="702" y2="232" stroke="#bfdbfe" stroke-width="1"/>
+        <text x="388" y="252" font-size="10.8" fill="#2563eb">温度 0.4 · max_tokens 4096 · top_p 0.9</text>
+        <text x="388" y="272" font-size="10.8" fill="#2563eb">repetition_penalty 1.08 · 并发 4 · 上下文 16384</text>
+        <text x="388" y="292" font-size="10.8" fill="#3b82f6">多端点 MODEL_SERVICE_URLS 配了走复数，未配回退单端点</text>
+
+        <!-- BGE -->
+        <rect x="370" y="330" width="350" height="100" rx="10" fill="#f5f3ff" stroke="#a78bfa" stroke-width="1.6"/>
+        <text x="388" y="356" font-size="13.5" font-weight="700" fill="#6d28d9">bge-m3 · :8006</text>
+        <text x="388" y="378" font-size="11.3" fill="#5b21b6">1024 维 /v1/embeddings · task embed</text>
+        <text x="388" y="400" font-size="10.8" fill="#b91c1c">⚠ 维度必须与 FAISS 索引一致，384 会全盘错位</text>
+        <text x="388" y="420" font-size="10.5" fill="#7c3aed">查询侧加 BGE 检索指令前缀，入库侧不加</text>
+
+        <line x1="330" y1="450" x2="410" y2="450" stroke="#a78bfa" stroke-width="2"/>
+        <line x1="410" y1="450" x2="410" y2="432" stroke="#a78bfa" stroke-width="2" marker-end="url(#ar3)"/>
+
+        <!-- PPT 9B -->
+        <rect x="370" y="456" width="350" height="100" rx="10" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <text x="388" y="482" font-size="13.5" font-weight="700" fill="#b91c1c">DeepPresenter-9B · :8004</text>
+        <text x="388" y="504" font-size="11.3" fill="#dc2626">PPTAgent 栈，PPT_AGENT_URL 置空即旁路</text>
+        <text x="388" y="526" font-size="10.8" fill="#b91c1c">建议下线：释放 davinci5,6；正式链路已不依赖</text>
+        <text x="388" y="546" font-size="10.5" fill="#ef4444">Host WebUI/API 另占 :7861（Gradio）</text>
+
+        <!-- 卡位 -->
+        <text x="760" y="94" font-size="13" font-weight="700" fill="#0f172a">昇腾 310P ×8（单卡 43GB）</text>
+
+        <rect x="766" y="112" width="86" height="80" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="809" y="140" font-size="10.5" fill="#1e3a8a" text-anchor="middle">davinci0</text>
+        <text x="809" y="160" font-size="10" fill="#2563eb" text-anchor="middle">35B</text>
+        <text x="809" y="178" font-size="9.5" fill="#3b82f6" text-anchor="middle">TP 第 1 卡</text>
+
+        <rect x="860" y="112" width="86" height="80" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="903" y="140" font-size="10.5" fill="#1e3a8a" text-anchor="middle">davinci1</text>
+        <text x="903" y="160" font-size="10" fill="#2563eb" text-anchor="middle">35B</text>
+        <text x="903" y="178" font-size="9.5" fill="#3b82f6" text-anchor="middle">TP 第 2 卡</text>
+
+        <rect x="954" y="112" width="86" height="80" rx="8" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="997" y="140" font-size="10.5" fill="#5b21b6" text-anchor="middle">davinci2</text>
+        <text x="997" y="160" font-size="10" fill="#7c3aed" text-anchor="middle">BGE</text>
+        <text x="997" y="178" font-size="9.5" fill="#8b5cf6" text-anchor="middle">与 27B 互斥</text>
+
+        <rect x="1048" y="112" width="86" height="80" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="4 3"/>
+        <text x="1091" y="140" font-size="10.5" fill="#64748b" text-anchor="middle">davinci3</text>
+        <text x="1091" y="160" font-size="10" fill="#94a3b8" text-anchor="middle">空闲</text>
+        <text x="1091" y="178" font-size="9.5" fill="#94a3b8" text-anchor="middle">27B 备用</text>
+
+        <rect x="766" y="202" width="86" height="80" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="4 3"/>
+        <text x="809" y="230" font-size="10.5" fill="#64748b" text-anchor="middle">davinci4</text>
+        <text x="809" y="250" font-size="10" fill="#94a3b8" text-anchor="middle">空闲</text>
+        <text x="809" y="268" font-size="9.5" fill="#94a3b8" text-anchor="middle">flash 试用位</text>
+
+        <rect x="860" y="202" width="86" height="80" rx="8" fill="#fee2e2" stroke="#f87171" stroke-width="1.5"/>
+        <text x="903" y="230" font-size="10.5" fill="#991b1b" text-anchor="middle">davinci5</text>
+        <text x="903" y="250" font-size="10" fill="#dc2626" text-anchor="middle">PPT</text>
+        <text x="903" y="268" font-size="9.5" fill="#ef4444" text-anchor="middle">可释放</text>
+
+        <rect x="954" y="202" width="86" height="80" rx="8" fill="#fee2e2" stroke="#f87171" stroke-width="1.5"/>
+        <text x="997" y="230" font-size="10.5" fill="#991b1b" text-anchor="middle">davinci6</text>
+        <text x="997" y="250" font-size="10" fill="#dc2626" text-anchor="middle">PPT</text>
+        <text x="997" y="268" font-size="9.5" fill="#ef4444" text-anchor="middle">可释放</text>
+
+        <rect x="1048" y="202" width="86" height="80" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+        <text x="1091" y="230" font-size="10.5" fill="#475569" text-anchor="middle">davinci7</text>
+        <text x="1091" y="250" font-size="10" fill="#64748b" text-anchor="middle">14B 回滚</text>
+        <text x="1091" y="268" font-size="9.5" fill="#94a3b8" text-anchor="middle">按需启停</text>
+
+        <rect x="766" y="300" width="368" height="1" fill="#e2e8f0"/>
+        <text x="766" y="322" font-size="10.8" fill="#475569">昇腾卡位占用：<tspan fill="#2563eb">■ 已占用 5 张</tspan><tspan fill="#64748b">　</tspan><tspan fill="#dc2626">■ 可释放 2 张</tspan><tspan fill="#64748b">　</tspan><tspan fill="#94a3b8">■ 空闲 2 张</tspan></text>
+
+        <text x="766" y="352" font-size="10.8" fill="#b45309">⚠ 27B 试用要 davinci2,3 → 与 bge 抢 davinci2，二选一</text>
+        <text x="766" y="374" font-size="10.8" fill="#b45309">⚠ flash-next 试用占 davinci4；14B 回滚占 davinci7</text>
+        <text x="766" y="396" font-size="10.8" fill="#b45309">⚠ PPT 栈停用后，davinci5,6 可整体回收</text>
+        <text x="766" y="418" font-size="10.8" fill="#475569">35B 只占 2 卡是刻意留余量（峰值并发 4、长文 8192）</text>
+
+        <rect x="760" y="446" width="300" height="64" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+        <text x="776" y="470" font-size="11.5" font-weight="700" fill="#334155">Draw.io MCP · :3001（可选）</text>
+        <text x="776" y="492" font-size="10.5" fill="#475569">只产 .drawio XML，不占 NPU，仅供 PPT 关系图</text>
+
+        <text x="760" y="540" font-size="10.5" fill="#64748b">DRAWIO_MCP_URL 留空 → 自动判定未启用，</text>
+        <text x="760" y="558" font-size="10.5" fill="#64748b">PPT 流程图回退本地原生渲染（零侵入）。</text>
+        <text x="760" y="578" font-size="10.5" fill="#64748b">MCP 无鉴权，仅同网络内可达，3001 不对外发布。</text>
+      </svg>
+    </div>
+    <p class="cap">图 3｜模型架构。左侧四套网关 + 一条 RAG 链路，中间是实际的服务实例，右侧是卡位占用。</p>
+
+    <h3>模型相关环境变量（生产 .env）</h3>
+    <table>
+      <thead><tr><th style="width:220px">变量</th><th style="width:230px">当前应填</th><th>作用</th></tr></thead>
+      <tbody>
+        <tr><td><code>MODEL_SERVICE_URL</code></td><td><code>http://10.128.85.133:8010/v1</code></td><td>主模型地址。<b>必须是宿主 LAN IP</b>，不能填 127.0.0.1</td></tr>
+        <tr><td><code>MODEL_NAME</code></td><td><code>Qwen3.6-35B-A3B-W8A8</code></td><td>served-model-name，须与 vllm 启动参数一致</td></tr>
+        <tr><td><code>VISION_MODEL_URL</code></td><td>同上（:8010）</td><td>留空则退回纯 OCR 文本通道，多模态失效</td></tr>
+        <tr><td><code>LONG_FORM_MODEL_URLS</code></td><td>同上（:8010）</td><td>留空仍能生成，但无显式关思考，长文更慢更飘</td></tr>
+        <tr><td><code>EMBEDDING_PROVIDER</code></td><td><code>http</code></td><td>走远程 bge，避免容器内 CPU 向量化卡 8 秒超时</td></tr>
+        <tr><td><code>PPT_AGENT_ENABLED</code></td><td><code>false</code></td><td>关掉外部 PPTAgent，走 35B + 本地排版引擎</td></tr>
+        <tr><td><code>DRAWIO_MCP_URL</code></td><td>留空或 <code>http://drawio-mcp:3001</code></td><td>留空即不启用，PPT 关系图走本地渲染</td></tr>
+        <tr><td><code>MODEL_MAX_CONCURRENCY</code></td><td><code>4</code></td><td>网关侧并发闸门，超了排队而不是打爆模型</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= 图4 部署链路 ================= -->
+  <section class="page">
+    <h2><span class="no">4</span>启动与部署：四步，位置写死</h2>
+    <p class="lead">生产环境严禁出网，所以没有 <code>git pull</code>。源码在 Windows 端打包、scp 上去、服务器上解包再 build。下面这条链是唯一正确路径。</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 1160 430" role="img" aria-label="部署与启动链路图">
+        <defs>
+          <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+                  orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+        </defs>
+
+        <rect x="40" y="60" width="250" height="146" rx="10" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+        <text x="56" y="86" font-size="12.5" font-weight="700" fill="#9a3412">① Windows 开发机（可出网）</text>
+        <text x="56" y="108" font-size="10.8" fill="#b45309">D:\Projects\judicial_app</text>
+        <text x="56" y="130" font-size="10.8" fill="#92400e">git archive HEAD → tar.gz</text>
+        <text x="56" y="150" font-size="10.8" fill="#92400e">产扁平包（无顶层目录）</text>
+        <text x="56" y="172" font-size="10.8" fill="#b91c1c">禁：服务器上 git fetch/pull</text>
+        <text x="56" y="192" font-size="10.5" fill="#b45309">也可用 pack_release.py</text>
+
+        <line x1="292" y1="133" x2="312" y2="133" stroke="#64748b" stroke-width="2" marker-end="url(#ar4)"/>
+
+        <rect x="314" y="60" width="250" height="146" rx="10" fill="#eff6ff" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="330" y="86" font-size="12.5" font-weight="700" fill="#1d4ed8">② scp 上载 + 解包</text>
+        <text x="330" y="108" font-size="10.8" fill="#1e40af">目标：/opt/judicial_app</text>
+        <text x="330" y="130" font-size="10.8" fill="#1e40af">tar xzf（不加 strip 参数）</text>
+        <text x="330" y="150" font-size="10.8" fill="#1e40af">覆盖源码，非目录挂载</text>
+        <text x="330" y="172" font-size="10.8" fill="#b91c1c">strip 会把 server/ 削成 app/</text>
+        <text x="330" y="192" font-size="10.5" fill="#2563eb">粘脚本后先 py_compile 查一遍</text>
+
+        <line x1="566" y1="133" x2="586" y2="133" stroke="#64748b" stroke-width="2" marker-end="url(#ar4)"/>
+
+        <rect x="588" y="60" width="250" height="146" rx="10" fill="#f0fdf4" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="604" y="86" font-size="12.5" font-weight="700" fill="#15803d">③ bash deploy_latest.sh</text>
+        <text x="604" y="108" font-size="10.8" fill="#166534">校验 → build → 切镜像 → 验证</text>
+        <text x="604" y="130" font-size="10.8" fill="#166534">deploy/Dockerfile 烤进镜像</text>
+        <text x="604" y="150" font-size="10.8" fill="#166534">COPY server/ /app/</text>
+        <text x="604" y="172" font-size="10.8" fill="#b91c1c">改宿主机文件 + restart 无效</text>
+        <text x="604" y="192" font-size="10.5" fill="#15803d">默认离线模式，不依赖 git</text>
+
+        <line x1="840" y1="133" x2="860" y2="133" stroke="#64748b" stroke-width="2" marker-end="url(#ar4)"/>
+
+        <rect x="862" y="60" width="258" height="146" rx="10" fill="#f5f3ff" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="878" y="86" font-size="12.5" font-weight="700" fill="#6d28d9">④ docker compose up -d</text>
+        <text x="878" y="108" font-size="10.8" fill="#5b21b6">目录：/opt/justice-office/deploy</text>
+        <text x="878" y="130" font-size="10.8" fill="#5b21b6">顺序：db healthy → migrate 成功</text>
+        <text x="878" y="150" font-size="10.8" fill="#5b21b6">→ api 启动</text>
+        <text x="878" y="172" font-size="10.8" fill="#5b21b6">模型池是另一套 compose</text>
+        <text x="878" y="192" font-size="10.5" fill="#7c3aed">先起模型（加载 5~15 分钟）</text>
+
+        <rect x="40" y="238" width="1080" height="86" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+        <text x="58" y="264" font-size="12.5" font-weight="700" fill="#0f172a">上线后必须核对（否则容易「假成功」）</text>
+        <text x="58" y="288" font-size="11" fill="#334155">docker inspect justice-api --format '{{.Config.Image}}'   ← 确认镜像真的切过去了</text>
+        <text x="58" y="310" font-size="11" fill="#334155">curl -s http://127.0.0.1:8000/health   ·   tail -f /data/justice/logs/server.log   ·   docker compose ps 看三容器状态</text>
+
+        <text x="40" y="356" font-size="11" fill="#b45309" font-weight="700">⚠ 模型池与业务是两套 compose：只要 API 能通过 HTTP 摸到 :8010 就行，谁先起都可以；但模型加载慢，演示前务必预留 15 分钟。</text>
+        <text x="40" y="380" font-size="11" fill="#b45309">⚠ 纯空气闸（完全无外网）时：出网机 build → docker save → scp → docker load → 在 .env 设 SERVER_IMAGE → up -d，现场不 build。</text>
+        <text x="40" y="404" font-size="11" fill="#475569">⚠ preflight-production.sh 里的模型端口/路径是硬编码的历史布局（:8003/:8002/:8004），改模型布局时要同步改它。</text>
+      </svg>
+    </div>
+    <p class="cap">图 4｜发布链路。注意第 3 步是「构建」不是「重启」，这是历史上反复踩的坑。</p>
+  </section>
+
+  <!-- ================= 位置清单 ================= -->
+  <section class="page">
+    <h2><span class="no">5</span>东西到底放在哪：目录与脚本清单</h2>
+    <p class="lead">这一节是会上最容易被追问的。左边是仓库（开发机），右边是服务器上的绝对路径，两者不要混。</p>
+
+    <h3>5.1 仓库结构（D:\Projects\judicial_app，分支 app）</h3>
+    <div class="treegrid">
+      <div class="row"><span class="p c">D://Projects//judicial_app//</span><span class="d">唯一源码仓库 · 开发机（Windows）</span></div>
+      <div class="row"><span class="p c">├─ server\</span><span class="d">后端 · Python 3.11 + FastAPI</span></div>
+      <div class="row"><span class="p c">│  ├─ app\main.py</span><span class="d">应用入口：create_app / lifespan / 16 路由装配</span></div>
+      <div class="row"><span class="p c">│  ├─ app\interfaces\</span><span class="d">HTTP 路由层（16 个 router）</span></div>
+      <div class="row"><span class="p c">│  ├─ app\application\</span><span class="d">用例编排（15 个业务模块）</span></div>
+      <div class="row"><span class="p c">│  ├─ app\domain\</span><span class="d">领域规则（GB/T 9704、质量规则）</span></div>
+      <div class="row"><span class="p c">│  ├─ app\infrastructure\</span><span class="d">AI 网关 / RAG / 仓储 / ORM / drawio</span></div>
+      <div class="row"><span class="p c">│  ├─ app\core\</span><span class="d">配置 / 安全 / 日志 / 监控</span></div>
+      <div class="row"><span class="p c">│  └─ app\migrations\</span><span class="d">Alembic 迁移（19 个版本文件）</span></div>
+      <div class="row"><span class="p c">├─ desktop\</span><span class="d">桌面客户端 · Compose Desktop（Kotlin）</span></div>
+      <div class="row"><span class="p c">│  ├─ src\jvmMain\kotlin\...\features\</span><span class="d">15 个功能页（writing / ppt / knowledge…）</span></div>
+      <div class="row"><span class="p g">│  └─ installer\</span><span class="d">安装包产物（EXE / deb）</span></div>
+      <div class="row"><span class="p g">├─ deploy\</span><span class="d">★ 部署资产 · 生产权威来源</span></div>
+      <div class="row"><span class="p g">│  ├─ production.docker-compose.yml</span><span class="d">生产 API + DB 编排（服务器同名文件以此为准）</span></div>
+      <div class="row"><span class="p g">│  ├─ model-pool\docker-compose.yml</span><span class="d">模型池编排（35B / bge / 14B 回滚 / 试用）</span></div>
+      <div class="row"><span class="p g">│  ├─ deploy_latest.sh</span><span class="d">覆盖部署脚本（校验 → 构建 → 切流量）</span></div>
+      <div class="row"><span class="p g">│  ├─ Dockerfile</span><span class="d">后端镜像（COPY server/ /app/）</span></div>
+      <div class="row"><span class="p y">│  ├─ docker-compose.yml</span><span class="d">开发 / 单机用（SQLite），非生产</span></div>
+      <div class="row"><span class="p c">│  └─ backup-production.sh</span><span class="d">生产备份（独立 justice-db 容器）</span></div>
+      <div class="row"><span class="p y">├─ start-backend.bat / .ps1</span><span class="d">本地开发起后端（Windows）</span></div>
+      <div class="row"><span class="p y">├─ desktop.sh</span><span class="d">在图形桌面起客户端（演示用）</span></div>
+      <div class="row"><span class="p rd">├─ start_all.sh / start_services.sh</span><span class="d">✗ 遗留：vLLM 14B 裸进程时代（:8001）</span></div>
+      <div class="row"><span class="p rd">├─ stop_services.sh / status.sh</span><span class="d">✗ 遗留：只管 8000/8001，与新架构不符</span></div>
+      <div class="row"><span class="p rd">└─ start-tunnels.bat</span><span class="d">✗ 过期：指向 192.168.68.51 实验机</span></div>
+    </div>
+
+    <h3>5.2 服务器上的绝对路径（10.128.85.133）</h3>
+    <table>
+      <thead><tr><th style="width:290px">路径</th><th style="width:150px">是什么</th><th>谁在用 / 怎么用</th></tr></thead>
+      <tbody>
+        <tr><td><code>/opt/justice-office/deploy/docker-compose.yml</code></td><td>生产编排（API+DB）</td>
+            <td>真正的生产 compose，仓库里 <code>deploy/production.docker-compose.yml</code> 是它的版本化副本</td></tr>
+        <tr><td><code>/opt/justice-office/deploy/.env</code></td><td>生产环境变量</td>
+            <td>密码 / SECRET_KEY / 模型地址；模板 <code>production.env.example</code></td></tr>
+        <tr><td><code>/opt/justice-office/deploy/model-pool/docker-compose.yml</code></td><td>模型池编排</td>
+            <td><code>docker compose up -d</code> 起 35B + bge；<code>--profile rollback|trial</code> 起回滚/试用</td></tr>
+        <tr><td><code>/opt/judicial_app/</code></td><td>源码落地目录</td>
+            <td>只作为 build 的上下文来源，改这里不重启不生效</td></tr>
+        <tr><td><code>/data/justice/</code></td><td>业务数据卷</td>
+            <td>uploads / ppt / generated / faiss / format-check，备份对象就是这个目录 + 数据库</td></tr>
+        <tr><td><code>/data/justice/logs/server.log</code></td><td>后端日志</td>
+            <td>排障第一现场；容器内 <code>DATA_DIR=/data/justice</code></td></tr>
+        <tr><td><code>/opt/justice-ppt/workspace</code></td><td>PPT 外部栈工作区</td>
+            <td>只读挂到 API 容器 <code>/data/pptagent</code>；PPTAgent 下线后可清理</td></tr>
+      </tbody>
+    </table>
+
+    <h3>5.3 脚本清单与可用性（重点：哪些别再用了）</h3>
+    <table>
+      <thead><tr><th style="width:230px">脚本 / 文件</th><th style="width:110px">状态</th><th style="width:280px">位置</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>deploy_latest.sh</code></td><td><span class="tag ok">权威</span></td><td><code>deploy/</code></td>
+            <td>生产唯一部署入口。默认离线模式；<code>--check-only</code> 只校验；<b>不要传 <code>--build-arg</code></b></td></tr>
+        <tr><td><code>production.docker-compose.yml</code></td><td><span class="tag ok">权威</span></td><td><code>deploy/</code> → 服务器 <code>/opt/justice-office/deploy/</code></td>
+            <td>起 justice-db / justice-migrate / justice-api 三个容器</td></tr>
+        <tr><td><code>model-pool/docker-compose.yml</code></td><td><span class="tag ok">权威</span></td><td><code>deploy/model-pool/</code></td>
+            <td>起 35B(:8010) + bge(:8006)；<code>profiles: rollback / trial</code> 控制回滚与试用模型</td></tr>
+        <tr><td><code>app.migrations.migrator</code></td><td><span class="tag ok">权威</span></td><td>容器内 <code>python -m</code></td>
+            <td>迁移只由 <code>justice-migrate</code> 服务跑一次；<b>不要用 <code>docker exec alembic</code></b></td></tr>
+        <tr><td><code>backup-production.sh</code></td><td><span class="tag ok">权威</span></td><td><code>deploy/</code></td>
+            <td>在宿主机执行，直连 justice-db 容器；API 容器内 psql 必失败</td></tr>
+        <tr><td><code>deploy/docker-compose.yml</code></td><td><span class="tag dev">仅开发</span></td><td><code>deploy/</code></td>
+            <td>单机 SQLite，带 <code>--build</code>；<b>不是生产编排</b>，别拿它上服务器</td></tr>
+        <tr><td><code>start-backend.bat / .ps1</code></td><td><span class="tag dev">仅开发</span></td><td>仓库根目录</td>
+            <td>Windows 本地起 uvicorn :8000，改代码即生效，用于调试</td></tr>
+        <tr><td><code>desktop.sh</code></td><td><span class="tag dev">仅演示</span></td><td>仓库根目录</td>
+            <td>需要在图形桌面（DISPLAY / WAYLAND）里跑，起 Compose Desktop 客户端</td></tr>
+        <tr><td><code>start_all.sh</code> / <code>start_services.sh</code></td><td><span class="tag bad">已废弃</span></td><td>仓库根目录</td>
+            <td>vLLM 起 Qwen2.5-14B 占 :8001 的裸进程方案，与 35B + Docker 现状完全不符</td></tr>
+        <tr><td><code>stop_services.sh</code> / <code>status.sh</code></td><td><span class="tag bad">已废弃</span></td><td>仓库根目录</td>
+            <td>只认 8000/8001；现在端口是 8000/8010/8006，跑它只会得到错误结论</td></tr>
+        <tr><td><code>start-tunnels.bat</code></td><td><span class="tag bad">已过期</span></td><td>仓库根目录</td>
+            <td>SSH 隧道指向 <code>192.168.68.51</code> 实验机（PPTAgent / llama.cpp），正式环境不用</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note danger">
+      <b>建议在本次会上拍板：</b>把三个废弃脚本移进 <code>deploy/archive/</code> 并在 <code>README.md</code> 顶部列出「生产只用哪三个入口」。现在根目录 8 个脚本里只有 2 个还能用，交接时极易踩错。
+    </div>
+  </section>
+
+  <!-- ================= 端口 ================= -->
+  <section>
+    <h2><span class="no">6</span>端口总表：一个端口对一件事</h2>
+    <p class="lead">现场排障时先看端口。这张表建议直接贴到运维文档里。</p>
+    <table>
+      <thead><tr><th style="width:90px">端口</th><th style="width:250px">服务</th><th style="width:200px">所在位置</th><th>状态 / 说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>8000</code></td><td>justice-api（FastAPI）</td><td>业务 compose</td><td><span class="tag ok">必开</span> 客户端唯一入口，<code>/api/v1</code>、<code>/health</code>、<code>/docs</code></td></tr>
+        <tr><td><code>5432</code></td><td>PostgreSQL 15</td><td>justice-db 容器内</td><td><span class="tag ok">必开</span> 不发布到宿主机，只在 justice-net 内</td></tr>
+        <tr><td><code>8010</code></td><td>Qwen3.6-35B-A3B-W8A8</td><td>模型池 · davinci0,1</td><td><span class="tag ok">必开</span> 文本 / 视觉 / 长文三链路共用</td></tr>
+        <tr><td><code>8006</code></td><td>bge-m3 向量化</td><td>模型池 · davinci2</td><td><span class="tag ok">必开</span> RAG 依赖；维度须与 FAISS 一致</td></tr>
+        <tr><td><code>8003</code></td><td>Qwen2.5-14B 回滚</td><td>模型池 · davinci7</td><td><span class="tag warn">按需</span> <code>--profile rollback</code>，默认不起</td></tr>
+        <tr><td><code>8004</code></td><td>DeepPresenter-9B</td><td>PPTAgent 栈 · davinci5,6</td><td><span class="tag bad">建议停</span> 正式链路已旁路，停后可释放 2 卡</td></tr>
+        <tr><td><code>7861</code></td><td>PPTAgent Host（Gradio）</td><td>PPTAgent 栈</td><td><span class="tag bad">建议停</span> 与 :8004 同进同退</td></tr>
+        <tr><td><code>8011</code></td><td>27B 试用</td><td>模型池 · davinci2,3</td><td><span class="tag dev">未启用</span> 与 bge 争 davinci2，二选一</td></tr>
+        <tr><td><code>8012</code></td><td>flash-next 试用</td><td>模型池 · davinci4</td><td><span class="tag dev">未启用</span> 权重未到位</td></tr>
+        <tr><td><code>3001</code></td><td>Draw.io MCP</td><td>独立容器</td><td><span class="tag warn">可选</span> 只绑 127.0.0.1，MCP 无鉴权</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= 模块表 ================= -->
+  <section>
+    <h2><span class="no">7</span>业务模块对照：找功能先找这三个文件</h2>
+    <p class="lead">会后如果有人问「XX 功能在哪」，按这张表三跳就能定位：路由 → 服务 → 规则。</p>
+    <table>
+      <thead><tr><th style="width:120px">模块</th><th style="width:180px">路由（interfaces/）</th><th style="width:220px">编排（application/）</th><th>核心能力</th></tr></thead>
+      <tbody>
+        <tr><td><b>智能写作</b></td><td><code>writing_tasks.py</code></td><td><code>writing/task_service.py</code></td><td>分节生成、质量门、改写、定稿；25 个服务文件，最重的一块</td></tr>
+        <tr><td><b>PPT 生成</b></td><td><code>ppt.py</code></td><td><code>ppt/service.py</code> <code>agent_job.py</code></td><td>35B 出大纲 → 本地排版引擎 → 逐页预览；drawio 只画关系图</td></tr>
+        <tr><td><b>知识库</b></td><td><code>knowledge.py</code></td><td><code>knowledge/rag_service.py</code></td><td>上传/解析/OCR/切片/向量化/检索/重排，含网页导入</td></tr>
+        <tr><td><b>格式校验</b></td><td><code>format_check.py</code></td><td><code>format_check/check_engine.py</code></td><td>确定性规则 + 自动修正 + 35B 语义复核</td></tr>
+        <tr><td><b>AI 对话</b></td><td><code>chat.py</code></td><td><code>chat/service.py</code></td><td>SSE 流式、意图识别、附件解析、docx 导出、记忆</td></tr>
+        <tr><td><b>公文文档</b></td><td><code>documents.py</code></td><td><code>documents/service.py</code></td><td>文档 CRUD、排版、模板套用</td></tr>
+        <tr><td><b>流程</b></td><td><code>workflow.py</code></td><td><code>workflow/service.py</code></td><td>审批流转、内置流程数据</td></tr>
+        <tr><td><b>身份</b></td><td><code>auth.py</code> <code>users.py</code></td><td><code>identity/service.py</code></td><td>登录、JWT、首登改密、限流、短信</td></tr>
+        <tr><td><b>组织</b></td><td><code>organization.py</code></td><td><code>organization/service.py</code></td><td>部门树、角色权限</td></tr>
+        <tr><td><b>模板/范文</b></td><td><code>templates.py</code> <code>references.py</code></td><td><code>templates/</code> <code>references/</code></td><td>内置模板库、范文检索与风格卡</td></tr>
+        <tr><td><b>个人偏好</b></td><td><code>preferences.py</code></td><td><code>shared/user_preference.py</code></td><td>助手名称、写作风格、行为开关</td></tr>
+        <tr><td><b>看板/系统</b></td><td><code>dashboard.py</code> <code>system.py</code></td><td><code>system/service.py</code></td><td>统计、健康检查、种子数据</td></tr>
+        <tr><td><b>审计</b></td><td>—（内部调用）</td><td><code>audit/service.py</code></td><td>操作留痕</td></tr>
+        <tr><td><b>培训</b></td><td><code>training.py</code></td><td><code>training/service.py</code></td><td>路由已注销（有意 404），仅保留代码与 LoRA 管线</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= 决策项 ================= -->
+  <section class="page">
+    <h2><span class="no">8</span>需要会上拍板的六件事</h2>
+    <p class="lead">这几项都是「现状已清楚、只差一个决定」，建议这次会上直接定下来，会后就能动。</p>
+    <table>
+      <thead><tr><th style="width:36px">#</th><th style="width:230px">事项</th><th style="width:340px">现状</th><th>建议决策 / 影响</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>PPTAgent 栈是否停用</td>
+            <td>DeepPresenter-9B（:8004）+ Host（:7861）容器仍在，占 <b>davinci5,6</b>；正式链路已改为 35B + 本地渲染</td>
+            <td>停容器 + 生产 .env 置空 <code>PPT_AGENT_URL</code>，<b>释放 2 张卡</b></td></tr>
+        <tr><td>2</td><td>三项已修未部署</td>
+            <td>Embedder 路径修复、Draw.io 接入、PPT 本地逐页预览，代码已提交但<b>镜像未重建</b></td>
+            <td>排一个发布窗口统一重建；否则功能在服务器上等于没有</td></tr>
+        <tr><td>3</td><td>缺失的 015 迁移文件</td>
+            <td><code>alembic_version</code> 长度问题曾手工修库，仓库里没有对应迁移文件（014 不可改名）</td>
+            <td>补 <code>015_widen_alembic_version_num.py</code>，避免下次部署在别的库上再炸</td></tr>
+        <tr><td>4</td><td>格式校验改造排期</td>
+            <td>确定性 21 条已可用；短板是结构项不查、语义项给了问题不给改法、只能独立上传不能写作时实时</td>
+            <td>按 A 规则扩展 → B 语义可修正 → C 写作时实时 三步走</td></tr>
+        <tr><td>5</td><td>废弃脚本清理</td>
+            <td>根目录 8 个脚本里 3 个已失效，2 个仅开发用，交接易踩错</td>
+            <td>移入 <code>deploy/archive/</code>，README 顶部只留生产三入口</td></tr>
+        <tr><td>6</td><td>多智能体写作灰度</td>
+            <td>开关 <code>WRITING_AGENT_GRAPH_ENABLED</code> 默认 false，功能已就绪但未对外</td>
+            <td>定灰度比例（建议先 10% 复杂任务），观察质量与耗时</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>会议结束前的一句话总结：</b>代码分四层、模型就一套、部署走四个脚本——<code>deploy_latest.sh</code> 管发布，<code>production.docker-compose.yml</code> 管业务，<code>model-pool/docker-compose.yml</code> 管模型，<code>migrate</code> 服务管表结构。其余脚本都是历史遗留。
+    </div>
+  </section>
+
+  <p class="foot">云法智办 · 架构现状说明 · 2026-10-27 · 依据当前 app 分支代码与实际 compose 配置整理</p>
+</div>
+</body>
+</html>

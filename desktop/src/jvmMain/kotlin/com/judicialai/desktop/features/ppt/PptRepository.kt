@@ -46,8 +46,11 @@ class PptRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
-    suspend fun uploadTemplate(file: File) =
-        api.upload(Endpoints.Ppt.TEMPLATE_UPLOAD, "file", listOf(file), timeoutMs = 300_000)
+    suspend fun uploadTemplate(file: File, shared: Boolean = false,
+                               licenseNote: String = "") =
+        api.upload(Endpoints.Ppt.TEMPLATE_UPLOAD, "file", listOf(file),
+            formFields = mapOf("shared" to shared.toString(),
+                "license_note" to licenseNote), timeoutMs = 300_000)
 
     suspend fun deleteTemplate(id: String) = api.del(Endpoints.Ppt.templateDelete(id))
 
@@ -87,6 +90,7 @@ class PptRepository(private val api: ApiClient) {
         kbIds: List<String> = emptyList(),
         materialNames: List<String> = emptyList(),
         materialIds: List<String> = emptyList(),
+        autoImages: Boolean = true,
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
@@ -94,6 +98,7 @@ class PptRepository(private val api: ApiClient) {
             "kb_ids" to kbIds,
             "material_names" to materialNames,
             "material_ids" to materialIds,
+            "auto_images" to autoImages,
         ).apply {
             slideCount?.let { put("slide_count", it) }
         }
@@ -130,6 +135,20 @@ class PptRepository(private val api: ApiClient) {
     suspend fun uploadLibraryMaterial(file: File) =
         api.upload(Endpoints.Ppt.MATERIALS, "file", listOf(file),
             formFields = mapOf("name" to file.nameWithoutExtension, "caption" to ""))
+
+    suspend fun uploadPublicImage(file: File, category: String, caption: String,
+                                  source: String, licenseNote: String) =
+        api.upload(Endpoints.Ppt.LIBRARY_IMAGES, "file", listOf(file),
+            formFields = mapOf("name" to file.nameWithoutExtension,
+                "category" to category, "caption" to caption,
+                "source" to source, "license_note" to licenseNote))
+
+    suspend fun updateImageCaption(id: String, source: String, caption: String) =
+        api.patch(
+            if (source == "library") "${Endpoints.Ppt.LIBRARY_IMAGES}/$id/caption"
+            else "${Endpoints.Ppt.MATERIALS}/$id/caption",
+            mapOf("caption" to caption),
+        )
 
     /** 上传已有 .pptx 继续修改 → {doc_id, outline, message} */
     suspend fun importPptx(file: File) =

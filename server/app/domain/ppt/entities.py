@@ -25,6 +25,7 @@ class PPTTemplate:
     layouts: Dict[str, Any] = field(default_factory=dict)
     layout_library: List[Dict[str, Any]] = field(default_factory=list)
     source_file: Optional[str] = None
+    license_note: str = ""
     use_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

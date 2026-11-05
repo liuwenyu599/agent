@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -276,7 +277,7 @@ internal fun sel(selected: Boolean) = ButtonDefaults.outlinedButtonColors(
 
 // ================= 极简入口页（按 ppt-assistant-redesign v3 设计稿重构） =================
 
-/** 风格卡渐变（政务红/政策蓝/宣传青/藏青，按序取色） */
+/** 未提供配色的用户模板才使用预览占位渐变。 */
 private val StyleGradients = listOf(
     listOf(Color(0xFFB01E23), Color(0xFF741217)),
     listOf(Color(0xFF234F91), Color(0xFF142F5A)),
@@ -421,13 +422,14 @@ private fun PptEntryPane(
             TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
         }
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth().height(140.dp),
+        Row(Modifier.fillMaxWidth().height(140.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StyleCardAuto(Modifier.weight(1f), selected = vm.templateId == null) {
+            StyleCardAuto(Modifier.width(190.dp), selected = vm.templateId == null) {
                 vm.templateId = null
             }
-            vm.templates.take(3).forEachIndexed { i, t ->
-                StyleCard(t, i, Modifier.weight(1f),
+            vm.templates.forEachIndexed { i, t ->
+                StyleCard(t, i, Modifier.width(190.dp),
                     selected = t["id"].str() == vm.templateId) {
                     vm.templateId = t["id"].str()
                 }
@@ -504,6 +506,21 @@ private fun PptEntryPane(
 
 @Composable
 private fun MaterialLibraryPanel(vm: PptViewModel) {
+    var filter by remember { mutableStateOf("全部") }
+    var search by remember { mutableStateOf("") }
+    var publicFile by remember { mutableStateOf<java.io.File?>(null) }
+    var publicCategory by remember { mutableStateOf("法治宣传") }
+    var publicCaption by remember { mutableStateOf("") }
+    var publicSource by remember { mutableStateOf("") }
+    var publicLicense by remember { mutableStateOf("") }
+      var editingImage by remember { mutableStateOf<PptLibraryMaterial?>(null) }
+      var editingCaption by remember { mutableStateOf("") }
+    val visible = vm.libraryMaterials.filter {
+        (filter == "全部" || (filter == "我的" && it.source == "personal") ||
+            (filter == "公共" && it.source == "library") || filter == it.category) &&
+            (search.isBlank() || listOf(it.name, it.caption, it.category).any { field ->
+                field.contains(search.trim(), ignoreCase = true) })
+    }
     Column(
         Modifier.fillMaxWidth().background(Color(0xFFF7F9FC))
             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -511,20 +528,78 @@ private fun MaterialLibraryPanel(vm: PptViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("图片素材库", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-                Text("只会把本次勾选的图片交给 AI 配图", fontSize = 11.sp, color = SecondaryText)
+                  Text(if (vm.autoImagesEnabled) "自动从我的图片和已上架公共图库配图"
+                       else "仅使用本次勾选的图片；不勾选则不配图",
+                       fontSize = 11.sp, color = SecondaryText)
             }
             TextButton(enabled = !vm.materialLibraryBusy, onClick = {
                 pickFiles("选择图片素材", multi = false).firstOrNull()
                     ?.let { vm.uploadLibraryMaterial(it) }
             }) { Text(if (vm.materialLibraryBusy) "处理中…" else "＋ 上传图片", fontSize = 12.sp) }
         }
-        if (vm.libraryMaterials.isEmpty()) {
+          TextButton(onClick = { vm.toggleAutoImages() }) {
+              Text(if (vm.autoImagesEnabled) "✓ 自动配图（点击改为手选）"
+                   else "手选图片（点击开启自动配图）", fontSize = 11.sp)
+          }
+        Row(Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            (listOf("全部", "我的", "公共") + vm.libraryMaterials.map { it.category }
+                .filter { it != "我的图片" }.distinct()).forEach { choice ->
+                TextButton(onClick = { filter = choice }) {
+                    Text(choice, color = if (filter == choice) Primary else SecondaryText,
+                        fontSize = 11.sp)
+                }
+            }
+            if (AppState.isAdmin) TextButton(onClick = {
+                publicFile = pickFiles("选择已获授权的公共图片", multi = false).firstOrNull()
+            }) { Text("＋ 上架公共图片", fontSize = 11.sp) }
+        }
+        OutlinedTextField(search, { search = it }, label = { Text("搜索图片名称或场景") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true)
+        publicFile?.let { file ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("上架：${file.name}", fontSize = 11.sp, color = Ink)
+                OutlinedTextField(publicCategory, { publicCategory = it },
+                    label = { Text("分类") }, singleLine = true)
+                OutlinedTextField(publicCaption, { publicCaption = it },
+                    label = { Text("图片说明") }, singleLine = true)
+                OutlinedTextField(publicSource, { publicSource = it },
+                    label = { Text("来源") }, singleLine = true)
+                OutlinedTextField(publicLicense, { publicLicense = it },
+                    label = { Text("授权范围（须允许系统内重复使用）") }, singleLine = true)
+                Row {
+                    TextButton(onClick = { publicFile = null }) { Text("取消") }
+                    Button(enabled = !vm.materialLibraryBusy && publicSource.isNotBlank() &&
+                        publicLicense.isNotBlank(), onClick = {
+                        vm.uploadPublicImage(file, publicCategory, publicCaption,
+                            publicSource, publicLicense)
+                        publicFile = null
+                    }) { Text("确认上架") }
+                }
+            }
+        }
+          editingImage?.let { material ->
+              Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                  Text("修正「${material.name}」的画面说明", fontSize = 11.sp, color = Ink)
+                  OutlinedTextField(editingCaption, { editingCaption = it.take(500) },
+                      label = { Text("描述图片中实际可见的内容") },
+                      modifier = Modifier.fillMaxWidth(), maxLines = 3)
+                  Row {
+                      TextButton(onClick = { editingImage = null }) { Text("取消") }
+                      TextButton(enabled = !vm.materialLibraryBusy, onClick = {
+                          vm.updateImageCaption(material, editingCaption)
+                          editingImage = null
+                      }) { Text("保存说明") }
+                  }
+              }
+          }
+        if (visible.isEmpty()) {
             Text("暂无图片素材。上传后可在不同 PPT 中重复使用。",
                 fontSize = 11.5.sp, color = Muted, modifier = Modifier.padding(vertical = 12.dp))
         } else {
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 220.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(vm.libraryMaterials, key = { it.id }) { material ->
+                items(visible, key = { it.id }) { material ->
                     val selected = material.id in vm.selectedMaterialIds
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
@@ -544,12 +619,27 @@ private fun MaterialLibraryPanel(vm: PptViewModel) {
                         Column(Modifier.weight(1f)) {
                             Text(material.name, fontSize = 12.sp, color = Ink, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
+                            Text(if (material.source == "library") "公共 · ${material.category}"
+                                 else "我的图片", fontSize = 10.sp, color = Muted)
                             if (material.caption.isNotBlank()) Text(material.caption,
                                 fontSize = 10.5.sp, color = SecondaryText, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
+                              else Text("暂无画面说明，自动配图不会使用此图",
+                                  fontSize = 10.sp, color = Muted, maxLines = 1)
+                            if (material.credit.isNotBlank()) Text("来源：${material.credit}",
+                                fontSize = 10.sp, color = Muted, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
                         }
-                        Text(if (selected) "✓ 已选" else "选择", fontSize = 11.sp,
-                            color = if (selected) Primary else SecondaryText)
+                          Column(horizontalAlignment = Alignment.End) {
+                              Text(if (selected) "✓ 已选" else "选择", fontSize = 11.sp,
+                                  color = if (selected) Primary else SecondaryText)
+                              if (material.source == "personal" || AppState.isAdmin) {
+                                  TextButton(onClick = {
+                                      editingImage = material
+                                      editingCaption = material.caption
+                                  }) { Text("改说明", fontSize = 10.sp) }
+                              }
+                          }
                     }
                 }
             }
@@ -759,7 +849,13 @@ private fun StyleCard(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val grad = StyleGradients[index % StyleGradients.size]
+    val colors = t["colors"].obj()
+    fun color(key: String): Color? = colors?.get(key)?.str()
+        ?.removePrefix("#")?.takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }
+        ?.toLongOrNull(16)?.let { Color((0xFF000000L or it).toInt()) }
+    val grad = if (color("primary") != null && color("dark") != null)
+        listOf(color("primary")!!, color("dark")!!)
+    else StyleGradients[index % StyleGradients.size]
     Column(
         modifier
             .height(140.dp)
@@ -1046,6 +1142,8 @@ private fun PptDocsPane(vm: PptViewModel, onOpen: () -> Unit) {
 @Composable
 private fun PptTemplatesPane(vm: PptViewModel) {
     var pendingDelete by remember { mutableStateOf<JsonObject?>(null) }
+    var sharedFile by remember { mutableStateOf<java.io.File?>(null) }
+    var sharedLicense by remember { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("模板库（上传后自动学习版式与风格）", style = MaterialTheme.typography.subtitle1,
@@ -1056,9 +1154,26 @@ private fun PptTemplatesPane(vm: PptViewModel) {
             Button(enabled = !vm.busy, onClick = {
                 pickFiles("选择 pptx 模板").firstOrNull()?.let { vm.uploadTemplate(it) }
             }) { Text(if (vm.busy) "学习中…" else "上传模板") }
+            if (AppState.isAdmin) TextButton(enabled = !vm.busy, onClick = {
+                pickFiles("选择已获授权的共享 PPTX 母版").firstOrNull()
+                    ?.let { sharedFile = it }
+            }) { Text("上传共享母版") }
         }
         Text("模板文字框可写 {{title}}、{{point1}}、{{card1_title}}、{{card1_body}}、{{time1}}、{{event1}} 等占位符；生成时按位置替换。",
             fontSize = 11.sp, color = Muted)
+        sharedFile?.let { file ->
+            OutlinedTextField(sharedLicense, { sharedLicense = it },
+                label = { Text("${file.name} 的授权说明：须允许内网系统反复生成和改编") },
+                modifier = Modifier.fillMaxWidth())
+            Row {
+                TextButton(onClick = { sharedFile = null }) { Text("取消") }
+                Button(enabled = sharedLicense.isNotBlank() && !vm.busy, onClick = {
+                    vm.uploadTemplate(file, shared = true, licenseNote = sharedLicense)
+                    sharedFile = null
+                    sharedLicense = ""
+                }) { Text("确认发布给全员") }
+            }
+        }
         PptStatus(vm)
         LazyVerticalGrid(columns = GridCells.Adaptive(200.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1086,6 +1201,9 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                                     maxLines = 1)
                                 Text(t["layout_count"].str().ifBlank { "?" } + " 种版式",
                                     style = MaterialTheme.typography.caption, color = SecondaryText)
+                                Text(if (t["is_learned"].bool()) "可编辑母版"
+                                     else "配色主题", style = MaterialTheme.typography.caption,
+                                     color = if (t["is_learned"].bool()) Primary else SecondaryText)
                             }
                             if (t["is_mine"].bool()) {
                                 TextButton(

@@ -355,7 +355,8 @@ def test_b2_stream_search_raises_still_emits_done(client, accounts, fake_llm,
     fake_rag.exc = TimeoutError("embed timeout")
     r = client.post(f"{BASE}/ppt/outline/stream", json={
         "source_type": "topic", "topic": "行政复议规范化建设",
-        "kb_ids": [accounts["kbs"]["public"]]}, headers=_hdr(accounts["a"]["token"]))
+        "kb_ids": [accounts["kbs"]["public"]], "auto_images": False,
+    }, headers=_hdr(accounts["a"]["token"]))
     assert r.status_code == 200, r.text
     ev = _events(r.text)
     assert [e["type"] for e in ev] == [

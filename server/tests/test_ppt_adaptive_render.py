@@ -5,6 +5,7 @@ import shutil
 import pytest
 
 from app.application.ppt import ppt_engine
+from app.application.ppt import adaptive_design
 from app.application.ppt.service import PPTService
 
 
@@ -137,6 +138,7 @@ def test_visual_feedback_changes_only_problem_page(monkeypatch):
     renders = []
 
     def fake_render(candidate, _template, **_kwargs):
+        assert _kwargs["adaptive"] is True
         layout = candidate["slides"][1].get("layout") or "content.bullets"
         renders.append(layout)
         return layout.encode()
@@ -162,6 +164,59 @@ def test_visual_feedback_changes_only_problem_page(monkeypatch):
     assert adjusted["slides"][2] == outline["slides"][2]
     assert warnings == []
     assert len(renders) <= 6
+
+
+def test_free_compare_reflows_long_content_but_strict_template_keeps_columns():
+    from io import BytesIO
+    from pptx import Presentation
+
+    template = {"colors": ppt_engine.DEFAULT_COLORS,
+                "layouts": ppt_engine.DEFAULT_LAYOUTS, "font": "思源黑体"}
+
+    def labels(data):
+        slide = Presentation(BytesIO(data)).slides[0]
+        return {shape.text: shape for shape in slide.shapes
+                if shape.has_text_frame and shape.text in {"01", "02"}}
+
+    short = {"slides": [{"type": "content", "layout": "content.compare",
+                          "title": "两种做法", "points": ["先行试点", "分批推广"]}]}
+    long = {"slides": [{"type": "content", "layout": "content.compare",
+                         "title": "两种做法", "points": ["加强基层调解能力。" * 12,
+                                                   "完善案件办理流程。" * 12]}]}
+    short_labels = labels(ppt_engine.render_pptx(short, template, adaptive=True))
+    long_labels = labels(ppt_engine.render_pptx(long, template, adaptive=True))
+    strict_labels = labels(ppt_engine.render_pptx(long, template))
+    assert short_labels["01"].left < short_labels["02"].left
+    assert long_labels["01"].left == long_labels["02"].left
+    assert long_labels["01"].top < long_labels["02"].top
+    assert strict_labels["01"].left < strict_labels["02"].left
+
+
+def test_adaptive_point_rows_give_longer_text_more_space():
+    size, rows = adaptive_design.point_rows(["简短结论", "较长的说明文字。" * 11], 0.79)
+    assert size >= adaptive_design.TOKENS.compact_pt
+    assert rows[1][1] > rows[0][1]
+    assert rows[-1][0] + rows[-1][1] <= adaptive_design.TOKENS.content_bottom + 0.001
+
+
+def test_adaptive_image_layout_uses_landscape_as_feature_image(tmp_path):
+    from io import BytesIO
+    from PIL import Image
+    from pptx import Presentation
+
+    path = tmp_path / "material.png"
+    Image.new("RGB", (1200, 650), "blue").save(path)
+    template = {"colors": ppt_engine.DEFAULT_COLORS,
+                "layouts": ppt_engine.DEFAULT_LAYOUTS, "font": "思源黑体"}
+    outline = {"slides": [{"type": "content", "layout": "content.image_right",
+                           "title": "现场情况", "points": ["开展现场检查", "完成情况核查"],
+                           "_image": {"file_path": str(path), "name": "现场图片"}}]}
+    slide = Presentation(BytesIO(ppt_engine.render_pptx(
+        outline, template, adaptive=True))).slides[0]
+    picture = next(shape for shape in slide.shapes if shape.shape_type == 13)
+    first_point = next(shape for shape in slide.shapes
+                       if shape.has_text_frame and shape.text == "开展现场检查")
+    assert picture.left < first_point.left
 
 
 def test_visual_feedback_reports_unresolved_problem(monkeypatch):
