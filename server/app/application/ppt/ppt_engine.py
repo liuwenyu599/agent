@@ -4457,6 +4457,48 @@ def _filled_page_issue(slide, sdata: Dict, sw: int, sh: int) -> Optional[str]:
     """Check the actual filled page before accepting a learned layout."""
     from app.application.ppt.adaptive_design import fit_font_size
 
+    # 内容缺失检测（P0）：正文型页型的要点大量未出现在成品页面上，说明版式
+    # 没有可用正文槽而兜底未接管——空页比溢出更伤观感，且不出错不报警，
+    # 只有这里能拦。检出后调用方会用可读版式重填整页（必能容纳全部正文）。
+    if sdata.get("type") not in {"cover", "section", "closing"}:
+        blocks = sdata.get("blocks") or {}
+        expected: List[str] = [str(p) for p in (sdata.get("points") or [])]
+        for card in blocks.get("cards") or []:
+            expected += [str(card.get("label") or ""),
+                         str(card.get("value") or "")]
+        for entry in blocks.get("timeline") or []:
+            expected += [str(entry.get("time") or ""),
+                         str(entry.get("event") or entry.get("text") or "")]
+        if blocks.get("process"):
+            expected += [str(p) for p in blocks["process"]]
+        chart = blocks.get("chart") or {}
+        expected += [str(c) for c in (chart.get("categories") or [])]
+        for series in chart.get("series") or []:
+            expected += [str(series.get("name") or "")]
+            expected += [str(v) for v in (series.get("values") or [])]
+        expected_chars = sum(len(e) for e in expected if e.strip())
+        if expected_chars >= 80:
+            # 图表/关系图页以图为主体，文字量天然少，不作此判
+            has_visual = False
+            for shape, rect, _depth in _iter_shapes(slide.shapes):
+                if getattr(shape, "has_chart", False):
+                    has_visual = True
+                    break
+                if "PICTURE" in str(shape.shape_type).upper() or (
+                        not getattr(shape, "has_text_frame", False)
+                        and shape._element.xpath(".//a:blip")):
+                    if (rect[2] / sw) * (rect[3] / sh) >= .12:
+                        has_visual = True
+                        break
+            if not has_visual:
+                title_len = len(str(sdata.get("title") or ""))
+                page_chars = sum(
+                    len((shape.text or "").strip())
+                    for shape, _rect, _depth in _iter_shapes(slide.shapes)
+                    if getattr(shape, "has_text_frame", False))
+                if page_chars - title_len < expected_chars * .4:
+                    return "页面内容缺失（版式无正文槽）"
+
     text_shapes = []
     all_text = []
     if sdata.get("type") not in {"cover", "section", "closing"}:
