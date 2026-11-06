@@ -632,7 +632,7 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 - section 章节页：title
 - content 正文页：title、points（按内容密度组织，避免为了凑条数拆句）
 - data 数据页：title、blocks={{"cards":[{{"label":"指标名","value":"数值"}},...]}}（材料里有具体数据时用，3~4 张卡）
-- chart 图表页：title、blocks={{"chart":{{"chart_type":"bar或pie或line","categories":["类别"...],"series":[{{"name":"系列名","values":[数值...]}}]}}}}（材料有对比/趋势数据时用）
+- chart 图表页：title、blocks={{"chart":{{"chart_type":"bar或bar_h或line或pie或stacked或area或doughnut","categories":["类别"...],"series":[{{"name":"系列名","values":[数值...]}}]}}}}（材料有对比/趋势/占比数据时用：横向对比多选 bar_h，趋势选 line，占比选 pie；每页最多 1 张图表）
 - case 案例页：title、points（案例背景→做法→结果，3~4 条）
 - timeline 时间轴页：title、blocks={{"timeline":[{{"time":"时间点","text":"事项"}},...]}}（有时间线内容时用）
 - process 图示页：办理顺序用 blocks={{"process":["步骤1","步骤2",...]}}；
@@ -2141,7 +2141,7 @@ def ai_generate_visual(assistant, kind: str, slide: Dict, instruction: str = "")
     kind: chart / timeline / process / data
     """
     spec_desc = {
-        "chart": '{"chart":{"chart_type":"bar或pie或line","categories":["类别"...],"series":[{"name":"系列","values":[数值...]}]}}',
+        "chart": '{"chart":{"chart_type":"bar或bar_h或line或pie或stacked或area或doughnut","categories":["类别"...],"series":[{"name":"系列","values":[数值...]}]}}（对比选 bar/bar_h、趋势选 line、占比选 pie）',
         "timeline": '{"timeline":[{"time":"时间点","text":"事项"},...]}（3~5 个节点）',
         "process": '{"process":["步骤1","步骤2",...]}（3~5 步）',
         "data": '{"cards":[{"label":"指标名","value":"数值"},...]}（3~4 张卡）',
@@ -3518,9 +3518,14 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     for serie in chart_spec.get("series", []):
         cd.add_series(serie.get("name", ""), serie.get("values", []))
     ct = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+          "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
+          "bar_h": XL_CHART_TYPE.BAR_CLUSTERED,
+          "stacked": XL_CHART_TYPE.COLUMN_STACKED,
           "line": XL_CHART_TYPE.LINE_MARKERS,
-          "pie": XL_CHART_TYPE.PIE}.get(chart_spec.get("chart_type", "bar"),
-                                        XL_CHART_TYPE.COLUMN_CLUSTERED)
+          "pie": XL_CHART_TYPE.PIE,
+          "doughnut": XL_CHART_TYPE.DOUGHNUT,
+          "area": XL_CHART_TYPE.AREA}.get(chart_spec.get("chart_type", "bar"),
+                                          XL_CHART_TYPE.COLUMN_CLUSTERED)
     gf = slide.shapes.add_chart(ct, x, y, w, h, cd)
     chart = gf.chart
     chart.has_title = False
@@ -3638,12 +3643,12 @@ def _shrink_text_to_fit(shape, sw, sh, min_pt: int = 13):
         return None
 
 
-def _raise_tiny_body_text(shape, sw, sh, min_pt: int = 13) -> None:
-    """模板小字槽（<13pt）被填入正文要点后仍是 9pt——投影上不可读。
+def _raise_tiny_body_text(shape, sw, sh, min_pt: int = 14) -> None:
+    """模板小字槽（<14pt）被填入正文要点后仍是 9pt——投影上不可读。
 
-    容量闸门按 max(14, 模板字号) 度量，放行等价于「13pt 装得下」；但填充只
+    容量闸门按 max(14, 模板字号) 度量，放行等价于「14pt 装得下」；但填充只
     写文本不动字号，模板原 9pt 原样保留。这里把写入了实际内容的 run 提到
-    13pt；13pt 装不下的槽保持原字号——宁可小字也不能溢出。
+    14pt；14pt 装不下的槽保持原字号——宁可小字也不能溢出（缩号兜底随后接管）。
     """
     try:
         from pptx.util import Pt

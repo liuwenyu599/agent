@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.FilterNone
@@ -100,6 +102,7 @@ fun AppShell(
         Column(Modifier.fillMaxSize()) {
             AppHeader(current = current, username = username, userRole = userRole,
                 onLogout = onLogout)
+            ComplianceBanner()
             Box(Modifier.weight(1f).fillMaxWidth()) { content() }
         }
 
@@ -126,6 +129,35 @@ fun AppShell(
 }
 
 /** 顶栏底色：与导航抽屉头条共用同一藏青（theme/Color.kt 的 HeaderNavy） */
+
+/** 合规公示条：常驻于 Header 与功能区之间（所有页面可见，含首页）。
+ *  非涉密信息处理平台警示——政务终端的安全红线提示，不可关闭。 */
+@Composable
+private fun ComplianceBanner() {
+    val amberDark = Color(0xFF8C5B14)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFFFFF8E7),
+        elevation = 0.dp,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Dimens.space5, vertical = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Campaign, contentDescription = null,
+                tint = Color(0xFFB7791F), modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(Dimens.space2))
+            Text(
+                "非涉密信息处理平台，严禁处理、传输涉密和敏感信息",
+                fontSize = 12.sp, color = amberDark,
+                fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp,
+            )
+        }
+    }
+}
 
 @Composable
 private fun AppHeader(
