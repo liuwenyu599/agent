@@ -39,6 +39,12 @@ class PptRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    suspend fun themes(): ApiResult<List<JsonObject>> =
+        when (val r = api.get("/ppt/themes")) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.items())
+            is ApiResult.Err -> r
+        }
+
     /** PPT 可选知识库（服务端已按可见范围过滤）→ [{id, name, description, doc_count}] */
     suspend fun kbs(): ApiResult<List<JsonObject>> =
         when (val r = api.get(Endpoints.Ppt.KBS)) {
@@ -91,6 +97,7 @@ class PptRepository(private val api: ApiClient) {
         materialNames: List<String> = emptyList(),
         materialIds: List<String> = emptyList(),
         autoImages: Boolean = true,
+        themeId: String? = null,
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
@@ -99,6 +106,7 @@ class PptRepository(private val api: ApiClient) {
             "material_names" to materialNames,
             "material_ids" to materialIds,
             "auto_images" to autoImages,
+            "theme_id" to themeId,
         ).apply {
             slideCount?.let { put("slide_count", it) }
         }

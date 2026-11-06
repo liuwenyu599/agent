@@ -127,6 +127,9 @@ class PptViewModel(private val repo: PptRepository) {
     var documents by mutableStateOf(listOf<JsonObject>())
         private set
     var templateId by mutableStateOf<String?>(null)
+    var themeId by mutableStateOf<String?>(null)
+    var themes by mutableStateOf(listOf<JsonObject>())
+        private set
     var status by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
@@ -282,6 +285,10 @@ class PptViewModel(private val repo: PptRepository) {
     // ================= 模板 / 文档列表 =================
 
     fun loadTemplates() {
+        scope.launch {
+            val result = repo.themes()
+            if (result is ApiResult.Ok) themes = result.data
+        }
         scope.launch {
             when (val r = repo.templates()) {
                 is ApiResult.Ok -> {
@@ -635,6 +642,7 @@ class PptViewModel(private val repo: PptRepository) {
             "material_names" to materials.map { it.filename },
             "material_ids" to if (autoImagesEnabled) emptyList<String>() else selectedMaterialIds.toList(),
             "auto_images" to autoImagesEnabled,
+            "theme_id" to themeId,
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -853,7 +861,8 @@ class PptViewModel(private val repo: PptRepository) {
                 body["source_type"] as String, body["topic"] as String,
                 body["content"] as String, slideCount, audience, scene,
                 kbIds = kbIds, materialNames = materialNames,
-                materialIds = materialIds, autoImages = autoImages)) {
+                materialIds = materialIds, autoImages = autoImages,
+                themeId = body["theme_id"] as? String)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()

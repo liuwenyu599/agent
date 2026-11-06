@@ -386,7 +386,7 @@ private fun PptEntryPane(
                     openPanel = if (openPanel == "meta") null else "meta"
                 }
                 Spacer(Modifier.weight(1f))
-                val canGenerate = !vm.busy &&
+                val canGenerate = !vm.busy && !vm.materialLibraryBusy &&
                     (vm.topic.isNotBlank() || vm.materials.isNotEmpty() ||
                         vm.selectedKbIds.isNotEmpty())
                 TextButton(enabled = canGenerate, onClick = { vm.startOutline() }) {
@@ -412,12 +412,37 @@ private fun PptEntryPane(
         if (vm.busy && vm.step == PptStep.ENTRY) OutlineGeneratingPanel(vm)
         PptStatus(vm)
 
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            var themeMenu by remember { mutableStateOf(false) }
+            val themeName = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
+                ?.get("name").str().ifBlank { "按内容自动选择" }
+            Box {
+                TextButton(enabled = vm.templateId == null, onClick = { themeMenu = true }) {
+                    Text("主题色 · $themeName")
+                }
+                DropdownMenu(themeMenu, onDismissRequest = { themeMenu = false }) {
+                    DropdownMenuItem(onClick = { vm.themeId = null; themeMenu = false }) {
+                        Text("按内容自动选择")
+                    }
+                    vm.themes.forEach { theme ->
+                        DropdownMenuItem(onClick = {
+                            vm.themeId = theme["id"].str()
+                            themeMenu = false
+                        }) { Text(theme["name"].str()) }
+                    }
+                }
+            }
+            TextButton(enabled = !vm.materialLibraryBusy && !vm.busy, onClick = {
+                pickFiles("上传到 PPT 图库", multi = false).firstOrNull()
+                    ?.let { vm.uploadLibraryMaterial(it) }
+            }) { Text(if (vm.materialLibraryBusy) "正在处理图片…" else "上传图库图片") }
+        }
         // 视觉风格
         Spacer(Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.Bottom) {
             Text("视觉风格", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Spacer(Modifier.width(8.dp))
-            Text("不选择时由 AI 根据内容自动匹配", fontSize = 11.sp, color = Muted)
+            Text("不选模板时使用自适应排版", fontSize = 11.sp, color = Muted)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
         }

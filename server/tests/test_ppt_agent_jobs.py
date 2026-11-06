@@ -829,8 +829,12 @@ def doc_and_token(monkeypatch):
     return token, r.json()["doc_id"]
 
 
-def _wait_terminal(token, job_id, timeout=15.0):
-    """轮询直到终态。"""
+def _wait_terminal(token, job_id, timeout=45.0):
+    """轮询直到终态。
+
+    本地兜底渲染含 soffice→pdftoppm 的逐页预览，冷启动常需 10~30s；
+    旧值 15s 会让「功能正常但渲染稍慢」的用例被误判为失败（status=running）。
+    """
     end = time.time() + timeout
     last = {}
     while time.time() < end:

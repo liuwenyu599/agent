@@ -334,6 +334,10 @@ LAYOUT_CATALOG: Dict[str, List[Dict[str, Any]]] = {
          "weight": 0.8},
         {"id": "content.icon_grid", "label": "四宫格", "min_points": 3, "max_points": 4,
          "weight": 0.8},
+        {"id": "content.center", "label": "居中正文", "min_points": 2, "max_points": 4,
+         "weight": 0.85},
+        {"id": "content.symmetric", "label": "左右对称", "min_points": 2, "max_points": 4,
+         "weight": 0.85},
         {"id": "content.statement", "label": "单句结论", "min_points": 1, "max_points": 1,
          "weight": 0.7},
         {"id": "content.quote", "label": "引言金句", "min_points": 1, "max_points": 2,
@@ -486,6 +490,14 @@ def _layout_score(spec: Dict, slide: Dict, recent: List[str], used: Dict[str, in
         score += 1.2 if quoted else -1.2
     elif sid == "content.bullets":
         score += 0.6 if n >= 2 else 0.0
+    elif sid == "content.center":
+        # 短要点居中才好看；长段落居中会变成大段文字块，反而更难读。
+        score += 1.1 if 2 <= n <= 4 and all(len(p) <= 46 for p in points) else -1.2
+    elif sid == "content.symmetric":
+        balanced = n in (2, 4) and all(len(p) <= 40 for p in points)
+        if n == 2:
+            balanced = balanced and abs(len(points[0]) - len(points[1])) <= 16
+        score += 1.0 if balanced else -1.0
     elif sid == "data.kpi":
         cards = (slide.get("blocks") or {}).get("cards") or []
         score += 0.3 if 3 <= len(cards) <= 4 else -0.6
@@ -1219,7 +1231,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def ly(f): return Emu(int(SH * f))
 
     def _font(run, size, bold=False, color=None):
-        run.font.name = FONT
+        run.font.name = "Arial" if adaptive else FONT
         run.font.size = Pt(size)
         run.font.bold = bold
         if color is not None:
@@ -1664,6 +1676,54 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             text(slide, lx(cx + 0.078), ly(cy + 0.105), lx(0.325), ly(0.14), p, 14, False, DARK)
         return slide
 
+    def _content_center(s):
+        """居中正文：浅色条带承载要点，整组垂直居中，避免短要点下半页留白。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"], variant="center")
+        pts = [str(p) for p in s["points"][:4]]
+        n = max(len(pts), 1)
+        top, bottom, gap = 0.245, 0.865, 0.025
+        band_h = min((bottom - top - gap * (n - 1)) / n, 0.175)
+        total = band_h * n + gap * (n - 1)
+        start = (top + bottom - total) / 2
+        for i, point in enumerate(pts):
+            y = start + i * (band_h + gap)
+            rect(slide, lx(0.14), ly(y), lx(0.72), ly(band_h), LIGHT, round_=True)
+            rect(slide, lx(0.478), ly(y + 0.014), lx(0.044), ly(0.006), ACCENT)
+            box_h = max(band_h - 0.05, 0.02)
+            size = adaptive_design.fit_font_size(
+                point, 0.66, box_h, adaptive_design.TOKENS.body_pt,
+                min_pt=14) or 14
+            text(slide, lx(0.17), ly(y + 0.025), lx(0.66), ly(box_h),
+                 point, int(size), False, DARK, align=PP_ALIGN.CENTER,
+                 anchor=MSO_ANCHOR.MIDDLE)
+        return slide
+
+    def _content_symmetric(s):
+        """严格左右对称：中轴分隔、两栏等宽等距，序号与文字在栏内垂直居中。"""
+        slide = prs.slides.add_slide(blank)
+        page_header(slide, s["title"], variant="center")
+        pts = [str(p) for p in s["points"][:4]]
+        half = (len(pts) + 1) // 2
+        col_w, left_x, right_x = 0.405, 0.055, 0.540
+        panel_y, panel_h = 0.245, 0.60
+        body_size = adaptive_design.TOKENS.body_pt - 2
+        for ci, group in enumerate((pts[:half], pts[half:])):
+            x = left_x if ci == 0 else right_x
+            rect(slide, lx(x), ly(panel_y), lx(col_w), ly(panel_h), LIGHT, round_=True)
+            rect(slide, lx(x), ly(panel_y), lx(col_w), ly(0.012), PRIMARY)
+            step = (panel_h - 0.09) / max(len(group), 1)
+            for j, point in enumerate(group):
+                y = panel_y + 0.045 + j * step
+                box_h = step - 0.01
+                text(slide, lx(x + 0.028), ly(y), lx(0.06), ly(box_h),
+                     f"{ci * half + j + 1:02d}", 17, True, ACCENT,
+                     anchor=MSO_ANCHOR.MIDDLE)
+                text(slide, lx(x + 0.10), ly(y), lx(col_w - 0.13), ly(box_h),
+                     point, body_size, False, DARK, anchor=MSO_ANCHOR.MIDDLE)
+        rect(slide, lx(0.499), ly(0.30), Emu(12700), ly(0.49), LINE)
+        return slide
+
     def _content_statement(s):
         """单句结论：一条主张铺满页面，牺牲信息量换冲击力。"""
         slide = prs.slides.add_slide(blank)
@@ -1700,6 +1760,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             "three_cards": _content_three_cards,
             "compare": _content_compare,
             "icon_grid": _content_icon_grid,
+            "center": _content_center,
+            "symmetric": _content_symmetric,
             "statement": _content_statement,
             "quote": _content_quote,
         }.get(v, _content_bullets)(s)
@@ -4035,6 +4097,8 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     from pptx.util import Pt as _Pt
     unfit_texts: List[str] = []
     for shp, e in texts:
+        if e.get("role") == "fixed":
+            continue
         if not (getattr(shp, "has_text_frame", False) and shp.text_frame.text.strip()):
             continue
         estimated = e.get("font_size") or 18
@@ -4042,9 +4106,8 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
             for run in para.runs:
                 if run.font.size is None:
                     run.font.size = _Pt(estimated)
-        if e.get("role") != "fixed":
-            # 模板小字槽塞进正文要点后仍是 9pt：先提到可读下限，再交给缩字兜底
-            _raise_tiny_body_text(shp, sw, sh)
+        # 模板小字槽塞进正文要点后仍是 9pt：先提到可读下限，再交给缩字兜底
+        _raise_tiny_body_text(shp, sw, sh)
         if _shrink_text_to_fit(shp, sw, sh) is None:
             # 硬下限（9pt）仍装不下：保持字号只会溢出截断。记录下来，
             # 由调用方把该页降级为可读兜底版式（可读版式必能放下全部正文）。

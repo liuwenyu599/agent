@@ -167,6 +167,8 @@ class TestRenderAllLayouts:
             _slide("content", pts(3), layout="three_cards"),
             _slide("content", pts(2), layout="compare"),
             _slide("content", pts(4), layout="icon_grid"),
+            _slide("content", pts(3, "居中"), layout="center"),
+            _slide("content", pts(2, "对称"), layout="symmetric"),
             _slide("content", pts(1, "核心判断"), layout="statement"),
             _slide("content", pts(2, "引用"), layout="quote"),
             _slide("content", pts(2), layout="image_right", image=True),
@@ -236,6 +238,65 @@ class TestRenderAllLayouts:
         data = E.build_pptx({"title": "t", "slides": [s,
             _slide("closing", title="谢谢")]}, TPL)
         assert data[:2] == b"PK"
+
+
+class TestCenteredAndSymmetricLayouts:
+    """内置骨架扩容：居中正文 / 左右对称（回应「不选模板就永远左对齐」）。"""
+
+    def test_new_layouts_registered(self):
+        ids = E.layout_ids("content")
+        assert "content.center" in ids
+        assert "content.symmetric" in ids
+
+    def test_ai_intent_selects_new_layouts(self):
+        assert E.choose_layout(_slide("content", ["依法履职", "服务群众"],
+                                     layout="center")) == "content.center"
+        assert E.choose_layout(_slide("content", ["依法履职", "服务群众"],
+                                     layout="symmetric")) == "content.symmetric"
+
+    def test_center_prefers_short_points(self):
+        spec = next(sp for sp in E.LAYOUT_CATALOG["content"]
+                    if sp["id"] == "content.center")
+        short = {"points": ["依法履职", "服务群众", "守正创新"]}
+        long_ = {"points": ["这是一段很长的正文" * 6, "另一段很长的正文" * 6]}
+        assert E._layout_score(spec, short, [], {}) > \
+            E._layout_score(spec, long_, [], {})
+
+    def test_symmetric_prefers_balanced_pairs(self):
+        spec = next(sp for sp in E.LAYOUT_CATALOG["content"]
+                    if sp["id"] == "content.symmetric")
+        balanced = {"points": ["依法履职", "服务群众"]}
+        lopsided = {"points": ["依法履职", "这一段比另一段长出很多很多很多很多的内容，"
+                                          "用于验证长度明显失衡时不选左右对称版式"]}
+        assert E._layout_score(spec, balanced, [], {}) > \
+            E._layout_score(spec, lopsided, [], {})
+
+    def test_center_body_text_is_centered(self):
+        from pptx.enum.text import PP_ALIGN
+        outline = {"title": "t", "slides": [
+            _slide("content", ["依法履职", "服务群众"], layout="center")]}
+        data = E.build_pptx(outline, TPL)
+        prs = Presentation(io.BytesIO(data))
+        body = [sh for sh in prs.slides[0].shapes
+                if sh.has_text_frame and "依法履职" in sh.text_frame.text]
+        assert body, "居中正文页应保留全部要点文字"
+        assert body[0].text_frame.paragraphs[0].alignment == PP_ALIGN.CENTER
+
+    def test_symmetric_columns_mirror_around_axis(self):
+        outline = {"title": "t", "slides": [
+            _slide("content", ["依法履职", "服务群众"], layout="symmetric")]}
+        data = E.build_pptx(outline, TPL)
+        prs = Presentation(io.BytesIO(data))
+        width, height = prs.slide_width, prs.slide_height
+        panels = [sh for sh in prs.slides[0].shapes
+                  if sh.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE
+                  and sh.width > width * 0.35 and sh.height > height * 0.5]
+        assert len(panels) >= 2, "应有左右两块等宽面板"
+        panels.sort(key=lambda sh: sh.left)
+        left, right = panels[0], panels[-1]
+        assert abs(left.width - right.width) < width * 0.01
+        assert abs((left.left + left.width / 2) +
+                   (right.left + right.width / 2) - width) < width * 0.01
 
 
 class TestNativeDataObjectProtocol:

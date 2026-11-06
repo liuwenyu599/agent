@@ -200,3 +200,5 @@ deliverables/*.html
 
 # 页眉几何差异化验证样稿（临时产物）
 deliverables/_header_style_samples/
+# 自适应排版目检样稿（pptx/pdf/逐页 PNG，脚本本身入库）
+deliverables/_adaptive_samples/

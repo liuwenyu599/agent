@@ -426,6 +426,36 @@ def test_upload_image_keeps_file_when_vision_is_unavailable(
     assert "补写图片说明" in response.json()["message"]
 
 
+def test_vision_caption_waits_for_slow_35b(monkeypatch):
+    """35B 多模态首字延迟常超 15s；旧固定 15s 会让 caption 恒为空，
+    图片随后被 _outline_images 过滤，表现为「传了图却从不自动配图」。"""
+    import asyncio
+    from app.application.ppt import image_analysis as ia
+
+    class SlowVision:
+        async def acomplete(self, messages, **_kwargs):
+            await asyncio.sleep(0.05)
+            return '{"caption":"室内普法宣讲现场"}'
+
+    monkeypatch.setattr(ia, "get_vision_gateway", lambda: SlowVision())
+    assert ia._CAPTION_TIMEOUT >= 60, "识图超时上限不能退回到 15s"
+    assert asyncio.run(ia.describe_image(_png_bytes(), timeout=0.5)) == "室内普法宣讲现场"
+
+
+def test_vision_caption_timeout_still_keeps_upload(monkeypatch):
+    """识别超时不能拖垮上传：仍返回空 caption，由前端提示补写说明。"""
+    import asyncio
+    from app.application.ppt import image_analysis as ia
+
+    class HangingVision:
+        async def acomplete(self, messages, **_kwargs):
+            await asyncio.sleep(5)
+            return '{"caption":"不该返回"}'
+
+    monkeypatch.setattr(ia, "get_vision_gateway", lambda: HangingVision())
+    assert asyncio.run(ia.describe_image(_png_bytes(), timeout=0.05)) == ""
+
+
 def test_image_caption_can_be_corrected_only_by_owner_or_admin(
         client, accounts, monkeypatch):
     from app.application.ppt import image_analysis
@@ -905,6 +935,7 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
         "source_type": "topic",
         "topic": "行政复议工作汇报",
         "slide_count": 8,
+        "theme_id": "research_sand",
         "material_names": ["材料A.txt", "材料B.csv"],
         # 本测试聚焦 SSE 事件序列；自动配图会多一个图库挑选 stage，另测
         "auto_images": False,
@@ -922,6 +953,11 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
 
     done = events[4]
     assert done["data"]["doc_id"]
+    document = client.get(
+        f"{BASE}/ppt/documents/{done['data']['doc_id']}", headers=_hdr(accounts["a"]))
+    assert document.status_code == 200, document.text
+    assert document.json()["theme_id"] == "research_sand"
+    assert document.json()["template_id"] is None
     outline = done["data"]["outline"]
     assert outline["title"] == "行政复议工作汇报"
     slides = outline["slides"]

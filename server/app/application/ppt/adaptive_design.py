@@ -13,7 +13,7 @@ class DesignTokens:
     content_bottom: float = 0.88
     gutter: float = 0.025
     title_pt: int = 28
-    body_pt: int = 18
+    body_pt: int = 20
     compact_pt: int = 14
     caption_pt: int = 11
 

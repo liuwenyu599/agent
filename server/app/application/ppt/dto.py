@@ -50,6 +50,7 @@ class OutlineIn(BaseModel):
     # 手动指定图片时仅使用这些图片；空数组由 auto_images 决定是否自动配图。
     material_ids: Optional[List[str]] = Field(default=None, max_length=30)
     auto_images: bool = True
+    theme_id: Optional[str] = Field(default=None, max_length=50)
     # 结合知识库生成：所选知识库 id 列表。服务端按主题做 RAG 语义检索，
     # 命中片段作为大纲内容依据；权限范围由服务端解析（与可访问库取交集），
     # 客户端传值无法扩大检索范围

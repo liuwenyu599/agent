@@ -128,10 +128,15 @@ services:
       MODEL_TIMEOUT: ${MODEL_TIMEOUT:-300}
       MODEL_CTX_LIMIT: ${MODEL_CTX_LIMIT:-16384}
       AI_PROVIDER: ${AI_PROVIDER:-auto}
-      # 视觉：35B 本身多模态，VISION_* 指向同一 8010 即由 35B 接管图片理解；
-      #      留空则回退 OCR 文本通道（多模态不生效）。
+      # 视觉：35B 本身多模态，VISION_MODEL_URL 指向同一 8010 即由 35B 接管图片理解。
+      #      留空不报错：图片仍可上传，但无自动描述，需在客户端补写后参与自动配图。
+      #      VISION_CAPTION_TIMEOUT 是单次识图上限（35B 首字延迟常 >15s，勿设过小）。
       VISION_MODEL_URL: ${VISION_MODEL_URL:-}
       VISION_MODEL_NAME: ${VISION_MODEL_NAME:-}
+      VISION_MODEL_API_KEY: ${VISION_MODEL_API_KEY:-}
+      VISION_MODEL_TIMEOUT: ${VISION_MODEL_TIMEOUT:-180}
+      VISION_MAX_IMAGES: ${VISION_MAX_IMAGES:-4}
+      VISION_CAPTION_TIMEOUT: ${VISION_CAPTION_TIMEOUT:-90}
       # 长文正文生成：显式路由到 35B（带 enable_thinking=false 双保险）；
       #      留空则静默回退主模型（主模型=35B 时内容仍对，但无显式关思考）。
       LONG_FORM_MODEL_URLS: ${LONG_FORM_MODEL_URLS:-}
