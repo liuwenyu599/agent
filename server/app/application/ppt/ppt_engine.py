@@ -3069,6 +3069,21 @@ def _pick_layout(layouts: list, slide_type: str, used: Dict,
     return None
 
 
+def _split_multiline_points(points) -> List[str]:
+    """模型输出的要点常把整段列表塞进一个字符串（\n 换行或 "- " 前缀）。
+
+    填充前拆成独立要点：多占位符（{{point1}}/{{point2}}…）才能逐条入座，
+    合并正文框也按段落展开——绝不能把列表捏成一坨长段（换行丢失）。
+    拆不出子行时保持原样。
+    """
+    result: List[str] = []
+    for point in points or []:
+        lines = [line.strip() for line in str(point).splitlines()]
+        lines = [re.sub(r"^[-•·—*]\s+", "", line) for line in lines]
+        result.extend(line for line in lines if line)
+    return result or [str(point) for point in (points or [])]
+
+
 def _readable_slide_points(slide: Dict) -> List[str]:
     points = [str(point) for point in slide.get("points") or []]
     blocks = slide.get("blocks") or {}
@@ -3077,7 +3092,9 @@ def _readable_slide_points(slide: Dict) -> List[str]:
     points.extend(f"{item.get('time', '')}　{item.get('event') or item.get('text') or ''}"
                   for item in blocks.get("timeline") or [])
     points.extend(str(item) for item in blocks.get("process") or [])
-    return points
+    # 与填充期同口径：含换行的要点拆开参与容量判定，否则 fit 以为只有一条、
+    # 填充拆成五条直接超容量溢出。
+    return _split_multiline_points(points)
 
 
 MIN_SHRINK_RATIO = 0.72
@@ -3391,21 +3408,60 @@ def _append_bullets(shape, lines) -> None:
 
 
 def _replace_template_tokens(shape, values: Dict[str, str]) -> None:
-    """Replace named tokens while retaining the paragraph and run formatting."""
+    """Replace named tokens while retaining the paragraph and run formatting.
+
+    值里带换行（模型输出的列表/段落）时拆成独立段落（沿用该段格式）：PPTX
+    的 ``<a:t>`` 不认 ``\\n``，原样写进去 PowerPoint 会吞掉换行，列表就被
+    捏成一个长段。
+    """
+    import copy
+
+    from lxml import etree
+    from pptx.oxml.ns import qn
+
     token = re.compile(r"\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}")
-    for paragraph in shape.text_frame.paragraphs:
+
+    def substitute(text: str) -> str:
+        return token.sub(lambda match: values.get(match.group(1), ""), text)
+
+    for paragraph in list(shape.text_frame.paragraphs):
         runs = list(paragraph.runs)
         if not runs:
             continue
-        for run in runs:
-            run.text = token.sub(lambda match: values.get(match.group(1), ""), run.text)
-        # PowerPoint may split one token between multiple runs. Keep the first
-        # run's formatting in that case and remove the consumed fragments.
         joined = "".join(run.text for run in runs)
-        if token.search(joined):
-            runs[0].text = token.sub(lambda match: values.get(match.group(1), ""), joined)
+        if not token.search(joined):
+            continue
+        replaced = substitute(joined)
+        if "\n" not in replaced:
+            runs[0].text = replaced
             for run in runs[1:]:
                 run.text = ""
+            continue
+        lines = [line.strip() for line in replaced.splitlines()]
+        if not any(lines):
+            lines = [""]
+        runs[0].text = lines[0]
+        for run in runs[1:]:
+            run.text = ""
+        # 首段承载第一行，其余行按首段格式克隆成新段落插到后面。
+        proto = copy.deepcopy(paragraph._p)
+        anchor = paragraph._p
+        for line in lines[1:]:
+            new_p = copy.deepcopy(proto)
+            anchor.addnext(new_p)
+            anchor = new_p
+            new_runs = new_p.findall(qn("a:r"))
+            if new_runs:
+                t = new_runs[0].find(qn("a:t"))
+                if t is None:
+                    t = etree.SubElement(new_runs[0], qn("a:t"))
+                t.text = line
+                for r in new_runs[1:]:
+                    rt = r.find(qn("a:t"))
+                    if rt is not None:
+                        rt.text = ""
+            else:
+                new_p.text = line
 
 
 def _template_token_values(sdata: Dict, points: Optional[List[str]] = None) -> Dict[str, str]:
@@ -3484,23 +3540,25 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     return gf
 
 
-def _shrink_text_to_fit(shape, sw, sh, min_pt: int = 13) -> None:
+def _shrink_text_to_fit(shape, sw, sh, min_pt: int = 13):
     """文字按当前字号装不下文本框时逐级缩小字号（所有 run 统一），避免溢出。
 
     - 高度判定留 15% 容差（文本框内边距），不追求绝对精确；
     - 若因破行只剩一两个字单独成行（孤字），在 18pt 以上继续缩到单行为止；
-    - 只处理有显式字号的文本（继承主题字号无法可靠估算）。
+    - 先降到 min_pt（可读下限）；仍装不下时对正文再降一档硬下限（最低 9pt）
+      做最后尝试——模板槽位偏小是常态，宁可小字也绝不截断；
+    - 返回最终字号；到硬下限仍装不下返回 None（调用方据此告警并降级该页）。
     """
     try:
         from pptx.util import Pt
         from app.application.ppt.adaptive_design import estimated_lines
         tf = shape.text_frame
         if not tf.text.strip() or shape.width is None or shape.height is None:
-            return
+            return None
         w_in = shape.width / 914400
         h_in = shape.height / 914400
         if w_in <= 0.15 or h_in <= 0.1:
-            return
+            return None
         deck_w_pt = max(1.0, sw / 12700) if sw else 960.0
         w_ratio = w_in / (sw / 914400) if sw else w_in / 13.333
         # 圆形槽（ellipse / 全圆角矩形）的可用文字区是内接矩形，只有外框的
@@ -3515,7 +3573,7 @@ def _shrink_text_to_fit(shape, sw, sh, min_pt: int = 13) -> None:
         sizes = [run.font.size.pt for p in paras for run in p.runs
                  if run.font.size is not None]
         if not sizes:
-            return
+            return None
         biggest = max(sizes)
         limit = min_pt
 
@@ -3563,13 +3621,21 @@ def _shrink_text_to_fit(shape, sw, sh, min_pt: int = 13) -> None:
                         or h_in * 72 < biggest * 1.8)
         size = pick(True) if force_single else None
         if size is None:
-            size = pick(False) or limit
+            size = pick(False)
+        if size is None and min_pt > 9:
+            # 可读下限仍装不下：最后降到硬下限（≥9pt）再试一轮。再不行才
+            # 交给调用方降级——绝对不能保持原字号让文字溢出截断。
+            limit = max(9, min_pt - 4)
+            size = pick(force_single)
+        if size is None:
+            return None
         if size < biggest:
             for p in paras:
                 for r in p.runs:
                     r.font.size = Pt(size)
+        return size
     except Exception:
-        pass
+        return None
 
 
 def _raise_tiny_body_text(shape, sw, sh, min_pt: int = 13) -> None:
@@ -3866,6 +3932,9 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     elif blocks.get("process"):
         for i, p in enumerate(blocks["process"], 1):
             points.append(f"第{i}步：{p if isinstance(p, str) else p.get('name', '')}")
+    # 模型把列表塞进单条字符串（\n / "- " 前缀）时先拆开：多占位符逐条入座、
+    # 合并框按段落展开，绝不把列表捏成一个长段。
+    points = _split_multiline_points(points)
 
     is_cover = layout.get("detected_type") == "cover"
     values = _template_token_values(sdata, points)
@@ -3959,6 +4028,7 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     # 闸门以为会缩号、填充后根本没缩，长句就从窄红条里溢出截断。所以先把
     # 分析阶段估算出的字号写成显式值，让收缩逻辑能接管。
     from pptx.util import Pt as _Pt
+    unfit_texts: List[str] = []
     for shp, e in texts:
         if not (getattr(shp, "has_text_frame", False) and shp.text_frame.text.strip()):
             continue
@@ -3970,7 +4040,10 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         if e.get("role") != "fixed":
             # 模板小字槽塞进正文要点后仍是 9pt：先提到可读下限，再交给缩字兜底
             _raise_tiny_body_text(shp, sw, sh)
-        _shrink_text_to_fit(shp, sw, sh)
+        if _shrink_text_to_fit(shp, sw, sh) is None:
+            # 硬下限（9pt）仍装不下：保持字号只会溢出截断。记录下来，
+            # 由调用方把该页降级为可读兜底版式（可读版式必能放下全部正文）。
+            unfit_texts.append((shp.text_frame.text or "").strip()[:12])
 
     # 槽位多于要点：未填充的 point 槽会留下空胶囊/空卡片（文字清了、形状还在），
     # 把空槽连同其视觉容器（同轴胶囊框、左侧序号圆组）一起删除。
@@ -3997,6 +4070,11 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         dropped = max(0, len(points) - consumed - body_index)
         if dropped > 0:
             warnings.append(f"「{title or '本页'}」有 {dropped} 条内容超出该页文本框，已省略")
+        if unfit_texts:
+            warnings.append(
+                f"「{title or '本页'}」正文在模板文本框中缩号后仍放不下"
+                f"（{'、'.join(unfit_texts[:3])}…），该页需改用可读版式")
+    return bool(unfit_texts)
 
 
     # 选图落位：只在真正的配图区插（页脚细条、整页底图、贴边装饰都排除），
@@ -4540,9 +4618,12 @@ def _filled_page_issue(slide, sdata: Dict, sw: int, sh: int) -> Optional[str]:
         sizes = [run.font.size.pt for para in shape.text_frame.paragraphs
                  for run in para.runs if run.font.size]
         size = min(sizes, default=18.0)
+        # min_pt 与填充期 _shrink_text_to_fit 的硬下限（max(9, min_pt-4)=9，
+        # 闸门留 1pt 余量取 10）对齐：闸门若按 6pt 判「放得下」，缩号器到
+        # 9pt 就停手，长句照样溢出截断——判定能力不能超出实际缩号能力。
         fitted = fit_font_size([value], width / sw, height / sh, size,
                                deck_width_pt=sw / 12700,
-                               deck_height_pt=sh / 12700, min_pt=6)
+                               deck_height_pt=sh / 12700, min_pt=10)
         if fitted is None or fitted < size * .7:
             return "文字在模板文本框中放不下"
         # 实际占字区域（按行数估高，而不是整个框）：模板标题框常做得很高、
@@ -4647,10 +4728,10 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                 from copy import deepcopy
                 template_shapes = [deepcopy(shape._element) for shape in ns.shapes]
             payload = {**s, "points": [], "blocks": {}} if diagram_xml else s
-            _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs, warnings)
+            unfit = _fill_learned_slide(ns, lay, payload, colors, font, sw, sh, prs, warnings)
             if diagram_xml:
                 if not _try_drawio_render(ns, s, (int(sw * .06), int(sh * .23),
-                                                int(sw * .88), int(sh * .64)), font, warnings, colors):
+                                                  int(sw * .88), int(sh * .64)), font, warnings, colors):
                     # Blank text regions stop being classified as text. Restore the
                     # original layout before filling it with the fallback content.
                     for shape in list(ns.shapes):
@@ -4661,8 +4742,12 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                     # only the unusable XML is excluded. Other pages retain their own layouts.
                     fallback = {**s, "blocks": {key: value for key, value in s["blocks"].items()
                                               if key != "drawio_xml"}}
-                    _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs, warnings)
+                    unfit = _fill_learned_slide(ns, lay, fallback, colors, font, sw, sh, prs, warnings)
+                else:
+                    unfit = False  # 关系图已画出：标题类容量告警不构成整页降级理由
             issue = _filled_page_issue(ns, s, sw, sh)
+            if not issue and unfit:
+                issue = "正文在模板文本框中缩号后仍放不下"
             if issue:
                 warnings.append(f"「{s.get('title') or '本页'}」{issue}，已为该页使用可读版式")
                 _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings)
