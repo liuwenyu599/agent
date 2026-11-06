@@ -1709,14 +1709,30 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         all_items = (s.get("blocks") or {}).get("timeline") or []
+
+        def _est_lines(label: str, fs: float, box_w: float) -> int:
+            # 与 review_pptx_visuals 的估行口径对齐（有效字宽 ≈ fs/72*1.5，介于
+            # 真实 CJK 字宽 1.0 与闸门保守值 1.875 之间，保证按此撑高的框
+            # 在闸门 est <= cap+1 判据下必过）。box_w 为版心宽占比（deck 宽 13.333in）
+            return max(1, math.ceil(len(label) * (fs / 72 * 1.5) / max(box_w * 13.333, 0.1)))
+
         if (lay_of(s) or "horizontal") == "vertical" and len(all_items) >= 3:
             items = all_items[:6]
             rect(slide, lx(0.175), ly(0.245), Emu(19050), ly(0.60), LINE)
             step = 0.60 / len(items)
             for i, it in enumerate(items):
                 cy = 0.245 + step * (i + 0.5)
-                text(slide, lx(0.04), ly(cy - 0.035), lx(0.115), ly(0.07),
-                     str(it.get("time", "")), 13, True, PRIMARY, align=PP_ALIGN.RIGHT)
+                # 长标签（如「第一阶段：近期（2026年11月—12月）」）降字号、加宽
+                # 时间列、高度按估算行数撑开——固定 13pt/0.07 槽遇换行必溢出
+                # （实机验收 bug 2026-11-06：竖/横两分支同源）
+                t_label = str(it.get("time", ""))
+                t_fs = 13 if len(t_label) <= 10 else (12 if len(t_label) <= 16 else 11)
+                t_w = 0.155
+                t_h = min(_est_lines(t_label, t_fs, t_w) * (t_fs / 72 * 1.35 / 7.5),
+                          step * 0.9)
+                t_y = min(max(cy - t_h / 2, 0.245), cy + step / 2 - t_h)
+                text(slide, lx(0.01), ly(t_y), lx(t_w), ly(t_h),
+                     t_label, t_fs, True, PRIMARY, align=PP_ALIGN.RIGHT)
                 circle(slide, lx(0.175), ly(cy - 0.006), SH * 0.012, PRIMARY, 100)
                 text(slide, lx(0.215), ly(cy - 0.045), lx(0.70), ly(step), str(it.get("text", "")),
                      14, False, DARK)
@@ -1725,8 +1741,10 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         n = max(len(items), 1)
         yline = 0.52
         rect(slide, lx(0.08), ly(yline), lx(0.84), ly(0.009), ACCENT, round_=True)
+        spacing = 0.80 / max(n - 1, 1)
+
         for i, it in enumerate(items):
-            cx = 0.10 + i * (0.80 / max(n - 1, 1))
+            cx = 0.10 + i * spacing
             dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, lx(cx - 0.009), ly(yline - 0.014),
                                          lx(0.018), lx(0.018))
             dot.fill.solid()
@@ -1734,10 +1752,29 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             dot.line.color.rgb = WHITE
             dot.line.width = Pt(2)
             up = (i % 2 == 0)
-            text(slide, lx(cx - 0.07), ly(yline - 0.105 if up else yline + 0.035), lx(0.14),
-                 ly(0.05), str(it.get("time", "")), 14, True, PRIMARY, align=PP_ALIGN.CENTER)
-            text(slide, lx(cx - 0.07), ly(yline - 0.06 if up else yline + 0.08), lx(0.14),
-                 ly(0.10), str(it.get("text", "")), 12, False, GRAY, align=PP_ALIGN.CENTER)
+            # 长标签（如「第一阶段：近期（2026年11月—12月）」）降字号、加宽槽位，
+            # 高度按估算行数撑开——固定 14pt/0.05 高槽遇换行必然压住正文（实机 bug 2026-11-06）
+            t_label = str(it.get("time", ""))
+            t_fs = 14 if len(t_label) <= 8 else (12 if len(t_label) <= 14 else 11)
+            t_w = min(0.18, spacing * 0.92)
+            t_h = _est_lines(t_label, t_fs, t_w) * (t_fs / 72 * 1.35 / 7.5)
+            d_label = str(it.get("text", ""))
+            d_fs = 12 if len(d_label) <= 26 else 11
+            d_w = min(0.20, spacing * 0.98)
+            d_h = _est_lines(d_label, d_fs, d_w) * (d_fs / 72 * 1.35 / 7.5)
+            gap = 0.012
+            if up:
+                # 上侧自线向上堆叠：正文贴线，时间槽在正文上方
+                text(slide, lx(cx - d_w / 2), ly(yline - 0.014 - d_h), lx(d_w),
+                     ly(d_h), d_label, d_fs, False, GRAY, align=PP_ALIGN.CENTER)
+                text(slide, lx(cx - t_w / 2), ly(yline - 0.014 - d_h - gap - t_h), lx(t_w),
+                     ly(t_h), t_label, t_fs, True, PRIMARY, align=PP_ALIGN.CENTER)
+            else:
+                # 下侧自线向下堆叠：时间槽贴线，正文在其下
+                text(slide, lx(cx - t_w / 2), ly(yline + 0.014), lx(t_w),
+                     ly(t_h), t_label, t_fs, True, PRIMARY, align=PP_ALIGN.CENTER)
+                text(slide, lx(cx - d_w / 2), ly(yline + 0.014 + t_h + gap), lx(d_w),
+                     ly(d_h), d_label, d_fs, False, GRAY, align=PP_ALIGN.CENTER)
         for j, p in enumerate(s["points"][:2]):
             text(slide, lx(0.07), ly(0.80 + j * 0.06), lx(0.86), ly(0.05), p, 14, False, GRAY)
         return slide
