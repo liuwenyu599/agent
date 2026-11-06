@@ -21,6 +21,7 @@ import math
 import os
 import re
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.llm_json import LLMJsonError, loads_lenient, truncate_for_log
@@ -180,6 +181,117 @@ def pick_builtin_template(topic: str = "", style_hint: str = "") -> str:
 
 def builtin_template(id_: str) -> Optional[Dict]:
     return _TEMPLATE_BY_NAME.get(id_)
+
+
+# ================= 图库学习模板自动选版 =================
+# 图库里那批上传分析过的真实模板（含 layout_library）不应只在用户手动选择时
+# 才被用上：自动生成链路按主题语义先试选库模板，命中即走模板克隆路径
+# （严格闸门 + 逐页可读兜底 + 安全回退都是现成的），未命中再落回内置主题。
+#
+# 结构硬门槛：layout_library 必须同时覆盖 cover 与 toc，且含正文系页型
+# （content/content_image/cards/two_col 之一）。封面不可借正文版式，缺了
+# 就是观感硬伤；toc 同理（learned 路径对 toc/section/closing 强制页型匹配）。
+_LIBRARY_CONTENT_FAMILY = ("content", "content_image", "cards", "two_col")
+
+_LIBRARY_TOPIC_RULES: List[tuple] = [
+    # (组名, 组关键词)。模板名/分类与主题命中同一组才算「同类」，按数组顺序取优先级。
+    ("党建党政", ("党建", "党课", "党务", "党支部", "党委", "廉政", "纪检",
+                 "主题教育", "党员", "党风廉政", "警示教育", "红色")),
+    ("普法法治", ("普法", "法治", "法律", "法规", "民法典", "宪法", "司法",
+                 "条例", "法治宣传", "法律援助", "公正司法", "普法教育")),
+    ("政策解读", ("政策", "解读", "管理办法", "实施细则", "规定解读", "处分法",
+                 "实施条例")),
+    ("总结汇报", ("总结", "汇报", "年终", "年中", "述职", "工作计划", "年度",
+                 "测评", "项目汇报")),
+    ("培训宣讲", ("培训", "讲座", "课件", "宣讲", "课程", "学习", "消防安全")),
+    ("通用商务", ("通用", "简约", "商务", "大气", "企业简介", "清新", "杂志风")),
+]
+
+
+def _library_group_score(text: str, tag: str) -> int:
+    for group, keys in _LIBRARY_TOPIC_RULES:
+        if group == tag:
+            return sum(1 for k in keys if k in text)
+    return 0
+
+
+def _library_template_tag(text: str) -> Optional[str]:
+    """模板名/分类归组：计分（命中的组关键词数）定组，平分取更靠前的组。"""
+    best_tag, best_score = None, 0
+    for tag, keys in _LIBRARY_TOPIC_RULES:
+        score = sum(1 for k in keys if k in text)
+        if score > best_score:
+            best_tag, best_score = tag, score
+    return best_tag
+
+
+# 模板体检结论（deliverables/template-audit/ 同步）：REVIEW 套自动选版直接排除，
+# WARN 套降权（同分时让位 PASS 套）。文件缺失视为全部合格。
+_LIBRARY_AUDIT_PATH = Path(__file__).with_name("library_audit.json")
+
+
+def _library_audit_rank(name: str) -> int:
+    """0=PASS/未知（不惩罚），1=WARN，2=REVIEW。"""
+    try:
+        data = json.loads(_LIBRARY_AUDIT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    for n in data.get("review") or []:
+        if n in name:
+            return 2
+    for n in data.get("warn") or []:
+        if n in name:
+            return 1
+    return 0
+
+
+def pick_library_template(rows: List[Dict], topic: str = "",
+                          style_hint: str = "", title: str = "") -> Optional[str]:
+    """从图库学习模板中按主题语义自动选一套；未命中返回 None（落回内置主题）。
+
+    rows 为图库模板的轻量字典（id/name/category/layout_library/use_count）。
+    选择确定性：结构门槛 → 体检排除 → 主题组匹配 → 关键词命中数（扣体检降权）
+    → 版式数 → use_count → 名称。
+    """
+    # 1) 结构门槛：先把不合格的筛掉
+    eligible: List[Dict] = []
+    for row in rows or []:
+        if _library_audit_rank(str(row.get("name") or "")) >= 2:
+            continue  # 体检 REVIEW：超过四页未复用模板，演示观感差，不自动选
+        lib = row.get("layout_library") or []
+        if len(lib) < 8:  # 版式太少学不出整份稿的骨架
+            continue
+        types = {str(l.get("detected_type") or l.get("type") or "")
+                 for l in lib}
+        if "cover" not in types or "toc" not in types:
+            continue
+        if not (types & set(_LIBRARY_CONTENT_FAMILY)):
+            continue
+        eligible.append(row)
+    if not eligible:
+        return None
+    # 2) 主题组匹配：题目/标题/风格提示按计分定组，模板名+分类同组才算同类
+    subject_text = f"{topic or ''}{title or ''}{style_hint or ''}"
+    subject_tag = _library_template_tag(subject_text)
+    if not subject_tag:
+        return None  # 无明显场景时不强行套库，保持内置主题的稳定性
+    hits: List[tuple] = []
+    for row in eligible:
+        template_text = f"{row.get('name') or ''}{row.get('category') or ''}"
+        if _library_template_tag(template_text) != subject_tag:
+            continue
+        # 双方都命中的关键词数；体检 WARN 的套数扣 1 分让位 PASS 同类
+        specificity = sum(1 for _, keys in _LIBRARY_TOPIC_RULES
+                          for k in keys
+                          if k in subject_text and k in template_text)
+        specificity -= _library_audit_rank(str(row.get("name") or ""))
+        hits.append((row, specificity))
+    if not hits:
+        return None
+    hits.sort(key=lambda h: (-h[1], -len(h[0].get("layout_library") or []),
+                             -(h[0].get("use_count") or 0),
+                             str(h[0].get("name") or "")))
+    return str(hits[0][0].get("id"))
 PAGE_TYPES = ["cover", "toc", "section", "content", "data", "chart",
               "case", "timeline", "process", "summary", "closing"]
 

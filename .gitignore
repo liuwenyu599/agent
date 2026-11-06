@@ -189,6 +189,8 @@ deliverables/样稿预览/
 
 # 图库清单是部署依赖（seed 脚本与镜像内都要用），例外放行
 !server/app/application/ppt/templates/library/manifest.json
+# 模板体检结论（自动选版的质量闸门），例外放行
+!server/app/application/ppt/library_audit.json
 deliverables/fixed_preview*/
 deliverables/template-audit/*/
 

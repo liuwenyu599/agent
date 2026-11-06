@@ -66,6 +66,7 @@ _SEED_USERNAMES = {
     "test_ppt_job_lifecycle_contract": "developer",
     "test_ppt_local_job": "developer",
     "test_ppt_kb_rag": "kbdev",
+    "test_ppt_library_picker": "libpick",
     "test_ppt_library_seed": "libseed",
     "test_ppt_preview_degrade": "pptprevdev",
     "test_ppt_workbench": "pptdev",

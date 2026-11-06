@@ -1778,12 +1778,17 @@ class PPTService:
                                       "auto" if auto_images else "off")
         except RuntimeError as e:
             raise AIServiceError(str(e))
+        outline_topic = topic or outline.get("title") or ""
+        auto_template_id = self._auto_select_template(
+            user.id, outline_topic, outline.get("style"), outline.get("title") or "")
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=source_type,
             # 后续 PPTAgent 必须能看到真实材料；topic 不能覆盖 material content。
             source_content=(content or topic or "")[:8000],
-            # 用户未选模板：按大纲 style 提示与主题关键词自动配色，摆脱"永远深蓝"
+            # 用户未选模板：先按主题语义从图库学习模板里自动选一套（克隆路径），
+            # 未命中再按大纲 style 提示与主题关键词自动配色，摆脱"永远深蓝"
+            template_id=auto_template_id,
             theme_id=ppt_engine.pick_builtin_template(
                 topic or outline.get("title"), outline.get("style")),
             outline=outline, status="draft", slide_count=len(outline.get("slides") or [])))
@@ -1865,10 +1870,14 @@ class PPTService:
             yield _sse({"type": "error", "message": _OUTLINE_UNEXPECTED_ERROR_MSG})
             return
         yield _sse({"type": "stage", "text": "大纲已优化，正在保存…"})
+        auto_template_id = self._auto_select_template(
+            user.id, body.topic or outline.get("title") or "",
+            outline.get("style"), outline.get("title") or "")
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=body.source_type,
             source_content=(content or body.topic or "")[:8000],
+            template_id=auto_template_id,
             theme_id=ppt_engine.pick_builtin_template(
                 body.topic or outline.get("title"), outline.get("style")),
             outline=outline, status="draft", slide_count=len(outline.get("slides") or [])))
@@ -1907,6 +1916,28 @@ class PPTService:
         return {"doc_id": d.id, "outline": outline,
                 "message": f"已导入「{file.filename}」，共 {len(outline.get('slides') or [])} 页，"
                            "可逐页编辑或让 AI 修改"}
+
+    def _auto_select_template(self, user_id: str, topic: str,
+                              style_hint: str, title: str) -> Optional[str]:
+        """自动生成链路先从图库学习模板里按主题选一套；未命中返回 None 落内置主题。
+
+        命中的 template_id 只是「默认选择」：用户在确认页显式选模板时仍会覆盖。
+        """
+        try:
+            rows = [{
+                "id": t.id, "name": t.name, "category": t.category,
+                "layout_library": t.layout_library or [],
+                "use_count": t.use_count or 0, "is_official": t.is_official,
+            } for t in self.templates.list_for_user(user_id, scope="official")]
+        except Exception as e:  # 选库失败不阻塞生成，落回内置主题
+            logger.warning("[PPT] 图库模板自动选版失败，落回内置主题：%s", e)
+            return None
+        picked = ppt_engine.pick_library_template(
+            rows, topic=topic, style_hint=style_hint, title=title)
+        if picked:
+            logger.info("[PPT] 自动选版命中图库模板：template_id=%s topic=%s",
+                        picked, (topic or title or "")[:40])
+        return picked
 
     def _resolve_template(self, template_id: Optional[str],
                           fallback_theme: str = "") -> Tuple[Dict, Optional[PPTTemplate]]:
