@@ -485,6 +485,8 @@ def template_to_dict(t) -> Dict:
             "font": t.get("font") or DEFAULT_CJK_FONT,
             "layouts": normalize_template_layouts(t.get("layouts")),
             "layout_library": t.get("layout_library") or [],
+            "builtin_id": t.get("builtin_id") or (
+                t.get("id") if t.get("id") in _TEMPLATE_BY_NAME else None),
         }
     if getattr(t, "is_official", False):
         spec = next((item for item in BUILTIN_TEMPLATES
@@ -1054,6 +1056,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     warnings = warnings if warnings is not None else []
 
     colors, layouts = template["colors"], template["layouts"]
+    header_style = {
+        "gov_report_red": "band", "policy_blue": "editorial",
+        "training_blue": "center", "exp_share_red": "editorial",
+        "summary_brown": "center", "publicity_cyan": "panel",
+        "public_service_green": "panel", "digital_slate": "band",
+        "research_sand": "editorial",
+    }.get(template.get("builtin_id") or template.get("id"))
     FONT = template.get("font") or DEFAULT_CJK_FONT
     C = lambda h: RGBColor.from_string(h)
     PRIMARY, ACCENT = C(colors["primary"]), C(colors["accent"])
@@ -1190,13 +1199,28 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     def page_header(slide, title, variant=None):
         """内容页页眉：bar=左侧竖条 / band=顶部色带 / none=整页留白（大字报页）。"""
-        v = variant or layouts.get("content", "bar_title")
+        v = variant or header_style or layouts.get("content", "bar_title")
+        title_size = 20 if len(title) > 32 else 24
         if v == "none":
             return
         if v in ("band", "top_band"):
             rect(slide, 0, 0, SW, ly(0.135), PRIMARY)
             rect(slide, 0, ly(0.135), SW, ly(0.006), ACCENT)
-            text(slide, lx(0.05), ly(0.032), lx(0.9), ly(0.08), title, 24, True, WHITE)
+            text(slide, lx(0.05), ly(0.017), lx(0.9), ly(0.105),
+                 title, title_size, True, WHITE, anchor=MSO_ANCHOR.MIDDLE)
+        elif v == "center":
+            text(slide, lx(0.05), ly(0.037), lx(0.90), ly(0.104),
+                 title, title_size, True, DARK, align=PP_ALIGN.CENTER)
+            rect(slide, lx(0.455), ly(0.157), lx(0.09), ly(0.007), ACCENT)
+        elif v == "editorial":
+            text(slide, lx(0.045), ly(0.042), lx(0.91), ly(0.105),
+                 title, title_size, True, DARK)
+            rect(slide, lx(0.05), ly(0.155), lx(0.13), ly(0.006), ACCENT)
+        elif v == "panel":
+            rect(slide, lx(0.045), ly(0.033), lx(0.91), ly(0.128), LIGHT, round_=True)
+            circle(slide, lx(0.069), ly(0.097), SH * 0.012, PRIMARY, 100)
+            text(slide, lx(0.085), ly(0.045), lx(0.84), ly(0.10),
+                 title, title_size, True, DARK, anchor=MSO_ANCHOR.MIDDLE)
         else:
             rect(slide, 0, 0, SW, ly(0.014), PRIMARY)
             rect(slide, lx(0.045), ly(0.07), lx(0.014), ly(0.082), PRIMARY, round_=True)
@@ -1419,6 +1443,15 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             size, rows = adaptive_design.point_rows(s["points"], 0.79,
                                                    top=0.245, bottom=0.88)
             for index, (point, (y, height)) in enumerate(zip(s["points"], rows), 1):
+                if header_style in {"editorial", "center", "panel"}:
+                    if header_style == "panel":
+                        circle(slide, lx(0.079), ly(y + 0.026), SH * 0.011, PRIMARY, 100)
+                    else:
+                        text(slide, lx(0.055), ly(y), lx(0.057), ly(0.07),
+                             f"{index:02d}", 15, True, ACCENT)
+                    text(slide, lx(0.115), ly(y), lx(0.79),
+                         ly(max(height - 0.015, 0.01)), point, size, False, DARK)
+                    continue
                 chip = rect(slide, lx(0.06), ly(y + 0.006),
                             lx(0.034), lx(0.034), PRIMARY, round_=True)
                 para = chip.text_frame.paragraphs[0]
@@ -1775,7 +1808,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                      ly(t_h), t_label, t_fs, True, PRIMARY, align=PP_ALIGN.CENTER)
                 text(slide, lx(cx - d_w / 2), ly(yline + 0.014 + t_h + gap), lx(d_w),
                      ly(d_h), d_label, d_fs, False, GRAY, align=PP_ALIGN.CENTER)
-        for j, p in enumerate(s["points"][:2]):
+        for j, p in enumerate((s.get("points") or [])[:2]):
             text(slide, lx(0.07), ly(0.80 + j * 0.06), lx(0.86), ly(0.05), p, 14, False, GRAY)
         return slide
 
