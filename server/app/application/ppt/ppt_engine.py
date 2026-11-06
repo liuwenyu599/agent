@@ -4049,6 +4049,15 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
             # 硬下限（9pt）仍装不下：保持字号只会溢出截断。记录下来，
             # 由调用方把该页降级为可读兜底版式（可读版式必能放下全部正文）。
             unfit_texts.append((shp.text_frame.text or "").strip()[:12])
+        elif len((shp.text_frame.text or "").strip()) >= 20:
+            # 长正文缩到五号（10.5pt）以下也能「挤进去」，但投影不可读、
+            # 层级全崩。正式汇报正文不为塞框一路缩号——宁可整页降级可读版式。
+            # 短标签/序号/图注（<20 字）不适用，小字槽本来就是小字设计。
+            smallest = min((run.font.size.pt for para in shp.text_frame.paragraphs
+                            for run in para.runs if run.font.size is not None),
+                           default=99)
+            if smallest < 11:
+                unfit_texts.append((shp.text_frame.text or "").strip()[:12])
 
     # 槽位多于要点：未填充的 point 槽会留下空胶囊/空卡片（文字清了、形状还在），
     # 把空槽连同其视觉容器（同轴胶囊框、左侧序号圆组）一起删除。

@@ -112,6 +112,39 @@ def test_shrink_returns_flag_not_silent_overflow():
     assert fitted is not None and fitted >= 13
 
 
+def test_body_shrunk_below_wuhao_is_unfit_not_delivered():
+    """长正文缩到五号（10.5pt）以下虽能「挤进」小框，也必须整页降级——
+    正式汇报不给用户一页 9pt 的正文（短标签/图注不受此限）。"""
+    prs, blank = _blank_deck()
+    slide = prs.slides.add_slide(blank)
+    # 2.0in 宽 × 0.55in 高的槽：六十字长句只能缩到 9~10pt 才装得下
+    box = slide.shapes.add_textbox(Inches(0.3), Inches(0.3), Inches(2.0), Inches(0.55))
+    box.text_frame.text = "{{point1}}"
+    layout = {"detected_type": "content", "element_schema": []}
+    sdata = {"type": "content", "title": "深化调解工作", "points": [LONG_POINT]}
+    warnings = []
+    unfit = ppt_engine._fill_learned_slide(
+        slide, layout, sdata, ppt_engine.DEFAULT_COLORS, "思源黑体",
+        prs.slide_width, prs.slide_height, prs, warnings)
+    assert unfit is True
+    assert any("放不下" in w or "可读版式" in w for w in warnings)
+
+
+def test_short_label_may_stay_small_without_degrade():
+    """短标签（<20 字）走小字槽是模板设计，不该触发整页降级。"""
+    prs, blank = _blank_deck()
+    slide = prs.slides.add_slide(blank)
+    box = slide.shapes.add_textbox(Inches(0.3), Inches(0.3), Inches(1.2), Inches(0.35))
+    box.text_frame.text = "{{point1}}"
+    layout = {"detected_type": "content", "element_schema": []}
+    sdata = {"type": "content", "title": "标题", "points": ["2026年11月"]}
+    warnings = []
+    unfit = ppt_engine._fill_learned_slide(
+        slide, layout, sdata, ppt_engine.DEFAULT_COLORS, "思源黑体",
+        prs.slide_width, prs.slide_height, prs, warnings)
+    assert unfit is False
+
+
 def test_unfittable_fill_flags_page_for_readable_fallback():
     """缩号到硬下限仍装不下：填充方返回 unfit 标记并写告警，由调用方降级。"""
     prs, blank = _blank_deck()
