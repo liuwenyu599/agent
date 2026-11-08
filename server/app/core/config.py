@@ -43,7 +43,7 @@ class Settings:
         self.LONG_FORM_MODEL_NAME = os.getenv("LONG_FORM_MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
         self.LONG_FORM_MODEL_TIMEOUT = int(os.getenv("LONG_FORM_MODEL_TIMEOUT", "600"))
         self.VISION_MODEL_URL = os.getenv("VISION_MODEL_URL", "")
-        self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME", "Qwen3.6-35B-A3B-W8A8")
+        self.VISION_MODEL_NAME = os.getenv("VISION_MODEL_NAME") or self.MODEL_NAME
         self.VISION_MODEL_API_KEY = os.getenv("VISION_MODEL_API_KEY", "")
         self.VISION_MODEL_TIMEOUT = int(os.getenv("VISION_MODEL_TIMEOUT", "180"))
         self.VISION_MAX_IMAGES = int(os.getenv("VISION_MAX_IMAGES", "4"))
@@ -57,6 +57,7 @@ class Settings:
         # PPTAgent 已退出生产链路。只有显式打开兼容开关才读取其地址；默认使用
         # 本地原生 PPTX 渲染器，生成的文本框、形状和表格均可继续编辑。
         self.PPT_AGENT_ENABLED = _bool(os.getenv("PPT_AGENT_ENABLED"), False)
+        self.PPT_CLOUD_ALLOWED = _bool(os.getenv("PPT_CLOUD_ALLOWED"), False)
         self.PPT_AGENT_URL = os.getenv("PPT_AGENT_URL", "") if self.PPT_AGENT_ENABLED else ""
         self.PPT_AGENT_HEALTH_PATH = os.getenv("PPT_AGENT_HEALTH_PATH", "/")
         self.PPT_AGENT_API_KEY = os.getenv("PPT_AGENT_API_KEY", "")

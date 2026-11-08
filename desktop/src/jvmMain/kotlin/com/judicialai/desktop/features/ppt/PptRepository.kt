@@ -98,6 +98,7 @@ class PptRepository(private val api: ApiClient) {
         materialIds: List<String> = emptyList(),
         autoImages: Boolean = true,
         themeId: String? = null,
+        templateId: String? = null,
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
@@ -107,6 +108,7 @@ class PptRepository(private val api: ApiClient) {
             "material_ids" to materialIds,
             "auto_images" to autoImages,
             "theme_id" to themeId,
+            "template_id" to templateId,
         ).apply {
             slideCount?.let { put("slide_count", it) }
         }

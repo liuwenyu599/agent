@@ -157,7 +157,12 @@ def test_generate_reports_diagram_fallback_without_losing_export(monkeypatch, ct
     }]}
     result = svc.generate(SimpleNamespace(doc_id=doc.id, outline=source, template_id=None), user)
     assert result["download_url"].endswith(f"/{doc.id}/download")
-    assert len(result["warnings"]) == 1
+    # 未配 VISION_MODEL_URL 时会新增一条「仅完成几何检查」的环境提示，
+    # 不属于本用例要验的业务警告；业务警告仍必须且只能有一条。
+    business = [w for w in result["warnings"] if "图示渲染失败" in w]
+    assert len(business) == 1
+    assert all("图示渲染失败" in w or "视觉模型未配置" in w
+               for w in result["warnings"])
     saved = svc.documents.get(doc.id)
     assert Path(saved.file_path).is_file()
     exported = Presentation(saved.file_path)

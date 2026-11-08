@@ -21,6 +21,14 @@ class DesignTokens:
 TOKENS = DesignTokens()
 
 
+def budget_chars(width: float, height: float, font_pt: float,
+                 deck_width_pt: float = 960, deck_height_pt: float = 540) -> int:
+    """Conservative CJK writing budget shared by template and scene planning."""
+    columns = max(1, int(width * deck_width_pt * .85 / font_pt))
+    lines = max(1, int(height * deck_height_pt * .8 / (font_pt * 1.35)))
+    return columns * lines
+
+
 def text_units(value: str) -> float:
     """Approximate rendered width without relying on a specific installed font."""
     return sum(1.0 if ord(char) > 0x2E80 else 0.56 for char in str(value))

@@ -96,6 +96,7 @@ def test_adaptive_route_never_calls_legacy_pptagent(monkeypatch):
     monkeypatch.setattr(PPTService, "_render_with_feedback",
                         staticmethod(lambda outline, _template, **_kw: (b"local", outline)))
     svc = object.__new__(PPTService)
+    monkeypatch.setattr(svc, "_ppt_assistant", lambda: None)
     monkeypatch.setattr(svc, "design_prompt_for_document", lambda _doc: "")
     data, renderer = svc._render_pptx_bytes(
         SimpleNamespace(source_content="", title="测试", id="x", user_id="u"),
@@ -173,22 +174,25 @@ def test_free_compare_reflows_long_content_but_strict_template_keeps_columns():
     template = {"colors": ppt_engine.DEFAULT_COLORS,
                 "layouts": ppt_engine.DEFAULT_LAYOUTS, "font": "思源黑体"}
 
-    def labels(data):
+    def labels(data, points=None):
         slide = Presentation(BytesIO(data)).slides[0]
+        names = set(points or ["01", "02"])
         return {shape.text: shape for shape in slide.shapes
-                if shape.has_text_frame and shape.text in {"01", "02"}}
+                if shape.has_text_frame and shape.text in names}
 
     short = {"slides": [{"type": "content", "layout": "content.compare",
                           "title": "两种做法", "points": ["先行试点", "分批推广"]}]}
     long = {"slides": [{"type": "content", "layout": "content.compare",
                          "title": "两种做法", "points": ["加强基层调解能力。" * 12,
                                                    "完善案件办理流程。" * 12]}]}
-    short_labels = labels(ppt_engine.render_pptx(short, template, adaptive=True))
-    long_labels = labels(ppt_engine.render_pptx(long, template, adaptive=True))
+    short_points = short["slides"][0]["points"]
+    long_points = long["slides"][0]["points"]
+    short_labels = labels(ppt_engine.render_pptx(short, template, adaptive=True), short_points)
+    long_labels = labels(ppt_engine.render_pptx(long, template, adaptive=True), long_points)
     strict_labels = labels(ppt_engine.render_pptx(long, template))
-    assert short_labels["01"].left < short_labels["02"].left
-    assert long_labels["01"].left == long_labels["02"].left
-    assert long_labels["01"].top < long_labels["02"].top
+    assert short_labels[short_points[0]].left < short_labels[short_points[1]].left
+    assert long_labels[long_points[0]].left == long_labels[long_points[1]].left
+    assert long_labels[long_points[0]].top < long_labels[long_points[1]].top
     assert strict_labels["01"].left < strict_labels["02"].left
 
 

@@ -643,6 +643,7 @@ class PptViewModel(private val repo: PptRepository) {
             "material_ids" to if (autoImagesEnabled) emptyList<String>() else selectedMaterialIds.toList(),
             "auto_images" to autoImagesEnabled,
             "theme_id" to themeId,
+            "template_id" to templateId,
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -862,7 +863,8 @@ class PptViewModel(private val repo: PptRepository) {
                 body["content"] as String, slideCount, audience, scene,
                 kbIds = kbIds, materialNames = materialNames,
                 materialIds = materialIds, autoImages = autoImages,
-                themeId = body["theme_id"] as? String)) {
+                themeId = body["theme_id"] as? String,
+                templateId = body["template_id"] as? String)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
@@ -878,6 +880,8 @@ class PptViewModel(private val repo: PptRepository) {
         return doneOk
     }
 
+    private var outlineDesignSpec: JsonObject? = null
+
     private fun applyOutline(newDocId: String, outline: JsonObject) {
         if (newDocId.isNotBlank()) {
             docId = newDocId
@@ -886,6 +890,7 @@ class PptViewModel(private val repo: PptRepository) {
         }
         outlineTitle = outline["title"].str().ifBlank { topic.ifBlank { "未命名PPT" } }
         outlineSubtitle = outline["subtitle"].str()
+        outlineDesignSpec = outline["design_spec"].obj()
         selectedMaterialIds.clear()
         selectedMaterialIds.addAll(outline["material_ids"].arr().map { it.str() }
             .filter { it.isNotBlank() })
@@ -1005,6 +1010,7 @@ class PptViewModel(private val repo: PptRepository) {
         slides.clear()
         outlineTitle = ""
         outlineSubtitle = ""
+        outlineDesignSpec = null
         exportStage = ""
         previewPages = emptyList()
         previewBusy = false
@@ -1091,6 +1097,7 @@ class PptViewModel(private val repo: PptRepository) {
     private fun outlineJson(): JsonObject = buildJsonObject {
         put("title", outlineTitle)
         put("subtitle", outlineSubtitle)
+        outlineDesignSpec?.let { put("design_spec", it) }
         put("image_selection_mode",
             if (autoImagesEnabled) "auto" else if (selectedMaterialIds.isEmpty()) "off" else "manual")
         // 自动配图的候选范围由服务端决定，客户端不要回传空数组：

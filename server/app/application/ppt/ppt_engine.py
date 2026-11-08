@@ -539,7 +539,13 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
     recent = list(recent or [])[-2:]
     used = used or {}
 
-    prefers = [(slide.get("layout"), True),          # 模型意图：尊重，不惩罚
+    design = slide.get("design") if isinstance(slide.get("design"), dict) else {}
+    preferred = {
+        "comparison": "compare", "parallel": "three_cards",
+        "grouped": "icon_grid", "takeaway": "statement",
+    }.get(str(design.get("relationship") or "")) if stype == "content" else None
+    prefers = [(slide.get("layout"), True),
+               (preferred, True),
                ((template_layouts or {}).get(stype), False)]  # 模板静态偏好：仅兜底
     for raw, from_model in prefers:
         want = _normalize_layout_id(raw, stype)
@@ -677,13 +683,45 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 
 【输出要求】
 1. 只输出 JSON，不要用 markdown 代码块包裹，不要输出其他文字：
-{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","style":"风格类别","slides":[{outline_example},...]}}
+{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","style":"风格类别","design_spec":{{"density":"balanced"}},"slides":[{outline_example},...]}}
 2. 顶层 "style" 字段：从「工作汇报、政策解读、培训课件、经验交流、总结汇报、宣传展示、党建廉政、公共服务、数字治理、调研分析」中选最贴合主题的类别。法律援助/人民调解选「公共服务」，信息化/智慧平台选「数字治理」，调研/评估选「调研分析」。整份稿使用同一套颜色、字体和间距，不要逐页换色或自行输出绝对坐标；
 3. 每页 slide 的字段：type、title、points、blocks、image_id、image_hint、note（演讲备注，一句话）；
 4. {count_rule}
 5. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
 6. 图片规则：仅当正文页内容与图片的画面说明明显相关时设置 image_id（必须取自可用图片清单），否则为 null；image_hint 用一句话说明本页希望呈现的画面。不要重复使用同一图片；
-7. 不要虚构材料中没有的事实和数据。"""
+7. 不要虚构材料中没有的事实和数据。
+8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选。
+9. 每页增加 design：job 写读者看完本页应理解的结论，relationship 从
+   none、comparison（对比）、parallel（并列）、grouped（分组）、takeaway（单一结论）中选。
+   流程、时间顺序和层级用相应页型的结构数据表达，不编造关系。确需配图时才写 image_hint，
+   以可观察的场景描述图片用途。不需要图片时设置 design.image_role=none，需要场景证据时
+   设置 design.image_role=evidence。需要保留整个画面时设置 design.image_fit=contain，否则为 crop。
+10. content/summary 页可给 design.regions 设计文字和已选图片区域。
+    每个区域只写 ref、x、y、w、h，坐标是页面宽高的 0 到 1 比例。
+    ref 为 title 或 point:0、point:1 等，每段必须且只出现一次。已有 image_id 时还需 image 区域。
+    标题在 y=0.03~0.18，正文在 y=0.23~0.88，左右至少留 0.055。
+    区域互不重叠，长文留足高度。可选择并排、上下、重点大区配次要小区，
+    不要全篇重复同一种构图。不确定时省略 regions，交给程序按内容布局。"""
+
+
+def template_content_budget(library: list) -> list:
+    """按真实页面尺寸及原字号估算槽位容量。最终仍需排版检查。"""
+    budgets = []
+    for layout in library[:24]:
+        size = layout.get("slide_size") or {}
+        width = (size.get("w") or 12192000) / 12700
+        height = (size.get("h") or 6858000) / 12700
+        slots = []
+        for region in (layout.get("text_regions") or [])[:12]:
+            font = max(9, float(region.get("font_size") or 18))
+            lines = max(1, int(region["h"] * height * .8 / (font * 1.35)))
+            slots.append({"role": region["role"], "font_pt": font,
+                          "max_lines": lines, "suggested_chars": adaptive_design.budget_chars(
+                              region["w"], region["h"], font, width, height)})
+        if slots:
+            budgets.append({"layout": layout["id"], "type": layout.get("detected_type"),
+                            "slots": slots})
+    return budgets
 
 
 def generate_outline(assistant, source_type: str, topic: str, content: str,
@@ -691,7 +729,8 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
                      audience: str = "", scene: str = "",
                      material_names: Optional[List[str]] = None,
                      enforce_exact_count: bool = True,
-                     free_structure: bool = False) -> Dict:
+                     free_structure: bool = False,
+                     template_budget: Optional[list] = None) -> Dict:
     image_list = "\n".join(f"- id={im['id']}；{im['name']}：{im.get('caption') or '（无说明）'}" for im in images) \
         or "（素材库为空）"
     extra = ""
@@ -716,6 +755,17 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
     )
     # 事实约束（provenance）：给出材料清单时，要求每页标注内容依据，
     # 防止模型把旧材料/记忆中的数据当作本次数据
+    if template_budget:
+        prompt += (
+            "\n【已选模板槽位预算】\n" + json.dumps(template_budget, ensure_ascii=False)
+            + "\n每页选择相符的 layout，文字按各槽 suggested_chars 精炼，保留关键事实和数字。"
+            "保持原字号，不要将多栏合并。预算是建议值，最终仍需排版检查。")
+    else:
+        prompt += (
+            "\n【自适应起草预算】标题建议20字以内；单句结论建议40字以内；"
+            "双栏每栏约80字以内；三卡片每卡约45字以内；四宫格每格约35字以内。"
+            "这些是常规16:9页面的起草建议，优先保留关键事实和数字，"
+            "长材料按内容拆页；最终以实际区域尺寸和排版检查为准。")
     names = "、".join(str(n) for n in (material_names or []) if n)
     if names:
         prompt += (
@@ -943,11 +993,22 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
         if t not in PAGE_TYPES:
             t = "content"
         layout = s.get("layout") or ("image_right" if legacy_image or s.get("image_name") else None)
+        design = s.get("design") if isinstance(s.get("design"), dict) else {}
         norm.append({
             "id": s.get("id") or uuid.uuid4().hex[:8],
             "type": t,
             "layout": layout,
             "layout_locked": bool(s.get("layout_locked", False)),
+            "scene": s.get("scene") if isinstance(s.get("scene"), dict) else None,
+            "design": {
+                "job": str(design.get("job") or "")[:120],
+                "relationship": design.get("relationship") if design.get("relationship") in (
+                    "comparison", "parallel", "grouped", "takeaway") else "none",
+                "image_fit": "contain" if design.get("image_fit") == "contain" else "crop",
+                "image_role": design.get("image_role") if design.get("image_role") in (
+                    "none", "evidence") else "auto",
+                "regions": design.get("regions")[:7] if isinstance(design.get("regions"), list) else None,
+            },
             "title": (s.get("title") or "")[:60],
             "subtitle": (s.get("subtitle") or "")[:80],
             "points": [str(p)[:150] for p in (s.get("points") or [])][:6],
@@ -987,6 +1048,11 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
         raise RuntimeError("AI 未生成有效页面，请重试")
     outline["slides"] = norm
     outline["style"] = str(outline.get("style") or "")[:20]
+    spec = outline.get("design_spec")
+    outline["design_spec"] = {
+        "density": "spacious" if isinstance(spec, dict) and spec.get("density") == "spacious"
+        else "balanced",
+    }
     outline.setdefault("title", norm[0]["title"])
     outline.setdefault("subtitle", norm[0].get("subtitle", ""))
     return outline
@@ -1030,7 +1096,8 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
             img = by_name.get(str(s["image_name"]))
         if img and str(img.get("id")) in used_auto_ids:
             img = None
-        if not img and not (s.get("image_id") or s.get("image_name")):
+        if (not img and not (s.get("image_id") or s.get("image_name"))
+                and (s.get("design") or {}).get("image_role") != "none"):
             img = _relevant(str(s.get("image_hint") or s.get("title") or ""))
         if img:
             used_auto_ids.add(str(img.get("id")))
@@ -1294,11 +1361,16 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         _font(r, size, bold, color)
         return tb
 
-    def picture_fit(slide, path, x, y, w, h):
+    def picture_fit(slide, path, x, y, w, h, fit="crop"):
         from PIL import Image
         with Image.open(path) as im:
             iw, ih = im.size
         box_ratio, img_ratio = w / h, iw / ih
+        if fit == "contain":
+            width, height = ((w, int(w / img_ratio)) if img_ratio > box_ratio
+                             else (int(h * img_ratio), h))
+            return slide.shapes.add_picture(
+                path, x + (w - width) // 2, y + (h - height) // 2, width, height)
         pic = slide.shapes.add_picture(path, x, y, w, h)
         if img_ratio > box_ratio:
             crop = (1 - box_ratio / img_ratio) / 2
@@ -1535,7 +1607,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 ix, iy, iw, ih = lx(0.94 - image_width), ly(0.25), lx(image_width), ly(0.54)
                 tx, tw = 0.065, 0.82 - image_width
             rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
-            picture_fit(slide, img["file_path"], ix, iy, iw, ih)
+            picture_fit(slide, img["file_path"], ix, iy, iw, ih,
+                        (s.get("design") or {}).get("image_fit"))
             text(slide, ix, iy + ih + ly(0.012), iw, ly(0.05),
                  f"▲ {img.get('caption') or img['name']}",
                  adaptive_design.TOKENS.caption_pt, False, GRAY, align=PP_ALIGN.CENTER)
@@ -1555,7 +1628,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             y += step
         ix, iy, iw, ih = lx(0.53), ly(0.235), lx(0.43), ly(0.60)
         rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
-        picture_fit(slide, img["file_path"], ix, iy, iw, ih)
+        picture_fit(slide, img["file_path"], ix, iy, iw, ih,
+                    (s.get("design") or {}).get("image_fit"))
         text(slide, ix, iy + ih + ly(0.012), iw, ly(0.045),
              f"▲ {img.get('caption') or img['name']}", 11, False, GRAY, align=PP_ALIGN.CENTER)
         return slide
@@ -1564,8 +1638,10 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         if adaptive:
-            size, rows = adaptive_design.point_rows(s["points"], 0.79,
-                                                   top=0.245, bottom=0.88)
+            spacious = (outline.get("design_spec") or {}).get("density") == "spacious"
+            size, rows = adaptive_design.point_rows(
+                s["points"], 0.79, top=0.245, bottom=0.88,
+                preferred_pt=22 if spacious else adaptive_design.TOKENS.body_pt)
             for index, (point, (y, height)) in enumerate(zip(s["points"], rows), 1):
                 if header_style in {"editorial", "center", "panel"}:
                     if header_style == "panel":
@@ -2122,6 +2198,29 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
              align=PP_ALIGN.CENTER)
         return slide
 
+    def r_scene(s):
+        from app.application.ppt.page_scene import references
+        slide = prs.slides.add_slide(blank)
+        values = references(s)
+        for item in s["scene"]["elements"]:
+            x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
+            if item["ref"] == "image":
+                picture_fit(slide, s["_image"]["file_path"], lx(x), ly(y), lx(w), ly(h),
+                            (s.get("design") or {}).get("image_fit"))
+                continue
+            title = item["ref"] == "title"
+            if title:
+                rect(slide, lx(x), ly(y+h+.007), lx(.11), ly(.006), ACCENT)
+            elif (s.get("design") or {}).get("relationship") in (
+                    "comparison", "parallel", "grouped"):
+                rect(slide, lx(x), ly(y), lx(w), ly(h), LIGHT, round_=True)
+                rect(slide, lx(x), ly(y), lx(.006), ly(h), PRIMARY)
+            inset = 0 if title else .02
+            text(slide, lx(x+inset), ly(y+inset), lx(w-2*inset), ly(h-2*inset),
+                 values[item["ref"]], item["font_pt"], title, DARK,
+                 anchor=MSO_ANCHOR.MIDDLE)
+        return slide
+
     renderers = {"cover": r_cover, "toc": r_toc, "section": r_section, "content": r_content,
                  "data": r_data, "chart": r_chart, "case": r_case, "timeline": r_timeline,
                  "process": r_process, "summary": r_summary, "closing": r_closing}
@@ -2132,17 +2231,24 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     used_layouts: Dict[str, int] = {}
     recent_layouts: List[str] = []
     sec_no = 0
-    for s in slides_list:
+    for scene_index, s in enumerate(slides_list):
         if s.get("type") == "section":
             sec_no += 1
             s["_sec_no"] = sec_no
         chosen = choose_layout(s, layouts, recent=recent_layouts, used=used_layouts)
         s["_layout"] = chosen
+        if adaptive and not s.get("layout_locked"):
+            from app.application.ppt.page_scene import plan
+            scene = plan(s, chosen)
+            s["scene"] = scene
+            outline["slides"][scene_index]["scene"] = scene
         if chosen:
             used_layouts[chosen] = used_layouts.get(chosen, 0) + 1
             recent_layouts = (recent_layouts + [chosen])[-2:]
     for idx, s in enumerate(slides_list, 1):
-        slide = renderers.get(s.get("type"), r_content)(s)
+        slide = (r_scene(s) if adaptive and s.get("scene") and not s.get("layout_locked")
+                 and s.get("type") in ("content", "summary")
+                 else renderers.get(s.get("type"), r_content)(s))
         if s.get("type") in ("content", "toc", "data", "chart", "case", "timeline",
                              "process", "summary"):
             footer(slide, idx, total)

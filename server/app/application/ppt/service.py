@@ -253,6 +253,7 @@ class PPTService:
         clean = self.sanitize_outline(outline, target_count=None,
                                       ensure_toc=False, enforce_bookends=False)
         planned_style = clean.get("style")
+        planned_spec = clean["design_spec"]
         prompt = (
             "你是司法行政机关 PPT 大纲质量检查员。检查并在必要时直接修正大纲。\n"
             "重点检查：页面注水或重复、章节顺序不合理、一页要点过多。"
@@ -281,11 +282,20 @@ class PPTService:
         repaired = data.get("outline")
         if data.get("needs_fix") and isinstance(repaired, dict) and repaired.get("slides"):
             logger.info("[PPT] 大纲自动审查触发修正：%s", "；".join(issues) or "结构质量")
+            prior = {slide["id"]: slide for slide in clean["slides"] if slide.get("id")}
+            for slide in repaired["slides"]:
+                if not isinstance(slide, dict) or not isinstance(slide.get("id"), str):
+                    continue
+                previous = prior.get(slide["id"])
+                if previous and all(slide.get(key) == previous.get(key)
+                                    for key in ("type", "title", "points", "blocks")):
+                    slide.setdefault("design", previous.get("design"))
             clean = self.sanitize_outline(
                 repaired, target_count=None, ensure_toc=False,
                 enforce_bookends=False)
             if not clean.get("style") and planned_style:
                 clean["style"] = planned_style
+            clean["design_spec"] = planned_spec
         if target_count is not None and len(clean.get("slides") or []) != target_count:
             raise RuntimeError(
                 f"AI 页面规划未达到指定的 {target_count} 页，请重试或调整页数要求")
@@ -791,6 +801,11 @@ class PPTService:
 
     def import_template_url(self, body, user: User) -> dict:
         """从在线链接导入 pptx 模板（仅提取版式风格，不保存原始内容）。"""
+        from app.domain.identity.entities import SYSTEM_ADMIN_ROLES
+        if user.role not in SYSTEM_ADMIN_ROLES:
+            raise PermissionDeniedError("仅系统管理员可以导入在线模板")
+        if not settings.PPT_CLOUD_ALLOWED:
+            raise AppError(403, "当前部署已禁止在线模板下载，请上传本地文件")
         try:
             from app.application.knowledge.web_fetcher import fetch_public_bytes
             data = fetch_public_bytes(body.url, max_bytes=50 * 1024 * 1024, timeout=30)
@@ -1141,7 +1156,7 @@ class PPTService:
             # 图片授权范围与配图模式是文档级状态，不属于可编辑的页面内容。
             # 客户端只回传 slides 时若直接整体替换，会丢掉 material_ids，
             # 导出重新渲染时公共图库图片便无法解析，表现为「图没了」。
-            for key in ("material_ids", "image_selection_mode"):
+            for key in ("material_ids", "image_selection_mode", "native_edit"):
                 if key not in payload and key in previous:
                     payload[key] = previous[key]
             normalized = ppt_engine.normalize_outline(
@@ -1180,6 +1195,14 @@ class PPTService:
             source_type=d.source_type, source_content=d.source_content,
             outline=d.outline, theme_id=d.theme_id, template_id=d.template_id,
             status="draft"))
+        source = self.ppt_dir / "native_src" / d.id
+        if source.exists():
+            try:
+                shutil.copytree(source, self.ppt_dir / "native_src" / nd.id)
+            except Exception:
+                self.documents.delete(nd)
+                shutil.rmtree(self.ppt_dir / "native_src" / nd.id, ignore_errors=True)
+                raise
         return {"id": nd.id, "message": "已复制"}
 
     def toggle_doc_favorite(self, doc_id: str, user: User) -> dict:
@@ -1210,6 +1233,7 @@ class PPTService:
         if prev_dir.exists():
             shutil.rmtree(prev_dir, ignore_errors=True)
         (self.ppt_dir / "preview" / (d.id + ".key")).unlink(missing_ok=True)
+        shutil.rmtree(self.ppt_dir / "native_src" / d.id, ignore_errors=True)
         self.documents.delete(d)
         return {"message": "已删除"}
 
@@ -1744,12 +1768,74 @@ class PPTService:
         return {"sufficient": True, "questions": []}
 
     # ================= 大纲 =================
+    def _template_budget(self, template_id: Optional[str], user: User) -> list:
+        if not template_id:
+            return []
+        template = self._get_visible_template(template_id, user)
+        return ppt_engine.template_content_budget(template.layout_library or [])
+
+    def _compact_template_text(self, outline: dict, template: dict) -> dict:
+        """只精简明确选定槽位中的超长文字，一次调用处理整稿。"""
+        budgets = {item["layout"]: item for item in
+                   ppt_engine.template_content_budget(template.get("layout_library") or [])}
+        requests = []
+        for index, slide in enumerate(outline.get("slides") or []):
+            budget = budgets.get(ppt_engine.preferred_layout_id(slide, template.get("layouts") or {}))
+            if not budget:
+                continue
+            slots = budget["slots"]
+            title = next((slot["suggested_chars"] for slot in slots
+                          if slot["role"] == "title"), 60)
+            body = sum(slot["suggested_chars"] for slot in slots if slot["role"] == "body")
+            if len(slide.get("title") or "") > title or (
+                    body and sum(len(p) for p in slide.get("points") or []) > body):
+                requests.append({"index": index, "title": slide.get("title") or "",
+                                 "points": slide.get("points") or [],
+                                 "title_budget": title, "body_budget": body})
+        if not requests:
+            return outline
+        try:
+            raw = self._ppt_assistant().complete([{"role": "user", "content":
+                "将以下幻灯片文字精简到槽位预算以内。保留全部数字、事实、专名和要点顺序，"
+                "每条要点对应一条，不增加事实。不修改任何其他字段。仅输出 JSON "
+                '{"pages":[{"index":0,"title":"标题","points":["精简后的要点"]}]}。'
+                "\n" + _json.dumps(requests, ensure_ascii=False)}],
+                temperature=0.1, max_tokens=3000)
+            result = _parse_json_object(raw) or {}
+            clean = copy.deepcopy(outline)
+            originals = {item["index"]: item for item in requests}
+            for page in result.get("pages") or []:
+                if not isinstance(page, dict) or type(page.get("index")) is not int:
+                    continue
+                original = originals.get(page["index"])
+                if not original or not isinstance(page.get("title"), str):
+                    continue
+                points = page.get("points")
+                if not isinstance(points, list) or len(points) != len(original["points"]):
+                    continue
+                if not all(isinstance(p, str) and p.strip() for p in points):
+                    continue
+                if len(page["title"]) > original["title_budget"] or (
+                        original["body_budget"] and sum(map(len, points)) > original["body_budget"]):
+                    continue
+                before = [original["title"], *original["points"]]
+                after = [page["title"], *points]
+                if any(re.findall(r"\d+(?:[.,]\d+)*%?", a) !=
+                       re.findall(r"\d+(?:[.,]\d+)*%?", b) for a, b in zip(before, after)):
+                    continue
+                clean["slides"][page["index"]].update(title=page["title"], points=points)
+            return clean
+        except Exception as exc:
+            logger.warning("模板文字精简未完成，保留原文进入排版检查：%s", type(exc).__name__)
+            return outline
+
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
                     material_names: Optional[List[str]] = None,
                     material_ids: Optional[List[str]] = None,
                     auto_images: bool = True,
                     theme_id: Optional[str] = None,
+                    template_id: Optional[str] = None,
                     kb_ids: Optional[List[str]] = None,
                     enforce_exact_count: bool = True) -> dict:
         content, material_names = self._apply_kb_material(
@@ -1762,13 +1848,15 @@ class PPTService:
         target_count = self._effective_slide_count(
             slide_count, enforce_exact_count, content)
         images = self._outline_images(user.id, material_ids, auto_images, topic, content)
+        budget = self._template_budget(template_id, user)
         try:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
                 target_count, audience, scene,
                 material_names=material_names,
                 # 未填页数时仅给建议，由模型按材料决定实际页数。
-                enforce_exact_count=enforce_exact_count, free_structure=True)
+                enforce_exact_count=enforce_exact_count, free_structure=True,
+                template_budget=budget)
             outline = self._audit_and_repair_outline(
                 outline, target_count if enforce_exact_count else None, content)
             # 大纲阶段自动为适合图示的页面挂接 drawio 原生图示（固化进 blocks.drawio_xml，
@@ -1781,6 +1869,7 @@ class PPTService:
             raise AIServiceError(str(e))
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
+            template_id=template_id,
             subtitle=outline.get("subtitle", ""), source_type=source_type,
             # 后续 PPTAgent 必须能看到真实材料；topic 不能覆盖 material content。
             source_content=(content or topic or "")[:8000],
@@ -1800,6 +1889,7 @@ class PPTService:
                                 material_ids=body.material_ids,
                                 auto_images=body.auto_images,
                                 theme_id=body.theme_id,
+                                template_id=body.template_id,
                                 kb_ids=getattr(body, "kb_ids", None),
                                 enforce_exact_count=explicit_count)
 
@@ -1840,7 +1930,8 @@ class PPTService:
                 self._ppt_assistant(), body.source_type, body.topic, content,
                 images, target_count, body.audience, body.scene,
                 material_names=material_names,
-                enforce_exact_count=explicit_count, free_structure=True)
+                enforce_exact_count=explicit_count, free_structure=True,
+                template_budget=self._template_budget(body.template_id, user))
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
             outline = self._audit_and_repair_outline(
                 outline, target_count if explicit_count else None, content)
@@ -1870,6 +1961,7 @@ class PPTService:
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=body.source_type,
+            template_id=body.template_id,
             source_content=(content or body.topic or "")[:8000],
             theme_id=(body.theme_id if ppt_engine.builtin_template(body.theme_id) else None)
             or ppt_engine.pick_builtin_template(
@@ -1900,16 +1992,46 @@ class PPTService:
         if not zipfile.is_zipfile(io.BytesIO(data)):
             raise AppError(400, "文件损坏或不是有效的 .pptx 文件")
         try:
-            outline = ppt_engine.outline_from_pptx(data)
-        except RuntimeError as e:
+            from app.application.ppt import native_edit
+            outline, manifest = native_edit.read_source(data)
+            outline["native_edit"] = True
+        except Exception as e:
             raise AppError(400, str(e))
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "导入的PPT"),
             subtitle=outline.get("subtitle", ""), source_type="import",
             source_content=(file.filename or "")[:200], outline=outline, status="draft"))
+        folder = self.ppt_dir / "native_src" / d.id
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "source.pptx").write_bytes(data)
+            (folder / "manifest.json").write_text(
+                _json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            self.documents.delete(d)
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
         return {"doc_id": d.id, "outline": outline,
                 "message": f"已导入「{file.filename}」，共 {len(outline.get('slides') or [])} 页，"
-                           "可逐页编辑或让 AI 修改"}
+                           "可修改原页面文字，保留图片、图表和版式"}
+
+    def _render_native_import(self, d: PPTDocument, outline: dict) -> Optional[bytes]:
+        # 该方法位于所有渲染路径的最前面；部分调用方传入的是轻量文档替身，
+        # 不能假设一定带 source_type / outline。非导入文档直接短路返回。
+        outline_native = bool((getattr(d, "outline", None) or {}).get("native_edit"))
+        folder = None
+        if getattr(d, "source_type", "") == "import":
+            folder = self.ppt_dir / "native_src" / d.id
+        if folder is None or not folder.exists():
+            if outline_native:
+                raise AppError(422, "原始 PPT 文件缺失，请重新导入后编辑")
+            return None
+        from app.application.ppt import native_edit
+        try:
+            manifest = _json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+            return native_edit.render((folder / "source.pptx").read_bytes(), manifest, outline)
+        except (ValueError, OSError) as exc:
+            raise AppError(422, str(exc)) from exc
 
     def _resolve_template(self, template_id: Optional[str],
                           fallback_theme: str = "") -> Tuple[Dict, Optional[PPTTemplate]]:
@@ -1954,11 +2076,14 @@ class PPTService:
         Returns:
             (pptx 字节, 渲染来源 ``"pptagent"`` / ``"local"``)
         """
+        native = self._render_native_import(d, outline)
+        if native is not None:
+            return native, "native_edit"
         def local_render() -> bytes:
             """未选模板时按内容排版并复检；显式模板保持原样。"""
             if adaptive:
                 data, adjusted = self._render_with_feedback(
-                    outline, template, warnings=warnings)
+                    outline, template, warnings=warnings, assistant=self._ppt_assistant())
                 outline.clear()
                 outline.update(adjusted)
                 return data
@@ -2039,6 +2164,7 @@ class PPTService:
         clean = ppt_engine.resolve_slide_images(
             clean, self._user_images(user_id, selected_ids, strict=False))
         base = self._tpl_base_bytes(trow)
+        clean = self._compact_template_text(clean, template)
         logger.info(
             "[PPT] 严格套模板渲染：doc_id=%s template=%s learned_base=%s pages=%d",
             d.id,
@@ -2046,7 +2172,9 @@ class PPTService:
             bool(base),
             len(clean.get("slides") or []),
         )
-        return ppt_engine.render_pptx(clean, template, base_pptx=base)
+        data = ppt_engine.render_pptx(clean, template, base_pptx=base)
+        d.outline = clean
+        return data
 
     def render_local_pptx(self, d: PPTDocument, outline: dict, user_id: str) -> bytes:
         """显式模板走固定版式；自由生成按内容选择并复检版式。"""
@@ -2057,13 +2185,68 @@ class PPTService:
         return data
 
     @staticmethod
+    def _rewrite_scene_page(slide: dict, issues: list, assistant) -> Optional[dict]:
+        from app.application.ppt import page_scene
+        from app.application.ppt.adaptive_design import budget_chars
+        regions = (slide.get("scene") or {}).get("elements") or []
+        if not regions:
+            # 原文过密可能连合法 scene 都无法生成。用安全的纵排区域给重写提供预算。
+            count = max(1, len(slide.get("points") or []))
+            height = (.60-.035*(count-1))/count
+            regions = [{"ref": "title", "x": .055, "y": .05, "w": .89, "h": .12,
+                        "budget_chars": budget_chars(.89, .12, 28)}]
+            regions.extend({"ref": f"point:{index}", "x": .055,
+                            "y": .245+index*(height+.035), "w": .89, "h": height,
+                            "budget_chars": budget_chars(.85, max(.01, height-.04), 14)}
+                           for index in range(count))
+        prompt = {
+            "title": slide.get("title"), "points": slide.get("points") or [],
+            "regions": regions,
+            "issues": issues[:8],
+        }
+        raw = assistant.complete([{"role": "user", "content":
+            "修复这一页PPT。按每个区域的budget_chars精简原文，保留事实、专名、"
+            "每条数字及要点顺序，不新增推断，不改变标题。可重新安排区域坐标，"
+            "ref为title、point:0等；已有image时必须保留image区域。坐标为0到1，"
+            "边距至少0.055，底部不超过0.88，各区不得重叠。"
+            '只输出JSON {"points":["修改后的原要点"],"regions":[{"ref":"title",'
+            '"x":0.055,"y":0.05,"w":0.89,"h":0.12},...]}。'
+            "\n" + _json.dumps(prompt, ensure_ascii=False)}],
+            temperature=0.1, max_tokens=1800)
+        result = _parse_json_object(raw) or {}
+        points, regions = result.get("points"), result.get("regions")
+        original = slide.get("points") or []
+        if not isinstance(points, list) or len(points) != len(original):
+            return None
+        if not all(isinstance(p, str) and p.strip() and len(p) <= 150 for p in points):
+            return None
+        if any(re.findall(r"\d+(?:[.,]\d+)*%?", a) !=
+               re.findall(r"\d+(?:[.,]\d+)*%?", b) for a, b in zip(original, points)):
+            return None
+        if not isinstance(regions, list):
+            return None
+        # 与 plan() 共用局部修正：轻微越界先平移；偏离过远或坐标非法时放弃模型
+        # 构图、让 plan() 回落到安全布局，但保留已通过数字/条目校验的精简文字。
+        # 否则模型一次坐标给坏，就把整页重写（含有效的措辞压缩）全部作废。
+        # 修正后的坐标写回 design，保证线框预览与实际渲染一致。
+        regions = page_scene.clamp_regions(copy.deepcopy(regions))
+        candidate = copy.deepcopy(slide)
+        candidate["points"] = points
+        candidate["scene"] = None
+        if not page_scene.audit(copy.deepcopy(regions), candidate):
+            regions = None
+        candidate["design"] = {**(candidate.get("design") or {}), "regions": regions}
+        return candidate
+
+    @staticmethod
     def _render_with_feedback(outline: dict, template: Dict,
                               warnings: Optional[List[str]] = None,
-                              vision_review: bool = True) -> Tuple[bytes, dict]:
+                              vision_review: bool = True, assistant=None) -> Tuple[bytes, dict]:
         """针对检测出排版问题的页面试用其他可行版式，保留内容和页数。"""
         from copy import deepcopy
 
         current = deepcopy(outline)
+        rendered = None
         render_warnings: List[str] = []
         data = ppt_engine.render_pptx(current, template, warnings=render_warnings,
                                       adaptive=True)
@@ -2094,6 +2277,8 @@ class PPTService:
                     continue
                 trial = deepcopy(current)
                 trial["slides"][page - 1]["layout"] = layout
+                trial["slides"][page - 1]["design"] = {
+                    **(trial["slides"][page - 1].get("design") or {}), "regions": None}
                 trial_warnings: List[str] = []
                 try:
                     trial_data = ppt_engine.render_pptx(
@@ -2110,21 +2295,107 @@ class PPTService:
                     render_warnings = trial_warnings
                 if best_score == 0:
                     break
+        if vision_review and settings.VISION_MODEL_URL:
+            rendered = PPTService.review_rendered_pages(data)
+            # 视觉模型只提出问题；替代版式由服务端枚举并做几何、视觉双重检查。
+            pages = sorted({issue.get("page") for issue in rendered["issues"]
+                            if type(issue.get("page")) is int
+                            and 0 < issue["page"] <= len(current["slides"])})[:3]
+            trial = deepcopy(current)
+            changed = False
+            for page in pages:
+                slide = trial["slides"][page - 1]
+                if slide.get("layout_locked"):
+                    continue
+                original = ppt_engine.choose_layout(slide, template.get("layouts"))
+                alternative = next((layout for layout in ppt_engine.layout_ids(
+                    slide.get("type") or "content")
+                    if layout != original and ppt_engine.choose_layout(
+                        {**slide, "layout": layout}) == layout), None)
+                if alternative:
+                    slide["layout"] = alternative
+                    slide["design"] = {**(slide.get("design") or {}), "regions": None}
+                    changed = True
+            if changed:
+                try:
+                    trial_warnings = []
+                    trial_data = ppt_engine.render_pptx(
+                        trial, template, warnings=trial_warnings, adaptive=True)
+                    trial_geometry = PPTService.review_pptx_visuals(trial_data)
+                    trial_visual = PPTService.review_rendered_pages(trial_data)
+                    if (trial_visual["status"] not in ("unavailable", "partial")
+                            and rendered["status"] not in ("unavailable", "partial")
+                            and len(trial_visual["issues"]) < len(rendered["issues"])
+                            and score(trial_geometry) <= score(review)):
+                        current, data, review, rendered = (
+                            trial, trial_data, trial_geometry, trial_visual)
+                        render_warnings = trial_warnings
+                except Exception as exc:
+                    logger.warning("视觉定向修复未完成，保留已检查版本：%s", type(exc).__name__)
+        elif vision_review:
+            logger.warning("PPT 视觉复检未执行：未配置视觉模型，仅完成几何检查")
+            if warnings is not None:
+                warnings.append("视觉模型未配置，本次仅完成几何检查，未执行图片视觉复检")
+        problems = list(review.get("issues") or []) + list((rendered or {}).get("issues") or [])
+        repair_pages = sorted({issue.get("page") for issue in problems
+                               if type(issue.get("page")) is int
+                               and 0 < issue["page"] <= len(current["slides"])})
+        attempts = 0
+        for page in repair_pages:
+            slide = current["slides"][page-1]
+            if (assistant is None or attempts >= 2 or slide.get("layout_locked")
+                    or slide.get("type") not in ("content", "summary")):
+                continue
+            attempts += 1
+            try:
+                candidate = PPTService._rewrite_scene_page(
+                    slide, [issue for issue in problems if issue.get("page") == page], assistant)
+                if candidate is None:
+                    continue
+                trial = deepcopy(current)
+                trial["slides"][page-1] = candidate
+                trial_warnings = []
+                trial_data = ppt_engine.render_pptx(trial, template, warnings=trial_warnings,
+                                                   adaptive=True)
+                trial_review = PPTService.review_pptx_visuals(trial_data)
+                improved = score(trial_review) < score(review)
+                trial_visual = rendered
+                # 视觉复检只有完整时才做双评分。模型超时/部分页失败时退回几何
+                # 评分，否则「配了 VISION 但复检不完整」会比「完全没配」更差：
+                # 重写明明变好却因 complete=False 被全部否决，还白调一次 35B。
+                if (rendered is not None
+                        and rendered["status"] not in ("unavailable", "partial")):
+                    trial_visual = PPTService.review_rendered_pages(trial_data)
+                    if trial_visual["status"] not in ("unavailable", "partial"):
+                        improved = score(trial_review) <= score(review) and (
+                            len(trial_visual["issues"]) < len(rendered["issues"]) or (
+                                improved and len(trial_visual["issues"]) <= len(rendered["issues"])))
+                if improved:
+                    if trial_visual is rendered and rendered is not None:
+                        # 此次仅按几何采纳重写；旧稿对该页的视觉结论不再有效。
+                        # 其他页面没有变化，保留它们已发现的问题。
+                        remaining = [issue for issue in rendered.get("issues") or []
+                                     if issue.get("page") != page]
+                        checked = max(
+                            len({issue.get("page") for issue in remaining}),
+                            max(0, rendered.get("pages_checked", 0) - 1))
+                        trial_visual = {**rendered, "issues": remaining,
+                                        "pages_checked": checked,
+                                        "status": "partial" if checked else "unavailable",
+                                        "reason": "重写页面尚未完成视觉复检"}
+                    current, data, review, rendered = trial, trial_data, trial_review, trial_visual
+                    render_warnings = trial_warnings
+            except Exception as exc:
+                logger.warning("问题页重写未采用：page=%s error=%s", page, type(exc).__name__)
         if warnings is not None:
+            if rendered is not None:
+                warnings.extend(f"第{i['page']}页：{i['message']}" for i in rendered["issues"])
+                if rendered["status"] in ("unavailable", "partial"):
+                    warnings.append("实际页面视觉复检未全部完成，请查看逐页预览")
             warnings.extend(render_warnings)
             warnings.extend(
                 f"第{issue['page']}页：{issue['message']}" for issue in review.get("issues") or []
                 if issue.get("page", 0) > 0)
-        if vision_review and settings.VISION_MODEL_URL:
-            rendered = PPTService.review_rendered_pages(data)
-            findings = [f"第{issue['page']}页：{issue['message']}"
-                        for issue in rendered["issues"]]
-            if warnings is not None:
-                warnings.extend(findings)
-                if rendered["status"] in ("unavailable", "partial"):
-                    warnings.append("实际页面视觉复检未全部完成，请查看逐页预览")
-            for finding in findings:
-                logger.warning("[PPT] 视觉复检发现问题：%s", finding)
         return data, current
 
     def render_adaptive_pptx(self, d: PPTDocument, outline: dict,
@@ -2132,6 +2403,9 @@ class PPTService:
                              warnings: Optional[List[str]] = None,
                              vision_review: bool = True) -> Tuple[bytes, dict]:
         """自由生成使用主题配色；只在用户显式选模板时加载模板底稿。"""
+        native = self._render_native_import(d, outline)
+        if native is not None:
+            return native, outline
         template, _ = self._resolve_template(None, d.theme_id or "")
         clean = self.sanitize_outline(
             outline, target_count=len((outline or {}).get("slides") or []) or None,
@@ -2140,7 +2414,26 @@ class PPTService:
         clean = ppt_engine.resolve_slide_images(
             clean, self._user_images(user_id, selected_ids, strict=False))
         return self._render_with_feedback(clean, template, warnings,
-                                          vision_review=vision_review)
+                                          vision_review=vision_review,
+                                          assistant=self._ppt_assistant())
+
+    def scene_preview(self, doc_id: str, page: int, user: User) -> str:
+        from app.application.ppt import page_scene
+        document = self._get_doc_checked(doc_id, user)
+        slides = (document.outline or {}).get("slides") or []
+        if not 1 <= page <= len(slides):
+            raise NotFoundError("页面不存在")
+        if document.template_id or (document.outline or {}).get("native_edit"):
+            raise AppError(422, "此文档使用原模板版式，请查看真实页面预览")
+        slide = copy.deepcopy(slides[page-1])
+        resolved = ppt_engine.resolve_slide_images(
+            {"slides": [slide]}, self._user_images(
+                user.id, (document.outline or {}).get("material_ids"), strict=False))
+        slide = resolved["slides"][0]
+        scene = page_scene.plan(slide, ppt_engine.choose_layout(slide))
+        if not scene:
+            raise AppError(422, "该页尚无可用的构图描述，请查看真实页面预览")
+        return page_scene.wireframe(scene, slide)
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str],
@@ -2151,7 +2444,11 @@ class PPTService:
         用户在确认页明确把目录改成正文时不重新强制补目录。
         """
         target = len((outline or {}).get("slides") or []) or None
+        if (d.outline or {}).get("native_edit"):
+            target = None
         selected_template_id = template_id or d.template_id
+        if (d.outline or {}).get("native_edit") and selected_template_id:
+            raise AppError(422, "保留原版式编辑请使用原文件版式")
         outline = self.sanitize_outline(
             outline, target_count=target, ensure_toc=False,
             enforce_bookends=bool(selected_template_id))
@@ -2160,6 +2457,8 @@ class PPTService:
         if selected_template_id:
             self._get_visible_template(selected_template_id, user)
         template, trow = self._resolve_template(selected_template_id, d.theme_id or "")
+        if selected_template_id:
+            outline = self._compact_template_text(outline, template)
         selected_ids = outline.get("material_ids")
         available = self._user_images(user.id, selected_ids, strict=False)
         resolved_ids = {str(item["id"]) for item in available}
@@ -2182,6 +2481,10 @@ class PPTService:
         review = self.review_pptx_visuals(data)
         hard = [issue for issue in review.get("issues") or []
                 if issue.get("severity") == "error"]
+        if renderer == "native_edit":
+            original = (self.ppt_dir / "native_src" / d.id / "source.pptx").read_bytes()
+            existing = self.review_pptx_visuals(original).get("issues") or []
+            hard = [issue for issue in hard if issue not in existing]
         if hard and selected_template_id:
             # A purchased layout can still fail on unusual real content after
             # its per-page checks. Keep the selected color system, render a
@@ -2377,7 +2680,12 @@ class PPTService:
                 "base_url": cfg["base_url"], "mode": cfg["mode"],
                 "template_id": cfg["template_id"]}
 
-    def put_cloud_config(self, body) -> dict:
+    def put_cloud_config(self, body, user: User) -> dict:
+        from app.domain.identity.entities import SYSTEM_ADMIN_ROLES
+        if user.role not in SYSTEM_ADMIN_ROLES:
+            raise PermissionDeniedError("仅系统管理员可以修改云生成配置")
+        if body.enabled and not settings.PPT_CLOUD_ALLOWED:
+            raise AppError(403, "当前部署已禁止云端生成")
         cfg = self._load_cloud()
         cfg.update(body.dict())
         if not body.api_key:          # 留空表示不修改已有 Key
@@ -2400,6 +2708,8 @@ class PPTService:
 
     def generate_cloud(self, body, user: User) -> dict:
         """调用阿里云 qwen-doc-turbo PPT skill 生成 PPTX（内容会出网，仅限脱敏材料）。"""
+        if not settings.PPT_CLOUD_ALLOWED:
+            raise AppError(403, "当前部署已禁止云端生成")
         import requests as _req
 
         cfg = self._load_cloud()

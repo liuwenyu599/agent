@@ -302,6 +302,17 @@ def visual_review_document(doc_id: str,
     return svc.visual_review_document(doc_id, user)
 
 
+@router.get("/documents/{doc_id}/pages/{page}/scene.svg")
+def scene_preview(doc_id: str, page: int,
+                  user: User = Depends(get_current_user),
+                  svc: PPTService = Depends(get_ppt_service)):
+    from fastapi.responses import Response
+    return Response(svc.scene_preview(doc_id, page, user),
+                    media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store",
+                             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+
+
 @router.post("/documents/{doc_id}/copy")
 def copy_document(doc_id: str, user: User = Depends(get_current_user),
                 svc: PPTService = Depends(get_ppt_service)):
@@ -485,7 +496,7 @@ def get_cloud_config(user: User = Depends(get_current_user),
 def put_cloud_config(body: CloudCfgIn,
                      user: User = Depends(get_current_user),
                      svc: PPTService = Depends(get_ppt_service)):
-    return svc.put_cloud_config(body)
+    return svc.put_cloud_config(body, user)
 
 
 @router.post("/generate-cloud")

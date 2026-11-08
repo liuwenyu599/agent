@@ -38,6 +38,7 @@ class ImageCaptionIn(BaseModel):
 
 
 class OutlineIn(BaseModel):
+    template_id: Optional[str] = None
     source_type: str = "topic"          # topic / text / document / kb
     topic: str = ""
     content: str = ""

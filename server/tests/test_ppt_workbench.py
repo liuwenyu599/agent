@@ -862,9 +862,9 @@ def test_import_pptx_parses_editable_outline(client, accounts, fake_llm):
     assert "已导入" in body["message"]
     outline = body["outline"]
     slides = outline["slides"]
-    # normalize_outline 保证首封面、尾结束页
-    assert slides[0]["type"] == "cover"
-    assert slides[-1]["type"] == "closing"
+    # 成品导入保留原页面，不额外插入封面或结束页。
+    assert len(slides) == 2
+    assert outline["native_edit"] is True
     titles = " ".join(s["title"] for s in slides)
     assert "行政复议工作汇报" in titles
     assert "一季度案件办理情况" in titles
@@ -883,6 +883,19 @@ def test_import_pptx_parses_editable_outline(client, accounts, fake_llm):
     assert got.status_code == 200, got.text
     assert len(got.json()["outline"]["slides"]) == len(slides)
 
+    outline["slides"][0]["title"] = "行政复议办理工作汇报"
+    generated = client.post(f"{BASE}/ppt/generate", json={
+        "doc_id": doc_id, "outline": outline}, headers=_hdr(accounts["a"]))
+    assert generated.status_code == 200, generated.text
+    exported = client.get(f"{BASE}/ppt/documents/{doc_id}/download", headers=_hdr(accounts["a"]))
+    assert exported.status_code == 200
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as old, zipfile.ZipFile(io.BytesIO(exported.content)) as new:
+        assert old.namelist() == new.namelist()
+        changed = [name for name in old.namelist() if old.read(name) != new.read(name)]
+        assert changed == ["ppt/slides/slide1.xml"]
+
 
 def test_imported_pptx_appears_in_my_documents(client, accounts, fake_llm):
     data = _make_pptx_bytes([("清单页", ["要点一", "要点二"])])
@@ -897,6 +910,22 @@ def test_imported_pptx_appears_in_my_documents(client, accounts, fake_llm):
 
 
 # ============================================================ 3. outline/stream
+
+
+def test_scene_wireframe_requires_document_owner(client, accounts, fake_llm, outline_payload):
+    fake_llm._responder = lambda messages: json.dumps(outline_payload, ensure_ascii=False)
+    created = client.post(f"{BASE}/ppt/outline", json={
+        "source_type": "topic", "topic": "行政复议工作汇报", "auto_images": False},
+        headers=_hdr(accounts["a"]))
+    assert created.status_code == 200, created.text
+    doc_id = created.json()["doc_id"]
+    url = f"{BASE}/ppt/documents/{doc_id}/pages/2/scene.svg"
+    response = client.get(url, headers=_hdr(accounts["a"]))
+    assert response.status_code == 200, response.text
+    assert "image/svg+xml" in response.headers["content-type"]
+    assert "<svg" in response.text
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=_hdr(accounts["b"])).status_code in (403, 404)
 
 
 def test_outline_stream_requires_login(client):
