@@ -2,8 +2,10 @@ import copy
 import io
 
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.oxml.ns import qn
 
-from app.application.ppt import page_scene, ppt_engine
+from app.application.ppt import page_scene, ppt_engine, visual_primitives as vp
 
 
 def test_scene_uses_valid_model_geometry_and_exports_same_positions():
@@ -75,3 +77,90 @@ def test_far_out_of_bounds_region_uses_safe_layout_instead_of_teleporting():
     assert page_scene.audit(scene["elements"], slide)
     assert scene["elements"][0]["x"] == .055
     assert slide["design"]["regions"][0]["x"] == -1.0
+
+
+# ---------- 视觉原语：渲染与线框共用同一份几何描述 ----------
+
+def _relationship_slide(rel: str, points=("甲项工作稳步推进", "乙项工作持续深化",
+                                          "丙项工作取得突破", "丁项工作形成机制")):
+    slide = {"type": "content", "title": "年度成效", "points": list(points),
+             "design": {"relationship": rel}}
+    scene = page_scene.plan(slide, "content.two_col")
+    assert scene is not None
+    return slide, scene
+
+
+def test_each_relationship_has_a_distinct_visual_language():
+    languages = {}
+    for rel in vp.RELATIONSHIPS:
+        slide, scene = _relationship_slide(rel)
+        kinds = {item["kind"] for item in vp.decorations(scene, slide)}
+        languages[rel] = kinds
+    assert "line" in languages["comparison"]       # 中轴连接符
+    assert "chevron" in languages["parallel"]      # 步骤箭头条
+    assert "oval" in languages["takeaway"]         # 强调圆
+    assert "badge" in languages["grouped"]         # 圆形序号
+    assert "badge" not in languages["none"]        # 克制版式不铺卡片/序号
+    assert len({frozenset(kinds) for kinds in languages.values()}) == 5
+
+
+def test_circular_decorations_are_visually_round_in_16_9():
+    for rel in vp.RELATIONSHIPS:
+        slide, scene = _relationship_slide(rel)
+        for item in vp.decorations(scene, slide):
+            if item["kind"] in ("badge", "oval"):
+                assert abs(item["w"] * 960 - item["h"] * 540) < .6, (rel, item)
+
+
+def test_all_decorations_stay_inside_the_safe_area():
+    for rel in vp.RELATIONSHIPS:
+        slide, scene = _relationship_slide(rel)
+        for item in vp.decorations(scene, slide):
+            if item["kind"] == "line":
+                assert all(0 <= item[k] <= 1 for k in ("x1", "y1", "x2", "y2"))
+                continue
+            assert item["x"] >= vp.SAFE_X - 1e-9
+            assert item["y"] >= vp.SAFE_Y - 1e-9
+            assert item["x"] + item["w"] <= vp.SAFE_R + 1e-9
+            assert item["y"] + item["h"] <= vp.SAFE_B + 1e-9
+
+
+def test_wireframe_mirrors_every_decoration_kind():
+    slide, scene = _relationship_slide("parallel")
+    items = vp.decorations(scene, slide)
+    svg = page_scene.wireframe(scene, slide)
+    assert svg.count("<polygon") == sum(i["kind"] == "chevron" for i in items)
+    assert svg.count("<circle") == sum(i["kind"] == "badge" for i in items)
+    assert svg.count("<line ") == sum(i["kind"] == "line" for i in items)
+    assert svg.count("<defs>") == sum(i["kind"] == "gradient" for i in items)
+    assert "stroke-dasharray" in svg  # 区域轮廓仍在，文字摘录不被装饰吞掉
+
+
+def test_wireframe_accepts_document_theme_colors():
+    slide, scene = _relationship_slide("none")
+    svg = page_scene.wireframe(scene, slide,
+                               colors={"primary": "#C00000", "accent": "#E8B54D"})
+    assert "#C00000" in svg
+    assert "#E8B54D" in svg
+
+
+def test_render_adds_native_primitives_without_losing_text():
+    slide, _ = _relationship_slide("comparison", points=("法治政府建设持续深化",
+                                                          "普惠法律服务覆盖面扩大"))
+    outline = {"slides": [slide]}
+    spec = ppt_engine.template_to_dict(ppt_engine.builtin_template("publicity_cyan"))
+    data = ppt_engine.render_pptx(outline, spec, adaptive=True)
+    prs = Presentation(io.BytesIO(data))
+    shapes = list(prs.slides[0].shapes)
+    texts = [s.text for s in shapes if s.has_text_frame and s.text.strip()]
+    assert all(any(point in t for t in texts) for point in slide["points"])
+    assert any(s.shape_type == MSO_SHAPE_TYPE.LINE for s in shapes)  # 原生连接符
+    assert any(s._element.spPr.find(qn("a:gradFill")) is not None
+               for s in shapes if hasattr(s._element, "spPr"))       # 原生渐变
+    # 装饰必须先于文字，否则几何审计会判 TEXT_HIDDEN
+    badge_idx = next(i for i, s in enumerate(shapes)
+                     if s.has_text_frame and s.text.strip() in ("1", "2"))
+    body_idx = next(i for i, s in enumerate(shapes)
+                    if s.shape_type == MSO_SHAPE_TYPE.TEXT_BOX
+                    and s.text.strip() in slide["points"])
+    assert badge_idx < body_idx

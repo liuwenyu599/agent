@@ -693,7 +693,10 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选。
 9. 每页增加 design：job 写读者看完本页应理解的结论，relationship 从
    none、comparison（对比）、parallel（并列）、grouped（分组）、takeaway（单一结论）中选。
-   流程、时间顺序和层级用相应页型的结构数据表达，不编造关系。确需配图时才写 image_hint，
+   该字段决定整页视觉语言：comparison 左右对照中轴、parallel 圆形序号与步骤箭头、
+   grouped 分组色带、takeaway 单一结论强调圆、none 克制留白。按内容真实关系选，
+   不要为了页面变化乱选；流程、时间顺序和层级用相应页型的结构数据表达，不编造关系。
+   确需配图时才写 image_hint，
    以可观察的场景描述图片用途。不需要图片时设置 design.image_role=none，需要场景证据时
    设置 design.image_role=evidence。需要保留整个画面时设置 design.image_fit=contain，否则为 crop。
 10. content/summary 页可给 design.regions 设计文字和已选图片区域。
@@ -1379,6 +1382,75 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             crop = (1 - img_ratio / box_ratio) / 2
             pic.crop_top = pic.crop_bottom = crop
         return pic
+
+    def grad_fill(shape, c1, c2):
+        """真正的 DrawingML 渐变填充（python-pptx 只暴露纯色 API）。"""
+        spPr = shape._element.spPr
+        make = spPr.makeelement
+        grad = make(qn('a:gradFill'), {})
+        stops = make(qn('a:gsLst'), {})
+        for pos, color in ((0, c1), (100000, c2)):
+            stop = make(qn('a:gs'), {'pos': str(pos)})
+            stop.append(make(qn('a:srgbClr'), {'val': str(color)}))
+            stops.append(stop)
+        grad.append(stops)
+        grad.append(make(qn('a:lin'), {'ang': '0', 'scaled': '1'}))
+        solid = spPr.find(qn('a:solidFill'))
+        if solid is not None:
+            spPr.remove(solid)
+        geom = spPr.find(qn('a:prstGeom'))
+        if geom is None:
+            geom = spPr.find(qn('a:custGeom'))
+        insert_at = list(spPr).index(geom) + 1 if geom is not None else 0
+        spPr.insert(insert_at, grad)
+
+    def draw_decorations(slide, scene, s):
+        """渲染共享的视觉原语层：必须早于文字，避免审计判 TEXT_HIDDEN。"""
+        from pptx.enum.shapes import MSO_CONNECTOR
+        from app.application.ppt.visual_primitives import decorations
+
+        palette = {"primary": PRIMARY, "accent": ACCENT, "light": LIGHT,
+                   "dark": DARK, "white": WHITE, "line": LINE}
+        for d in decorations(scene, s):
+            kind = d["kind"]
+            if kind == "line":
+                conn = slide.shapes.add_connector(
+                    MSO_CONNECTOR.STRAIGHT, lx(d["x1"]), ly(d["y1"]),
+                    lx(d["x2"]), ly(d["y2"]))
+                conn.line.color.rgb = palette.get(d.get("stroke"), LINE)
+                conn.line.width = Pt(d.get("width", 1.2))
+                continue
+            color = palette.get(d.get("fill"), LIGHT)
+            if kind in ("rect", "gradient"):
+                shp = rect(slide, lx(d["x"]), ly(d["y"]), lx(d["w"]), ly(d["h"]),
+                           color, round_=d.get("radius", False),
+                           alpha=d.get("alpha") if kind == "rect" else None)
+                if kind == "gradient":
+                    grad_fill(shp, palette.get(d["from"], PRIMARY),
+                              palette.get(d["to"], ACCENT))
+                continue
+            if kind not in ("oval", "chevron", "badge"):
+                continue
+            shp = slide.shapes.add_shape(
+                MSO_SHAPE.OVAL if kind != "chevron" else MSO_SHAPE.CHEVRON,
+                lx(d["x"]), ly(d["y"]), lx(d["w"]), ly(d["h"]))
+            shp.fill.solid()
+            shp.fill.fore_color.rgb = color
+            shp.line.fill.background()
+            shp.shadow.inherit = False
+            if d.get("alpha") is not None and kind != "badge":
+                _alpha(shp, d["alpha"])
+            if kind == "badge":
+                tf = shp.text_frame
+                tf.word_wrap = False
+                tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+                tf.margin_left = tf.margin_right = Emu(0)
+                tf.margin_top = tf.margin_bottom = Emu(0)
+                para = tf.paragraphs[0]
+                para.alignment = PP_ALIGN.CENTER
+                run = para.add_run()
+                run.text = str(d.get("label") or "")
+                _font(run, 10, True, WHITE)
 
     def deco_circles(slide, light_on_dark=True):
         """封面/章节/结束页的装饰圆。"""
@@ -2202,6 +2274,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         from app.application.ppt.page_scene import references
         slide = prs.slides.add_slide(blank)
         values = references(s)
+        # 视觉原语与线框预览共用同一份 decorations()；整层先于文字绘制。
+        draw_decorations(slide, s["scene"], s)
         for item in s["scene"]["elements"]:
             x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
             if item["ref"] == "image":
@@ -2209,12 +2283,6 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                             (s.get("design") or {}).get("image_fit"))
                 continue
             title = item["ref"] == "title"
-            if title:
-                rect(slide, lx(x), ly(y+h+.007), lx(.11), ly(.006), ACCENT)
-            elif (s.get("design") or {}).get("relationship") in (
-                    "comparison", "parallel", "grouped"):
-                rect(slide, lx(x), ly(y), lx(w), ly(h), LIGHT, round_=True)
-                rect(slide, lx(x), ly(y), lx(.006), ly(h), PRIMARY)
             inset = 0 if title else .02
             text(slide, lx(x+inset), ly(y+inset), lx(w-2*inset), ly(h-2*inset),
                  values[item["ref"]], item["font_pt"], title, DARK,

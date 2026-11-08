@@ -202,3 +202,5 @@ deliverables/*.html
 deliverables/_header_style_samples/
 # 自适应排版目检样稿（pptx/pdf/逐页 PNG，脚本本身入库）
 deliverables/_adaptive_samples/
+# 视觉原语目检样稿（pptx/pdf/逐页 PNG/SVG，脚本本身入库）
+deliverables/_visual_samples/

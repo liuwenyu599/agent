@@ -130,17 +130,26 @@ def plan(slide: dict, layout: str) -> dict | None:
     return {"version": 1, "source": stamp, "elements": elements}
 
 
-def wireframe(scene: dict, slide: dict) -> str:
-    """Geometry-only preview. Text excerpts are escaped and stay inside their boxes."""
+def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:
+    """Preview drawn from the same decoration list as the exported deck.
+
+    Still a line-frame (not a pixel-perfect design proof), but relationship
+    primitives, connectors, numbered badges and gradient bands are visible and
+    share their geometry with ``r_scene``.
+    """
+    from app.application.ppt import visual_primitives as vp
+
     values = references(slide)
     parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540">',
              '<rect width="960" height="540" fill="white"/>']
+    for item in vp.decorations(scene, slide):
+        parts.append(vp.svg_decoration(item, colors))
     for element in scene["elements"]:
         x, y, w, h = (element[k] * scale for k, scale in
                        (("x", 960), ("y", 540), ("w", 960), ("h", 540)))
         label = escape(element["ref"] + " · " + values[element["ref"]][:16])
         parts.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" '
-                     'fill="#EDF3F5" stroke="#304557"/>')
+                     'fill="none" stroke="#304557" stroke-dasharray="4 3"/>')
         parts.append(f'<svg x="{x}" y="{y}" width="{w}" height="{h}" overflow="hidden">'
                      f'<text x="8" y="20" font-size="14">{label}</text></svg>')
     return "".join(parts) + "</svg>"

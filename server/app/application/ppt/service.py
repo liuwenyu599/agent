@@ -2433,7 +2433,12 @@ class PPTService:
         scene = page_scene.plan(slide, ppt_engine.choose_layout(slide))
         if not scene:
             raise AppError(422, "该页尚无可用的构图描述，请查看真实页面预览")
-        return page_scene.wireframe(scene, slide)
+        # 线框用该文档主题的真实配色，避免预览和成稿颜色对不上。
+        theme = ppt_engine.builtin_template(document.theme_id or "gov_report_red") or {}
+        raw = theme.get("colors") or {}
+        colors = {key: f"#{value}" for key, value in raw.items()
+                  if isinstance(value, str) and len(value) == 6}
+        return page_scene.wireframe(scene, slide, colors=colors or None)
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str],
