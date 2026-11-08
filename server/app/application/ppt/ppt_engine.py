@@ -704,7 +704,14 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
     ref 为 title 或 point:0、point:1 等，每段必须且只出现一次。已有 image_id 时还需 image 区域。
     标题在 y=0.03~0.18，正文在 y=0.23~0.88，左右至少留 0.055。
     区域互不重叠，长文留足高度。可选择并排、上下、重点大区配次要小区，
-    不要全篇重复同一种构图。不确定时省略 regions，交给程序按内容布局。"""
+    不要全篇重复同一种构图。不确定时省略 regions，交给程序按内容布局。
+11. content/summary 页还可给 design.visuals 追加 0~6 个无文字装饰图形，
+    让版式与内容关系相配，而不是每页套相同色块。只用主题语义色
+    primary/accent/light/dark/white/line，不输出具体色号或外部素材。
+    形状示例：{{"kind":"rect","x":0.06,"y":0.21,"w":0.4,"h":0.01,"fill":"accent"}}；
+    也可用 oval/chevron，渐变用 from/to，线条用 x1/y1/x2/y2/stroke/width。
+    坐标均为 0~1 的相对位置。正文背后只能用浅色或透明度不高于 20 的深色；
+    图形不能盖住标题或正文，不能添加未经提供的文字。不确定时省略 visuals。"""
 
 
 def template_content_budget(library: list) -> list:
@@ -1011,6 +1018,8 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
                 "image_role": design.get("image_role") if design.get("image_role") in (
                     "none", "evidence") else "auto",
                 "regions": design.get("regions")[:7] if isinstance(design.get("regions"), list) else None,
+                "visuals": design.get("visuals") if (isinstance(design.get("visuals"), list)
+                                                    and len(design["visuals"]) <= 6) else None,
             },
             "title": (s.get("title") or "")[:60],
             "subtitle": (s.get("subtitle") or "")[:80],
@@ -1407,11 +1416,9 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def draw_decorations(slide, scene, s):
         """渲染共享的视觉原语层：必须早于文字，避免审计判 TEXT_HIDDEN。"""
         from pptx.enum.shapes import MSO_CONNECTOR
-        from app.application.ppt.visual_primitives import decorations
-
         palette = {"primary": PRIMARY, "accent": ACCENT, "light": LIGHT,
                    "dark": DARK, "white": WHITE, "line": LINE}
-        for d in decorations(scene, s):
+        for d in scene.get("visuals") or []:
             kind = d["kind"]
             if kind == "line":
                 conn = slide.shapes.add_connector(

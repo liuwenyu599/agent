@@ -82,6 +82,8 @@ def clamp_regions(elements: list) -> list:
 
 
 def plan(slide: dict, layout: str) -> dict | None:
+    from app.application.ppt.visual_primitives import decorations, model_visuals
+
     if slide.get("type") not in ("content", "summary"):
         return None
     points = slide.get("points") or []
@@ -93,15 +95,25 @@ def plan(slide: dict, layout: str) -> dict | None:
         return None
     stamp = signature(slide, layout)
     previous = slide.get("scene")
-    if isinstance(previous, dict) and previous.get("version") == 1 and previous.get("source") == stamp:
+    if isinstance(previous, dict) and previous.get("version") == 2 and previous.get("source") == stamp:
         elements = previous.get("elements")
         if audit(elements, slide):
-            return previous
+            expected = model_visuals(design.get("visuals"), elements)
+            expected = decorations(previous, slide) + (expected or [])
+            if previous.get("visuals") == expected:
+                return previous
+
+    def scene_from(elements: list) -> dict:
+        scene = {"version": 2, "source": stamp, "elements": elements}
+        visuals = model_visuals(design.get("visuals"), elements)
+        scene["visuals"] = decorations(scene, slide) + (visuals or [])
+        return scene
+
     suggested = design.get("regions")
     if isinstance(suggested, list):
         elements = clamp_regions(copy.deepcopy(suggested))
         if audit(elements, slide):
-            return {"version": 1, "source": stamp, "elements": elements}
+            return scene_from(elements)
     elements = [{"ref": "title", "x": .055, "y": .05, "w": .89, "h": .12}]
     n = len(points)
     variant = layout.split(".")[-1]
@@ -119,15 +131,20 @@ def plan(slide: dict, layout: str) -> dict | None:
     span = .72 if variant == "center" else .89
     width = (.48 if image else span - gap*(columns-1)) / columns
     height = (.60 - gap*(rows-1)) / rows
+    top = .245
+    if (design.get("relationship") == "comparison" and n == 2
+            and columns == 2 and not image):
+        # 两项短对照不需要占满正文高度；大空卡会让文字悬在页面中间。
+        height, top = .40, .32
     for index in range(n):
         column, row = index % columns, index // columns
         elements.append({"ref": f"point:{index}", "x": left+column*(width+gap),
-                         "y": .245+row*(height+gap), "w": width, "h": height})
+                         "y": top+row*(height+gap), "w": width, "h": height})
     if image:
         elements.append({"ref": "image", "x": .58, "y": .245, "w": .365, "h": .60})
     if not audit(elements, slide):
         return None
-    return {"version": 1, "source": stamp, "elements": elements}
+    return scene_from(elements)
 
 
 def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:
@@ -137,12 +154,11 @@ def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:
     primitives, connectors, numbered badges and gradient bands are visible and
     share their geometry with ``r_scene``.
     """
-    from app.application.ppt import visual_primitives as vp
-
     values = references(slide)
     parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540">',
              '<rect width="960" height="540" fill="white"/>']
-    for item in vp.decorations(scene, slide):
+    from app.application.ppt import visual_primitives as vp
+    for item in scene.get("visuals") or []:
         parts.append(vp.svg_decoration(item, colors))
     for element in scene["elements"]:
         x, y, w, h = (element[k] * scale for k, scale in

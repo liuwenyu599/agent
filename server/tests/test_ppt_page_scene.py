@@ -19,6 +19,8 @@ def test_scene_uses_valid_model_geometry_and_exports_same_positions():
     spec = ppt_engine.template_to_dict(ppt_engine.builtin_template("public_service_green"))
     data = ppt_engine.render_pptx(outline, spec, adaptive=True)
     scene = slide["scene"]
+    assert scene["version"] == 2
+    assert scene["visuals"] == vp.decorations(scene, slide)
     assert scene["elements"][1]["w"] == .55
     prs = Presentation(io.BytesIO(data))
     shape = next(s for s in prs.slides[0].shapes if s.has_text_frame and s.text == "办理提速")
@@ -30,6 +32,66 @@ def test_scene_uses_valid_model_geometry_and_exports_same_positions():
     slide["points"][0] = "新的办理结果"
     ppt_engine.render_pptx(outline, spec, adaptive=True)
     assert slide["scene"]["source"] != saved["source"]
+
+
+def test_scene_rebuilds_modified_visuals_from_its_design_contract():
+    slide = {"type": "content", "title": "两项工作", "points": ["工作一", "工作二"],
+             "design": {"relationship": "comparison"}}
+    original = page_scene.plan(slide, "content.two_col")
+    assert original["visuals"]
+    slide["scene"] = copy.deepcopy(original)
+    slide["scene"]["visuals"][0]["x"] = -100
+    rebuilt = page_scene.plan(slide, "content.two_col")
+    assert rebuilt["visuals"] == original["visuals"]
+    assert rebuilt["visuals"][0]["x"] >= 0
+
+
+def test_two_item_comparison_uses_content_sized_cards():
+    slide = {"type": "content", "title": "两条主线", "points": ["一", "二"],
+             "design": {"relationship": "comparison"}}
+    scene = page_scene.plan(slide, "content.symmetric")
+    bodies = [item for item in scene["elements"] if item["ref"].startswith("point:")]
+    assert all(item["h"] == .40 and item["y"] == .32 for item in bodies)
+    assert scene["visuals"] == vp.decorations(scene, slide)
+
+
+def test_model_page_visuals_survive_normalization_and_export_as_native_shapes():
+    slide = {"type": "content", "title": "两项工作", "points": ["工作一", "工作二"],
+             "design": {"relationship": "comparison", "visuals": [
+                 {"kind": "rect", "x": .06, "y": .205, "w": .40, "h": .012,
+                  "fill": "accent"},
+                 {"kind": "line", "x1": .5, "y1": .25, "x2": .5, "y2": .78,
+                  "stroke": "line", "width": 1.5}]}}
+    outline = ppt_engine.normalize_outline({"slides": [slide]}, require_bookends=False)
+    spec = ppt_engine.template_to_dict(ppt_engine.builtin_template("publicity_cyan"))
+    data = ppt_engine.render_pptx(outline, spec, adaptive=True)
+    scene = outline["slides"][0]["scene"]
+    assert [item["kind"] for item in scene["visuals"]][-2:] == ["rect", "line"]
+    assert len(scene["visuals"]) > 2  # 模型装饰不会删掉原有的对比版式。
+    assert "<line " in page_scene.wireframe(scene, outline["slides"][0])
+    shapes = list(Presentation(io.BytesIO(data)).slides[0].shapes)
+    assert any(shape.shape_type == MSO_SHAPE_TYPE.LINE for shape in shapes)
+    assert any(shape.has_text_frame and "工作一" in shape.text for shape in shapes)
+
+
+def test_invalid_model_visuals_fall_back_to_safe_page_language():
+    base = {"type": "content", "title": "成果", "points": ["正文"],
+            "design": {"relationship": "takeaway"}}
+    for visuals in (
+        [{"kind": "rect", "x": .05, "y": .25, "w": .8, "h": .5,
+          "fill": "dark"}],  # saturated fill hides body text
+        [{"kind": "image", "x": .1, "y": .2, "w": .2, "h": .2,
+          "src": "https://example.invalid/a.png"}],
+        [{"kind": "rect", "x": -10, "y": .2, "w": .2, "h": .02,
+          "fill": "accent"}],
+        [{"kind": "line", "x1": .2, "y1": .3, "x2": .8, "y2": .7,
+          "stroke": "primary", "width": 2}],  # intersects body copy
+    ):
+        slide = copy.deepcopy(base)
+        slide["design"]["visuals"] = visuals
+        scene = page_scene.plan(slide, "content.statement")
+        assert scene is not None
+        assert scene["visuals"] == vp.decorations(scene, slide)
 
 
 def test_invalid_model_geometry_falls_back_without_losing_text():

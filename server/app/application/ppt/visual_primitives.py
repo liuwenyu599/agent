@@ -10,6 +10,8 @@ the text layer, which keeps the geometry audit's TEXT_HIDDEN check quiet.
 """
 from __future__ import annotations
 
+import math
+
 # 装饰安全区：比 audit() 的文字区略宽，允许贴边色带，但不越出页面。
 SAFE_X, SAFE_Y, SAFE_R, SAFE_B = .030, .020, .970, .900
 
@@ -27,6 +29,79 @@ SVG_PALETTE = {
 }
 
 RELATIONSHIPS = ("none", "comparison", "parallel", "grouped", "takeaway")
+MODEL_KINDS = frozenset({"rect", "oval", "chevron", "gradient", "line"})
+MODEL_COLORS = frozenset(SVG_PALETTE)
+
+
+def model_visuals(proposed: object, elements: list[dict]) -> list[dict] | None:
+    """Accept a small, text-free page design in theme colors; None means use defaults.
+
+    Decorative shapes are drawn behind text. Dark opaque fills may only be thin
+    rules, so a model cannot hide the page's editable wording under a color block.
+    """
+    if not isinstance(proposed, list) or len(proposed) > 6:
+        return None
+    result: list[dict] = []
+    for raw in proposed:
+        if not isinstance(raw, dict) or raw.get("kind") not in MODEL_KINDS:
+            return None
+        kind = raw["kind"]
+        keys = ("x1", "y1", "x2", "y2") if kind == "line" else ("x", "y", "w", "h")
+        coords = [raw.get(key) for key in keys]
+        if any(type(v) not in (int, float) or not math.isfinite(v) for v in coords):
+            return None
+        item = {"kind": kind, **{key: float(raw[key]) for key in keys}}
+        if kind == "line":
+            if (any(not 0 <= item[key] <= 1 for key in keys)
+                    or raw.get("stroke") not in MODEL_COLORS):
+                return None
+            width = raw.get("width", 1.2)
+            if type(width) not in (int, float) or not math.isfinite(width) or not .5 <= width <= 3:
+                return None
+            left, right = sorted((item["x1"], item["x2"]))
+            top, bottom = sorted((item["y1"], item["y2"]))
+            if any(e.get("ref") != "image" and
+                   left <= e["x"] + e["w"] and right >= e["x"] and
+                   top <= e["y"] + e["h"] and bottom >= e["y"]
+                   for e in elements):
+                return None
+            item.update(stroke=raw["stroke"], width=float(width))
+        else:
+            x, y, w, h = (item[key] for key in keys)
+            if (x < SAFE_X or y < SAFE_Y or w < .005 or h < .004
+                    or x + w > SAFE_R or y + h > SAFE_B):
+                return None
+            if kind == "gradient":
+                if raw.get("from") not in MODEL_COLORS or raw.get("to") not in MODEL_COLORS:
+                    return None
+                item.update({"from": raw["from"], "to": raw["to"]})
+            else:
+                if raw.get("fill") not in MODEL_COLORS:
+                    return None
+                item["fill"] = raw["fill"]
+                if kind == "rect":
+                    if type(raw.get("radius", False)) is not bool:
+                        return None
+                    item["radius"] = raw.get("radius", False)
+            alpha = raw.get("alpha", 100)
+            if type(alpha) not in (int, float) or not math.isfinite(alpha) or not 0 <= alpha <= 100:
+                return None
+            if kind != "gradient":
+                item["alpha"] = float(alpha)
+            # A broad saturated shape behind body copy destroys contrast even
+            # when the text geometry itself passes audit().
+            saturated = (kind == "gradient" and
+                         (item["from"] not in ("light", "white") or
+                          item["to"] not in ("light", "white"))) or item.get("fill") in (
+                              "primary", "accent", "dark")
+            if saturated and (kind == "gradient" or alpha > 20) and w > .02 and h > .04:
+                if any(e.get("ref") != "image" and
+                       min(x+w, e["x"]+e["w"])-max(x, e["x"]) > .002 and
+                       min(y+h, e["y"]+e["h"])-max(y, e["y"]) > .002
+                       for e in elements):
+                    return None
+        result.append(item)
+    return result
 
 
 def _clamp(value: float, low: float, high: float) -> float:
