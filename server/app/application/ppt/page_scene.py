@@ -148,6 +148,20 @@ def _compose_points(variant: str, n: int, image: bool,
         # 居中大结论 + 其余要点下方横排；单点时就是整页一句大字。
         if n == 1:
             return [{"ref": "point:0", "x": .14, "y": .30, "w": .72, "h": .38}]
+        if n >= 3:
+            # 三条以上是并列关系，没有主次可分：排成等级一致的竖卡（不再做
+            # 1 大 + n-1 小，那等于凭空造出主次，且字号差违反同级一致）。
+            # 起点 .28、宽度 .84 与 three_cards / icon_grid 都不同，仍是自己的
+            # 几何指纹，不会在选版时撞回网格族。
+            gap = .03
+            if n == 3:
+                w = (.84 - gap * 2) / 3
+                return [{"ref": f"point:{i}", "x": .08 + i * (w + gap),
+                         "y": .28, "w": w, "h": .55} for i in range(3)]
+            w = (.84 - gap) / 2
+            h = (.52 - gap) / 2
+            return [{"ref": f"point:{i}", "x": .08 + (i % 2) * (w + gap),
+                     "y": .28 + (i // 2) * (h + gap), "w": w, "h": h} for i in range(4)]
         rest, gap = n - 1, .03
         w = (.72 - gap * (rest - 1)) / rest
         boxes = [{"ref": "point:0", "x": .14, "y": .27, "w": .72, "h": .28}]
