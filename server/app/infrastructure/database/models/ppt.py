@@ -18,6 +18,8 @@ class PPTTemplateModel(Base, IdMixin):
     builtin_id: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True)
     category: Mapped[str] = mapped_column(String(50), default="工作汇报")
     description: Mapped[Optional[str]] = mapped_column(String(300))
+    sharing_status: Mapped[str] = mapped_column(String(12), nullable=False,
+                                                default="private", server_default="private")
     is_official: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
     colors: Mapped[Optional[dict]] = mapped_column(JSON)

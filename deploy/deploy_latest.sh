@@ -271,9 +271,23 @@ curl -sf http://127.0.0.1:8000/ready  >/dev/null && ok "ready 正常（向量库
 
 # C1 验证 + 迁移版本：一次 python 输出两个可解析标记，避免分别 grep 造成假阴性
 docker exec justice-api python -c "
+import glob as _g
 import sqlalchemy as sa
 from app.infrastructure.database import engine
 from alembic.runtime.migration import MigrationContext
+# 从容器内源码动态算迁移 head，避免把某个历史版本号写死在部署脚本里。
+_rs=set(); _ds=set()
+for _p in _g.glob('/app/app/migrations/versions/*.py'):
+    for _line in open(_p, encoding='utf-8', errors='ignore').read().splitlines():
+        _s = _line.strip()
+        if _s.startswith('down_revision') and '=' in _s:
+            _v = _s.split('=', 1)[1].strip().strip(chr(34) + chr(39))
+            if _v and _v != 'None': _ds.add(_v)
+        elif _s.startswith('revision') and '=' in _s:
+            _v = _s.split('=', 1)[1].strip().strip(chr(34) + chr(39))
+            if _v: _rs.add(_v)
+_heads = sorted(_rs - _ds)
+print('HEAD_REV=' + (_heads[0] if len(_heads) == 1 else 'AMBIGUOUS'))
 with engine.connect() as c:
     cols = sa.inspect(c).get_columns('alembic_version')
     w = [x['type'].length for x in cols if x['name'] == 'version_num']
@@ -284,9 +298,12 @@ with engine.connect() as c:
 if [[ -s /tmp/c1-check.txt ]]; then
   W=$(grep -o 'VERSION_NUM_WIDTH=[^ ]*' /tmp/c1-check.txt | cut -d= -f2)
   R=$(grep -o 'ALEMBIC_REV=[^ ]*' /tmp/c1-check.txt | cut -d= -f2)
-  echo "  version_num 宽度 = ${W:-?}    alembic 版本 = ${R:-?}"
+  H=$(grep -o 'HEAD_REV=[^ ]*' /tmp/c1-check.txt | cut -d= -f2)
+  echo "  version_num 宽度 = ${W:-?}    alembic 版本 = ${R:-?}    源码 head = ${H:-?}"
   [[ "$W" == "255" ]] && ok "C1 版本列已扩宽到 255" || bad "C1 版本列 = ${W:-?}，应为 255（迁移未生效或被回滚）"
-  [[ "$R" == 015_* ]] && ok "迁移已到 015" || bad "alembic 版本 = ${R:-?}，未到 015_widen_alembic_version"
+  [[ -n "$H" && "$H" != "AMBIGUOUS" && "$R" == "$H" ]] \
+    && ok "迁移已到源码 head：$R" \
+    || bad "alembic 版本 = ${R:-?}，源码 head = ${H:-?}；请确认 migrate 容器已成功执行 upgrade"
   [[ -s /tmp/c1-check.err ]] && printf '  (python stderr: %s)\n' "$(head -c 300 /tmp/c1-check.err)"
 else
   bad "无法在容器内查库（/tmp/c1-check.txt 为空）。stderr：$(head -c 300 /tmp/c1-check.err 2>/dev/null)"

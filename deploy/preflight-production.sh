@@ -25,13 +25,51 @@ expect() {
   ok "$key"
 }
 
-expect MODEL_SERVICE_URL "http://10.128.85.133:8003/v1"
+# ---------- 模型链路：按 .env 实际值校验，不再硬编码已退役端口 ----------
+# 旧布局 14B(:8003) / VL-7B(:8002) / DP9B(:8004) / PPTAgent(:7861) 已停用；
+# 文本 / 视觉 / 长文 / PPT 大纲现统一走 35B(:8010)，或留空回退主文本模型。
 expect MODEL_CTX_LIMIT "16384"
-expect VISION_MODEL_URL "http://10.128.85.133:8002/v1"
-expect PPT_MODEL_URL "http://10.128.85.133:8004/v1"
-expect PPT_AGENT_URL "http://10.128.85.133:7861"
-expect PPT_AGENT_SUBMIT_PATH "/gradio_api/call/send_message"
-expect PPT_AGENT_WORKSPACE_DIR "/data/pptagent"
+
+require_url() {
+  local key="$1" actual
+  actual="$(getenvv "$key")"
+  [[ "$actual" =~ ^https?://[^/]+/v1/?$ ]] ||
+    fail "$key 必须是 http(s)://host:port/v1，实际为 '$actual'"
+  ok "$key = $actual"
+}
+require_url MODEL_SERVICE_URL
+# 视觉模型可选：留空不报错，但上传图片不会有自动 caption。
+if [ -n "$(getenvv VISION_MODEL_URL)" ]; then
+  require_url VISION_MODEL_URL
+else
+  echo "[WARN] VISION_MODEL_URL 为空：图片描述/视觉复检会降级，需人工补写 caption"
+fi
+
+if [ -n "$(getenvv PPT_MODEL_URL)" ]; then
+  require_url PPT_MODEL_URL
+  [ -n "$(getenvv PPT_MODEL_NAME)" ] ||
+    fail "PPT_MODEL_URL 非空时必须同时配置 PPT_MODEL_NAME"
+  ok "PPT 大纲使用独立模型"
+else
+  ok "PPT_MODEL_URL 为空：大纲回退主文本模型（35B）"
+fi
+
+case "$(getenvv PPT_AGENT_ENABLED)" in
+  true|TRUE|1|yes|YES) agent_enabled=true ;;
+  *) agent_enabled=false ;;
+esac
+agent_url="$(getenvv PPT_AGENT_URL)"
+if $agent_enabled; then
+  [ -n "$agent_url" ] || fail "PPT_AGENT_ENABLED=true 但 PPT_AGENT_URL 为空"
+  expect PPT_AGENT_SUBMIT_PATH "/gradio_api/call/send_message"
+  expect PPT_AGENT_WORKSPACE_DIR "/data/pptagent"
+  ok "PPTAgent 已启用：$agent_url"
+else
+  # config.py 在开关为 false 时强制忽略该 URL，属于配置残留而非部署阻断。
+  [ -z "$agent_url" ] ||
+    echo "[WARN] PPTAgent 已停用但 PPT_AGENT_URL 仍为 '$agent_url'（运行时会被忽略，建议清理）"
+  ok "PPTAgent 已停用：走本地 render_pptx"
+fi
 
 # ---------- SECRET_KEY 生产强校验（2026-10-03 排障基线） ----------
 secret_key="$(getenvv SECRET_KEY)"
@@ -40,26 +78,34 @@ secret_key="$(getenvv SECRET_KEY)"
   fail "SECRET_KEY 仍使用默认弱密钥，必须在生产 .env 中替换为强随机值"
 ok "SECRET_KEY 已配置且非默认"
 
-[ -d /opt/justice-ppt/workspace ] || fail "缺少 PPTAgent workspace"
-[ -f /opt/justice-ppt/deeppresenter/config.yaml ] || fail "缺少 DeepPresenter config.yaml"
-[ -f /opt/justice-ppt/deeppresenter/mcp.json ] || fail "缺少 DeepPresenter mcp.json"
-[ -f /opt/justice-ppt/cache/lid.176.bin ] || fail "缺少 fasttext 离线模型"
-ok "PPTAgent 配置与缓存"
+# 以下目录/镜像检查只属于已停用的 PPTAgent 独立栈；本地渲染模式下不要求存在。
+if $agent_enabled; then
+  [ -d /opt/justice-ppt/workspace ] || fail "缺少 PPTAgent workspace"
+  [ -f /opt/justice-ppt/deeppresenter/config.yaml ] || fail "缺少 DeepPresenter config.yaml"
+  [ -f /opt/justice-ppt/deeppresenter/mcp.json ] || fail "缺少 DeepPresenter mcp.json"
+  [ -f /opt/justice-ppt/cache/lid.176.bin ] || fail "缺少 fasttext 离线模型"
+  ok "PPTAgent 配置与缓存"
 
-for d in   /home/lcode/Qwen2.5-14B-Instruct   /home/lcode/Qwen2.5-VL-7B-Instruct   /home/lcode/DeepPresenter-9B   /home/lcode/bge-m3
-do
-  [ -d "$d" ] || fail "缺少模型目录: $d"
-done
-ok "模型目录"
+  for d in /home/lcode/DeepPresenter-9B; do
+    [ -d "$d" ] || fail "缺少模型目录: $d"
+  done
+  ok "PPTAgent 模型目录"
+else
+  ok "跳过 PPTAgent 目录检查（本地渲染）"
+fi
 
 free_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
 [ "${free_kb:-0}" -ge 20971520 ] || fail "根分区可用空间不足 20GB"
 ok "磁盘空间 >= 20GB"
 
 cfg="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config)"
-grep -q '/data/pptagent' <<<"$cfg" || fail "compose 未挂载 /data/pptagent"
-grep -q '/opt/justice-ppt/workspace' <<<"$cfg" || fail "compose 未挂载宿主机 PPTAgent workspace"
-ok "compose PPTAgent 挂载"
+if $agent_enabled; then
+  grep -q '/data/pptagent' <<<"$cfg" || fail "compose 未挂载 /data/pptagent"
+  grep -q '/opt/justice-ppt/workspace' <<<"$cfg" || fail "compose 未挂载宿主机 PPTAgent workspace"
+  ok "compose PPTAgent 挂载"
+else
+  ok "compose 配置可解析（本地渲染，不校验 PPTAgent 挂载）"
+fi
 
 grep -q 'max(2, min' "$SOURCE_DIR/server/app/application/ppt/service.py" ||
   fail "源码缺少 2 页下限修复"
@@ -73,8 +119,9 @@ grep -q 'replace(tzinfo=CN_TZ)' "$SOURCE_DIR/server/app/application/ppt/agent_jo
   fail "源码缺少 PPT 预览时区修复"
 ok "关键源码修复"
 
-# ---------- 镜像补丁完整性（2026-09-28 排障基线） ----------
-DELIVERY_IMAGE_DIR="/opt/justice-office/data/delivery-images"
+# ---------- 镜像补丁完整性（仅 PPTAgent 启用时，2026-09-28 排障基线） ----------
+if $agent_enabled; then
+  DELIVERY_IMAGE_DIR="/opt/justice-office/data/delivery-images"
 SANDBOX_IMAGE="deeppresenter-sandbox:latest"
 HOST_IMAGE="deeppresenter-host:latest"
 SANDBOX_RESTORE="$DELIVERY_IMAGE_DIR/sandbox.tar"
@@ -117,16 +164,34 @@ docker run --rm --entrypoint sh "$HOST_IMAGE" -c '
   which unoconv >/dev/null
   test -f /root/.cache/huggingface/hub/models--julien-c--fasttext-language-id/snapshots/master/lid.176.bin
 ' || fail "host 镜像补丁丢失，请从 /opt/justice-office/data/delivery-images/host.tar 恢复"
-ok "host 镜像补丁完整"
+  ok "host 镜像补丁完整"
+else
+  ok "跳过 PPTAgent 镜像补丁检查（本地渲染）"
+fi
 
-for p in 8002 8003 8004; do
-  curl -fsS --max-time 10 "http://127.0.0.1:$p/v1/models" >/dev/null ||
-    fail "模型端口 $p 不可用"
+# ---------- 模型端点可达性：按 .env 实际配置动态探测 ----------
+# 不再硬编码 8002/8003/8004；从各条 *_URL(S) 里取出实参逐个请求 /v1/models。
+model_urls=""
+for key in MODEL_SERVICE_URL MODEL_SERVICE_URLS VISION_MODEL_URL \
+           LONG_FORM_MODEL_URLS PPT_MODEL_URL; do
+  value="$(getenvv "$key")"
+  [ -n "$value" ] && model_urls="$model_urls $(printf '%s' "$value" | tr ',' ' ')"
 done
-code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:7861/ || true)"
-[ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ] ||
-  fail "PPTAgent 7861 不可用，HTTP=$code"
-ok "模型与 PPTAgent"
+for base in $model_urls; do
+  endpoint="${base%/}/models"
+  curl -fsS --max-time 10 "$endpoint" >/dev/null ||
+    fail "模型端点不可用：$endpoint（检查 .env 的 URL 与模型容器状态）"
+done
+[ -n "$model_urls" ] || fail ".env 中没有任何可用的模型端点"
+ok "模型端点可达"
+
+if $agent_enabled; then
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    "${agent_url%/}/" || true)"
+  [ -n "$code" ] && [ "$code" != "000" ] && [ "${code:0:1}" != "5" ] ||
+    fail "PPTAgent 不可用，HTTP=$code"
+  ok "PPTAgent 可达"
+fi
 
 echo
 echo "⚠️ 部署前必须在 Windows 端执行以下两条命令，人工确认客户端行为："

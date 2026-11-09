@@ -20,7 +20,8 @@ def test_material_matching_uses_relevant_caption_and_avoids_unrelated_image():
     resolved = ppt_engine.resolve_slide_images(outline, images)
     assert resolved["slides"][0]["_image"] is None
     assert resolved["slides"][1]["_image"]["id"] == "a"
-    assert resolved["slides"][1]["layout"] == "image_right"
+    assert ppt_engine.choose_layout(resolved["slides"][1]) in {
+        "content.image_right", "content.image_left"}
 
 
 def test_automatic_material_is_not_repeated_on_every_page():

@@ -185,3 +185,108 @@ def test_unfittable_page_falls_back_with_full_content_end_to_end():
     assert LONG_POINT[:12] in all_text and LONG_POINT[-12:] in all_text
     assert "法律顾问全覆盖" in all_text
     assert any("可读版式" in w or "放不下" in w for w in warnings)
+
+
+# --- 中西文字体统一 / 同级模块字号协调 -------------------------------------
+
+def test_apply_cjk_font_writes_all_three_scripts_and_clears_italic():
+    """只写 <a:latin> 时中文仍按 <a:ea> 继承模板宋体、数字落回斜体 Times。"""
+    from pptx.oxml.ns import qn
+    from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font
+
+    prs, blank = _blank_deck()
+    shape = prs.slides.add_slide(blank).shapes.add_textbox(
+        Inches(1), Inches(1), Inches(5), Inches(1))
+    run = shape.text_frame.paragraphs[0].add_run()
+    run.text = "98.5%"
+    run.font.name = "Times New Roman"
+    run.font.italic = True
+    apply_cjk_font(run, DEFAULT_CJK_FONT)
+    r_pr = run._r.get_or_add_rPr()
+    assert run.font.name == DEFAULT_CJK_FONT
+    for tag in ("a:ea", "a:cs"):
+        node = r_pr.find(qn(tag))
+        assert node is not None and node.get("typeface") == DEFAULT_CJK_FONT
+    assert r_pr.get("i") in (None, "0", "false")
+
+
+def test_normalize_theme_font_rejects_latin_and_serif_fonts():
+    from app.core.fonts import DEFAULT_CJK_FONT, normalize_theme_font
+
+    assert normalize_theme_font("Times New Roman") == DEFAULT_CJK_FONT
+    assert normalize_theme_font("Arial") == DEFAULT_CJK_FONT
+    assert normalize_theme_font("SimSun") == DEFAULT_CJK_FONT
+    assert normalize_theme_font("宋体") == DEFAULT_CJK_FONT
+    assert normalize_theme_font("+mj-lt") == DEFAULT_CJK_FONT
+    assert normalize_theme_font(None) == DEFAULT_CJK_FONT
+    assert normalize_theme_font("Noto Sans CJK SC") == "Noto Sans CJK SC"
+    assert normalize_theme_font("微软雅黑") == "微软雅黑"
+
+
+def test_extract_style_does_not_inherit_foreign_theme_font():
+    import re
+    import zipfile
+    from app.core.fonts import DEFAULT_CJK_FONT
+
+    prs, blank = _blank_deck()
+    slide = prs.slides.add_slide(blank)
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1)) \
+        .text_frame.text = "98.5%"
+    buf = io.BytesIO()
+    prs.save(buf)
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zin, \
+            zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if re.match(r"ppt/theme/theme\d+\.xml$", item.filename):
+                data = re.sub(rb'<a:latin typeface="[^"]*"',
+                              b'<a:latin typeface="Times New Roman"', data)
+                data = re.sub(rb'<a:ea typeface="[^"]*"',
+                              b'<a:ea typeface="Times New Roman"', data)
+            zout.writestr(item, data)
+    assert ppt_engine.extract_style_from_pptx(out.getvalue())["font"] == DEFAULT_CJK_FONT
+
+
+def test_peer_point_slots_share_one_larger_font_and_official_typeface():
+    """模板 sibling 槽「一大三小」或全小字：成稿同页同级必须同号，且往大拉齐。"""
+    from pptx.oxml.ns import qn
+    from app.core.fonts import DEFAULT_CJK_FONT
+
+    prs, blank = _blank_deck()
+    slide = prs.slides.add_slide(blank)
+    points = ["坚持政治引领，确保司法行政工作正确方向",
+              "聚焦主责主业，全面提升法治建设水平",
+              "深化改革创新，激发司法行政内生动力",
+              "强化责任担当，为建设法治社会贡献力量"]
+    boxes = []
+    for index, (text, size) in enumerate(zip(points, (26, 16, 16, 16))):
+        col, row = index % 2, index // 2
+        box = slide.shapes.add_textbox(
+            Emu(int(W * (.08 + col * .45))), Emu(int(H * (.30 + row * .30))),
+            Emu(int(W * .38)), Emu(int(H * .20)))
+        box.text_frame.text = "{{point%d}}" % (index + 1)
+        run = box.text_frame.paragraphs[0].runs[0]
+        run.font.size = Pt(size)
+        run.font.name = "Times New Roman"
+        run.font.italic = True
+        boxes.append(box)
+    warnings = []
+    ppt_engine._fill_learned_slide(
+        slide, {"detected_type": "content", "element_schema": []},
+        {"type": "content", "title": "总结与展望", "points": points},
+        ppt_engine.DEFAULT_COLORS, DEFAULT_CJK_FONT,
+        prs.slide_width, prs.slide_height, prs, warnings)
+
+    final_sizes = []
+    for index, box in enumerate(boxes, 1):
+        runs = [r for p in box.text_frame.paragraphs for r in p.runs]
+        assert runs and "".join(r.text for r in runs) == points[index - 1]
+        final_sizes.append(max(r.font.size.pt for r in runs
+                               if r.font.size is not None))
+        r_pr = runs[0]._r.get_or_add_rPr()
+        assert runs[0].font.name == DEFAULT_CJK_FONT
+        assert r_pr.find(qn("a:ea")).get("typeface") == DEFAULT_CJK_FONT
+        assert r_pr.get("i") in (None, "0", "false")
+    assert len(set(final_sizes)) == 1, final_sizes
+    assert final_sizes[0] >= 20, final_sizes

@@ -23,7 +23,7 @@ from app.infrastructure.database.models.ppt import (
     PPTTemplateModel,
 )
 
-_TPL_FIELDS = ["id", "name", "builtin_id", "category", "description", "is_official",
+_TPL_FIELDS = ["id", "name", "builtin_id", "category", "description", "sharing_status", "is_official",
                "created_by", "colors", "font", "layouts", "layout_library",
                "source_file", "license_note", "use_count", "created_at", "updated_at"]
 _MAT_FIELDS = ["id", "user_id", "name", "caption", "file_path", "file_size",
@@ -74,6 +74,9 @@ class SqlAlchemyPPTTemplateRepository(PPTTemplateRepository):
         q = select(PPTTemplateModel)
         if scope == "official":
             q = q.where(PPTTemplateModel.is_official == True)  # noqa: E712
+        elif scope == "pending":
+            q = q.where(PPTTemplateModel.is_official == False,  # noqa: E712
+                        PPTTemplateModel.sharing_status == "pending")
         elif scope == "mine":
             q = q.where(PPTTemplateModel.is_official == False,  # noqa: E712
                         PPTTemplateModel.created_by == user_id)
@@ -101,6 +104,7 @@ class SqlAlchemyPPTTemplateRepository(PPTTemplateRepository):
         m = PPTTemplateModel(
             name=tpl.name, builtin_id=tpl.builtin_id, category=tpl.category,
             description=tpl.description, is_official=tpl.is_official,
+            sharing_status=tpl.sharing_status,
             created_by=tpl.created_by, colors=tpl.colors, font=tpl.font,
             layouts=tpl.layouts, layout_library=tpl.layout_library,
             source_file=tpl.source_file, license_note=tpl.license_note,

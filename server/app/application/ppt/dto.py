@@ -1,5 +1,5 @@
 """PPT 助手 DTO。"""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 from app.core.fonts import DEFAULT_CJK_FONT
@@ -39,6 +39,8 @@ class ImageCaptionIn(BaseModel):
 
 class OutlineIn(BaseModel):
     template_id: Optional[str] = None
+    template_mode: Literal["adaptive", "strict"] = "adaptive"
+    color_override: bool = False
     source_type: str = "topic"          # topic / text / document / kb
     topic: str = ""
     content: str = ""

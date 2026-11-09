@@ -150,8 +150,24 @@ def test_prepare_template_bytes_inserts_tokens_and_drops_empty_pages():
     assert "{{title}}" in texts
     assert "{{subtitle}}" in texts
     assert "{{point1}}" in texts
+    from app.core.fonts import DEFAULT_CJK_FONT
     with zipfile.ZipFile(io.BytesIO(out)) as z:
-        assert "微软雅黑" in z.read("ppt/theme/theme1.xml").decode("utf-8")
+        theme = z.read("ppt/theme/theme1.xml").decode("utf-8")
+        assert DEFAULT_CJK_FONT in theme
+    # run 级：中文/西文/复杂文种同字形，模板的斜体衬线数字不会残留
+    from pptx.oxml.ns import qn
+    for slide in prs2.slides:
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    r_pr = run._r.get_or_add_rPr()
+                    assert run.font.name == DEFAULT_CJK_FONT
+                    for tag in ("a:ea", "a:cs"):
+                        node = r_pr.find(qn(tag))
+                        assert node is not None and node.get("typeface") == DEFAULT_CJK_FONT
+                    assert r_pr.get("i") in (None, "0", "false")
 
     prs3 = Presentation()  # 默认 4:3 → 明确拒绝，不做等比拉伸
     b3 = io.BytesIO()

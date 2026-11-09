@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from app.core.fonts import DEFAULT_CJK_FONT
+from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font, normalize_theme_font
 """智能 PPT 引擎（移植自旧系统 ppt_service，AI 调用改经 WritingAssistant）。
 
 核心设计：内容与版式分离
@@ -325,7 +325,9 @@ LAYOUT_CATALOG: Dict[str, List[Dict[str, Any]]] = {
         {"id": "content.bullets", "label": "编号要点", "min_points": 1, "max_points": 6,
          "weight": 1.0},
         {"id": "content.image_right", "label": "左文右图", "needs_image": True,
-         "min_points": 1, "max_points": 4, "weight": 1.0},
+         "min_points": 1, "max_points": 6, "weight": 1.0},
+        {"id": "content.image_left", "label": "左图右文", "needs_image": True,
+         "min_points": 1, "max_points": 6, "weight": 1.0},
         {"id": "content.two_col", "label": "双栏并列", "min_points": 4, "max_points": 6,
          "weight": 0.9},
         {"id": "content.three_cards", "label": "三卡并列", "min_points": 3, "max_points": 3,
@@ -444,6 +446,9 @@ def _layout_usable(spec: Dict, slide: Dict) -> bool:
         return False
     if spec.get("needs_image") and not _slide_has_image(slide):
         return False
+    if (slide.get("type") == "content" and _slide_has_image(slide)
+            and not spec.get("needs_image")):
+        return False
     blocks = slide.get("blocks") or {}
     need = spec.get("requires")
     if need == "cards" and not (blocks.get("cards") or []):
@@ -469,7 +474,7 @@ def _layout_score(spec: Dict, slide: Dict, recent: List[str], used: Dict[str, in
     total_chars = sum(len(p) for p in points)
     score = float(spec.get("weight", 1.0))
 
-    if _slide_has_image(slide) and sid == "content.image_right":
+    if _slide_has_image(slide) and sid in {"content.image_right", "content.image_left"}:
         score += 2.0                     # 有图不用图等于白配
     if sid == "content.statement":
         score += 1.6 if (n == 1 and total_chars <= 40) else -1.5
@@ -717,7 +722,9 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 def template_content_budget(library: list) -> list:
     """按真实页面尺寸及原字号估算槽位容量。最终仍需排版检查。"""
     budgets = []
-    for layout in library[:24]:
+    usable = [layout for layout in library
+              if (layout.get("qualification") or {}).get("status") != "rejected"]
+    for layout in usable[:24]:
         size = layout.get("slide_size") or {}
         width = (size.get("w") or 12192000) / 12700
         height = (size.get("h") or 6858000) / 12700
@@ -1116,8 +1123,6 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
             s["image_id"] = img["id"]
             s["image_name"] = img["name"]
         s["_image"] = img
-        if img and s.get("type") == "content" and not s.get("layout_locked"):
-            s["layout"] = "image_right"
     return outline
 
 
@@ -1310,17 +1315,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def ly(f): return Emu(int(SH * f))
 
     def _font(run, size, bold=False, color=None):
-        run.font.name = "Arial" if adaptive else FONT
+        # 中西文（含数字）写同一个字体名，避免中文按 <a:ea> 继承模板宋体、
+        # 数字按 <a:latin> 落回 Arial/Times 斜体。
+        apply_cjk_font(run, FONT)
         run.font.size = Pt(size)
         run.font.bold = bold
         if color is not None:
             run.font.color.rgb = color
-        rPr = run._r.get_or_add_rPr()
-        ea = rPr.find(qn('a:ea'))
-        if ea is None:
-            ea = rPr.makeelement(qn('a:ea'), {})
-            rPr.append(ea)
-        ea.set('typeface', FONT)
 
     def _alpha(shape, pct):
         """给形状填充加透明度。pct=剩余不透明度（0~100）。"""
@@ -1667,7 +1668,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             text(slide, lx(0.06), ly(0.44), lx(0.26), ly(0.18), s["title"], 30, True, WHITE)
         return slide
 
-    def _content_image(s):
+    def _content_image(s, side="right"):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         img = s["_image"]
@@ -1683,8 +1684,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             else:
                 image_width = 0.37 if ratio < 0.95 or sum(
                     adaptive_design.text_units(p) for p in points) > 100 else 0.43
-                ix, iy, iw, ih = lx(0.94 - image_width), ly(0.25), lx(image_width), ly(0.54)
-                tx, tw = 0.065, 0.82 - image_width
+                ix, iy, iw, ih = lx(0.055 if side == "left" else 0.94 - image_width), ly(0.25), lx(image_width), ly(0.54)
+                tx, tw = (0.10 + image_width, 0.82 - image_width) if side == "left" else (0.065, 0.82 - image_width)
             rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
             picture_fit(slide, img["file_path"], ix, iy, iw, ih,
                         (s.get("design") or {}).get("image_fit"))
@@ -1905,10 +1906,10 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     def r_content(s):
         v = lay_of(s) or "bullets"
-        if v == "image_right":
+        if v in {"image_right", "image_left"}:
             img = s.get("_image") or {}
             if img.get("file_path"):
-                return _content_image(s)
+                return _content_image(s, "left" if v == "image_left" else "right")
             v = "bullets"
         return {
             "two_col": _content_two_col,
@@ -2328,6 +2329,11 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                              "process", "summary"):
             footer(slide, idx, total)
         notes(slide, s.get("note"))
+        image = s.get("_image") or {}
+        if image.get("file_path"):
+            credit = " · ".join(str(value) for value in
+                                (image.get("credit"), image.get("license_note")) if value)
+            notes(slide, f"图片来源：{credit or image.get('name') or '用户素材'}")
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -2646,13 +2652,13 @@ def extract_style_from_pptx(file_bytes: bytes) -> Dict:
                 dk2 = _clr("dk2", xml)
                 if dk2:
                     colors["dark"] = dk2
+                # 模板主题的字体是原设计者的示例排法，不是本系统的字体约定：
+                # 直接继承会出现「宋体中文 + 斜体 Times 数字」，故只认无衬线
+                # 黑体系，其余统一回退到公文字体（模板中心显式设置不受影响）。
                 m = re.search(r'<a:ea typeface="([^"]+)"', xml)
-                if m and m.group(1):
-                    font = m.group(1)
-                else:
+                if not m or not m.group(1):
                     m = re.search(r'<a:latin typeface="([^"]+)"', xml)
-                    if m and m.group(1) and m.group(1) != "+mj-lt":
-                        font = m.group(1)
+                font = normalize_theme_font(m.group(1) if m else None)
             masters = sorted(n for n in z.namelist()
                              if re.match(r"ppt/slideMasters/slideMaster\d+\.xml$", n))
             for mf in masters:
@@ -3206,7 +3212,7 @@ def analyze_template(file_bytes: bytes) -> Dict:
     return result
 
 
-def validate_learned_template(learned: Dict) -> None:
+def validate_learned_template(learned: Dict, require_content: bool = True) -> None:
     """Reject source decks that cannot hold a title and real page content.
 
     A decorative cover alone is not a reusable content template.  Checking
@@ -3218,7 +3224,7 @@ def validate_learned_template(learned: Dict) -> None:
     page_w, page_h = page_size.get("w", 0), page_size.get("h", 0)
     if not page_w or not page_h or abs(page_w / page_h - 16 / 9) > 0.02:
         raise ValueError("模板须为 16:9 宽屏 PPTX")
-    if not any(layout.get("detected_type") not in {"cover", "toc", "closing"} and
+    if require_content and not any(layout.get("detected_type") not in {"cover", "toc", "closing"} and
                sum(1 for element in (layout.get("element_schema") or [])
                    if element.get("kind") == "text" and
                    element.get("role") != "fixed") >= 2
@@ -3282,6 +3288,8 @@ def _pick_layout(layouts: list, slide_type: str, used: Dict,
     给了 slide 时按容量质量分排序后取最优（并让同档版式轮换），否则退到
     按 fallback 链顺序取（保持旧行为，供无内容信息的调用方使用）。
     """
+    layouts = [layout for layout in layouts
+               if (layout.get("qualification") or {}).get("status") != "rejected"]
     if not layouts:
         return None
 
@@ -4092,6 +4100,59 @@ def _remove_icons_under_text(slide, sw, sh) -> None:
                 break
 
 
+_PEER_BODY_PT = 20   # 同级正文的设计目标字号（与 TOKENS.body_pt 对齐）
+_PEER_MAX_PT = 28    # 不超过标题档，避免把正文槽拉成封面巨字
+_PEER_MIN_PT = 14    # 紧凑档下限，再小就交给可读兜底版式
+
+
+def _harmonize_peer_point_sizes(peers, sw, sh, font) -> bool:
+    """同级要点槽统一字号，且向「饱满的大字」对齐。
+
+    模板的 sibling 槽常按示例短句定字号（四大三小或全小字），填进等长要点后
+    同一页出现明显字号台阶——这不是设计层级，是模板示例文字长度的残留。
+    这里不取最小值把大的缩回去，而是从设计目标字号起，整组一起降到「所有槽
+    都装得下」的最大共同字号；实在装不下就放弃协调，留给后续缩号/降级闸门。
+    """
+    from pptx.util import Pt
+    from app.application.ppt.adaptive_design import fit_font_size
+
+    entries = []
+    for shp, e in peers:
+        if not getattr(shp, "has_text_frame", False):
+            continue
+        text = shp.text_frame.text.strip()
+        runs = [run for para in shp.text_frame.paragraphs for run in para.runs]
+        if not text or not runs:
+            continue
+        w_in = (shp.width or 0) / 914400
+        h_in = (shp.height or 0) / 914400
+        if w_in <= .15 or h_in <= .1:
+            continue
+        current = max((run.font.size.pt for run in runs
+                       if run.font.size is not None), default=0)
+        w_ratio = w_in / (sw / 914400) if sw else w_in / 13.333
+        h_ratio = h_in / (sh / 914400) if sh else h_in / 7.5
+        entries.append((runs, text, current, w_ratio, h_ratio))
+    if len(entries) < 2:
+        return False
+
+    deck_w = sw / 12700 if sw else 960
+    deck_h = sh / 12700 if sh else 540
+    start = min(max(max(item[2] for item in entries), _PEER_BODY_PT),
+                _PEER_MAX_PT)
+    for size in range(int(start), _PEER_MIN_PT - 1, -1):
+        if all(fit_font_size(text, w, h, float(size),
+                             deck_width_pt=deck_w,
+                             deck_height_pt=deck_h) == float(size)
+               for _, text, _, w, h in entries):
+            for runs, *_ in entries:
+                for run in runs:
+                    run.font.size = Pt(size)
+                    apply_cjk_font(run, font)
+            return True
+    return False
+
+
 def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warnings=None):
     """把大纲一页的内容填进克隆出来的模板页：
     - 标题/副标题/正文 → 对应文本区域（示例文字全部替换）
@@ -4210,6 +4271,7 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     available_points = points[consumed:]
     body_index = 0
     last_body_shape = None
+    peer_bodies = []   # 无 token、按位置填进要点的正文槽（同级模块）
     last_point_shape = point_slot_shapes[-1][0] if point_slot_shapes else None
     img_path = (sdata.get("_image") or {}).get("file_path")
     image_drawn = False
@@ -4259,6 +4321,7 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
             if body_index < len(available_points):
                 _fill_text_region(shp, [available_points[body_index]])
                 last_body_shape = shp
+                peer_bodies.append((shp, e))
                 body_index += 1
             elif shp is not last_body_shape:
                 _clear_text(shp)
@@ -4270,6 +4333,22 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     if body_index < len(available_points) and merge_target is not None:
         _append_bullets(merge_target, available_points[body_index:])
         body_index = len(available_points)
+
+    # 模板 run 常自带斜体与外文字体（示例数字尤其明显）：只替换文字会原样
+    # 带进成稿。这里把已填充槽的西文/中文/复杂文种统一成同一个公文字体。
+    for shp, e in texts:
+        if e.get("role") == "fixed" or not getattr(shp, "has_text_frame", False):
+            continue
+        for para in shp.text_frame.paragraphs:
+            for run in para.runs:
+                apply_cjk_font(run, font)
+
+    # 同级模块（pointN 槽 + 按位置填充的并列正文槽）字号统一，向大字拉齐。
+    # 模板示例文字长短不一留下的「一大三小」不是设计层级，不应出现在成稿里。
+    peer_shapes = list(point_slot_shapes) + [
+        item for item in peer_bodies
+        if all(item[0] is not other[0] for other in point_slot_shapes)]
+    _harmonize_peer_point_sizes(peer_shapes, sw, sh, font)
 
     # 填完再按真实文本框收缩字号：模板字号是按示例短句定的，塞进长句会溢出框。
     # 模板 run 常不带显式字号（继承主题/母版），收缩逻辑对这种文本直接跳过——
@@ -4416,7 +4495,7 @@ def _fill_basic_page(slide, sdata: Dict, colors: Dict, font: str, sw: int, sh: i
     title.text = str(sdata.get("title") or "")
     for paragraph in title.text_frame.paragraphs:
         for run in paragraph.runs:
-            run.font.name = font
+            apply_cjk_font(run, font)
             run.font.size = Pt(26)
             run.font.bold = True
             run.font.color.rgb = primary
@@ -4439,7 +4518,7 @@ def _fill_basic_page(slide, sdata: Dict, colors: Dict, font: str, sw: int, sh: i
         box.text = point
         for paragraph in box.text_frame.paragraphs:
             for run in paragraph.runs:
-                run.font.name = font
+                apply_cjk_font(run, font)
                 run.font.size = Pt(12 if rows > 6 or len(point) > 55 else 16)
                 run.font.color.rgb = dark
 
@@ -4492,7 +4571,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
             paragraph.alignment = align
         run = paragraph.add_run()
         run.text = str(value)
-        run.font.name = font
+        apply_cjk_font(run, font)
         run.font.size = Pt(size)
         run.font.bold = bold
         run.font.color.rgb = color
@@ -4545,7 +4624,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         paragraph.alignment = PP_ALIGN.CENTER
         run = paragraph.add_run()
         run.text = str(number)
-        run.font.name = font
+        apply_cjk_font(run, font)
         run.font.size = Pt(size)
         run.font.bold = True
         run.font.color.rgb = white
@@ -4626,34 +4705,38 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         # 双要点：上下两张宽卡，左侧大号圆徽章
         region_top, region_bottom = .36, .85
         card_h = (region_bottom - region_top - .03) / 2
+        # 同级卡片同号：取所有卡都能装下的最大字号，不逐卡缩出大小台阶
+        common_size = min(fit_size(p, .58, card_h - .05, 20) for p in points)
         for index, (point, y) in enumerate(zip(points, (region_top,
                 region_top + card_h + .03)), 1):
             card(.105, y, .79, card_h, tint(primary, .06))
             badge(f"{index:02d}", .135, y + card_h / 2 - .037, .075, primary, 20)
-            size = fit_size(point, .58, card_h - .05, 18)
-            label(point, .245, y + .03, .58, card_h - .06, size, False, dark)
+            label(point, .245, y + .03, .58, card_h - .06, common_size, False, dark)
         return
 
     if count == 3 and longest <= 60:
         # 三要点：三条独立圆角色卡
-        size, rows = point_rows(points, .58, top=.36, bottom=.85, preferred_pt=18)
+        size, rows = point_rows(points, .58, top=.36, bottom=.85, preferred_pt=20)
+        row_heights = [max(height - .015, .09) for _, height in rows]
+        common_size = min(fit_size(p, .67, min(row_heights) - .03, size)
+                          for p in points)
         for index, (point, (y, height)) in enumerate(zip(points, rows), 1):
             row_h = max(height - .015, .09)
             card(.105, y, .79, row_h, tint(primary, .06))
             badge(f"{index:02d}", .13, y + row_h / 2 - .028, .056, primary, 14)
-            text_size = fit_size(point, .67, row_h - .03, size)
-            label(point, .21, y + .012, .67, row_h - .024, text_size, False, dark)
+            label(point, .21, y + .012, .67, row_h - .024, common_size, False, dark)
         return
 
     if count == 4 and longest <= 46:
         # 四条短要点：2×2 网格卡，顶部色条 + 序号方块
         cells = [(.105, .36), (.515, .36), (.105, .615), (.515, .615)]
+        # 2×2 同级模块必须同号且饱满：统一按 20pt 起算，整组一起降
+        common_size = min(fit_size(p, .32, .155, 20) for p in points)
         for index, (point, (x, y)) in enumerate(zip(points, cells), 1):
             card(x, y, .375, .22, tint(primary, .05))
             box(x, y, .375, .014, primary)
             badge(str(index), x + .022, y + .035, .042, primary, 13)
-            text_size = fit_size(point, .32, .155, 15)
-            label(point, x + .08, y + .038, .275, .17, text_size, False, dark)
+            label(point, x + .08, y + .038, .275, .17, common_size, False, dark)
         return
 
     # 5 条以上或长要点：编号行（密度优先）
@@ -4921,6 +5004,8 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     模板没有的页型自动降级到已有版式，不套用 DEFAULT_LAYOUTS。"""
     from pptx import Presentation
     warnings = warnings if warnings is not None else []
+    layout_library = [layout for layout in layout_library
+                      if (layout.get("qualification") or {}).get("status") != "rejected"]
     colors = template["colors"]
     font = template.get("font") or DEFAULT_CJK_FONT
     prs = Presentation(io.BytesIO(base_pptx))
@@ -5023,7 +5108,12 @@ def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 adaptive: bool = False) -> bytes:
     """渲染总入口：有版式库+底版 → 模板学习渲染；否则 → 精修渲染（fallback）。"""
     library = template.get("layout_library") or []
-    if base_pptx and library:
+    reviewed = any("qualification" in layout for layout in library)
+    usable_content = any(
+        layout.get("detected_type") not in {"cover", "toc", "section", "closing"}
+        and (layout.get("qualification") or {}).get("status") == "qualified"
+        for layout in library)
+    if base_pptx and library and not adaptive and (not reviewed or usable_content):
         try:
             return build_pptx_learned(outline, template, base_pptx, library, warnings=warnings)
         except Exception as e:

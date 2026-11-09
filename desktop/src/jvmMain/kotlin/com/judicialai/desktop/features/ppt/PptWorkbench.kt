@@ -273,6 +273,24 @@ private fun PreviewPane(vm: PptViewModel) {
                     }
                 }
             }
+            if (vm.templateId != null) {
+                var modeOpen by remember { mutableStateOf(false) }
+                Box {
+                    TextButton(onClick = { modeOpen = true }) {
+                        Text(if (vm.strictTemplate) "严格套版 ▾" else "智能排版 ▾", fontSize = 12.sp)
+                    }
+                    DropdownMenu(modeOpen, { modeOpen = false }) {
+                        DropdownMenuItem(onClick = {
+                            modeOpen = false
+                            vm.chooseTemplateMode(false)
+                        }) { Text("按模板风格智能排版") }
+                        DropdownMenuItem(onClick = {
+                            modeOpen = false
+                            vm.chooseTemplateMode(true)
+                        }) { Text("严格沿用原版式") }
+                    }
+                }
+            }
             val compatibleLayouts = vm.layoutOptions.filter {
                 slide.type in it["applicable_types"].arr().map { value -> value.str() }
             }
@@ -311,6 +329,35 @@ private fun PreviewPane(vm: PptViewModel) {
             if (vm.canUndo) {
                 TextButton(onClick = { vm.undo() }) {
                     Text("撤销", fontSize = 12.sp, color = Ink2)
+                }
+            }
+        }
+
+        if (!vm.strictTemplate) {
+            var themeOpen by remember { mutableStateOf(false) }
+            val themeName = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
+                ?.get("name").str().ifBlank {
+                    if (vm.templateId == null) "自动配色" else "模板配色"
+                }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("整稿主题色", fontSize = 12.sp, color = Muted)
+                Box {
+                    TextButton(onClick = { themeOpen = true }) {
+                        Text("$themeName ▾", fontSize = 12.sp)
+                    }
+                    DropdownMenu(themeOpen, { themeOpen = false }) {
+                        DropdownMenuItem(onClick = {
+                            themeOpen = false
+                            vm.chooseTheme(null)
+                        }) { Text(if (vm.templateId == null) "按内容自动选择" else "使用模板配色") }
+                        vm.themes.forEach { theme ->
+                            DropdownMenuItem(onClick = {
+                                themeOpen = false
+                                vm.chooseTheme(theme["id"].str())
+                            }) { Text(theme["name"].str()) }
+                        }
+                    }
                 }
             }
         }
@@ -569,8 +616,12 @@ private fun GenerateConfirmDialog(vm: PptViewModel, onDismiss: () -> Unit) {
         Text("共 ${vm.slides.size} 页 · 排版：$curName", fontSize = 13.sp, color = Ink)
         Spacer(Modifier.height(6.dp))
         Text(
-            "未选模板时会按每页内容选择版式、渲染后检查明显的遮挡和越界；" +
-                "选定模板时按模板排版。生成完成即保存在系统中，" +
+            "系统按每页内容选择版式并检查明显的遮挡和越界；" +
+                (if (vm.templateId != null && vm.strictTemplate) "本次严格沿用模板原版式与原配色。"
+                 else if (vm.templateId != null && vm.colorOverride) "本次使用模板风格和所选主题色智能排版。"
+                 else if (vm.templateId != null) "本次使用模板风格智能排版。"
+                 else "本次使用所选主题色智能排版。") +
+                "生成完成即保存在系统中，" +
                 "无需提前选择本地保存位置。",
             fontSize = 12.sp, color = Ink2, lineHeight = 18.sp,
         )

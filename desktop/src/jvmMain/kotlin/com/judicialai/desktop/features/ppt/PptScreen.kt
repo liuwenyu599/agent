@@ -415,18 +415,20 @@ private fun PptEntryPane(
         Row(verticalAlignment = Alignment.CenterVertically) {
             var themeMenu by remember { mutableStateOf(false) }
             val themeName = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
-                ?.get("name").str().ifBlank { "按内容自动选择" }
+                ?.get("name").str().ifBlank {
+                    if (vm.templateId == null) "按内容自动选择" else "使用模板配色"
+                }
             Box {
-                TextButton(enabled = vm.templateId == null, onClick = { themeMenu = true }) {
+                TextButton(enabled = !vm.strictTemplate, onClick = { themeMenu = true }) {
                     Text("主题色 · $themeName")
                 }
                 DropdownMenu(themeMenu, onDismissRequest = { themeMenu = false }) {
-                    DropdownMenuItem(onClick = { vm.themeId = null; themeMenu = false }) {
-                        Text("按内容自动选择")
+                    DropdownMenuItem(onClick = { vm.chooseTheme(null); themeMenu = false }) {
+                        Text(if (vm.templateId == null) "按内容自动选择" else "使用模板配色")
                     }
                     vm.themes.forEach { theme ->
                         DropdownMenuItem(onClick = {
-                            vm.themeId = theme["id"].str()
+                            vm.chooseTheme(theme["id"].str())
                             themeMenu = false
                         }) { Text(theme["name"].str()) }
                     }
@@ -442,7 +444,7 @@ private fun PptEntryPane(
         Row(verticalAlignment = Alignment.Bottom) {
             Text("视觉风格", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Spacer(Modifier.width(8.dp))
-            Text("不选模板时使用自适应排版", fontSize = 11.sp, color = Muted)
+            Text("选模板后默认沿用配色，正文使用系统兼容中文字体，逐页智能排版", fontSize = 11.sp, color = Muted)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
         }
@@ -452,19 +454,31 @@ private fun PptEntryPane(
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StyleCardAuto(Modifier.width(190.dp), selected = vm.templateId == null) {
                 vm.templateId = null
+                vm.strictTemplate = false
             }
             vm.templates.forEachIndexed { i, t ->
                 StyleCard(t, i, Modifier.width(190.dp),
                     selected = t["id"].str() == vm.templateId) {
                     vm.templateId = t["id"].str()
+                    vm.strictTemplate = false
                 }
             }
         }
         val selectedTemplateName = vm.templates.firstOrNull { it["id"].str() == vm.templateId }
             ?.get("name").str()
         Text(if (vm.templateId == null) "本次未套用模板，将使用自适应排版。"
-             else "本次将套用「${selectedTemplateName.ifBlank { "所选模板" }}」的版式与配色。",
+             else if (vm.strictTemplate) "本次严格沿用「${selectedTemplateName.ifBlank { "所选模板" }}」的原版式与原配色。"
+             else if (vm.colorOverride) "本次使用模板版式风格，并采用所选主题色逐页排版。"
+             else "本次将使用「${selectedTemplateName.ifBlank { "所选模板" }}」的配色，按内容逐页排版。",
             fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
+        if (vm.templateId != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { vm.chooseTemplateMode(false) },
+                    colors = sel(!vm.strictTemplate)) { Text("智能排版") }
+                OutlinedButton(onClick = { vm.chooseTemplateMode(true) },
+                    colors = sel(vm.strictTemplate)) { Text("严格沿用原版式") }
+            }
+        }
 
         // 最近创建
         if (vm.documents.isNotEmpty()) {
@@ -1196,7 +1210,7 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                     vm.uploadTemplate(file, shared = true, licenseNote = sharedLicense)
                     sharedFile = null
                     sharedLicense = ""
-                }) { Text("确认发布给全员") }
+                }) { Text("上传并检查版式") }
             }
         }
         PptStatus(vm)
@@ -1229,12 +1243,22 @@ private fun PptTemplatesPane(vm: PptViewModel) {
                                 Text(if (t["is_learned"].bool()) "可编辑母版"
                                      else "配色主题", style = MaterialTheme.typography.caption,
                                      color = if (t["is_learned"].bool()) Primary else SecondaryText)
+                                if (t["is_pending_shared"].bool()) {
+                                    Text("待审核共享模板", style = MaterialTheme.typography.caption,
+                                        color = SecondaryText)
+                                } else if (t["needs_recheck"].bool()) {
+                                    Text("旧版式待复检", style = MaterialTheme.typography.caption,
+                                        color = SecondaryText)
+                                }
                             }
-                            if (t["is_mine"].bool()) {
+                            if (t["is_mine"].bool() ||
+                                AppState.isAdmin && t["is_pending_shared"].bool()) {
                                 TextButton(
                                     enabled = !vm.templateEditorBusy,
                                     onClick = { vm.openTemplateEditor(t["id"].str()) },
-                                ) { Text("编辑骨架") }
+                                ) { Text(if (t["is_pending_shared"].bool()) "审核" else "编辑骨架") }
+                            }
+                            if (t["is_mine"].bool()) {
                                 IconButton(onClick = { pendingDelete = t }) {
                                     Icon(Icons.Default.Delete, "删除",
                                         tint = MaterialTheme.colors.error)
@@ -1274,6 +1298,15 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
     val id = t["id"].str()
     val originalLayouts = t["layouts"].obj() ?: JsonObject(emptyMap())
     val library = t["layout_library"].arr().mapNotNull { it.obj() }
+    val usableLibrary = library.filter {
+        it["qualification"].obj()?.get("status").str() == "qualified"
+    }
+    val contentLayouts = usableLibrary.count {
+        it["detected_type"].str() !in setOf("cover", "toc", "section", "closing")
+    }
+    val rejectedLibrary = library.filter {
+        it["qualification"].obj()?.get("status").str() == "rejected"
+    }
 
     var name by remember(id) { mutableStateOf(t["name"].str()) }
     var category by remember(id) { mutableStateOf(t["category"].str()) }
@@ -1303,6 +1336,23 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
             AppButton("取消", onClick = { vm.closeTemplateEditor() },
                 kind = AppButtonKind.SECONDARY)
             Spacer(Modifier.width(8.dp))
+            if (t["needs_recheck"].bool()) {
+                AppButton("复检旧模板", enabled = !vm.templateEditorBusy,
+                    onClick = { vm.recheckTemplate(id) })
+                Spacer(Modifier.width(8.dp))
+            }
+            if (library.any { it["preview_error"].str().isNotBlank() }) {
+                AppButton("重试预览", enabled = !vm.templateEditorBusy,
+                    onClick = { vm.refreshTemplatePreview(id) })
+                Spacer(Modifier.width(8.dp))
+            }
+            if (AppState.isAdmin && t["license_note"].str().isNotBlank() &&
+                !t["is_shared"].bool() && t["is_learned"].bool()) {
+                AppButton("确认发布给全员", enabled = !vm.templateEditorBusy &&
+                    usableLibrary.any { it["source_preview_url"].str().isNotBlank() },
+                    onClick = { vm.publishTemplate(id) })
+                Spacer(Modifier.width(8.dp))
+            }
             AppButton(
                 "保存骨架",
                 enabled = !vm.templateEditorBusy && name.isNotBlank(),
@@ -1344,22 +1394,45 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
             )
             Text("各页型版式骨架", style = MaterialTheme.typography.subtitle2)
             Text(
-                if (library.isEmpty()) "该模板尚未识别到可编辑版式；可重新上传结构更完整的 PPTX。"
-                else "系统已识别 ${library.size} 种实际页面版式。为核心页型指定来源页后，生成时会优先克隆对应骨架。",
+                if (t["needs_recheck"].bool()) "该模板尚未经过新版试填检查，请先复检；此前版式暂按旧规则使用。"
+                else if (usableLibrary.isEmpty()) "没有合格正文版式；本次仅使用配色、字体与母版。"
+                else "${usableLibrary.size}/${library.size} 种版式通过试填，其中正文可用 $contentLayouts 种；${rejectedLibrary.size} 种待调整。",
                 style = MaterialTheme.typography.caption, color = SecondaryText,
             )
-            if (library.isNotEmpty()) {
-                TemplateLayoutSelector("封面", cover, library) { cover = it }
-                TemplateLayoutSelector("目录", toc, library) { toc = it }
-                TemplateLayoutSelector("章节页", section, library) { section = it }
-                TemplateLayoutSelector("正文", content, library) { content = it }
-                TemplateLayoutSelector("数据页", data, library) { data = it }
-                TemplateLayoutSelector("图表页", chart, library) { chart = it }
-                TemplateLayoutSelector("案例页", caseLayout, library) { caseLayout = it }
-                TemplateLayoutSelector("时间线", timeline, library) { timeline = it }
-                TemplateLayoutSelector("流程页", process, library) { process = it }
-                TemplateLayoutSelector("总结页", summary, library) { summary = it }
-                TemplateLayoutSelector("结束页", closing, library) { closing = it }
+            if (!t["needs_recheck"].bool() && contentLayouts in 1..2) {
+                Text("正文版式较少，多页演示稿可能反复使用同一种布局；请先查看试填预览再发布。",
+                    style = MaterialTheme.typography.caption, color = MaterialTheme.colors.error)
+            }
+            rejectedLibrary.take(4).forEach { lay ->
+                val reason = lay["qualification"].obj()?.get("issues").arr()
+                    .joinToString("；") { it.str() }
+                Text("${lay["name"].str()}：$reason", style = MaterialTheme.typography.caption,
+                    color = SecondaryText)
+            }
+            library.filter { it["qualification"].obj()?.get("warnings").arr().isNotEmpty() }
+                .take(4).forEach { lay ->
+                    val warning = lay["qualification"].obj()?.get("warnings").arr()
+                        .joinToString("；") { it.str() }
+                    Text("${lay["name"].str()}：$warning", style = MaterialTheme.typography.caption,
+                        color = SecondaryText)
+                }
+            library.firstOrNull { it["preview_error"].str().isNotBlank() }?.let { lay ->
+                Text("预览环境：${lay["preview_error"].str()}",
+                    style = MaterialTheme.typography.caption,
+                    color = MaterialTheme.colors.error)
+            }
+            if (usableLibrary.isNotEmpty()) {
+                TemplateLayoutSelector("封面", cover, usableLibrary) { cover = it }
+                TemplateLayoutSelector("目录", toc, usableLibrary) { toc = it }
+                TemplateLayoutSelector("章节页", section, usableLibrary) { section = it }
+                TemplateLayoutSelector("正文", content, usableLibrary) { content = it }
+                TemplateLayoutSelector("数据页", data, usableLibrary) { data = it }
+                TemplateLayoutSelector("图表页", chart, usableLibrary) { chart = it }
+                TemplateLayoutSelector("案例页", caseLayout, usableLibrary) { caseLayout = it }
+                TemplateLayoutSelector("时间线", timeline, usableLibrary) { timeline = it }
+                TemplateLayoutSelector("流程页", process, usableLibrary) { process = it }
+                TemplateLayoutSelector("总结页", summary, usableLibrary) { summary = it }
+                TemplateLayoutSelector("结束页", closing, usableLibrary) { closing = it }
             }
         }
     }
@@ -1374,31 +1447,57 @@ private fun TemplateLayoutSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = layouts.firstOrNull { it["id"].str() == selectedId }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, modifier = Modifier.width(72.dp), style = MaterialTheme.typography.body2)
-        Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    selected?.get("name")?.str()
-                        ?.let { "$it（${selected["id"].str()}）" }
-                        ?: "自动匹配",
-                    maxLines = 1,
-                )
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(onClick = {
-                    onSelected("")
-                    expanded = false
-                }) { Text("自动匹配") }
-                layouts.forEach { lay ->
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, modifier = Modifier.width(72.dp), style = MaterialTheme.typography.body2)
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        selected?.get("name")?.str()
+                            ?.let { "$it（${selected["id"].str()}）" }
+                            ?: "自动匹配",
+                        maxLines = 1,
+                    )
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(onClick = {
-                        onSelected(lay["id"].str())
+                        onSelected("")
                         expanded = false
-                    }) {
-                        Text(
-                            lay["name"].str().ifBlank { lay["id"].str() } +
-                                " · " + slideTypeLabel(lay["detected_type"].str())
-                        )
+                    }) { Text("自动匹配") }
+                    layouts.forEach { lay ->
+                        DropdownMenuItem(onClick = {
+                            onSelected(lay["id"].str())
+                            expanded = false
+                        }) {
+                            Text(
+                                lay["name"].str().ifBlank { lay["id"].str() } +
+                                    " · " + slideTypeLabel(lay["detected_type"].str())
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        selected?.let { layout ->
+            val trial = rememberServerImage(AppState.api,
+                layout["preview_url"].str().ifBlank { null })
+            val source = rememberServerImage(AppState.api,
+                layout["source_preview_url"].str().ifBlank { null })
+            if (trial != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("试填效果", style = MaterialTheme.typography.caption)
+                        Image(trial, contentDescription = "试填后的版式预览",
+                            modifier = Modifier.fillMaxWidth().height(140.dp),
+                            contentScale = ContentScale.Fit)
+                    }
+                    if (source != null) {
+                        Column(Modifier.weight(1f)) {
+                            Text("原模板页", style = MaterialTheme.typography.caption)
+                            Image(source, contentDescription = "原模板页预览",
+                                modifier = Modifier.fillMaxWidth().height(140.dp),
+                                contentScale = ContentScale.Fit)
+                        }
                     }
                 }
             }

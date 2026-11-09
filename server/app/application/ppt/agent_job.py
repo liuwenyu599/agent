@@ -79,7 +79,8 @@ def uses_local_renderer(doc_id: str) -> bool:
     if not (settings.PPT_AGENT_URL or "").strip():
         return True
     doc = _open(doc_id)
-    return doc is not None and not doc.template_id
+    return doc is not None and (
+        not doc.template_id or not PPTService._strict_template_mode(getattr(doc, "outline", None)))
 
 
 def _update_job(doc_id: str, **fields: Any) -> Optional[PPTDocument]:
@@ -212,7 +213,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             return False, "文档不存在"
         if not doc.outline:
             return False, "本地渲染缺少大纲"
-        if doc.template_id:
+        if doc.template_id and svc._strict_template_mode(doc.outline):
             data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
             adjusted_outline = doc.outline
         else:

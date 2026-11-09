@@ -127,7 +127,9 @@ class PptViewModel(private val repo: PptRepository) {
     var documents by mutableStateOf(listOf<JsonObject>())
         private set
     var templateId by mutableStateOf<String?>(null)
+    var strictTemplate by mutableStateOf(false)
     var themeId by mutableStateOf<String?>(null)
+    var colorOverride by mutableStateOf(false)
     var themes by mutableStateOf(listOf<JsonObject>())
         private set
     var status by mutableStateOf<String?>(null)
@@ -396,6 +398,7 @@ class PptViewModel(private val repo: PptRepository) {
                 is ApiResult.Ok -> if (templateId == id) {
                     layoutOptions = result.data["layout_library"].arr()
                         .mapNotNull { it.obj() }
+                        .filter { it["qualification"].obj()?.get("status").str() != "rejected" }
                 }
                 is ApiResult.Err -> if (templateId == id) layoutOptions = emptyList()
             }
@@ -416,10 +419,78 @@ class PptViewModel(private val repo: PptRepository) {
         status = "上传并学习模板中…"
         scope.launch {
             when (val r = repo.uploadTemplate(file, shared, licenseNote)) {
-                is ApiResult.Ok -> { status = "模板学习完成"; loadTemplates() }
+                is ApiResult.Ok -> {
+                    val previewError = r.data.obj()?.get("preview_error").str()
+                    status = if (previewError.isNotBlank())
+                        "模板已保存，但试填预览失败：$previewError"
+                    else if (shared) "模板已上传，请检查试填预览后发布"
+                    else "模板学习完成"
+                    loadTemplates()
+                    if (shared) r.data.obj()?.get("id").str().takeIf { it.isNotBlank() }
+                        ?.let { openTemplateEditor(it) }
+                }
                 is ApiResult.Err -> status = r.message
             }
             busy = false
+        }
+    }
+
+    fun publishTemplate(id: String) {
+        if (templateEditorBusy) return
+        templateEditorBusy = true
+        status = "正在发布共享模板…"
+        scope.launch {
+            when (val r = repo.publishTemplate(id)) {
+                is ApiResult.Ok -> {
+                    templateEditor = null
+                    status = "模板已发布给全员"
+                    loadTemplates()
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            templateEditorBusy = false
+        }
+    }
+
+    fun refreshTemplatePreview(id: String) {
+        if (templateEditorBusy) return
+        templateEditorBusy = true
+        status = "正在重新生成试填预览…"
+        scope.launch {
+            when (val r = repo.refreshTemplatePreview(id)) {
+                is ApiResult.Ok -> {
+                    status = "试填预览已更新"
+                    loadTemplates()
+                    when (val detail = repo.templateDetail(id)) {
+                        is ApiResult.Ok -> templateEditor = detail.data
+                        is ApiResult.Err -> status = detail.message
+                    }
+                }
+                is ApiResult.Err -> status = r.message
+            }
+            templateEditorBusy = false
+        }
+    }
+
+    fun recheckTemplate(id: String) {
+        if (templateEditorBusy) return
+        templateEditorBusy = true
+        status = "正在复检模板版式…"
+        scope.launch {
+            when (val result = repo.recheckTemplate(id)) {
+                is ApiResult.Ok -> {
+                    val previewError = result.data.obj()?.get("preview_error").str()
+                    status = if (previewError.isNotBlank())
+                        "版式已复检，预览生成失败：$previewError" else "版式复检完成"
+                    loadTemplates()
+                    when (val detail = repo.templateDetail(id)) {
+                        is ApiResult.Ok -> templateEditor = detail.data
+                        is ApiResult.Err -> status = detail.message
+                    }
+                }
+                is ApiResult.Err -> status = result.message
+            }
+            templateEditorBusy = false
         }
     }
 
@@ -643,7 +714,9 @@ class PptViewModel(private val repo: PptRepository) {
             "material_ids" to if (autoImagesEnabled) emptyList<String>() else selectedMaterialIds.toList(),
             "auto_images" to autoImagesEnabled,
             "theme_id" to themeId,
+            "color_override" to colorOverride,
             "template_id" to templateId,
+            "template_mode" to if (strictTemplate) "strict" else "adaptive",
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -864,7 +937,9 @@ class PptViewModel(private val repo: PptRepository) {
                 kbIds = kbIds, materialNames = materialNames,
                 materialIds = materialIds, autoImages = autoImages,
                 themeId = body["theme_id"] as? String,
-                templateId = body["template_id"] as? String)) {
+                templateId = body["template_id"] as? String,
+                templateMode = body["template_mode"] as? String ?: "adaptive",
+                colorOverride = body["color_override"] as? Boolean ?: false)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
@@ -891,6 +966,9 @@ class PptViewModel(private val repo: PptRepository) {
         outlineTitle = outline["title"].str().ifBlank { topic.ifBlank { "未命名PPT" } }
         outlineSubtitle = outline["subtitle"].str()
         outlineDesignSpec = outline["design_spec"].obj()
+        strictTemplate = outline["template_mode"].str() == "strict"
+        colorOverride = outline["color_override"].str() == "true"
+        themeId = if (colorOverride) outline["color_theme_id"].str().ifBlank { null } else null
         selectedMaterialIds.clear()
         selectedMaterialIds.addAll(outline["material_ids"].arr().map { it.str() }
             .filter { it.isNotBlank() })
@@ -1011,6 +1089,8 @@ class PptViewModel(private val repo: PptRepository) {
         outlineTitle = ""
         outlineSubtitle = ""
         outlineDesignSpec = null
+        colorOverride = false
+        themeId = null
         exportStage = ""
         previewPages = emptyList()
         previewBusy = false
@@ -1049,6 +1129,7 @@ class PptViewModel(private val repo: PptRepository) {
                     if (d != null && ol != null) {
                         templateId = d["template_id"].str().ifBlank { null }
                         applyOutline(id, ol)
+                        if ("template_mode" !in ol && templateId != null) strictTemplate = true
                         step = PptStep.WORKBENCH
                         status = "已打开「${d["title"].str()}」"
                         // 打开成功即说明"上次生成失败"已成过去：不清的话那条红字横幅
@@ -1097,6 +1178,9 @@ class PptViewModel(private val repo: PptRepository) {
     private fun outlineJson(): JsonObject = buildJsonObject {
         put("title", outlineTitle)
         put("subtitle", outlineSubtitle)
+        put("template_mode", if (strictTemplate) "strict" else "adaptive")
+        put("color_override", colorOverride)
+        if (colorOverride) themeId?.let { put("color_theme_id", it) }
         outlineDesignSpec?.let { put("design_spec", it) }
         put("image_selection_mode",
             if (autoImagesEnabled) "auto" else if (selectedMaterialIds.isEmpty()) "off" else "manual")
@@ -1161,11 +1245,29 @@ class PptViewModel(private val repo: PptRepository) {
     fun switchTemplate(id: String?) {
         if (templateId == id) return
         templateId = id
+        strictTemplate = false
         loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
             ?.get("name").str().ifBlank { null } ?: "自适应排版"
         status = "已切换为「$name」，正在重新渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
         refreshPreview()
+    }
+
+    fun chooseTemplateMode(value: Boolean) {
+        if (strictTemplate == value) return
+        strictTemplate = value
+        status = if (value) "已选择严格沿用原模板版式，正在刷新预览"
+            else "已选择按模板风格自适应排版，正在刷新预览"
+        if (docId != null) refreshPreview()
+    }
+
+    fun chooseTheme(id: String?) {
+        if (themeId == id && colorOverride == (id != null)) return
+        themeId = id
+        colorOverride = id != null
+        status = if (id == null) "已恢复默认配色，正在刷新预览"
+            else "已选择主题色，正在刷新预览"
+        if (docId != null) refreshPreview()
     }
 
     fun selectSlideLayout(layoutId: String) {

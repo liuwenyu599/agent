@@ -192,7 +192,17 @@ def test_copied_uploaded_template_keeps_learned_layouts(client, accounts, monkey
 
 
 def test_shared_pptx_template_requires_admin_and_license(client, accounts, monkeypatch):
-    monkeypatch.setattr(PPTService, "_gen_tpl_previews", lambda *_args: None)
+    def fake_previews(svc, template_id, _data, layouts):
+        for layout in layouts:
+            if (layout.get("qualification") or {}).get("status") != "qualified":
+                continue
+            layout["source_preview"] = f"{layout['id']}.png"
+            layout["preview"] = f"{layout['id']}-probe.png"
+            for name in (layout["source_preview"], layout["preview"]):
+                path = svc.ppt_dir / "tpl_prev" / template_id / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", fake_previews)
     data = _make_pptx_bytes([("封面", []), ("工作安排", ["事项一", "事项二"])])
     files = {"file": ("licensed.pptx", data,
                        "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
@@ -207,9 +217,165 @@ def test_shared_pptx_template_requires_admin_and_license(client, accounts, monke
                            data={"shared": "true", "license_note": "允许内网重复生成及修改"},
                            files=files)
     assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["review_required"] is True
+    template_id = uploaded.json()["id"]
     listing = client.get(f"{BASE}/ppt/templates", headers=_hdr(accounts["a"])).json()["items"]
-    assert any(item["id"] == uploaded.json()["id"] and item["is_learned"]
-               for item in listing)
+    assert not any(item["id"] == template_id for item in listing)
+    assert client.post(f"{BASE}/ppt/templates/{template_id}/publish",
+                       headers=_hdr(accounts["a"])).status_code == 403
+    published = client.post(f"{BASE}/ppt/templates/{template_id}/publish",
+                            headers=_hdr(accounts["dev"]))
+    assert published.status_code == 200, published.text
+    listing = client.get(f"{BASE}/ppt/templates", headers=_hdr(accounts["a"])).json()["items"]
+    assert any(item["id"] == template_id and item["is_learned"] for item in listing)
+
+
+def test_second_admin_can_review_and_publish_pending_shared_template(
+        client, accounts, monkeypatch):
+    from sqlalchemy import select
+    from app.core.security import create_access_token
+    from app.infrastructure.database import SessionLocal
+    from app.infrastructure.database.models.identity import UserModel
+
+    def fake_previews(svc, template_id, _data, layouts):
+        for layout in layouts:
+            if (layout.get("qualification") or {}).get("status") != "qualified":
+                continue
+            layout["source_preview"] = f"{layout['id']}.png"
+            layout["preview"] = f"{layout['id']}-probe.png"
+            for name in (layout["source_preview"], layout["preview"]):
+                path = svc.ppt_dir / "tpl_prev" / template_id / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", fake_previews)
+    data = _make_pptx_bytes([("封面", []), ("工作安排", ["事项一", "事项二"])])
+    uploaded = client.post(f"{BASE}/ppt/templates/upload", headers=_hdr(accounts["dev"]),
+                           data={"shared": "true", "license_note": "内网可复用"},
+                           files={"file": ("shared.pptx", data,
+                                           "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
+    assert uploaded.status_code == 200, uploaded.text
+    template_id = uploaded.json()["id"]
+    changed = client.put(f"{BASE}/ppt/templates/{template_id}",
+                         headers=_hdr(accounts["dev"]), json={
+                             "name": "待审党建模板", "category": "汇报",
+                             "description": "已替换成业务说明，不再保留待审字样"})
+    assert changed.status_code == 200, changed.text
+    with SessionLocal() as db:
+        reviewer = db.scalar(select(UserModel).where(UserModel.username == "pptuserb"))
+        reviewer.role = "admin"
+        db.commit()
+        reviewer_id, reviewer_name = reviewer.id, reviewer.username
+    try:
+        token = create_access_token({"sub": reviewer_id,
+                                     "username": reviewer_name, "role": "admin"})
+        listed = client.get(f"{BASE}/ppt/templates?scope=pending",
+                            headers=_hdr(token))
+        assert listed.status_code == 200, listed.text
+        assert any(item["id"] == template_id for item in listed.json()["items"])
+        detail = client.get(f"{BASE}/ppt/templates/{template_id}", headers=_hdr(token))
+        assert detail.status_code == 200 and detail.json()["license_note"] == "内网可复用"
+        published = client.post(f"{BASE}/ppt/templates/{template_id}/publish",
+                                headers=_hdr(token))
+        assert published.status_code == 200, published.text
+    finally:
+        with SessionLocal() as db:
+            reviewer = db.get(UserModel, reviewer_id)
+            reviewer.role = "user"
+            db.commit()
+
+
+def test_missing_preview_renderer_is_explained_and_can_be_retried(client, accounts, monkeypatch):
+    import app.application.ppt.service as ppt_service_module
+
+    data = _make_pptx_bytes([
+        ("封面", []), ("工作安排", ["第一项", "第二项"]),
+    ])
+    monkeypatch.setattr(ppt_service_module.shutil, "which", lambda _name: None)
+    uploaded = client.post(f"{BASE}/ppt/templates/upload",
+                           headers=_hdr(accounts["dev"]),
+                           data={"shared": "true", "license_note": "内部授权使用"},
+                           files={"file": ("layout.pptx", data,
+                                           "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
+    assert uploaded.status_code == 200, uploaded.text
+    assert "soffice" in uploaded.json()["preview_error"]
+    template_id = uploaded.json()["id"]
+    blocked = client.post(f"{BASE}/ppt/templates/{template_id}/publish",
+                          headers=_hdr(accounts["dev"]))
+    assert blocked.status_code == 503 and "soffice" in blocked.text
+    retry = client.post(f"{BASE}/ppt/templates/{template_id}/refresh-preview",
+                        headers=_hdr(accounts["dev"]))
+    assert retry.status_code == 503 and "soffice" in retry.text
+
+
+def test_legacy_template_can_be_rechecked_without_exposing_private_decks(
+        client, accounts, monkeypatch):
+    from app.infrastructure.database import SessionLocal
+    from app.infrastructure.database.models.ppt import PPTTemplateModel
+
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", lambda *_args: None)
+    data = _make_pptx_bytes([("工作安排", ["事项一", "事项二"])])
+    uploaded = client.post(f"{BASE}/ppt/templates/upload", headers=_hdr(accounts["a"]),
+                           files={"file": ("legacy.pptx", data,
+                                           "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
+    assert uploaded.status_code == 200, uploaded.text
+    template_id = uploaded.json()["id"]
+    with SessionLocal() as db:
+        row = db.get(PPTTemplateModel, template_id)
+        row.layout_library = [{key: value for key, value in layout.items()
+                               if key != "qualification"}
+                              for layout in row.layout_library]
+        db.commit()
+    detail = client.get(f"{BASE}/ppt/templates/{template_id}",
+                        headers=_hdr(accounts["a"]))
+    assert detail.json()["needs_recheck"] is True
+    denied = client.post(f"{BASE}/ppt/templates/{template_id}/recheck",
+                         headers=_hdr(accounts["b"]))
+    assert denied.status_code == 403
+    checked = client.post(f"{BASE}/ppt/templates/{template_id}/recheck",
+                          headers=_hdr(accounts["a"]))
+    assert checked.status_code == 200, checked.text
+    assert client.get(f"{BASE}/ppt/templates/{template_id}",
+                      headers=_hdr(accounts["a"])).json()["needs_recheck"] is False
+
+
+def test_cover_only_private_template_is_kept_as_theme(client, accounts, monkeypatch):
+    monkeypatch.setattr(PPTService, "_gen_tpl_previews", lambda *_args: None)
+    data = _make_pptx_bytes([("封面标题", [])])
+    uploaded = client.post(f"{BASE}/ppt/templates/upload", headers=_hdr(accounts["a"]),
+                           files={"file": ("cover.pptx", data,
+                                           "application/vnd.openxmlformats-officedocument.presentationml.presentation")})
+    assert uploaded.status_code == 200, uploaded.text
+    assert "仅使用配色、字体与母版" in uploaded.json()["message"]
+    detail = client.get(f"{BASE}/ppt/templates/{uploaded.json()['id']}",
+                        headers=_hdr(accounts["a"]))
+    assert detail.status_code == 200
+    assert detail.json()["is_theme_only"] is True
+    assert detail.json()["is_learned"] is False
+    template = {
+        "colors": detail.json()["colors"], "font": detail.json()["font"],
+        "layouts": detail.json()["layouts"], "layout_library": detail.json()["layout_library"]}
+    output = ppt_engine.render_pptx({"slides": [{"type": "content",
+        "title": "新稿", "points": ["内容完整"]}]}, template, base_pptx=data)
+    from pptx import Presentation
+    page = Presentation(io.BytesIO(output)).slides[0]
+    assert "内容完整" in " ".join(shape.text for shape in page.shapes if shape.has_text_frame)
+
+
+def test_fallback_keeps_uploaded_slide_master_but_removes_example_pages():
+    from pptx import Presentation
+    source = _make_pptx_bytes([("示例标题", ["示例正文"])])
+    original = Presentation(io.BytesIO(source))
+    design = ppt_engine.template_to_dict(ppt_engine.BUILTIN_TEMPLATES[0])
+    output = Presentation(io.BytesIO(ppt_engine.build_pptx(
+        {"slides": [{"type": "content", "title": "正式标题", "points": ["正式正文"]}]},
+        design, base_pptx=source)))
+    assert (output.slide_width, output.slide_height) == (
+        original.slide_width, original.slide_height)
+    assert len(output.slide_masters) == len(original.slide_masters)
+    text = " ".join(shape.text for slide in output.slides for shape in slide.shapes
+                    if shape.has_text_frame)
+    assert "正式正文" in text and "示例正文" not in text
 
 
 def test_public_gallery_requires_license_and_respects_selection(client, accounts):
@@ -630,6 +796,179 @@ def test_model_cannot_attach_an_image_outside_candidate_ids():
     ppt_engine.resolve_slide_images(outline, [{"id": "allowed", "name": "普法活动",
                                                "caption": "群众参与普法活动"}])
     assert outline["slides"][0]["_image"] is None
+
+
+def test_selected_template_defaults_to_adaptive_but_legacy_decks_keep_clone(monkeypatch):
+    from app.application.ppt.service import PPTService
+
+    assert not PPTService._strict_template_mode({"template_mode": "adaptive"})
+    assert PPTService._strict_template_mode({"template_mode": "strict"})
+    assert PPTService._strict_template_mode({})
+
+    calls = []
+    monkeypatch.setattr(ppt_engine, "build_pptx_learned",
+                        lambda *_a, **_k: calls.append("clone") or b"clone")
+    monkeypatch.setattr(ppt_engine, "build_pptx",
+                        lambda *_a, **_k: calls.append("adaptive" if _k.get("adaptive") else "plain") or b"adaptive")
+    template = {"layout_library": [{"detected_type": "content"}]}
+    assert ppt_engine.render_pptx({}, template, b"source", adaptive=True) == b"adaptive"
+    assert calls == ["adaptive"]
+    assert ppt_engine.render_pptx({}, template, b"source", adaptive=False) == b"clone"
+
+
+def test_selected_template_adaptive_mode_persists_through_generate(client, accounts):
+    from pptx import Presentation
+    import zipfile
+    template = client.post(f"{BASE}/ppt/templates", headers=_hdr(accounts["a"]),
+                           json={"name": "浅色汇报", "colors": {
+                               "primary": "365472", "accent": "C99C4B"},
+                                 "font": "微软雅黑"})
+    assert template.status_code == 200, template.text
+    doc_id = _blank_doc(client, accounts["a"], "版式选择")
+    outline = {"title": "版式选择", "template_mode": "adaptive", "slides": [
+        {"type": "content", "title": "工作进展", "points": ["依法履职", "服务群众"]}]}
+    response = client.post(f"{BASE}/ppt/generate", headers=_hdr(accounts["a"]),
+                           json={"doc_id": doc_id, "template_id": template.json()["id"],
+                                 "outline": outline})
+    assert response.status_code == 200, response.text
+    saved = client.get(f"{BASE}/ppt/documents/{doc_id}",
+                       headers=_hdr(accounts["a"])).json()
+    assert saved["outline"]["template_mode"] == "adaptive"
+    assert saved["template_id"] == template.json()["id"]
+    deck = client.get(f"{BASE}/ppt/documents/{doc_id}/download",
+                      headers=_hdr(accounts["a"]))
+    assert deck.status_code == 200
+    assert "工作进展" in " ".join(
+        shape.text for slide in Presentation(io.BytesIO(deck.content)).slides
+        for shape in slide.shapes if shape.has_text_frame)
+    with zipfile.ZipFile(io.BytesIO(deck.content)) as package:
+        first_xml = package.read("ppt/slides/slide1.xml")
+    assert b"365472" in first_xml
+    assert b"Noto Sans CJK SC" in first_xml
+    assert "微软雅黑".encode("utf-8") not in first_xml
+
+    recolored = {**outline, "color_override": True,
+                 "color_theme_id": "gov_report_red"}
+    regenerated = client.post(f"{BASE}/ppt/generate", headers=_hdr(accounts["a"]),
+                              json={"doc_id": doc_id,
+                                    "template_id": template.json()["id"],
+                                    "outline": recolored})
+    assert regenerated.status_code == 200, regenerated.text
+    changed = client.get(f"{BASE}/ppt/documents/{doc_id}/download",
+                         headers=_hdr(accounts["a"]))
+    with zipfile.ZipFile(io.BytesIO(changed.content)) as package:
+        second_xml = package.read("ppt/slides/slide1.xml")
+    assert b"C00000" in second_xml
+    assert b"365472" not in second_xml
+
+
+def test_template_palette_changes_only_after_explicit_theme_choice(monkeypatch):
+    from app.application.ppt.service import PPTService
+    from app.core.fonts import DEFAULT_CJK_FONT
+
+    service = object.__new__(PPTService)
+    layouts = [{"id": "source-layout"}]
+    source = {"colors": {"primary": "8E1B1B", "accent": "D6AA44"},
+              "font": "微软雅黑", "layout_library": layouts}
+    theme = ppt_engine.template_to_dict(ppt_engine.builtin_template("gov_report_blue"))
+    monkeypatch.setattr(service, "_resolve_template",
+                        lambda template_id, _fallback="":
+                        (source if template_id else theme, None))
+    implicit, _ = service._resolve_render_style(
+        "selected", "gov_report_blue", {"template_mode": "adaptive"})
+    assert implicit["colors"] == source["colors"]
+    assert implicit["font"] == DEFAULT_CJK_FONT
+    explicit, _ = service._resolve_render_style("selected", "gov_report_blue", {
+        "template_mode": "adaptive", "color_override": True,
+        "color_theme_id": "gov_report_blue"})
+    assert explicit["colors"] == theme["colors"]
+    assert explicit["layout_library"] is layouts
+    strict, _ = service._resolve_render_style("selected", "gov_report_blue", {
+        "template_mode": "strict", "color_override": True,
+        "color_theme_id": "gov_report_blue"})
+    assert strict["colors"] == source["colors"]
+    assert strict["font"] == DEFAULT_CJK_FONT
+
+
+def test_clearing_explicit_theme_restores_original_automatic_palette(monkeypatch):
+    from app.application.ppt.service import PPTService
+
+    service = object.__new__(PPTService)
+    requested = []
+
+    def resolve(_template_id, fallback=""):
+        requested.append(fallback)
+        return {"font": "微软雅黑", "colors": {"primary": fallback}}, None
+
+    monkeypatch.setattr(service, "_resolve_template", resolve)
+    original = {"template_mode": "adaptive", "base_theme_id": "gov_report_blue"}
+    selected = {**original, "color_override": True,
+                "color_theme_id": "gov_report_red"}
+    service._resolve_render_style(None, "gov_report_red", selected)
+    restored, _ = service._resolve_render_style(None, "gov_report_red", original)
+    assert requested[0] == "gov_report_red"
+    assert requested[-1] == "gov_report_blue"
+    assert restored["colors"]["primary"] == "gov_report_blue"
+
+
+def test_explicit_theme_choice_survives_outline_creation(client, accounts, fake_llm,
+                                                         outline_payload):
+    fake_llm._responder = lambda _messages: json.dumps(outline_payload, ensure_ascii=False)
+    created = client.post(f"{BASE}/ppt/outline", headers=_hdr(accounts["a"]),
+                          json={"source_type": "topic", "topic": "年度汇报",
+                                "theme_id": "gov_report_blue", "color_override": True})
+    assert created.status_code == 200, created.text
+    outline = created.json()["outline"]
+    assert outline["color_override"] is True
+    assert outline["color_theme_id"] == "gov_report_blue"
+    assert ppt_engine.builtin_template(outline["base_theme_id"])
+    stored = client.get(f"{BASE}/ppt/documents/{created.json()['doc_id']}",
+                        headers=_hdr(accounts["a"])).json()["outline"]
+    assert stored["color_theme_id"] == "gov_report_blue"
+
+    streamed = client.post(f"{BASE}/ppt/outline/stream", headers=_hdr(accounts["a"]),
+                           json={"source_type": "topic", "topic": "年度汇报",
+                                 "theme_id": "gov_report_blue", "color_override": True})
+    assert streamed.status_code == 200, streamed.text
+    events = _parse_sse(streamed.text)
+    assert events[-1]["type"] == "done"
+    assert events[-1]["data"]["outline"]["color_theme_id"] == "gov_report_blue"
+    assert ppt_engine.builtin_template(events[-1]["data"]["outline"]["base_theme_id"])
+
+
+def test_image_pages_choose_both_sides_without_losing_picture():
+    slides = [{"type": "content", "title": "社区矫正", "points": ["依法监督"],
+               "_image": {"id": str(i), "file_path": "photo.png"}}
+              for i in range(2)]
+    first = ppt_engine.choose_layout(slides[0])
+    second = ppt_engine.choose_layout(slides[1], recent=[first], used={first: 1})
+    assert {first, second} == {"content.image_right", "content.image_left"}
+
+
+def test_adaptive_photo_layout_keeps_images_and_source_note(tmp_path):
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (200, 320), "#4488aa").save(photo)
+    image = {"id": "photo", "name": "社区矫正", "caption": "活动现场",
+             "file_path": str(photo), "credit": "本地图库",
+             "license_note": "已授权使用"}
+    outline = {"title": "司法工作", "slides": [
+        {"type": "content", "title": f"工作{i}", "points": ["依法履职"],
+         "_image": image} for i in range(2)]}
+    theme = ppt_engine.template_to_dict(ppt_engine.builtin_template("gov_report_blue"))
+    deck = Presentation(io.BytesIO(ppt_engine.render_pptx(outline, theme, adaptive=True)))
+    positions = []
+    for slide in deck.slides:
+        pictures = [shape for shape in slide.shapes
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE]
+        assert len(pictures) == 1
+        positions.append(pictures[0].left)
+        assert "本地图库" in slide.notes_slide.notes_text_frame.text
+        assert "已授权使用" in slide.notes_slide.notes_text_frame.text
+    assert positions[0] != positions[1]
 
 
 def test_outline_rejects_another_users_library_material(client, accounts, fake_llm):

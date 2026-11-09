@@ -7,7 +7,7 @@
   · 打 token：{{title}}/{{subtitle}}/{{pointN}}/{{image}} 自动写入
   · 页型标签：改文字前先按原文分类，写入幻灯片备注（PPT_LAYOUT_TYPE:xxx），
     否则「目录」被替换成 {{title}} 后引擎分类线索丢失
-  · 统一字体：run 级 + 主题级（默认「思源黑体」，部署机有 Noto Sans CJK 即可渲染）
+  · 统一字体：run 级 + 主题级（默认公文字体 Noto Sans CJK SC，中西文同字形、不斜体）
   · 去品牌：移除版式/母版层的 logo 图与品牌文字
   · 清示例字：点击输入/汇报人/占位符等脚手架文字
   · 自动去空页：处理完仍无任何 token/图片的页（如纯装饰页）删除
@@ -20,15 +20,16 @@ import re
 import zipfile
 from collections import Counter
 
-from lxml import etree
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
+from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font
+
 TARGET_RATIO = 16 / 9
-# 微软雅黑：Windows/WPS 端全部自带（见 fonts.py 的链路 2 说明），导出后
-# 中文与数字回退一致；后端预览缺该字体时 fontconfig 回退 Noto Sans CJK，不影响渲染。
-DEFAULT_FONT = "微软雅黑"
+# 与 fonts.py / 迁移 016 保持一致：后端容器（fonts-noto-cjk）与国产 OS 都有，
+# 中文、数字、西文写同一个字体名，不再出现模板自带的斜体衬线数字。
+DEFAULT_FONT = DEFAULT_CJK_FONT
 
 BRAND_TEXT_HINTS = (".com", ".cn", ".net", ".org", "officeplus",
                     "powered by", "template by", "www.", "http",
@@ -358,15 +359,9 @@ def process(prs, notes: list, *, title_tokens: bool = True, point_tokens: bool =
                     continue
                 for para in sh.text_frame.paragraphs:
                     for run in para.runs:
-                        run.font.name = font
-                        r_pr = run._r.get_or_add_rPr()
-                        ea = r_pr.find(qn("a:ea"))
-                        if ea is None:
-                            ea = etree.SubElement(r_pr, qn("a:ea"))
-                            latin = r_pr.find(qn("a:latin"))
-                            if latin is not None:
-                                latin.addnext(ea)
-                        ea.set("typeface", font)
+                        # latin / ea / cs 三处同字体 + 去斜体：只改 latin 时
+                        # 中文仍继承模板宋体，数字仍是斜体外文字体。
+                        apply_cjk_font(run, font)
                         count += 1
         notes.append(f"已统一 {count} 处文本字体为「{font}」")
 
@@ -385,10 +380,12 @@ def _patch_font_blocks(xml: str, font: str):
                                '<a:latin typeface="%s"' % font, body)
         new_body, n2 = re.subn(r'<a:ea typeface="[^"]*"',
                                '<a:ea typeface="%s"' % font, new_body)
+        new_body, n3 = re.subn(r'<a:cs typeface="[^"]*"',
+                               '<a:cs typeface="%s"' % font, new_body)
         if n2 == 0 and n1:
             new_body = re.sub(r'(<a:latin typeface="[^"]*"/>)',
                               r'\1<a:ea typeface="%s"/>' % font, new_body, count=1)
-        total += n1 + max(n2, 1 if n1 else 0)
+        total += n1 + n3 + max(n2, 1 if n1 else 0)
         return new_body
 
     for tag in ("majorFont", "minorFont"):

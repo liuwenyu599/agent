@@ -122,6 +122,24 @@ async def upload_template(file: UploadFile = File(...), name: str = Form(""),
                                      shared=shared, license_note=license_note)
 
 
+@router.post("/templates/{template_id}/publish")
+def publish_template(template_id: str, user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
+    return svc.publish_template(template_id, user)
+
+
+@router.post("/templates/{template_id}/refresh-preview")
+def refresh_template_preview(template_id: str, user: User = Depends(get_current_user),
+                             svc: PPTService = Depends(get_ppt_service)):
+    return svc.refresh_template_previews(template_id, user)
+
+
+@router.post("/templates/{template_id}/recheck")
+def recheck_template(template_id: str, user: User = Depends(get_current_user),
+                     svc: PPTService = Depends(get_ppt_service)):
+    return svc.recheck_template(template_id, user)
+
+
 @router.get("/templates/{template_id}/layout-preview/{layout_id}")
 def layout_preview(template_id: str, layout_id: str,
                    user: User = Depends(get_current_user),

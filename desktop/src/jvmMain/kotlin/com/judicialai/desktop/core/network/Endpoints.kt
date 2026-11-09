@@ -144,6 +144,9 @@ object Endpoints {
         const val KBS = "/ppt/kbs"
         const val TEMPLATE_UPLOAD = "/ppt/templates/upload"
         fun template(id: String) = "/ppt/templates/$id"
+        fun templatePublish(id: String) = "/ppt/templates/$id/publish"
+        fun templateRefreshPreview(id: String) = "/ppt/templates/$id/refresh-preview"
+        fun templateRecheck(id: String) = "/ppt/templates/$id/recheck"
         fun templateDelete(id: String) = "/ppt/templates/$id"
         const val OUTLINE = "/ppt/outline"
         /** 流式大纲（SSE）：stage 阶段事件 + done 携带权威大纲 */

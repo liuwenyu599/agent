@@ -18,6 +18,7 @@ class PPTTemplate:
     builtin_id: Optional[str] = None
     category: str = "工作汇报"
     description: Optional[str] = None
+    sharing_status: str = "private"
     is_official: bool = False
     created_by: Optional[str] = None
     colors: Dict[str, Any] = field(default_factory=dict)

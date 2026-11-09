@@ -8,7 +8,7 @@
 
 默认行为（只给 --out 时）就完成全部机械处理：
   · 打 token：{{title}}/{{subtitle}}/{{pointN}}/{{image}} 自动写入
-  · 统一字体：默认「微软雅黑」（Windows/WPS 端自带，导出显示一致）
+  · 统一字体：默认「Noto Sans CJK SC」（中西文同字形，后端与国产 OS 都有）
   · 去品牌：自动移除版式/母版层的 logo 图与品牌字（--keep-brand 可保留）
   · 自动去空页：处理完仍无任何 token/图片的页（如结束页艺术字）自动删
 
@@ -36,8 +36,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
 
 from app.application.ppt.template_prepare import (  # noqa: E402
-    TARGET_RATIO, has_smartart, is_picture, layout_brand, prepare_template_bytes,
-    text_size, walk,
+    DEFAULT_FONT, TARGET_RATIO, has_smartart, is_picture, layout_brand,
+    prepare_template_bytes, text_size, walk,
 )
 from pptx import Presentation  # noqa: E402
 
@@ -108,7 +108,8 @@ def main() -> int:
     ap.add_argument("--image-pages", default=None, help="多图页中强制锚定最大图，如 3,5")
     ap.add_argument("--strip-pictures", action="store_true",
                     help="清除第 2 页起所有未锚定图片（真实旧稿改模板用：照片/截图是旧内容不是装饰）")
-    ap.add_argument("--font", default="微软雅黑", help="统一字体名（默认 微软雅黑；--no-font 可跳过）")
+    ap.add_argument("--font", default=DEFAULT_FONT,
+                    help="统一字体名（默认公文字体 Noto Sans CJK SC；--no-font 可跳过）")
     ap.add_argument("--no-font", action="store_true", help="不统一字体，保留模板原字体")
     ap.add_argument("--no-auto-drop", action="store_true",
                     help="关闭自动删除无 token/无图的空页（默认开启）")

@@ -58,6 +58,17 @@ class PptRepository(private val api: ApiClient) {
             formFields = mapOf("shared" to shared.toString(),
                 "license_note" to licenseNote), timeoutMs = 300_000)
 
+    suspend fun publishTemplate(id: String) =
+        api.post(Endpoints.Ppt.templatePublish(id), emptyMap<String, Any?>())
+
+    suspend fun refreshTemplatePreview(id: String) =
+        api.post(Endpoints.Ppt.templateRefreshPreview(id), emptyMap<String, Any?>(),
+            timeoutMs = 300_000)
+
+    suspend fun recheckTemplate(id: String) =
+        api.post(Endpoints.Ppt.templateRecheck(id), emptyMap<String, Any?>(),
+            timeoutMs = 300_000)
+
     suspend fun deleteTemplate(id: String) = api.del(Endpoints.Ppt.templateDelete(id))
 
     suspend fun templateDetail(id: String): ApiResult<JsonObject> =
@@ -99,6 +110,8 @@ class PptRepository(private val api: ApiClient) {
         autoImages: Boolean = true,
         themeId: String? = null,
         templateId: String? = null,
+        templateMode: String = "adaptive",
+        colorOverride: Boolean = false,
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
@@ -109,6 +122,8 @@ class PptRepository(private val api: ApiClient) {
             "auto_images" to autoImages,
             "theme_id" to themeId,
             "template_id" to templateId,
+            "template_mode" to templateMode,
+            "color_override" to colorOverride,
         ).apply {
             slideCount?.let { put("slide_count", it) }
         }
