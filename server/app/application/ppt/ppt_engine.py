@@ -819,7 +819,7 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 3. 每页 slide 的字段：type、title、points、blocks、image_id、image_hint、note（演讲备注，一句话）；
 4. {count_rule}
 5. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
-6. 图片规则：仅当正文页内容与图片的画面说明明显相关时设置 image_id（必须取自可用图片清单），否则为 null；image_hint 用一句话说明本页希望呈现的画面。不要重复使用同一图片；
+6. 图片规则：主动为 2–4 个确实有实景场景的正文页配图（开会部署、培训讲座、普法宣传、窗口接待、调解、启动仪式），image_id 必须取自「可用图片」清单且画面与页面内容相符；没有相符画面就留 null，不要为凑数配无关图，不要用合影图配正文页。不要重复使用同一图片；image_hint 用一句话说明本页希望呈现的画面（写清场所+活动+人物，供无合适图时按画面检索）；
 7. 不要虚构材料中没有的事实和数据。材料出现 "XX""若干""待填" 等占位值时，不得把占位值
    原样写入 blocks.cards[].value（会被渲染成大字指标卡），也不要为凑页型创建没有真实数值的
    data/chart 页；缺数据时改用不带数字的定性表述。不得编造案例情节、办结天数或成果数字。
@@ -1983,6 +1983,52 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
     return outline
 
 
+# 页面场景词 → 图库标签。政务稿标题多是口号（"强化思想引领"），和画面说明
+# 几乎不共享词；但正文里通常写着"专题学习会/业务培训/普法咨询"，这些才是
+# 能对上照片的具体场景（用户 2026-11-09「图库呢」）。
+_SCENE_CUES = (
+    # (场景词, 期望图库标签, 权重)。权重决定"同页出现多个场景词时听谁的"：
+    # 演讲比赛/专题培训这类画面指向最强，泛指的"普法/法治宣传"最弱。
+    (("论坛演讲", "论坛", "开幕式", "主论坛", "开讲", "主旨演讲"),
+     ("演讲", "论坛", "开幕式"), 4),
+    (("培训", "讲座", "授课", "讲授", "宣讲", "实训", "轮训", "教学", "辅导"),
+     ("培训", "讲座", "授课"), 4),
+    (("会议", "会场", "研讨", "座谈", "部署", "专题会", "第一议题", "三会一课",
+      "中心组", "学习会", "警示教育会", "动员会", "推进会", "例会", "述职",
+      "专题学习", "读书班"),
+     ("会议", "会场", "主席台", "会议室", "研讨"), 2),
+    (("窗口", "大厅", "接待", "政务服务", "公共法律服务", "办事", "便民",
+      "咨询点", "服务点"),
+     ("服务窗口", "公共法律服务", "接待", "政务服务大厅"), 2),
+    (("调解", "纠纷", "化解"),
+     ("调解",), 3),
+    (("启动仪式", "签约", "授旗", "揭牌", "授牌"),
+     ("启动仪式", "签约", "授旗", "开幕式"), 3),
+    (("普法", "法治宣传", "宪法", "民法典", "宣传栏", "法律咨询", "送法",
+      "法律援助", "法治教育"),
+     ("普法", "法治宣传", "宣传栏", "横幅"), 1),
+)
+# 合影类照片只适合封面/结尾/活动留影，配到正文页像"贴图凑数"。
+_GROUP_PHOTO_CUES = ("合影", "集体合影", "活动留影")
+# 一稿里自动配图的正文页上限：政务稿配满会显得杂。
+_SCENE_IMAGE_CAP = 4
+
+
+def _scene_wanted(text: str) -> Dict[str, int]:
+    """从页面文字识别场景，返回 {图库标签: 权重}。"""
+    wanted: Dict[str, int] = {}
+    for cues, tags, weight in _SCENE_CUES:
+        if any(cue in text for cue in cues):
+            for tag in tags:
+                wanted[tag] = max(wanted.get(tag, 0), weight)
+    return wanted
+
+
+def _is_group_photo(im: Dict) -> bool:
+    blob = f"{im.get('name') or ''}{' '.join(im.get('tags') or [])}"
+    return any(cue in blob for cue in _GROUP_PHOTO_CUES)
+
+
 def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
     """只使用本次授权的素材；说明与页面主题明显相符时才自动配图。"""
     by_name = {str(im["name"]): im for im in images}
@@ -1992,6 +2038,10 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
         value = re.sub(r"[^\w\u4e00-\u9fff]", "", value.lower())
         return {value[i:i + 2] for i in range(len(value) - 1)}
 
+    def _blob(im: Dict) -> str:
+        return (f"{im.get('caption') or ''} {im.get('name') or ''} "
+                f"{im.get('category') or ''} {' '.join(im.get('tags') or [])}")
+
     def _relevant(hint: str) -> Optional[Dict]:
         query = _grams(hint)
         if len(query) < 2:
@@ -2000,16 +2050,35 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
         for im in images:
             if im.get("id") in used_auto_ids:
                 continue
-            description = (f"{im.get('caption') or ''} {im.get('name') or ''} "
-                           f"{im.get('category') or ''} {' '.join(im.get('tags') or [])}")
-            terms = _grams(description)
-            common = len(query & terms)
+            common = len(query & _grams(_blob(im)))
             score = common / len(query) if query else 0.0
             if common >= 2 and score > best_score:
                 best, best_score = im, score
         return best if best_score >= 0.55 else None
 
+    def _scene_match(page_text: str) -> Optional[Dict]:
+        """场景命中优先：页面写了"专题学习会"，就配会议现场，而不是靠词形重合。"""
+        wanted = _scene_wanted(page_text)
+        if not wanted:
+            return None
+        best, best_score = None, 0
+        for im in images:
+            if im.get("id") in used_auto_ids or _is_group_photo(im):
+                continue
+            name = str(im.get("name") or "")
+            body = _blob(im)
+            score = 0
+            for tag, weight in wanted.items():
+                if tag in name:      # 图名直接点明场景，权重更高
+                    score += weight * 2
+                elif tag in body:
+                    score += weight
+            if score > best_score:
+                best, best_score = im, score
+        return best if best_score else None
+
     used_auto_ids: set[str] = set()
+    scene_used = 0
     for s in outline.get("slides", []):
         img = None
         if s.get("type") not in {"content", "case"}:
@@ -2023,7 +2092,21 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
             img = None
         if (not img and not (s.get("image_id") or s.get("image_name"))
                 and (s.get("design") or {}).get("image_role") != "none"):
-            img = _relevant(str(s.get("image_hint") or s.get("title") or ""))
+            page_text = " ".join([
+                str(s.get("title") or ""),
+                " ".join(str(p) for p in (s.get("points") or [])),
+                str(s.get("note") or ""),
+            ])
+            if scene_used < _SCENE_IMAGE_CAP:
+                img = _scene_match(page_text)
+                if img:
+                    scene_used += 1
+            if not img:
+                # 词形兜底只看模型写的画面描述或标题本身，不拼正文：正文几千字
+                # 拿去比二元组重合，任何一页都能凑够 0.55，会把无关照片硬塞进来。
+                hint = str(s.get("image_hint") or s.get("title") or "").strip()
+                if hint:
+                    img = _relevant(hint)
         if img:
             used_auto_ids.add(str(img.get("id")))
             s["image_id"] = img["id"]

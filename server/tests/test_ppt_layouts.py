@@ -1135,3 +1135,78 @@ class TestMixedDataSlide:
             "【成果转化】报送微视频获优秀奖，展现队伍风采。"]}]}
         E.apply_visual_intent(outline)
         assert outline["slides"][0]["type"] == "content"
+
+
+class TestSceneImageMatching:
+    """图库有货但选不出来：标题是口号、照片说明是画面，靠词形重合永远配不上。
+
+    用户 2026-11-09 把 32 张实景照入库后追问「图库呢」——图在库里，
+    但 11 页稿一张都没配上，因为选图只比标题与 caption 的字面重合。
+    """
+
+    IMAGES = [
+        {"id": "m1", "name": "长桌会议室", "category": "会议",
+         "caption": "室内会议：十余人沿长桌两侧就座，桌上有材料和茶杯",
+         "tags": ["会议室", "研讨", "工作会议"]},
+        {"id": "m2", "name": "培训讲座现场", "category": "会议",
+         "caption": "培训讲座：讲者立于左侧，听众围坐长桌面向投影大屏",
+         "tags": ["讲座", "培训", "业务培训"]},
+        {"id": "m3", "name": "大会集体合影", "category": "会议",
+         "caption": "合影：二十余人立于台阶上合影", "tags": ["合影", "集体合影"]},
+        {"id": "m4", "name": "户外普法咨询", "category": "法治宣传",
+         "caption": "户外普法：宣传台前群众咨询，背景为横幅",
+         "tags": ["普法", "法治宣传", "横幅"]},
+    ]
+
+    def _resolve(self, slides):
+        outline = {"slides": slides}
+        E.resolve_slide_images(outline, list(self.IMAGES))
+        return outline["slides"]
+
+    def test_slogan_title_still_gets_matching_photo(self):
+        slides = self._resolve([{
+            "type": "content", "title": "拉紧纪律防线，落实“学纪知纪守纪”",
+            "points": ["全年开展“第一议题”学习35次，中心组专题学习17场。"]}])
+        assert slides[0]["_image"]["id"] == "m1"
+        assert slides[0]["image_name"] == "长桌会议室"
+
+    def test_lecture_page_picks_lecture_photo_not_meeting_room(self):
+        slides = self._resolve([{
+            "type": "content", "title": "深学细悟《条例》",
+            "points": ["局党组书记到联系支部讲授专题纪律党课，分章节深度解读。"]}])
+        assert slides[0]["_image"]["id"] == "m2"
+
+    def test_promoted_data_page_gets_no_photo(self):
+        """成图优先于配图：数据页先 promote 成 chart，配图只落 content/case。"""
+        outline = {"slides": [{
+            "type": "content", "title": "拉紧纪律防线",
+            "points": ["全年开展“第一议题”学习35次，中心组专题学习17场，"
+                       "“三会一课”23次，主题党日11场。",
+                       "紧扣目标，将党纪学习教育与专项行动深度融合。"]}]}
+        E.apply_visual_intent(outline)
+        E.resolve_slide_images(outline, list(self.IMAGES))
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        assert slide.get("_image") is None
+
+    def test_group_photo_never_lands_on_body_page(self):
+        slides = self._resolve([{
+            "type": "content", "title": "全员参与学习",
+            "points": ["开展集体学习活动，提升政治判断力。"]}])
+        image = slides[0].get("_image")
+        assert image is None or "合影" not in image["name"]
+
+    def test_page_without_real_scene_stays_text_only(self):
+        slides = self._resolve([{
+            "type": "content", "title": "构建“五学联动”学习体系",
+            "points": ["班子成员领学、支部研学、部门促学、党员自学，形成学习合力。"]}])
+        assert slides[0].get("_image") is None
+
+    def test_same_photo_is_not_reused_across_pages(self):
+        slides = self._resolve([
+            {"type": "content", "title": "专题学习会",
+             "points": ["召开专题学习会，分章节解读条例。"]},
+            {"type": "content", "title": "研讨交流",
+             "points": ["围绕条例开展研讨交流，分享学习体会。"]}])
+        ids = [s["_image"]["id"] for s in slides if s.get("_image")]
+        assert len(ids) == len(set(ids))
