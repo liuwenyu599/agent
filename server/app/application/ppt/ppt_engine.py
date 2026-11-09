@@ -51,7 +51,7 @@ BUILTIN_TEMPLATES = [
     {"id": "gov_report_blue", "name": "政务工作汇报（深蓝）", "category": "工作汇报", "is_official": True,
      "description": "庄重政务深蓝，适用：司法行政工作汇报、年度总结、专项汇报",
      "colors": {"primary": "17365D", "accent": "2F75B5", "light": "EEF3F8", "dark": "0E243E"},
-     "layouts": {"cover": "cover.band", "toc": "toc.list", "section": "section.side",
+     "layouts": {"cover": "cover.band", "toc": "toc.list", "section": "section.number",
                   "content": "content.bullets", "data": "data.cards", "chart": "chart.full",
                   "case": "case.block", "timeline": "timeline.horizontal", "process": "process.chevron",
                   "summary": "summary.cards", "closing": "closing.center"}},
@@ -79,7 +79,7 @@ BUILTIN_TEMPLATES = [
     {"id": "exp_share_red", "name": "经验交流", "category": "经验交流", "is_official": True,
      "description": "热烈交流红，适用：经验交流、工作分享",
      "colors": {"primary": "B01E23", "accent": "F2C14E", "light": "FBF1F1", "dark": "6E1114"},
-     "layouts": {"cover": "cover.side", "toc": "toc.cards", "section": "section.side",
+     "layouts": {"cover": "cover.side", "toc": "toc.cards", "section": "section.number",
                   "content": "content.quote", "data": "data.cards", "chart": "chart.split",
                   "case": "case.block", "timeline": "timeline.vertical", "process": "process.chevron",
                   "summary": "summary.list", "closing": "closing.center"}},
@@ -100,7 +100,7 @@ BUILTIN_TEMPLATES = [
     {"id": "public_service_green", "name": "公共服务（青绿）", "category": "公共服务", "is_official": True,
      "description": "清晰、亲和的公共服务风格，适用：法律援助、人民调解、便民服务",
      "colors": {"primary": "176B57", "accent": "A47A35", "light": "EDF5F0", "dark": "173D32"},
-     "layouts": {"cover": "cover.side", "toc": "toc.grid", "section": "section.side",
+     "layouts": {"cover": "cover.side", "toc": "toc.grid", "section": "section.number",
                   "content": "content.three_cards", "data": "data.kpi", "chart": "chart.full",
                   "case": "case.split", "timeline": "timeline.horizontal", "process": "process.chevron",
                   "summary": "summary.cards", "closing": "closing.band"}},
@@ -317,9 +317,11 @@ LAYOUT_CATALOG: Dict[str, List[Dict[str, Any]]] = {
         {"id": "toc.grid", "label": "宫格目录", "min_points": 4, "max_points": 6, "weight": 1.1},
     ],
     "section": [
-        {"id": "section.side", "label": "侧栏章节页", "weight": 1.0},
+        # 默认用对称居中的大序号页：左右留白相等，序号 / 色条 / 标题同轴，
+        # 通篇同一种章节版式（用户 2026-11-09 要求章节页统一且不要失衡构图）。
+        {"id": "section.number", "label": "居中大序号章节页", "weight": 1.3},
         {"id": "section.center", "label": "居中章节页", "weight": 1.0},
-        {"id": "section.number", "label": "大序号章节页", "weight": 0.9},
+        {"id": "section.side", "label": "侧栏章节页", "weight": 0.85},
     ],
     "content": [
         {"id": "content.bullets", "label": "编号要点", "min_points": 1, "max_points": 6,
@@ -658,9 +660,12 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                     continue
                 # 章节页整篇必须同一种版式（用户 2026-11-09：章节页要统一，
                 # 不能每页都不一样）。章节页没有内容差异可打分，一旦参与轮换
-                # 就会 4 个章节出现 3 种样式；这里直接沿用模板静态偏好。
+                # 就会 4 个章节出现 3 种样式。
+                # 模板静态偏好也不跟随：10 套内置模板里有 3 套配的是 side（左侧
+                # 满高色块 + 右侧留白的失衡构图），已按用户反馈统一为居中大序号。
+                # 需要别的样式时用 outline["section_style"] 或单页 layout 指定。
                 if stype == "section" and not slide.get("layout_locked"):
-                    return want
+                    return want if from_model else "section.number"
                 # 模型没给意图时，模板静态偏好不锁版：用满次数就改走打分均衡，
                 # 避免"每页都是同一版式"的模板感。封面/目录/结束页整篇只出现
                 # 一次，无法靠 used 轮换，另有下方指纹逻辑跨稿变化；
@@ -1498,7 +1503,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     warnings = warnings if warnings is not None else []
 
-    colors, layouts = template["colors"], template["layouts"]
+    colors, layouts = template["colors"], dict(template["layouts"])
+    # 章节页样式可按稿覆盖：outline["section_style"] ∈ number / center / side。
+    # 坐标仍由引擎提供（三套都是对称构图），但「用哪一套」不是唯一写死的：
+    # 稿级可指定，单页还能用 layout + layout_locked 锁定。
+    _sec_style = str(outline.get("section_style") or "")
+    if _sec_style not in ("number", "center", "side"):
+        _sec_style = ""
     header_style = {
         "gov_report_red": "band", "policy_blue": "editorial",
         "training_blue": "center", "exp_share_red": "editorial",
@@ -1703,8 +1714,12 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         circle(slide, SW * 0.06, SH * 0.95, SH * 0.24, base, 14)
 
     def footer(slide, idx, total):
-        """内容页页脚：细分隔线 + 页码。"""
-        rect(slide, lx(0.045), ly(0.955), lx(0.91), Emu(9525), LINE)
+        """内容页页脚：只留页码。
+
+        原先是 0.91 宽的通栏细灰线横贯页底，缩略图上像一条来历不明的
+        残留线（用户 2026-11-09：「下面有一些莫名其妙的线条」）；改成
+        短色标后依然是一条孤立小横线，索性去掉，页脚只保留页码。
+        """
         text(slide, lx(0.88), ly(0.962), lx(0.08), ly(0.03), f"{idx} / {total}", 9, False, GRAY,
              align=PP_ALIGN.RIGHT)
 
@@ -1876,21 +1891,26 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     def r_section(s):
         slide = prs.slides.add_slide(blank)
-        v = lay_of(s) or "side"
+        v = lay_of(s) or "number"
         if v == "number":
+            # 居中式大序号（默认）：4 个章节页必须同一种排版，且重心居中。
+            # 旧写法把 150pt 序号钉在左上、标题右对齐钉在右下，形成对角失衡
+            # ——用户 2026-11-09 反馈「章节页不对称不适合」。
+            # 纯主色底 + 中轴堆叠，不加任何贴边装饰线（贴边细线在投影上看
+            # 起来像残留边框，用户两次提到「莫名其妙的线条」）。
             rect(slide, 0, 0, SW, SH, PRIMARY)
-            deco_circles(slide)
             no = int(s.get("_sec_no") or 1)
-            text(slide, lx(0.06), ly(0.10), lx(0.60), ly(0.52), f"{no:02d}", 150, True,
-                 WHITE)
-            rect(slide, lx(0.83), ly(0.57), lx(0.10), ly(0.008), ACCENT)
-            text(slide, lx(0.40), ly(0.60), lx(0.50), ly(0.16), s["title"], 32, True, WHITE,
-                 align=PP_ALIGN.RIGHT)
+            text(slide, 0, ly(0.275), SW, ly(0.24), f"{no:02d}", 96, True, WHITE,
+                 align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+            rect(slide, lx(0.455), ly(0.550), lx(0.09), ly(0.008), ACCENT)
+            text(slide, 0, ly(0.600), SW, ly(0.12), s["title"], 34, True, WHITE,
+                 align=PP_ALIGN.CENTER)
             return slide
         if v == "center":
             rect(slide, 0, 0, SW, SH, LIGHT)
-            circle(slide, SW * 0.9, SH * 0.15, SH * 0.25, PRIMARY, 10)
-            circle(slide, SW * 0.08, SH * 0.9, SH * 0.2, PRIMARY, 8)
+            # 对角镜像的两个装饰圆（同尺寸、同距边），点对称而非一上一下的失衡
+            circle(slide, SW * 0.90, SH * 0.16, SH * 0.16, PRIMARY, 10)
+            circle(slide, SW * 0.10, SH * 0.82, SH * 0.16, PRIMARY, 10)
             rect(slide, lx(0.43), ly(0.40), lx(0.14), ly(0.009), ACCENT)
             text(slide, 0, ly(0.45), SW, ly(0.16), s["title"], 36, True, DARK,
                  align=PP_ALIGN.CENTER)
@@ -1900,7 +1920,11 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             circle(slide, SW * 0.06, SH * 0.85, SH * 0.24, ACCENT, 10)
             rect(slide, lx(0.34), 0, lx(0.008), SH, ACCENT)
             rect(slide, lx(0.06), ly(0.40), lx(0.05), ly(0.010), ACCENT)
-            text(slide, lx(0.06), ly(0.44), lx(0.26), ly(0.18), s["title"], 30, True, WHITE)
+            # 侧栏只有 0.28 页宽可用：「三、存在问题与挑战」在 30pt 下被挤成两行，
+            # 按字数降号保证一行排完。
+            title_pt = 30 if len(s["title"]) <= 8 else 26
+            text(slide, lx(0.06), ly(0.44), lx(0.28), ly(0.18), s["title"], title_pt,
+                 True, WHITE)
         return slide
 
     def _content_image(s, side="right"):
@@ -2205,14 +2229,16 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         if cards:
             n = len(cards)
             cw = 0.88 / n - 0.02
+            # 卡片整体下移到正文区中线（原 0.33 起使整页内容偏上、下半页留白）；
+            # 数值与标签靠字号层级区分，中间那条 0.04 宽的短色条删掉——它是
+            # 卡片里一根孤立的短横线，成稿上像「莫名其妙的线条」。
             for i, c in enumerate(cards):
                 cx = 0.06 + i * (cw + 0.02)
-                rect(slide, lx(cx), ly(0.33), lx(cw), ly(0.30), LIGHT, round_=True)
-                rect(slide, lx(cx), ly(0.33), lx(cw), ly(0.014), PRIMARY)
-                text(slide, lx(cx), ly(0.395), lx(cw), ly(0.12), str(c.get("value", "")),
+                rect(slide, lx(cx), ly(0.355), lx(cw), ly(0.335), LIGHT, round_=True)
+                rect(slide, lx(cx), ly(0.355), lx(cw), ly(0.014), PRIMARY)
+                text(slide, lx(cx), ly(0.425), lx(cw), ly(0.12), str(c.get("value", "")),
                      32, True, PRIMARY, align=PP_ALIGN.CENTER)
-                rect(slide, lx(cx + cw / 2 - 0.02), ly(0.535), lx(0.04), ly(0.006), ACCENT)
-                text(slide, lx(cx), ly(0.555), lx(cw), ly(0.06), str(c.get("label", "")),
+                text(slide, lx(cx), ly(0.585), lx(cw), ly(0.07), str(c.get("label", "")),
                      14, False, GRAY, align=PP_ALIGN.CENTER)
         elif raw_cards:
             rect(slide, lx(0.06), ly(0.34), lx(0.88), ly(0.26), LIGHT, round_=True)
@@ -2364,7 +2390,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
         if (lay_of(s) or "horizontal") == "vertical" and len(all_items) >= 3:
             items = all_items[:6]
-            rect(slide, lx(0.175), ly(0.245), Emu(19050), ly(0.60), LINE)
+            rect(slide, lx(0.185), ly(0.245), lx(0.0022), ly(0.60), LINE)
             step = 0.60 / len(items)
             for i, it in enumerate(items):
                 cy = 0.245 + step * (i + 0.5)
@@ -2372,16 +2398,18 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 # 时间列、高度按估算行数撑开——固定 13pt/0.07 槽遇换行必溢出
                 # （实机验收 bug 2026-11-06：竖/横两分支同源）
                 t_label = str(it.get("time", ""))
-                t_fs = 13 if len(t_label) <= 10 else (12 if len(t_label) <= 16 else 11)
-                t_w = 0.155
+                t_fs = 15 if len(t_label) <= 10 else (14 if len(t_label) <= 16 else 13)
+                t_w = 0.17
                 t_h = min(_est_lines(t_label, t_fs, t_w) * (t_fs / 72 * 1.35 / 7.5),
                           step * 0.9)
                 t_y = min(max(cy - t_h / 2, 0.245), cy + step / 2 - t_h)
-                text(slide, lx(0.01), ly(t_y), lx(t_w), ly(t_h),
+                text(slide, lx(0.008), ly(t_y), lx(t_w), ly(t_h),
                      t_label, t_fs, True, PRIMARY, align=PP_ALIGN.RIGHT)
-                circle(slide, lx(0.175), ly(cy - 0.006), SH * 0.012, PRIMARY, 100)
-                text(slide, lx(0.215), ly(cy - 0.045), lx(0.70), ly(step), str(it.get("text", "")),
-                     14, False, DARK)
+                circle(slide, lx(0.185), ly(cy - 0.006), SH * 0.013, PRIMARY, 100)
+                # 正文 13/14pt 在投影上几乎读不出来（用户 2026-11-09：时间线字号小）。
+                # 正文区宽 0.72，17pt 一行可容约 40 个汉字，四条时间线均单行。
+                text(slide, lx(0.225), ly(cy - 0.048), lx(0.72), ly(step),
+                     str(it.get("text", "")), 17, False, DARK)
             return slide
         items = all_items[:5]
         n = max(len(items), 1)
@@ -2402,13 +2430,14 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             # 长标签（如「第一阶段：近期（2026年11月—12月）」）降字号、加宽槽位，
             # 高度按估算行数撑开——固定 14pt/0.05 高槽遇换行必然压住正文（实机 bug 2026-11-06）
             t_label = str(it.get("time", ""))
-            t_fs = 14 if len(t_label) <= 8 else (12 if len(t_label) <= 14 else 11)
-            t_w = min(0.18, spacing * 0.92)
+            t_fs = 16 if len(t_label) <= 8 else (15 if len(t_label) <= 14 else 13)
+            t_w = min(0.20, spacing * 0.92)
             t_h = _est_lines(t_label, t_fs, t_w) * (t_fs / 72 * 1.35 / 7.5)
             d_label = str(it.get("text", ""))
-            # 原 11/12pt 在投影上明显偏小，与正文页 20–26pt 落差过大。
-            d_fs = 14 if len(d_label) <= 26 else 13
-            d_w = min(0.20, spacing * 0.98)
+            # 原 11/12/14pt 在投影上明显偏小，与正文页 20–26pt 落差过大；
+            # 提到 18/16pt，按估算行数撑高，上下交替仍不互相压字。
+            d_fs = 18 if len(d_label) <= 30 else 16
+            d_w = min(0.21, spacing * 1.02)
             d_h = _est_lines(d_label, d_fs, d_w) * (d_fs / 72 * 1.35 / 7.5)
             gap = 0.012
             # 首尾节点居中排会越出页面：把文字框夹回版心内（实机节点 1 的
@@ -2593,6 +2622,11 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                  "process": r_process, "summary": r_summary, "closing": r_closing}
 
     slides_list = [dict(s) for s in (outline.get("slides") or [])]
+    # 稿级章节样式覆盖：直接写成该页的模型意图（优先级最高），不改调用方 outline。
+    if _sec_style:
+        for _s in slides_list:
+            if _s.get("type") == "section" and not _s.get("layout"):
+                _s["layout"] = f"section.{_sec_style}"
     total = len(slides_list)
     # 先统一选版：相邻页去重 + 整篇均衡，避免"每页长得一样"的模板感
     used_layouts: Dict[str, int] = {}

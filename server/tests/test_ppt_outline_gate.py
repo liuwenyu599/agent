@@ -234,8 +234,10 @@ def test_section_layouts_are_unified_across_the_deck() -> None:
             {"section": "section.side"}, used=used)
         chosen.append(layout)
         used[layout] = used.get(layout, 0) + 1
-    # 章节页不参与任何轮换：4 页全部沿用模板静态偏好。
-    assert chosen == ["section.side"] * 4
+    # 章节页不参与任何轮换；也不跟随模板静态偏好——旧模板里配的 section.side
+    # 是「左侧满高色块 + 右侧大片留白」的失衡构图（用户 2026-11-09 反馈不适合），
+    # 已统一为居中大序号。需要别的样式请显式给 layout 或 outline["section_style"]。
+    assert chosen == ["section.number"] * 4
     # 同一页在成稿 / 预览 / 复检里必须得到同一个结果。
     same = {"type": "section", "title": "章节", "points": []}
     assert (ppt_engine.choose_layout(same, {"section": "section.side"}) ==
@@ -249,4 +251,4 @@ def test_section_layout_unaffected_by_previous_pages_usage() -> None:
     used = {"section.side": 3, "section.number": 3}
     assert ppt_engine.choose_layout(
         {"type": "section", "title": "章节", "points": []},
-        {"section": "section.side"}, recent=["section.side"], used=used) == "section.side"
+        {"section": "section.side"}, recent=["section.side"], used=used) == "section.number"

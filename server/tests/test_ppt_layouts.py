@@ -686,4 +686,63 @@ class TestPageFontBottomLine:
         assert "01" in texts and "03" in texts
         assert texts.count(point) == 1, "兜底节点在页脚又被重复了一遍"
         body = [pt for txt, pt in self._body_runs(prs.slides[0]) if txt == point]
-        assert body and min(body) >= 13
+        assert body and min(body) >= 16, f"时间轴正文仍然偏小：{body}"
+
+
+class TestSectionBalanceAndFooterRule:
+    """章节页构图与页脚：不再出现失衡对角布局和通栏「残留线」。
+
+    用户 2026-11-09 第二轮反馈：①章节页不对称；②有的页下面有莫名其妙的线条。
+    根因：section.number 把 150pt 序号钉左上、标题右对齐钉右下；footer 画了
+    0.91 宽通栏细灰线。这里锁住「居中同轴」和「页脚无通栏线」两个结论。
+    """
+
+    @staticmethod
+    def _render(slides, **top):
+        outline = {"title": "t", "slides": slides + [_slide("closing", title="谢谢")], **top}
+        return Presentation(io.BytesIO(E.build_pptx(outline, TPL)))
+
+    @staticmethod
+    def _text_shapes(slide, needle):
+        return [sh for sh in slide.shapes
+                if sh.has_text_frame and needle in sh.text_frame.text]
+
+    def test_section_number_is_centered_on_page_axis(self):
+        prs = self._render([_slide("section", title="一、工作回顾与成效", layout="number")])
+        slide = prs.slides[0]
+        shapes = self._text_shapes(slide, "01") + self._text_shapes(slide, "工作回顾")
+        assert len(shapes) == 2, "章节页的序号和标题没渲染出来"
+        for sh in shapes:
+            center = sh.left + sh.width / 2
+            # 序号与标题同一中轴：都和页面中心对齐（容差 0.02 英寸）
+            assert abs(center - prs.slide_width / 2) < 20000, "章节页内容没有居中"
+            assert sh.text_frame.paragraphs[0].alignment is not None
+
+    def test_section_style_can_be_overridden_per_deck(self):
+        slides = [_slide("section", title=f"{n}、章节") for n in "一二三"]
+        default = self._render([dict(s) for s in slides])
+        forced = self._render([dict(s) for s in slides], section_style="side")
+
+        def sidebar(prs, idx):
+            slide = prs.slides[idx]
+            return [sh for sh in slide.shapes
+                    if abs(sh.width / prs.slide_width - .34) < .01
+                    and abs(sh.height / prs.slide_height - 1.0) < .01]
+
+        assert not sidebar(default, 0), "默认章节页不该是侧栏版式"
+        for idx in range(3):
+            assert sidebar(forced, idx), "section_style=side 未生效或未统一"
+
+    def test_content_footer_has_no_full_width_rule(self):
+        outline = {"title": "t", "slides": [
+            _slide("content", ["要点一", "要点二"], layout="bullets"),
+            _slide("toc", ["一、回顾", "二、计划"], layout="list"),
+            _slide("closing", title="谢谢")]}
+        prs = Presentation(io.BytesIO(E.build_pptx(outline, TPL)))
+        for page in list(prs.slides)[:2]:
+            for sh in page.shapes:
+                near_bottom = sh.top / prs.slide_height > .94
+                flat = sh.height / prs.slide_height < .006
+                if near_bottom and flat:
+                    assert sh.width / prs.slide_width < .20, (
+                        "页脚又出现了通栏细线（用户反馈的「莫名其妙的线条」）")

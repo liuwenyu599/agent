@@ -178,27 +178,29 @@ def _layout_motif(out: list, scene: dict) -> list:
     body_top = min(b["y"] for b in boxes)
     rule_y = min(.205, body_top - .035)
     add: list[dict] = []
-    # 色条必须对齐真实列：2 列页画三条会有一条悬空在卡片外。
+    # 色条必须对齐真实列，且跟着该列的实际顶部走：mirror（上下错落）布局里
+    # 两列起点相差 4%，统一钉在 rule_y 会让右列色条悬空在卡片外 0.08 处。
     columns = sorted({round(b["x"], 3) for b in boxes})[:4]
     if variant in ("two_col", "compare", "symmetric", "icon_grid",
                    "three_cards", "cards"):
         for i, x in enumerate(columns):
-            width = min((b["w"] for b in boxes if abs(b["x"] - x) <= .01),
-                        default=.28)
-            add.append(_box(x, rule_y, width, .008, kind="rect",
+            column_boxes = [b for b in boxes if abs(b["x"] - x) <= .01]
+            width = min(b["w"] for b in column_boxes)
+            band_y = max(.02, min(b["y"] for b in column_boxes) - .018)
+            add.append(_box(x, band_y, width, .006, kind="rect",
                             fill=("primary", "accent", "primary", "accent")[i % 4],
                             alpha=70))
-        if (variant in ("two_col", "compare", "symmetric")
+        # 只有真正左右对照（split/compare）才画中轴；mirror 是上下错落的镜像，
+        # 中轴穿过两列间隙没有任何语义，成稿里像一条无来由的竖线。
+        if (variant in ("two_col", "compare")
                 and not any(item["kind"] == "line" for item in out)):
             add.append(_line(.5, rule_y + .02, .5, .845, stroke="line", width=1.0))
     elif variant in ("center", "statement", "quote"):
         add.append(_box(.30, rule_y, .40, .008, kind="gradient",
                         **{"from": "primary", "to": "light"}))
         add.append(_box(.455, rule_y + .022, .09, .004, kind="rect", fill="accent"))
-    else:  # bullets / image_* / 未知：左侧竖色带，与卡片类明显不同
-        add.append(_box(.035, body_top, .008, max(.10, .845 - body_top),
-                        kind="rect", fill="primary", alpha=45))
-        add.append(_box(.055, rule_y, .11, .006, kind="rect", fill="accent"))
+    # else: bullets / image_* / 未知 —— 标题下方已有统一短线（见 decorations
+    # 开头），正文块不再逐条补线，避免条带页出现「一排来历不明的横杠」。
     return out + add
 
 
@@ -252,11 +254,9 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
         for index, box in enumerate(ordered[:2]):
             fill = "primary" if index == 0 else "accent"
             out.append(_card(box, fill=fill, alpha=11))
-            out.append(_gradient(box, fill, "accent" if index == 0 else "primary"))
             out.append(_badge(box, index, fill))
         for index, box in enumerate(ordered[2:], 2):
             out.append(_card(box))
-            out.append(_gradient(box, "primary", "accent"))
             out.append(_badge(box, index, "primary" if index % 2 == 0 else "accent"))
         return _layout_motif(out, scene)
 
@@ -276,8 +276,8 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             fill = "primary" if gi % 2 == 0 else "accent"
             gx = min(b["x"] for b in group)
             gw = max(b["x"] + b["w"] for b in group) - gx
-            out.append(_box(gx, group[0]["y"] - .020, gw, .012,
-                            kind="gradient", **{"from": fill, "to": "light"}))
+            out.append(_box(gx, group[0]["y"] - .020, gw, .010,
+                            kind="rect", fill=fill, alpha=60))
             for box in group:
                 out.append(_card(box))
                 out.append(_box(box["x"], box["y"], .006, box["h"],
@@ -286,12 +286,18 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
                 serial += 1
         return _layout_motif(out, scene)
 
-    # none / 未知：克制版式，只给每条要点一条竖线与顶部渐变细条，避免整页卡片。
+    # none / 未知：克制版式，只给每条要点一条竖线作为项目符号。
+    # 原本每条要点上方还压一条 primary→light 的渐变细条，右侧渐隐在浅底上
+    # 像一层灰影，三条叠起来就是用户说的「下面一些莫名其妙的线条」；删掉，
+    # 页头已有统一的标题短线，正文块不需要再各挂一条。
+    # 多列网格（槽宽 < 50% 页宽）仍铺浅底卡片，否则三列页只剩几根孤线；
+    # 横条带页（槽宽 80%）不铺卡，保持整页留白。
     for index, box in enumerate(boxes):
         fill = "primary" if index % 2 == 0 else "accent"
+        if box["w"] < .50:
+            out.append(_card(box))
         out.append(_box(box["x"] - .012, box["y"], .006, box["h"],
                         kind="rect", fill=fill, alpha=75))
-        out.append(_gradient(box, fill, "light", y=box["y"], height=.008))
     return _layout_motif(out, scene)
 
 

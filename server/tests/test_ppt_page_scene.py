@@ -230,8 +230,10 @@ def test_render_adds_native_primitives_without_losing_text():
     texts = [s.text for s in shapes if s.has_text_frame and s.text.strip()]
     assert all(any(point in t for t in texts) for point in slide["points"])
     assert any(s.shape_type == MSO_SHAPE_TYPE.LINE for s in shapes)  # 原生连接符
-    assert any(s._element.spPr.find(qn("a:gradFill")) is not None
-               for s in shapes if hasattr(s._element, "spPr"))       # 原生渐变
+    # 正文页不应再出现「primary→light 渐变细条」压在要点上方：右端渐隐在浅底上
+    # 像一层灰影，成稿里读作「下面莫名其妙的线条」（用户 2026-11-09 反馈）。
+    assert not any(s._element.spPr.find(qn("a:gradFill")) is not None
+                   for s in shapes if hasattr(s._element, "spPr"))
     # 装饰必须先于文字，否则几何审计会判 TEXT_HIDDEN
     badge_idx = next(i for i, s in enumerate(shapes)
                      if s.has_text_frame and s.text.strip() in ("1", "2"))
@@ -319,11 +321,15 @@ class TestCompositionFamilies:
         boxes = [e for e in scene["elements"] if e["ref"].startswith("point:")]
         columns = {round(b["x"], 3) for b in boxes}
         bands = [d for d in scene["visuals"]
-                 if d["kind"] == "rect" and abs(d.get("y", 0) - .205) < .02
-                 and d.get("h", 0) < .012]
+                 if d["kind"] == "rect" and d.get("h", 0) < .012
+                 and d.get("y", 0) >= .20]
         assert bands
         assert len(bands) == len(columns)
         assert {round(b["x"], 3) for b in bands} == columns
+        # 色带贴各自列顶（差 0.018），不再是一条固定横线穿过错落的两列
+        for band in bands:
+            top = min(b["y"] for b in boxes if abs(b["x"] - band["x"]) < .01)
+            assert abs(band["y"] - (top - .018)) < .002
 
     def test_short_and_long_points_still_fit_after_uniform_sizing(self):
         slide = {"type": "content", "title": "成效",
