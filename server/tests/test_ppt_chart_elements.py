@@ -59,3 +59,44 @@ def test_learned_unknown_chart_type_falls_back_to_column():
         ppt_engine.DEFAULT_COLORS, "思源黑体", W, H)
     chart = next(sh for sh in slide.shapes if getattr(sh, "has_chart", False)).chart
     assert "COLUMN_CLUSTERED" in str(chart.chart_type)
+
+
+def _built_chart(spec):
+    """按正式渲染链路（build_pptx → r_chart）出一页图表并取回 chart 对象。"""
+    import io
+
+    tpl = dict(ppt_engine.BUILTIN_TEMPLATES[0])
+    outline = {"title": "t", "slides": [{
+        "type": "chart", "title": "指标对比", "points": [], "blocks": {"chart": spec}}]}
+    data = ppt_engine.build_pptx(outline, tpl)
+    prs = Presentation(io.BytesIO(data))
+    return next(sh for sh in prs.slides[0].shapes
+                if getattr(sh, "has_chart", False)).chart
+
+
+RATE_SPEC = {"chart_type": "bar_h",
+             "categories": ["调解成功率", "覆盖率", "满意度"],
+             "series": [{"name": "率（%）", "values": [96.2, 98.6, 96.8]}],
+             "unit": "%"}
+
+
+def test_built_chart_writes_data_labels_with_unit():
+    """三项都挤在 96% 上下时只靠柱长读不出值，必须带数值标签（2026-11-09）。"""
+    xml = _built_chart(RATE_SPEC)._chartSpace.xml
+    assert "dLbls" in xml, "数据标签没写进 chart XML（异常被 try 吞掉）"
+    assert 'val="outEnd"' in xml, "标签位置没落到柱子外侧"
+    assert "0.0" in xml or "#,##0" in xml, "数值格式未设置"
+
+
+def test_bar_h_category_axis_is_reversed_to_reading_order():
+    """横向条形默认自下而上，第一条要点要读在顶部。"""
+    assert 'val="maxMin"' in _built_chart(RATE_SPEC)._chartSpace.xml
+
+
+def test_column_chart_keeps_zero_baseline():
+    """柱状图不能截断基线（三项都过万时从 0 起才是真实比例）。"""
+    spec = {"chart_type": "bar", "categories": ["受理", "办结", "咨询"],
+            "series": [{"name": "件", "values": [32180, 31500, 28600]}],
+            "unit": "件"}
+    chart = _built_chart(spec)
+    assert chart.value_axis.minimum_scale in (None, 0)

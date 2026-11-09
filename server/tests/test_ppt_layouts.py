@@ -914,3 +914,84 @@ class TestDemotedMetricsExplainThemselves:
         warnings = []
         E.build_pptx(outline, TPL, warnings=warnings)
         assert any("补充数字" in w for w in warnings), warnings
+
+
+class TestMetricBackfill:
+    """指标卡只有趋势词时，从材料/知识库把真实数值搬回来（用户 2026-11-09：
+    「它缺的是数字，不是意愿，不能搜知识库吗」）。"""
+
+    MATERIAL = (
+        "2026年，全市司法行政系统共受理法律援助案件 32180 件，同比增长 12.4%。\n"
+        "矛盾纠纷调解成功率达到 96.2%，全年调解矛盾纠纷 128450 件。\n"
+        "公共法律服务覆盖率提升至 98.6%，建成公共法律服务中心 42 个。\n"
+        "群众满意度测评得分 96.8 分，收到锦旗 35 面。")
+
+    @staticmethod
+    def _cards():
+        return {"cards": [
+            {"label": "法律援助案件受理量", "value": "稳步增长"},
+            {"label": "矛盾纠纷调解成功率", "value": "保持高位"},
+            {"label": "公共法律服务覆盖率", "value": "显著提升"},
+            {"label": "群众满意度测评", "value": "持续向好"}]}
+
+    def test_trend_words_are_replaced_with_values_from_material(self):
+        outline = {"slides": [_slide("data", title="核心指标", blocks=self._cards())]}
+        filled = E.backfill_metric_values(outline, self.MATERIAL, "本次材料")
+        values = {f["label"]: f["value"] for f in filled}
+        assert values == {"法律援助案件受理量": "32180件",
+                          "矛盾纠纷调解成功率": "96.2%",
+                          "公共法律服务覆盖率": "98.6%",
+                          "群众满意度测评": "96.8分"}
+        # 补完后不再是「只有趋势词」，成稿不该再降级成结论宫格
+        assert E.unfilled_metric_labels(outline) == []
+        assert outline["slides"][0]["sources"] == ["本次材料"]
+
+    def test_short_material_wording_still_matches_long_label(self):
+        """指标名比材料多一层修饰（矛盾纠纷调解成功率 vs 调解成功率）也要认。"""
+        outline = {"slides": [_slide("data", blocks={"cards": [
+            {"label": "矛盾纠纷调解成功率", "value": "保持高位"}]})]}
+        filled = E.backfill_metric_values(outline, "调解成功率达到 96.2%。", "m")
+        assert [f["value"] for f in filled] == ["96.2%"]
+
+    def test_no_number_in_material_keeps_trend_word(self):
+        """材料里没有该指标的数值时原样保留，绝不编造。"""
+        outline = {"slides": [_slide("data", blocks={"cards": [
+            {"label": "法律援助案件受理量", "value": "稳步增长"}]})]}
+        assert E.backfill_metric_values(outline, "本年度工作稳步推进。", "m") == []
+        assert outline["slides"][0]["blocks"]["cards"][0]["value"] == "稳步增长"
+
+    def test_ambiguous_numbers_are_not_assigned(self):
+        """同一指标名对上两个不同的数 → 放弃，不能张冠李戴。"""
+        outline = {"slides": [_slide("data", blocks={"cards": [
+            {"label": "调解成功率", "value": "保持高位"}]})]}
+        material = "人民调解成功率 96.2%。行业性调解成功率 88.5%。"
+        assert E.backfill_metric_values(outline, material, "m") == []
+
+    def test_demoted_page_is_restored_and_promoted_to_chart(self):
+        """已降级成「指标名：趋势词」的页，补到数字后要能重新成图。"""
+        outline = {"slides": [_slide("content", points=[
+            "法律援助案件受理量：稳步增长", "矛盾纠纷调解成功率：保持高位",
+            "公共法律服务覆盖率：显著提升", "群众满意度测评：持续向好"])]}
+        outline["slides"][0]["_promoted"] = "demote_fake_cards"
+        E.backfill_metric_values(outline, self.MATERIAL, "m")
+        E.apply_visual_intent(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] in ("data", "chart")
+        assert all("增长" not in p for p in (slide.get("points") or []))
+
+    def test_mixed_units_chart_the_majority_group_and_keep_the_rest(self):
+        """三个百分比 + 一个件数：率并排成图，件数转成图表下方结论行。"""
+        material = ("调解成功率达到 96.2%。公共法律服务覆盖率达到 98.6%。"
+                    "群众满意度达到 96.8%。\n全年受理法律援助案件 32180 件。")
+        outline = {"slides": [_slide("data", title="核心指标", blocks={"cards": [
+            {"label": "矛盾纠纷调解成功率", "value": "保持高位"},
+            {"label": "公共法律服务覆盖率", "value": "显著提升"},
+            {"label": "群众满意度", "value": "持续向好"},
+            {"label": "法律援助案件受理量", "value": "稳步增长"}]})]}
+        E.backfill_metric_values(outline, material, "m")
+        E.apply_visual_intent(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        chart = slide["blocks"]["chart"]
+        assert len(chart["series"][0]["values"]) == 3
+        assert slide["points"] == ["法律援助案件受理量：32180件"]

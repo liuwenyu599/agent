@@ -1102,6 +1102,245 @@ _METRIC_TOKEN = re.compile(
 _LABEL_PREFIX = re.compile(r"^(?:截至|其中|全年|年内|累计|截至目前|目前|共计)")
 
 
+# ---- 指标数值回补：把「稳步增长」换回材料里写明的真实数字 ----
+# 用户 2026-11-09：「它缺的是数字，不是意愿，不能搜知识库吗」。此前规则层只
+# 会在成稿时把趋势词卡降级成结论宫格（不编造），但材料/知识库里往往本来就有
+# 这些指标的真实数值，只是模型生成大纲时没抄进 value。这里补一层**确定性搬运**：
+# 数值必须与指标名出现在同一句话里、且唯一定位到，才写回卡片；定位不到一律
+# 原样保留。不计算、不换算、不补造。
+_TREND_WORDS = ("增长", "提升", "提高", "上升", "下降", "持平", "向好", "高位",
+                "显著", "稳步", "持续", "优化", "完善", "增强", "扩大", "领先")
+_METRIC_TAIL = re.compile(
+    r"(?:数量|总量|件数|人次|情况|水平|能力|程度|比例|占比|率|量|数)$")
+_SENTENCE_SPLIT = re.compile(r"[。；;！？!?\n]+")
+# 中文一句话里常并排两个指标（「调解成功率达到 96.2%，全年调解 128450 件」），
+# 按整句取窗口会把两个数的贴合度拉平、判成歧义。先按逗号切到分句级。
+_FRAGMENT_SPLIT = re.compile(r"[。；;！？!?\n，,、]+")
+_METRIC_NUM = re.compile(
+    r"(?<![0-9.])(?P<num>\d{1,7}(?:\.\d+)?)(?!\d)\s*"
+    r"(?P<unit>%|％|个百分点|万元|亿元|万件|万人次|人次|万|件|人|户|家|项|场次"
+    r"|个工作日|个|天|小时|条|份|宗|起)?")
+
+
+def looks_like_trend(text: Any) -> bool:
+    """value 是不是「稳步增长」这类没有数字的趋势描述。"""
+    s = str(text or "").strip()
+    if not s or re.search(r"\d", s):
+        return False
+    return any(word in s for word in _TREND_WORDS)
+
+
+def _core_label(label: str) -> str:
+    """剥掉括注与「率/量/数」这类通用尾字，只留可比的指标主干。"""
+    s = re.sub(r"[（(][^）)]*[)）]", "", str(label or ""))
+    s = s.strip(" 　：:，,。·、-—")
+    stripped = _METRIC_TAIL.sub("", s)
+    return stripped if len(stripped) >= 2 else s
+
+
+def _longest_common(a: str, b: str) -> int:
+    """最长公共连续子串长度（指标名与候选句窗口的贴合度）。"""
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for ch in a:
+        cur = [0] * (len(b) + 1)
+        for j, other in enumerate(b, 1):
+            if ch == other:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+def _label_match(core: str, window: str) -> float:
+    """指标名与候选句窗口的贴合度（0~1）。
+
+    中文指标名常比材料多一层范围修饰（指标名「矛盾纠纷调解成功率」、材料写
+    「调解成功率达到 96.2%」），整串比对只有 0.5 会漏。所以允许丢掉前面的
+    修饰词：只要 core 的某个**后缀**在窗口里完整出现即可，但后缀至少 4 个字，
+    避免「调解」两字就把调解案件数认成成功率。
+    """
+    best = 0.0
+    for start in range(0, max(1, len(core) - 3)):
+        suffix = core[start:]
+        if len(suffix) < 4 and suffix != core:
+            break
+        score = _longest_common(suffix, window) / len(suffix)
+        if score > best:
+            best = score
+    return best
+
+
+def _locate_metric_value(material: str, label: str,
+                         threshold: float = .6) -> Optional[tuple]:
+    """在材料里为指标名找到唯一对应的数值，返回 (数值文本, 所在句)。
+
+    「唯一」是硬要求：同一句话里出现两个分数并列且值不同，视为有歧义而放弃
+    —— 宁可保留趋势词，也不能把 A 指标的数字安到 B 指标上。
+    """
+    core = _core_label(label)
+    if len(core) < 2 or not (material or "").strip():
+        return None
+
+    def _scan(windows: List[str], cut: float) -> List[tuple]:
+        found: List[tuple] = []
+        for sentence in windows:
+            for m in _METRIC_NUM.finditer(sentence):
+                num = m.group("num")
+                unit = (m.group("unit") or "").replace("％", "%")
+                if re.fullmatch(r"\d{7,}", num):
+                    continue                  # 电话/热线/账号
+                if not unit and re.fullmatch(r"\d{4}", num) and 1900 <= int(num) <= 2100:
+                    continue                  # 年份
+                prefix = sentence[max(0, m.start() - 3):m.start()]
+                if prefix.endswith(("第", "号", "编号", "电话", "热线", "工号")):
+                    continue
+                tail = sentence[m.end():m.end() + 2]
+                label_unit = unit or ("分" if tail.startswith("分")
+                                      and not tail.startswith("分钟") else "")
+                window = sentence[max(0, m.start() - 28):min(len(sentence), m.end() + 12)]
+                score = _label_match(core, window) - cut
+                if not label_unit:
+                    score -= .12              # 无单位：可能只是编号
+                if score >= threshold:
+                    found.append((score, f"{num}{label_unit}", sentence))
+        return found
+
+    def _pick(found: List[tuple]) -> Optional[tuple]:
+        found.sort(key=lambda item: item[0], reverse=True)
+        top = found[0]
+        rivals = [r for r in found[1:] if r[0] >= top[0] - .05]
+        return None if any(r[1] != top[1] for r in rivals) else (top[1], top[2])
+
+    # 先分句级：指标名与数值通常同处一个分句，精度最高。
+    fragments = [f.strip(" 　\t") for f in _FRAGMENT_SPLIT.split(material)]
+    fragments = [f for f in fragments if 4 <= len(f) <= 80]
+    hit = _pick(found) if (found := _scan(fragments, 0)) else None
+    if hit:
+        return hit
+    # 兜底：主语在前一分句、数值在后一分句（「受理量再创新高，达到 3.2 万件」）。
+    # 整句窗口更模糊，阈值抬高且只在整句里只有一个候选时才认。
+    sentences = [s.strip(" 　\t") for s in _SENTENCE_SPLIT.split(material)]
+    sentences = [s for s in sentences if 4 <= len(s) <= 240]
+    wide = _scan(sentences, .10)
+    if len({item[1] for item in wide}) == 1:
+        return wide[0][1], wide[0][2]
+    return None
+
+
+def unfilled_metric_labels(outline: Dict) -> List[str]:
+    """列出这一稿里「只有趋势词、没有数字」的指标名（去重保序）。"""
+    labels: List[str] = []
+    for slide in outline.get("slides") or []:
+        if not isinstance(slide, dict):
+            continue
+        blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+        cards = blocks.get("cards")
+        if isinstance(cards, list):
+            for card in cards:
+                if isinstance(card, dict) and str(card.get("label") or "").strip() \
+                        and looks_like_trend(card.get("value")):
+                    label = str(card["label"]).strip()
+                    if label not in labels:
+                        labels.append(label)
+        for point in (slide.get("points") or []):
+            label, sep, value = _split_metric_point(str(point))
+            if sep and looks_like_trend(value) and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _split_metric_point(point: str) -> tuple:
+    """「指标名：稳步增长」拆成 (指标名, 分隔符, 值)；不是这种形态返回 ("", "", "")。"""
+    text = str(point or "").strip()
+    for sep in ("：", ":"):
+        if sep in text:
+            label, _, value = text.partition(sep)
+            label, value = label.strip(), value.strip()
+            if 2 <= len(label) <= 24 and value:
+                return label, sep, value
+    return "", "", ""
+
+
+def _restore_demoted_cards(slide: Dict) -> bool:
+    """把被降级成「指标名：趋势词」要点页恢复成指标卡页。"""
+    if slide.get("_promoted") != "demote_fake_cards":
+        return False
+    cards = []
+    for point in _slide_points(slide):
+        label, _, value = _split_metric_point(point)
+        if not label:
+            return False
+        cards.append({"label": label, "value": value})
+    if len(cards) < 3:
+        return False
+    slide["blocks"] = {"cards": cards}
+    slide["type"] = "data"
+    slide["layout"] = None
+    slide.pop("points", None)
+    slide.pop("_promoted", None)
+    return True
+
+
+def backfill_metric_values(outline: Dict, material: str,
+                           source: str = "") -> List[dict]:
+    """用材料里的真实数值填回趋势词指标卡，返回补入清单。
+
+    Args:
+        outline: 大纲（原地修改 blocks.cards / points）
+        material: 材料文本（含知识库检索材料）
+        source: 来源标签，写进补入清单与 slide["sources"]
+    """
+    filled: List[dict] = []
+    text = material or ""
+    if not text.strip():
+        return filled
+    for index, slide in enumerate(outline.get("slides") or []):
+        if not isinstance(slide, dict):
+            continue
+        _restore_demoted_cards(slide)
+        blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+        cards = blocks.get("cards")
+        touched = False
+        if isinstance(cards, list) and cards:
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                label = str(card.get("label") or "").strip()
+                if not label or not looks_like_trend(card.get("value")):
+                    continue
+                found = _locate_metric_value(text, label)
+                if not found:
+                    continue
+                card["value"] = found[0]
+                touched = True
+                filled.append({"slide": index, "title": slide.get("title") or "",
+                               "label": label, "value": found[0], "source": source})
+        else:
+            points = slide.get("points")
+            if isinstance(points, list) and points:
+                for i, point in enumerate(points):
+                    label, sep, value = _split_metric_point(str(point))
+                    if not sep or not looks_like_trend(value):
+                        continue
+                    found = _locate_metric_value(text, label)
+                    if not found:
+                        continue
+                    points[i] = f"{label}{sep}{found[0]}"
+                    touched = True
+                    filled.append({"slide": index, "title": slide.get("title") or "",
+                                   "label": label, "value": found[0], "source": source})
+        if touched and source:
+            sources = [str(x) for x in (slide.get("sources") or [])]
+            if source not in sources:
+                sources.append(source)
+                slide["sources"] = sources[:4]
+    return filled
+
+
 def _parse_metric(text: Any) -> Optional[tuple]:
     """把「3200」「98.5%」「1.2万件」解析成 (数值, 单位)；不是纯数值返回 None。
 
@@ -1198,7 +1437,7 @@ def _chart_spec(categories: List[str], values: List[float],
     # 孤零零的「%」既不像标题也不像图例（实测成稿顶部就是这样）。
     name = (affix or unit or "数量") + (f"（{unit}）" if affix and unit else "")
     return {"chart_type": chart_type, "categories": short,
-            "series": [{"name": name, "values": list(values)}]}
+            "series": [{"name": name, "values": list(values)}], "unit": unit}
 
 
 def _table_from_points(points: List[str]) -> Optional[dict]:
@@ -1233,24 +1472,39 @@ def _table_from_points(points: List[str]) -> Optional[dict]:
 
 
 def _promote_slide_to_chart(slide: Dict) -> Optional[dict]:
-    """能升级成图表就返回 chart 规格，否则 None。"""
+    """能升级成图表就返回 chart 规格，否则 None。
+
+    混合单位（3 个百分比 + 1 个件数）时不留「图不图卡不卡」的页：取同单位
+    最大子集（≥3 且过半）成图，其余指标转成图表下方的结论行。件数与百分比
+    同轴没有意义，但把 3 个率并排比出来仍然比四张卡更直观。
+    """
     blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
     cards = blocks.get("cards")
     if isinstance(cards, list) and len(cards) >= 3:
-        categories: List[str] = []
-        values: List[float] = []
-        units: List[str] = []
+        parsed: List[tuple] = []
         for card in cards:
             if not isinstance(card, dict):
                 return None
             label = str(card.get("label") or "").strip()
-            parsed = _parse_metric(card.get("value"))
-            if not label or parsed is None:
+            metric = _parse_metric(card.get("value"))
+            if not label or metric is None:
                 return None
-            categories.append(label[:16])
-            values.append(parsed[0])
-            units.append(parsed[1])
-        return _chart_spec(categories, values, units)
+            parsed.append((label[:16], metric[0], metric[1], card))
+        units = [item[2] for item in parsed]
+        if len(set(units)) == 1:
+            return _chart_spec([i[0] for i in parsed], [i[1] for i in parsed], units)
+        groups: Dict[str, List[tuple]] = {}
+        for item in parsed:
+            groups.setdefault(item[2], []).append(item)
+        _, best = max(groups.items(), key=lambda kv: len(kv[1]))
+        if len(best) < 3 or len(best) * 2 < len(parsed):
+            return None
+        rest = [item for item in parsed if item[2] != best[0][2]]
+        if rest:
+            slide["_chart_leftover"] = [
+                f"{item[0]}：{item[3].get('value')}" for item in rest]
+        return _chart_spec([i[0] for i in best], [i[1] for i in best],
+                           [i[2] for i in best])
     return _metric_from_points(_slide_points(slide))
 
 
@@ -1323,7 +1577,13 @@ def promote_data_slides(outline: Dict) -> Dict:
             # 原要点就是类目的来源，数据已经搬进 categories / series；
             # 留着会被 r_chart 当「图表结论」画到页面底部，出现
             # 「天河区调解成功率96.2%」这种与图表重复的残行（实测）。
-            slide.pop("points", None)
+            # 唯一例外是混合单位时没进图的指标：那几条必须留在页面上，
+            # 否则「群众满意度 96.8 分」整个消失。
+            leftover = slide.pop("_chart_leftover", None)
+            if leftover:
+                slide["points"] = [str(p)[:150] for p in leftover][:2]
+            else:
+                slide.pop("points", None)
             slide["_promoted"] = "chart"
             continue
         if slide.get("type") == "data":
@@ -2577,6 +2837,42 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             axis.major_gridlines.format.line.color.rgb = C("DCE3EC")
         except Exception:
             pass
+        # 数据标签：三项都挤在 96% 上下时，值轴还被截到 80 起，光看柱长读不出
+        # 具体值（实测成稿就是一根根几乎等长的条，看不出谁高谁低）。
+        try:
+            if not pie_like:
+                plot = gf.chart.plots[0]
+                plot.has_data_labels = True
+                labels = plot.data_labels
+                labels.show_value = True
+                labels.show_category_name = False
+                labels.show_series_name = False
+                unit = str(chart_spec.get("unit") or "")
+                labels.number_format = ("#,##0.##" if not unit
+                                        else '#,##0.##"{}"'.format(unit))
+                labels.number_format_is_linked = False
+                labels.font.size = Pt(12)
+                labels.font.bold = True
+                labels.font.color.rgb = DARK
+                labels.position = (XL_LABEL_POSITION.ABOVE
+                                   if ct in ("line", "area")
+                                   else XL_LABEL_POSITION.OUTSIDE_END)
+        except Exception:
+            pass
+        # 横向条形的类目轴默认自下而上，第一条要点落在最底部，与阅读顺序相反。
+        if ct == "bar_h":
+            try:
+                from lxml import etree
+                from pptx.oxml.ns import qn
+                scaling = gf.chart.category_axis._element.find(qn("c:scaling"))
+                if scaling is not None:
+                    orient = scaling.find(qn("c:orientation"))
+                    if orient is None:
+                        orient = etree.Element(qn("c:orientation"))
+                        scaling.insert(0, orient)
+                    orient.set("val", "maxMin")
+            except Exception:
+                pass
         try:
             palette = [PRIMARY, ACCENT, DARK, C("8FAADC")]
             if pie_like and gf.chart.series:
@@ -2961,9 +3257,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         # 画图，只能降成结论宫格。用户看到的是「该画图却没画」，所以要明确
         # 说清原因和补救路径：补上数字就会自动成图。
         if s.get("_promoted") == "demote_fake_cards":
+            labels = [label for label, _, _ in
+                      (_split_metric_point(p) for p in _slide_points(s)) if label][:4]
+            named = ("（" + "、".join(labels) + "）") if labels else ""
             warnings.append(
-                f"第 {idx} 页「{s.get('title') or '指标页'}」的指标只有趋势描述、"
-                "没有具体数值，已按结论宫格排版；补充数字后会自动生成图表。")
+                f"第 {idx} 页「{s.get('title') or '指标页'}」的指标{named}在本次材料与"
+                "知识库中都没有检索到具体数值，已按结论宫格排版；"
+                "补充数字或选择含该指标数据的知识库后会自动生成图表。")
         slide = (r_scene(s) if adaptive and s.get("scene") and not s.get("layout_locked")
                  and s.get("type") in ("content", "summary")
                  else renderers.get(s.get("type"), r_content)(s))

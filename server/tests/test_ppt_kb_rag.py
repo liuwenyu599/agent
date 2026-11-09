@@ -71,12 +71,17 @@ class FakeGateway:
 
 
 class FakeRag:
-    """记录 RagService.search 的调用参数，返回可控 hits。"""
+    """记录 RagService.search 的调用参数，返回可控 hits。
 
-    def __init__(self, hits=None, exc=None):
+    ``resolver`` 可按 query 返回不同结果——指标数值回补会在生成后按「缺口指标名」
+    再检索一次，两次查询内容不同，固定 hits 测不出链路。
+    """
+
+    def __init__(self, hits=None, exc=None, resolver=None):
         self.calls = []
         self.hits = hits if hits is not None else []
         self.exc = exc
+        self.resolver = resolver
 
     def __call__(self, query, user_id, top_k=None, kb_ids=None):
         """记录一次检索调用并返回预置 hits。"""
@@ -84,6 +89,8 @@ class FakeRag:
                            "top_k": top_k, "kb_ids": kb_ids})
         if self.exc:
             raise self.exc
+        if self.resolver:
+            return list(self.resolver(query) or [])
         return list(self.hits)
 
     def as_method(self):
@@ -665,3 +672,59 @@ def test_i1_source_title_from_source_field(accounts, fake_rag):
     finally:
         db.close()
 
+
+
+# ============================================ J. 指标数值回补（2026-11-09）
+
+def _metric_outline():
+    return {"slides": [{"type": "data", "title": "年度核心指标", "blocks": {"cards": [
+        {"label": "公共法律服务覆盖率", "value": "显著提升"}]}}]}
+
+
+def test_j1_missing_metric_value_is_searched_in_kb(accounts, fake_rag):
+    """大纲只有「显著提升」、本次材料也没有数字 → 按指标名再检索知识库补上。
+
+    用户 2026-11-09：「它缺的是数字，不是意愿，不能搜知识库吗」。这是生成链路
+    里唯一会为「补数字」额外发起的一次检索。
+    """
+    fake_rag.resolver = lambda q: (
+        [_hit("公共法律服务覆盖率达到 98.6%。", "统计年报")]
+        if "覆盖" in q else [_hit("全年工作稳步推进。")])
+    db, svc, user = _svc_and_user(accounts["a"]["id"])
+    try:
+        outline = _metric_outline()
+        filled = svc._backfill_metrics(outline, "本年度工作稳步推进。", user, ["kb-x"])
+        assert [f["value"] for f in filled] == ["98.6%"]
+        assert len(fake_rag.calls) == 1, fake_rag.calls
+        assert "公共法律服务覆盖率" in fake_rag.calls[0]["query"]
+        cards = outline["slides"][0]["blocks"]["cards"]
+        assert cards[0]["value"] == "98.6%"
+        assert any("知识库" in s for s in outline["slides"][0]["sources"])
+    finally:
+        db.close()
+
+
+def test_j2_no_extra_search_when_material_already_has_the_number(accounts, fake_rag):
+    """本次材料里就有数字 → 直接搬运，不再多打一次知识库检索。"""
+    db, svc, user = _svc_and_user(accounts["a"]["id"])
+    try:
+        outline = _metric_outline()
+        filled = svc._backfill_metrics(
+            outline, "公共法律服务覆盖率达到 98.6%。", user, ["kb-x"])
+        assert [f["value"] for f in filled] == ["98.6%"]
+        assert fake_rag.calls == [], fake_rag.calls
+        assert outline["slides"][0]["sources"] == ["本次材料"]
+    finally:
+        db.close()
+
+
+def test_j3_kb_search_returns_nothing_keeps_trend_word(accounts, fake_rag):
+    """知识库也查不到数值 → 保留趋势词，绝不生成数字。"""
+    fake_rag.resolver = lambda q: [_hit("全年工作稳步推进。")]
+    db, svc, user = _svc_and_user(accounts["a"]["id"])
+    try:
+        outline = _metric_outline()
+        assert svc._backfill_metrics(outline, "", user, ["kb-x"]) == []
+        assert outline["slides"][0]["blocks"]["cards"][0]["value"] == "显著提升"
+    finally:
+        db.close()

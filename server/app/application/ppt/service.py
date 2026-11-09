@@ -1734,6 +1734,35 @@ class PPTService:
                 sources.append(name)
         return "\n\n".join(parts), sources
 
+    def _backfill_metrics(self, outline: dict, content: str, user: User,
+                          kb_ids: Optional[List[str]]) -> List[dict]:
+        """把指标卡里的趋势词换成材料/知识库中写明的真实数值。
+
+        用户 2026-11-09：「它缺的是数字，不是意愿，不能搜知识库吗」。是的，
+        知识库本来就接了 RAG，但只在大纲生成前把片段喂给模型，模型没抄进
+        value 就留下「稳步增长」。这里补一道成稿前的确定性回补：
+
+        1. 先在本次生成材料（上传文件 + 已检索的知识库片段）里找，零开销；
+        2. 仍有缺口且用户选了知识库时，按缺口指标名做一次定向 RAG 检索补查。
+
+        数值只做搬运：必须与指标名同句、唯一定位，找不到就原样保留。
+        """
+        filled = ppt_engine.backfill_metric_values(outline, content, "本次材料")
+        missing = ppt_engine.unfilled_metric_labels(outline)
+        if missing and kb_ids:
+            query = " ".join(missing)[:200]
+            kb_text, kb_sources = self._rag_kb_material(query, user, kb_ids)
+            if kb_text:
+                filled += ppt_engine.backfill_metric_values(
+                    outline, kb_text,
+                    f"知识库《{kb_sources[0]}》" if kb_sources else "知识库")
+        if filled:
+            # 数值补上后原本的结论宫格可能已经满足成图条件，重新过一遍规则层。
+            ppt_engine.apply_visual_intent(outline)
+            logger.info("[PPT] 指标数值回补 %d 项：%s", len(filled),
+                        "；".join(f"{f['label']}={f['value']}" for f in filled[:6]))
+        return filled
+
     def _apply_kb_material(self, user: User, kb_ids: Optional[List[str]],
                            topic: str, content: str,
                            material_names: Optional[List[str]]) -> Tuple[str, List[str]]:
@@ -2055,8 +2084,13 @@ class PPTService:
                 # 未填页数时仅给建议，由模型按材料决定实际页数。
                 enforce_exact_count=enforce_exact_count, free_structure=True,
                 template_budget=budget)
+            # 大纲里只有趋势词、没有数字的指标，先从材料/知识库把真实数值搬回
+            # 来，再交给规则层——有数字才会自动成图（用户 2026-11-09）。
+            self._backfill_metrics(outline, content, user, kb_ids)
             outline = self._audit_and_repair_outline(
                 outline, target_count if enforce_exact_count else None, content)
+            # 复查阶段模型可能整页重写，补一次漏（此时卡片可能已降级成要点）。
+            self._backfill_metrics(outline, content, user, kb_ids)
             # 大纲阶段自动为适合图示的页面挂接 drawio 原生图示（固化进 blocks.drawio_xml，
             # 后续渲染链路自动取用；未配置/失败则静默回退原生步骤条）。
             outline = ppt_engine.enrich_outline_with_diagrams(self._ppt_assistant(), outline)
@@ -2147,8 +2181,10 @@ class PPTService:
                 template_budget=(self._template_budget(body.template_id, user)
                                  if mode == "strict" else []))
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
+            self._backfill_metrics(outline, content, user, kb_ids)
             outline = self._audit_and_repair_outline(
                 outline, target_count if explicit_count else None, content)
+            self._backfill_metrics(outline, content, user, kb_ids)
             # 仅在 drawio 真正开启时提示图示生成进度，避免无配置环境多出 stage 事件
             from app.application.ppt.drawio_service import DrawioService
             diagram_pages = [page for page in outline.get("slides") or []
