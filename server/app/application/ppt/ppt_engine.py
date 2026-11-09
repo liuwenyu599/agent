@@ -371,6 +371,9 @@ LAYOUT_CATALOG: Dict[str, List[Dict[str, Any]]] = {
         {"id": "summary.cards", "label": "结论卡片", "weight": 1.0},
         {"id": "summary.list", "label": "大字结论", "min_points": 2, "max_points": 4,
          "weight": 1.0},
+        # 结尾页常与正文页的卡片网格撞脸，补一个居中结论族给选版器避让。
+        {"id": "summary.statement", "label": "居中结论", "min_points": 2,
+         "max_points": 4, "weight": 0.75},
     ],
     "closing": [
         {"id": "closing.center", "label": "居中结束页", "weight": 1.0},
@@ -543,19 +546,42 @@ def _variant_seed(slide: Dict) -> int:
 # 规则层推断出的 relationship 整稿常常相同（例如 4 个正文页全判 grouped）。
 # 若把这种 preferred 当成「模型意图」锁死，choose_layout 会把它们全选成同一
 # 版式，连整篇去重都不触发，反而加重模板感。这里给每种关系准备一组几何
-# 差异明显的候选（1/2/3 列、卡片、居中结论），按整篇使用次数确定性轮换。
+# 差异明显的候选，且必须跨构图族：横向条带 / 卡片网格 / 左右对照 /
+# 交错双栏 / 居中结论。此前候选全是卡片网格，换版式只换列数，成稿仍撞脸。
 _RULE_LAYOUT_POOL: Dict[str, List[str]] = {
-    "comparison": ["content.compare", "content.symmetric", "content.two_col"],
-    "parallel": ["content.three_cards", "content.icon_grid", "content.two_col"],
-    "grouped": ["content.icon_grid", "content.three_cards", "content.two_col"],
-    "takeaway": ["content.statement", "content.quote", "content.center"],
+    "comparison": ["content.compare", "content.bullets", "content.symmetric",
+                   "content.two_col"],
+    "parallel": ["content.bullets", "content.three_cards", "content.symmetric",
+                 "content.icon_grid"],
+    "grouped": ["content.bullets", "content.icon_grid", "content.three_cards",
+                "content.center"],
+    "takeaway": ["content.statement", "content.bullets", "content.symmetric",
+                 "content.center"],
 }
+
+
+def _layout_family(lid: str) -> str:
+    """版式 id → 构图族。
+
+    只把 content / summary 两类正文页映射到构图族；目录的 ``toc.cards``、
+    数据页的 ``data.cards`` 虽然也叫 cards，却不是正文卡片网格，不能占用
+    grid 名额，否则第一张正文页会被误判为「已用过卡片族」而换版。
+    """
+    text = str(lid)
+    if not (text.startswith("content.") or text.startswith("summary.")):
+        return "other:" + text
+    from app.application.ppt.page_scene import _LAYOUT_FAMILY
+    return _LAYOUT_FAMILY.get(text.rsplit(".", 1)[-1], "other:" + text)
 
 
 def _rule_variant_pool(slide: Dict, relationship: str, stype: str,
                        recent: List[str], used: Dict[str, int]) -> str:
-    """同关系多页挑一个尚未用过的可用版式；全用过则取使用次数最少的。"""
+    """同关系多页挑一个尚未用过、且构图族不同于已用页的可用版式。"""
     specs = LAYOUT_CATALOG.get(stype) or []
+
+    # 整稿已用过的构图族也要避让：否则隔了几页的结尾页会撞回第一张正文页。
+    seen_families = {_layout_family(lid) for lid, count in used.items() if count}
+    recent_families = seen_families | {_layout_family(lid) for lid in recent}
 
     def pick(ids: List[str], fresh_only: bool = False) -> str:
         candidates = []
@@ -565,11 +591,13 @@ def _rule_variant_pool(slide: Dict, relationship: str, stype: str,
                 continue
             if fresh_only and used.get(lid, 0):
                 continue
-            candidates.append((used.get(lid, 0), lid))
+            # (使用次数, 与近邻是否同族, id)：优先没用过且换个构图族。
+            candidates.append((used.get(lid, 0),
+                               int(_layout_family(lid) in recent_families), lid))
         if not candidates:
             return ""
-        best = min(count for count, _ in candidates)
-        tied = [lid for count, lid in candidates if count == best]
+        best = min((count, same) for count, same, _ in candidates)
+        tied = [lid for count, same, lid in candidates if (count, same) == best]
         return tied[_variant_seed(slide) % len(tied)]
 
     # 先用同关系的候选（保持语义构图），关系池耗尽再退回该页型全部可用版式，
@@ -598,19 +626,24 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
         "comparison": "compare", "parallel": "three_cards",
         "grouped": "icon_grid", "takeaway": "statement",
     }.get(str(design.get("relationship") or "")) if stype == "content" else None
-    prefers = [(slide.get("layout"), True, False),
-               (preferred, False, preferred is not None),
-               ((template_layouts or {}).get(stype), False, False)]  # 模板静态偏好：仅兜底
-    for raw, from_model, from_rule in prefers:
+    prefers = [(slide.get("layout"), True),
+               (preferred, False),
+               ((template_layouts or {}).get(stype), False)]  # 模板静态偏好：仅兜底
+    for raw, from_model in prefers:
         want = _normalize_layout_id(raw, stype)
         if not want:
             want = _LEGACY_LAYOUT_ALIAS.get((stype, str(raw or "")), "")
-        # 规则层推断的关系整稿常相同：首选版式不可用（点数不符）或已用过时，
-        # 直接在候选池里换几何不同的版式，而不是掉回模板默认的 bullets。
-        if from_rule and not slide.get("layout_locked"):
+        # 规则层推断的关系整稿常相同；模板静态偏好同样会把 summary 页锁回
+        # 用过的卡片网格。两类正文页统一按「整稿构图族」避让，首选不可用、
+        # 已用过、或所属族已出现时，从候选池换一个几何不同的版式。
+        if (want and not from_model and stype in ("content", "summary")
+                and not slide.get("layout_locked")):
             rule_spec = next((sp for sp in specs if sp["id"] == want), None)
             exhausted = (not rule_spec or not _layout_usable(rule_spec, slide)
                          or used.get(want, 0) >= 1 or want in recent)
+            if not exhausted and want:
+                seen = {_layout_family(lid) for lid, count in used.items() if count}
+                exhausted = _layout_family(want) in seen
             if exhausted:
                 alt = _rule_variant_pool(
                     slide, str(design.get("relationship") or ""),

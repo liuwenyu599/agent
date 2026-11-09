@@ -553,14 +553,16 @@ class TestRuleLayoutRotation:
         assert all(lid in E.layout_ids("content") for lid in chosen)
 
     def test_unusable_preferred_layout_uses_variant_pool(self):
-        """4 条要点时 three_cards 硬门槛不通过，不能掉回千篇一律的 bullets。"""
+        """4 条要点时 three_cards 硬门槛不通过，要换到另一个构图族。"""
+        from app.application.ppt.page_scene import _LAYOUT_FAMILY
         slide = {"type": "content", "title": "重点任务",
                  "points": ["一是完善制度", "二是加强培训", "三是强化监督", "四是压实责任"],
                  "design": {"relationship": "parallel"}}
         lid = E.choose_layout(slide, TPL["layouts"],
                               recent=[], used={"content.three_cards": 1})
         assert lid in E.layout_ids("content")
-        assert lid not in ("content.three_cards", "content.bullets")
+        assert lid != "content.three_cards"
+        assert _LAYOUT_FAMILY.get(lid.rsplit(".", 1)[-1]) != "grid"
 
     def test_first_rule_page_keeps_preferred(self):
         slide = {"type": "content", "title": "三项工作",
@@ -598,6 +600,25 @@ class TestOfflineDefaults:
         with pytest.raises(AppError):
             svc.generate_cloud(body, object())
 
+class TestCompositionFamilyRotation:
+    """关系候选池跨构图族；整稿去重按族而非版式 id。"""
 
+    def test_rule_pool_spans_families(self):
+        from app.application.ppt.page_scene import _LAYOUT_FAMILY
+        for rel, ids in E._RULE_LAYOUT_POOL.items():
+            families = {_LAYOUT_FAMILY.get(i.rsplit(".", 1)[-1], "other")
+                        for i in ids}
+            assert len(families) >= 3, (rel, families)
 
+    def test_non_body_cards_do_not_claim_body_grid(self):
+        assert E._layout_family("toc.cards") != E._layout_family("content.three_cards")
+        assert E._layout_family("data.cards") != E._layout_family("content.three_cards")
 
+    def test_summary_avoids_family_already_used_in_body(self):
+        slide = {"type": "summary", "title": "结语与展望",
+                 "points": ["坚持党建引领", "聚焦主责主业", "强化改革创新"],
+                 "design": {"relationship": "grouped"}}
+        lid = E.choose_layout(slide, TPL["layouts"], recent=[],
+                              used={"content.three_cards": 1,
+                                    "content.bullets": 1})
+        assert E._layout_family(lid) not in ("grid", "bands")

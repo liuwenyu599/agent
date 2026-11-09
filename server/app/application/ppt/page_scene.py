@@ -43,6 +43,10 @@ def audit(elements: list, slide: dict) -> bool:
         if x < .035 or y < .025 or w <= .03 or h <= .02 or x+w > .965 or y+h > .89:
             return False
         preferred = 28 if ref == "title" else (30 if len(values) == 2 else 20)
+        # 大框短句原来恒按 20pt 排，卡片占 60% 页高却只有一两行字，
+        # 形成明显空卡；高框放宽到 26pt，窄条带保持 20pt 以免挤出多行。
+        if ref.startswith("point:") and h >= .16:
+            preferred = 26
         inset = 0 if ref == "title" else .04
         if w <= inset or h <= inset:
             return False
@@ -58,6 +62,18 @@ def audit(elements: list, slide: dict) -> bool:
             if min(x+w, bx+bw)-max(x, bx) > .002 and min(y+h, by+bh)-max(y, by) > .002:
                 return False
         boxes.append((x, y, w, h))
+    # 同页同级模块字号一致：各框先取「装得下的最大字号」，整组再取
+    # 最小值（即所有槽共同装得下的最大字号），绝不出现一大三小。
+    point_sizes = [item["font_pt"] for item in elements
+                   if str(item["ref"]).startswith("point:")]
+    if point_sizes:
+        common = min(point_sizes)
+        for item in elements:
+            if not str(item["ref"]).startswith("point:"):
+                continue
+            item["font_pt"] = common
+            item["budget_chars"] = budget_chars(
+                item["w"] - .04, item["h"] - .04, common)
     return found == set(values)
 
 
@@ -79,6 +95,74 @@ def clamp_regions(elements: list) -> list:
                 if abs(x-item["x"]) <= max_shift and abs(y-item["y"]) <= max_shift:
                     item["x"], item["y"] = x, y
     return elements
+
+
+# 版式 → 构图族。此前 layout 只影响列数，11 个正文版式共用
+# 1/2/3 列等高网格，换版式看不出差别；现在把语义映射到明显不同的骨架。
+_LAYOUT_FAMILY: dict[str, str] = {
+    "bullets": "bands", "list": "bands",
+    "two_col": "grid", "three_cards": "grid", "icon_grid": "grid", "cards": "grid",
+    "compare": "split", "symmetric": "mirror",
+    "center": "statement", "statement": "statement", "quote": "statement",
+}
+
+
+def _compose_points(variant: str, n: int, image: bool,
+                    long_text: bool = False,
+                    comparison: bool = False) -> list[dict]:
+    """按版式生成真正不同的 point 槽几何；字号由 audit 统一回填。"""
+    family = _LAYOUT_FAMILY.get(variant, "bands")
+    # 长文本左右对照装不下窄框，退回单列横向条带（旧行为：columns=1）。
+    if long_text:
+        family = "bands"
+    if image:
+        gap = .025
+        h = (.60 - gap * (n - 1)) / n
+        return [{"ref": f"point:{i}", "x": .055, "y": .245 + i * (h + gap),
+                 "w": .48, "h": h} for i in range(n)]
+    if family == "mirror" and n == 2 and not comparison:
+        # 左右对称但上下错落，位置与 split / grid 都不同。
+        return [{"ref": f"point:{i}", "x": .065 + i * .50,
+                 "y": .245 + i * .075, "w": .40, "h": .48} for i in range(n)]
+    if family in ("split", "mirror") and n == 2 and not long_text:
+        # 左右对照（含被判为 comparison 的对称页）：两块窄高框 +
+        # 中央留白给中轴，不用等高网格。
+        return [{"ref": f"point:{i}", "x": .055 + i * .49, "y": .32,
+                 "w": .40, "h": .40} for i in range(n)]
+    if family == "mirror" and n > 2:
+        # 多点对称：交错双栏，右列整体下移，避免与 two_col 的规整网格撞脸。
+        gap, rows = .045, math.ceil(n / 2)
+        w = (.89 - gap) / 2
+        h = (.60 - .03 * (rows - 1) - .04) / rows
+        return [{"ref": f"point:{i}",
+                 "x": .055 + (i % 2) * (w + gap),
+                 "y": .245 + (i // 2) * (h + .03) + (i % 2) * .04,
+                 "w": w, "h": h} for i in range(n)]
+    if family == "statement" and n <= 4:
+        # 居中大结论 + 其余要点下方横排；单点时就是整页一句大字。
+        if n == 1:
+            return [{"ref": "point:0", "x": .14, "y": .30, "w": .72, "h": .38}]
+        rest, gap = n - 1, .03
+        w = (.72 - gap * (rest - 1)) / rest
+        boxes = [{"ref": "point:0", "x": .14, "y": .27, "w": .72, "h": .28}]
+        boxes += [{"ref": f"point:{i+1}", "x": .14 + i * (w + gap),
+                   "y": .615, "w": w, "h": .20} for i in range(rest)]
+        return boxes
+    if family == "bands":
+        # 编号要点：横向条带，与竖卡阵列明显不同。
+        gap = .022
+        h = (.60 - gap * (n - 1)) / n
+        return [{"ref": f"point:{i}", "x": .10, "y": .245 + i * (h + gap),
+                 "w": .80, "h": h} for i in range(n)]
+    # grid：三卡 / 双栏 / 对称多点沿用等宽网格，但列数由版式决定。
+    columns = 3 if variant in ("three_cards", "cards") else min(2, n)
+    rows = math.ceil(n / columns)
+    gap = .035
+    width = (.89 - gap * (columns - 1)) / columns
+    height = (.60 - gap * (rows - 1)) / rows
+    return [{"ref": f"point:{i}", "x": .055 + (i % columns) * (width + gap),
+             "y": .245 + (i // columns) * (height + gap),
+             "w": width, "h": height} for i in range(n)]
 
 
 def plan(slide: dict, layout: str) -> dict | None:
@@ -120,29 +204,11 @@ def plan(slide: dict, layout: str) -> dict | None:
     elements = [{"ref": "title", "x": .055, "y": .05, "w": .89, "h": .12}]
     n = len(points)
     variant = layout.split(".")[-1]
-    columns = 1
-    if not image:
-        if variant in ("two_col", "compare", "symmetric", "icon_grid"):
-            columns = min(2, n)
-        elif variant in ("three_cards", "cards"):
-            columns = min(3, n)
-        if variant == "compare" and any(len(str(p)) > 80 for p in points):
-            columns = 1
-    rows = math.ceil(n / columns)
-    gap = .065 if variant == "symmetric" else .035
-    left = .14 if variant == "center" else .055
-    span = .72 if variant == "center" else .89
-    width = (.48 if image else span - gap*(columns-1)) / columns
-    height = (.60 - gap*(rows-1)) / rows
-    top = .245
-    if (design.get("relationship") == "comparison" and n == 2
-            and columns == 2 and not image):
-        # 两项短对照不需要占满正文高度；大空卡会让文字悬在页面中间。
-        height, top = .40, .32
-    for index in range(n):
-        column, row = index % columns, index // columns
-        elements.append({"ref": f"point:{index}", "x": left+column*(width+gap),
-                         "y": top+row*(height+gap), "w": width, "h": height})
+    long_text = (variant == "compare"
+                 and any(len(str(p)) > 80 for p in points))
+    elements.extend(_compose_points(
+        variant, n, image, long_text,
+        comparison=(design.get("relationship") == "comparison")))
     if image:
         elements.append({"ref": "image", "x": .58, "y": .245, "w": .365, "h": .60})
     if not audit(elements, slide):

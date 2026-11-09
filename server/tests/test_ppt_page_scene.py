@@ -79,7 +79,12 @@ def test_model_page_visuals_survive_normalization_and_export_as_native_shapes():
         run = shape.text_frame.paragraphs[0].runs[0]
         assert run.font.name == DEFAULT_CJK_FONT
         assert run._r.get_or_add_rPr().find(qn("a:ea")).get("typeface") == DEFAULT_CJK_FONT
-        assert run.font.size.pt == (28 if shape.text == "两项工作" else 20)
+        # 高框短句按 26pt 饱满排布（原为 20pt），且同页同级必须一致。
+        assert run.font.size.pt == (28 if shape.text == "两项工作" else 26)
+    body_sizes = [shape.text_frame.paragraphs[0].runs[0].font.size.pt
+                  for shape in shapes if shape.has_text_frame
+                  and shape.text in ("工作一", "工作二")]
+    assert body_sizes and len(set(body_sizes)) == 1
 
 
 def test_invalid_model_visuals_fall_back_to_safe_page_language():
@@ -279,3 +284,51 @@ class TestLayoutMotif:
         second = page_scene.plan(slide, "content.two_col")
         assert second is not None and second["layout"] == "content.two_col"
         assert second["visuals"] != first["visuals"]
+
+class TestCompositionFamilies:
+    """版式必须映射到不同构图族，且同页同级字号一致、装饰对齐真实列。"""
+
+    @staticmethod
+    def _slide():
+        return {"type": "content", "title": "年度重点",
+                "points": ["完善制度体系", "加强队伍建设", "推进数字转型"],
+                "design": {"relationship": "parallel"}}
+
+    def test_layouts_span_distinct_geometry_families(self):
+        sigs = {}
+        for layout in ("content.three_cards", "content.bullets",
+                       "content.symmetric", "content.center"):
+            scene = page_scene.plan(dict(self._slide()), layout)
+            assert scene is not None
+            sigs[layout] = tuple(
+                (round(e["x"], 3), round(e["y"], 3), round(e["w"], 3))
+                for e in scene["elements"] if e["ref"].startswith("point:"))
+        assert len(set(sigs.values())) == 4
+
+    def test_peer_points_share_one_readable_font_size(self):
+        scene = page_scene.plan(dict(self._slide()), "content.three_cards")
+        points = [e for e in scene["elements"] if e["ref"].startswith("point:")]
+        assert len({e["font_pt"] for e in points}) == 1
+        assert points[0]["font_pt"] >= 24  # 大框短句要放大，不再恒 20pt
+
+    def test_motif_bands_follow_real_columns(self):
+        slide = {"type": "content", "title": "两类问题",
+                 "points": ["资源分布不均", "协同效率待提升"],
+                 "design": {"relationship": "comparison"}}
+        scene = page_scene.plan(slide, "content.compare")
+        boxes = [e for e in scene["elements"] if e["ref"].startswith("point:")]
+        columns = {round(b["x"], 3) for b in boxes}
+        bands = [d for d in scene["visuals"]
+                 if d["kind"] == "rect" and abs(d.get("y", 0) - .205) < .02
+                 and d.get("h", 0) < .012]
+        assert bands
+        assert len(bands) == len(columns)
+        assert {round(b["x"], 3) for b in bands} == columns
+
+    def test_short_and_long_points_still_fit_after_uniform_sizing(self):
+        slide = {"type": "content", "title": "成效",
+                 "points": ["简", "较长的一段说明文字。" * 12],
+                 "design": {"relationship": "comparison"}}
+        scene = page_scene.plan(slide, "content.two_col")
+        assert scene is not None
+        assert page_scene.audit(scene["elements"], slide)

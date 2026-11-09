@@ -178,14 +178,19 @@ def _layout_motif(out: list, scene: dict) -> list:
     body_top = min(b["y"] for b in boxes)
     rule_y = min(.205, body_top - .035)
     add: list[dict] = []
-    if variant in ("two_col", "compare", "symmetric"):
-        if not any(item["kind"] == "line" for item in out):
+    # 色条必须对齐真实列：2 列页画三条会有一条悬空在卡片外。
+    columns = sorted({round(b["x"], 3) for b in boxes})[:4]
+    if variant in ("two_col", "compare", "symmetric", "icon_grid",
+                   "three_cards", "cards"):
+        for i, x in enumerate(columns):
+            width = min((b["w"] for b in boxes if abs(b["x"] - x) <= .01),
+                        default=.28)
+            add.append(_box(x, rule_y, width, .008, kind="rect",
+                            fill=("primary", "accent", "primary", "accent")[i % 4],
+                            alpha=70))
+        if (variant in ("two_col", "compare", "symmetric")
+                and not any(item["kind"] == "line" for item in out)):
             add.append(_line(.5, rule_y + .02, .5, .845, stroke="line", width=1.0))
-        add.append(_box(.055, rule_y, .40, .006, kind="rect", fill="primary", alpha=55))
-    elif variant in ("three_cards", "icon_grid", "cards"):
-        for i, fill in enumerate(("primary", "accent", "primary")):
-            add.append(_box(.055 + i * .30, rule_y, .28, .008,
-                            kind="rect", fill=fill, alpha=70))
     elif variant in ("center", "statement", "quote"):
         add.append(_box(.30, rule_y, .40, .008, kind="gradient",
                         **{"from": "primary", "to": "light"}))
