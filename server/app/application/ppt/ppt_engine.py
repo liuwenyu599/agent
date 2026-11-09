@@ -656,12 +656,16 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                 if (stype == "content" and want in recent
                         and not slide.get("layout_locked")):
                     continue
+                # 章节页整篇必须同一种版式（用户 2026-11-09：章节页要统一，
+                # 不能每页都不一样）。章节页没有内容差异可打分，一旦参与轮换
+                # 就会 4 个章节出现 3 种样式；这里直接沿用模板静态偏好。
+                if stype == "section" and not slide.get("layout_locked"):
+                    return want
                 # 模型没给意图时，模板静态偏好不锁版：用满次数就改走打分均衡，
-                # 避免"每页都是同一版式"的模板感。章节/目录/封面这类装饰页
-                # 整篇会出现多次且没有内容差异可打分，用过一次即轮换；
+                # 避免"每页都是同一版式"的模板感。封面/目录/结束页整篇只出现
+                # 一次，无法靠 used 轮换，另有下方指纹逻辑跨稿变化；
                 # 正文页保留 2 次，让内容相近的页仍可沿用同一结构。
-                static_limit = (1 if stype in ("section", "toc", "cover", "closing")
-                                else 2)
+                static_limit = (1 if stype in ("toc", "cover", "closing") else 2)
                 if (not from_model and used.get(want, 0) >= static_limit
                         and not slide.get("layout_locked")):
                     continue
@@ -669,7 +673,7 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                 # 上面的 used 轮换永远触发不到 → 每份稿都长一个样。这里按页面
                 # 内容指纹在该页型的可用版式里确定性取一个，跨稿才有变化。
                 if (not from_model and not slide.get("layout_locked")
-                        and stype in ("section", "toc", "cover", "closing")):
+                        and stype in ("toc", "cover", "closing")):
                     options = [sp["id"] for sp in specs if _layout_usable(sp, slide)]
                     # 同稿内优先选没用过的版式，避免几页内容相近时指纹相同又撞版；
                     # 全用过时退回全集，仍由 used/recent 的打分逻辑兜底。
@@ -2294,31 +2298,63 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 take = base + (1 if gi < extra else 0)
                 groups.append(pts[start:start + take])
                 start += take
+            # 字号：同级三卡共用 20pt（原硬编码 12/13pt，成稿里明显偏小），
+            # 文字过长时逐级降到 14pt 为止。卡片高度按实际行数撑开——一条
+            # 短句不该配一张占 57% 页高的大空卡，整排再在正文区垂直居中。
+            text_w = 0.235
+
+            def _lines(group, fs):
+                return sum(adaptive_design.estimated_lines(
+                    p, text_w * .85, int(round(fs))) for p in group)
+
+            body_pt = 20
+            while body_pt > 14 and (max(_lines(g, body_pt) for g in groups)
+                                    * body_pt * 1.30 / 540 > .44):
+                body_pt -= 1
+            text_h = max(_lines(g, body_pt) for g in groups) * body_pt * 1.30 / 540
+            card_h = min(.52, max(.28, .10 + text_h + .05))
+            card_top = 0.25 + max(0.0, (0.60 - card_h) / 2)
             for gi, group in enumerate(groups):
                 cx = 0.055 + gi * 0.30
-                rect(slide, lx(cx), ly(0.25), lx(0.278), ly(0.57), LIGHT, round_=True)
-                rect(slide, lx(cx), ly(0.25), lx(0.278), ly(0.010), PRIMARY)
-                text(slide, lx(cx + 0.022), ly(0.285), lx(0.10), ly(0.06), f"0{gi+1}",
-                     16, True, ACCENT)
-                y = 0.365
-                step = 0.19 if len(group) <= 2 else 0.135
+                rect(slide, lx(cx), ly(card_top), lx(0.278), ly(card_h), LIGHT,
+                     round_=True)
+                rect(slide, lx(cx), ly(card_top), lx(0.278), ly(0.010), PRIMARY)
+                text(slide, lx(cx + 0.022), ly(card_top + 0.025), lx(0.10), ly(0.06),
+                     f"0{gi+1}", 16, True, ACCENT)
+                y = card_top + 0.095
                 for p in group:
-                    text(slide, lx(cx + 0.022), ly(y), lx(0.235), ly(step), p,
-                         13 if len(group) <= 2 else 12, False, DARK)
-                    y += step
+                    h = max(.06, adaptive_design.estimated_lines(
+                        p, text_w * .85, int(round(body_pt))) * body_pt * 1.30 / 540)
+                    text(slide, lx(cx + 0.022), ly(y), lx(text_w), ly(h), p,
+                         body_pt, False, DARK)
+                    y += h + .02
             return slide
         rect(slide, lx(0.055), ly(0.235), lx(0.89), ly(0.64), LIGHT, round_=True)
         rect(slide, lx(0.055), ly(0.235), lx(0.012), ly(0.64), ACCENT)
-        y = 0.30
+        # 整块案例：一行一条，槽高按条数均分，字号按最挤的一条拟合（原固定 17pt）。
+        step = min(0.145, 0.52 / max(len(pts), 1))
+        body_pt = max(15, min([adaptive_design.fit_font_size(p, 0.80, step - .01, 20,
+                                                            min_pt=15) or 15
+                               for p in pts] or [20]))
+        # 整块居中：卡片 0.235–0.875，文本块按条数占高后上下留白均分。
+        block = step * max(len(pts), 1)
+        y = 0.235 + max(0.05, (0.64 - block) / 2)
         for p in pts:
-            text(slide, lx(0.10), ly(y), lx(0.80), ly(0.14), p, 17, False, DARK)
-            y += 0.145
+            text(slide, lx(0.10), ly(y), lx(0.80), ly(step), p, body_pt, False, DARK,
+                 anchor=MSO_ANCHOR.MIDDLE)
+            y += step
         return slide
 
     def r_timeline(s):
         slide = prs.slides.add_slide(blank)
         page_header(slide, s["title"])
         all_items = (s.get("blocks") or {}).get("timeline") or []
+        from_points = not all_items
+        if from_points:
+            # 模型只给了 points、没给 timeline 块时，时间轴页会只剩页脚两行小字
+            # （实际成稿出现过整页空白）。用要点兜底成编号节点，至少可读。
+            all_items = [{"time": f"{i + 1:02d}", "text": str(p)}
+                         for i, p in enumerate(s.get("points") or [])]
 
         def _est_lines(label: str, fs: float, box_w: float) -> int:
             # 与 review_pptx_visuals 的估行口径对齐（有效字宽 ≈ fs/72*1.5，介于
@@ -2349,7 +2385,8 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             return slide
         items = all_items[:5]
         n = max(len(items), 1)
-        yline = 0.52
+        # 时间轴只有一行，压在下半页更平衡（原 0.52 使整页内容偏上）。
+        yline = 0.56
         rect(slide, lx(0.08), ly(yline), lx(0.84), ly(0.009), ACCENT, round_=True)
         spacing = 0.80 / max(n - 1, 1)
 
@@ -2369,13 +2406,17 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             t_w = min(0.18, spacing * 0.92)
             t_h = _est_lines(t_label, t_fs, t_w) * (t_fs / 72 * 1.35 / 7.5)
             d_label = str(it.get("text", ""))
-            d_fs = 12 if len(d_label) <= 26 else 11
+            # 原 11/12pt 在投影上明显偏小，与正文页 20–26pt 落差过大。
+            d_fs = 14 if len(d_label) <= 26 else 13
             d_w = min(0.20, spacing * 0.98)
             d_h = _est_lines(d_label, d_fs, d_w) * (d_fs / 72 * 1.35 / 7.5)
             gap = 0.012
+            # 首尾节点居中排会越出页面：把文字框夹回版心内（实机节点 1 的
+            # 首个字被页面边缘切掉）。
+            dx = min(max(cx - d_w / 2, 0.02), 0.98 - d_w)
             if up:
                 # 上侧自线向上堆叠：正文贴线，时间槽在正文上方
-                text(slide, lx(cx - d_w / 2), ly(yline - 0.014 - d_h), lx(d_w),
+                text(slide, lx(dx), ly(yline - 0.014 - d_h), lx(d_w),
                      ly(d_h), d_label, d_fs, False, GRAY, align=PP_ALIGN.CENTER)
                 text(slide, lx(cx - t_w / 2), ly(yline - 0.014 - d_h - gap - t_h), lx(t_w),
                      ly(t_h), t_label, t_fs, True, PRIMARY, align=PP_ALIGN.CENTER)
@@ -2383,10 +2424,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 # 下侧自线向下堆叠：时间槽贴线，正文在其下
                 text(slide, lx(cx - t_w / 2), ly(yline + 0.014), lx(t_w),
                      ly(t_h), t_label, t_fs, True, PRIMARY, align=PP_ALIGN.CENTER)
-                text(slide, lx(cx - d_w / 2), ly(yline + 0.014 + t_h + gap), lx(d_w),
+                text(slide, lx(dx), ly(yline + 0.014 + t_h + gap), lx(d_w),
                      ly(d_h), d_label, d_fs, False, GRAY, align=PP_ALIGN.CENTER)
-        for j, p in enumerate((s.get("points") or [])[:2]):
-            text(slide, lx(0.07), ly(0.80 + j * 0.06), lx(0.86), ly(0.05), p, 14, False, GRAY)
+        # 兜底节点就是从 points 来的，再在页脚重复一遍等于同一句话印两次。
+        if not from_points:
+            for j, p in enumerate((s.get("points") or [])[:2]):
+                text(slide, lx(0.07), ly(0.80 + j * 0.06), lx(0.86), ly(0.05), p,
+                     14, False, GRAY)
         return slide
 
     def r_process(s):
@@ -2553,12 +2597,19 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     # 先统一选版：相邻页去重 + 整篇均衡，避免"每页长得一样"的模板感
     used_layouts: Dict[str, int] = {}
     recent_layouts: List[str] = []
+    section_layout = ""
     sec_no = 0
     for scene_index, s in enumerate(slides_list):
         if s.get("type") == "section":
             sec_no += 1
             s["_sec_no"] = sec_no
         chosen = choose_layout(s, layouts, recent=recent_layouts, used=used_layouts)
+        # 章节页整篇统一：首张定版，其余沿用，避免 4 个章节 3 种样式。
+        if s.get("type") == "section" and not s.get("layout_locked") and chosen:
+            if not section_layout:
+                section_layout = chosen
+            else:
+                chosen = section_layout
         s["_layout"] = chosen
         if adaptive and not s.get("layout_locked"):
             from app.application.ppt.page_scene import plan

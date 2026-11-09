@@ -222,8 +222,8 @@ def test_render_never_prints_placeholder_kpi_cards() -> None:
     assert any("占位" in item for item in warnings)
 
 
-def test_section_layouts_rotate_when_template_has_static_preference() -> None:
-    """4 个章节页不能全用同一个静态偏好版式。"""
+def test_section_layouts_are_unified_across_the_deck() -> None:
+    """章节页整篇必须同一种版式（用户 2026-11-09：不能每页都不一样）。"""
     from app.application.ppt import ppt_engine
 
     used = {}
@@ -234,9 +234,19 @@ def test_section_layouts_rotate_when_template_has_static_preference() -> None:
             {"section": "section.side"}, used=used)
         chosen.append(layout)
         used[layout] = used.get(layout, 0) + 1
-    # 装饰页按页面内容指纹确定性换版：首个章节页也不再被模板静态偏好锁死；
-    # 同一页在成稿 / 预览 / 复检里必须得到同一个结果（指纹只取 slide 自身字段）。
-    assert len(set(chosen)) >= 2
+    # 章节页不参与任何轮换：4 页全部沿用模板静态偏好。
+    assert chosen == ["section.side"] * 4
+    # 同一页在成稿 / 预览 / 复检里必须得到同一个结果。
     same = {"type": "section", "title": "章节", "points": []}
     assert (ppt_engine.choose_layout(same, {"section": "section.side"}) ==
             ppt_engine.choose_layout(dict(same), {"section": "section.side"}))
+
+
+def test_section_layout_unaffected_by_previous_pages_usage() -> None:
+    """前面章节用满次数也不能让后面的章节换版式（旧逻辑会轮换）。"""
+    from app.application.ppt import ppt_engine
+
+    used = {"section.side": 3, "section.number": 3}
+    assert ppt_engine.choose_layout(
+        {"type": "section", "title": "章节", "points": []},
+        {"section": "section.side"}, recent=["section.side"], used=used) == "section.side"

@@ -21,12 +21,15 @@ TPL = dict(E.BUILTIN_TEMPLATES[0])
 
 
 def _slide(t, points=None, layout=None, blocks=None, image=False,
-           title="测试标题", subtitle=None):
+           title="测试标题", subtitle=None, locked=False):
     s = {"type": t, "title": title, "points": points or [], "blocks": blocks or {}}
     if subtitle is not None:
         s["subtitle"] = subtitle
     if layout:
         s["layout"] = layout
+    if locked:
+        # 版式锁定 = 模板作者/用户指定，渲染必须照此执行（章节页统一除外）。
+        s["layout_locked"] = True
     if image:
         s["_image"] = {"file_path": "unused", "name": "x"}
     return s
@@ -161,8 +164,8 @@ class TestRenderAllLayouts:
             _slide("toc", pts(5, "章节"), layout="grid"),
             _slide("toc", pts(4, "章节"), layout="cards"),
             _slide("section", title="一、测试", layout="number"),
-            _slide("section", title="二、测试", layout="side"),
-            _slide("section", title="三、测试", layout="center"),
+            _slide("section", title="二、测试", layout="side", locked=True),
+            _slide("section", title="三、测试", layout="center", locked=True),
             _slide("content", pts(4), layout="bullets"),
             _slide("content", pts(5), layout="two_col"),
             _slide("content", pts(3), layout="three_cards"),
@@ -232,6 +235,19 @@ class TestRenderAllLayouts:
         from collections import Counter
         top = Counter(counts).most_common(1)[0][1]
         assert top <= 5, f"版式疑似塌缩：出现相同形状数的页过多 {counts}"
+
+    def test_section_pages_unified_even_if_layouts_differ(self):
+        """章节页整篇统一：首张定版，后面即使给了不同版式也沿用。"""
+        outline = {"title": "t", "slides": [
+            _slide("section", title="一、测试", layout="number"),
+            _slide("section", title="二、测试", layout="side"),
+            _slide("section", title="三、测试", layout="center"),
+            _slide("closing", title="谢谢"),
+        ]}
+        prs = Presentation(io.BytesIO(E.build_pptx(outline, TPL)))
+        sig = [tuple((sh.left, sh.top, sh.width, sh.height) for sh in sl.shapes)
+               for sl in list(prs.slides)[:3]]
+        assert sig[0] == sig[1] == sig[2], "章节页几何不一致，说明没统一"
 
     def test_statement_with_long_text_still_renders(self):
         s = _slide("content", ["这是一条超过了三十个字的核心结论，用来验证大字版式在长文本下仍然可以完整渲染不会异常"],
@@ -622,3 +638,52 @@ class TestCompositionFamilyRotation:
                               used={"content.three_cards": 1,
                                     "content.bullets": 1})
         assert E._layout_family(lid) not in ("grid", "bands")
+
+class TestPageFontBottomLine:
+    """字号底线：案例页 / 时间轴页不得再出现 11–13pt 的正文。
+
+    用户 2026-11-09 实机反馈：第二节案例页的字号明显偏小。根因是这几类页不走
+    page_scene 自适应排版，字号写死在 r_case / r_timeline 里。这里锁住下限，
+    防止以后改回硬编码。
+    """
+
+    @staticmethod
+    def _body_runs(slide):
+        out = []
+        for sh in slide.shapes:
+            if not sh.has_text_frame:
+                continue
+            for para in sh.text_frame.paragraphs:
+                for run in para.runs:
+                    if run.font.size:
+                        out.append((sh.text_frame.text.strip(), run.font.size.pt))
+        return out
+
+    def test_case_cards_use_readable_peer_size(self):
+        outline = {"title": "t", "slides": [
+            _slide("case", ["背景：基层调解力量不足，群众办事难。",
+                            "做法：搭建全流程线上调解系统，实现视频调解。",
+                            "成效：显著缩短办案周期，覆盖全市所有街道。"],
+                   layout="split"),
+            _slide("closing", title="谢谢")]}
+        prs = Presentation(io.BytesIO(E.build_pptx(outline, TPL)))
+        sizes = [pt for txt, pt in self._body_runs(prs.slides[0])
+                 if txt.startswith(("背景", "做法", "成效"))]
+        assert sizes, "案例卡片正文没渲染出来"
+        assert min(sizes) >= 18, f"案例页正文仍然偏小：{sizes}"
+        assert len(set(sizes)) == 1, f"同级三卡字号不一致：{sizes}"
+
+    def test_timeline_falls_back_to_points_without_duplicates(self):
+        point = "启动法治惠民专项行动，优化服务网点布局。"
+        outline = {"title": "t", "slides": [
+            _slide("timeline", [point, "完成全员轮训，提升专业素养。",
+                                "建成二期工程，投入使用。"]),
+            _slide("closing", title="谢谢")]}
+        prs = Presentation(io.BytesIO(E.build_pptx(outline, TPL)))
+        texts = [sh.text_frame.text.strip() for sh in prs.slides[0].shapes
+                 if sh.has_text_frame]
+        # 只给 points 没给 blocks.timeline 时，也要画成编号节点，不能整页空白。
+        assert "01" in texts and "03" in texts
+        assert texts.count(point) == 1, "兜底节点在页脚又被重复了一遍"
+        body = [pt for txt, pt in self._body_runs(prs.slides[0]) if txt == point]
+        assert body and min(body) >= 13
