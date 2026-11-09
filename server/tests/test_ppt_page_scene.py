@@ -234,3 +234,48 @@ def test_render_adds_native_primitives_without_losing_text():
                     if s.shape_type == MSO_SHAPE_TYPE.TEXT_BOX
                     and s.text.strip() in slide["points"])
     assert badge_idx < body_idx
+
+
+class TestLayoutMotif:
+    """同一份要点换版式后，装饰骨架也要跟着变，不只是列数不同。"""
+
+    @staticmethod
+    def _slide():
+        return {"type": "content", "title": "年度成效",
+                "points": ["完善制度体系", "加强队伍建设",
+                           "推进数字转型", "健全监督机制"],
+                "design": {"relationship": "grouped"}}
+
+    @staticmethod
+    def _layouts():
+        return ("content.bullets", "content.two_col",
+                "content.icon_grid", "content.center")
+
+    def test_different_layouts_produce_different_visual_language(self):
+        motifs = {}
+        for layout in self._layouts():
+            scene = page_scene.plan(dict(self._slide()), layout)
+            assert scene is not None and scene["layout"] == layout
+            motifs[layout] = tuple((item["kind"], round(item.get("x", 0), 3))
+                                   for item in scene["visuals"])
+        assert len(set(motifs.values())) == len(self._layouts())
+
+    def test_motif_shapes_stay_inside_safe_area(self):
+        for layout in self._layouts():
+            scene = page_scene.plan(dict(self._slide()), layout)
+            for item in scene["visuals"]:
+                if item["kind"] == "line":
+                    assert all(0 <= item[k] <= 1 for k in ("x1", "y1", "x2", "y2"))
+                    continue
+                assert item["x"] >= vp.SAFE_X - 1e-9
+                assert item["y"] >= vp.SAFE_Y - 1e-9
+                assert item["x"] + item["w"] <= vp.SAFE_R + 1e-9
+                assert item["y"] + item["h"] <= vp.SAFE_B + 1e-9
+
+    def test_scene_cache_is_keyed_by_layout(self):
+        slide = dict(self._slide())
+        first = page_scene.plan(slide, "content.bullets")
+        slide["scene"] = first
+        second = page_scene.plan(slide, "content.two_col")
+        assert second is not None and second["layout"] == "content.two_col"
+        assert second["visuals"] != first["visuals"]

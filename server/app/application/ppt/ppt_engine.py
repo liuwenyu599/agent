@@ -540,6 +540,44 @@ def _variant_seed(slide: Dict) -> int:
     return int(hashlib.md5(raw.encode("utf-8")).hexdigest()[:8], 16)
 
 
+# 规则层推断出的 relationship 整稿常常相同（例如 4 个正文页全判 grouped）。
+# 若把这种 preferred 当成「模型意图」锁死，choose_layout 会把它们全选成同一
+# 版式，连整篇去重都不触发，反而加重模板感。这里给每种关系准备一组几何
+# 差异明显的候选（1/2/3 列、卡片、居中结论），按整篇使用次数确定性轮换。
+_RULE_LAYOUT_POOL: Dict[str, List[str]] = {
+    "comparison": ["content.compare", "content.symmetric", "content.two_col"],
+    "parallel": ["content.three_cards", "content.icon_grid", "content.two_col"],
+    "grouped": ["content.icon_grid", "content.three_cards", "content.two_col"],
+    "takeaway": ["content.statement", "content.quote", "content.center"],
+}
+
+
+def _rule_variant_pool(slide: Dict, relationship: str, stype: str,
+                       recent: List[str], used: Dict[str, int]) -> str:
+    """同关系多页挑一个尚未用过的可用版式；全用过则取使用次数最少的。"""
+    specs = LAYOUT_CATALOG.get(stype) or []
+
+    def pick(ids: List[str], fresh_only: bool = False) -> str:
+        candidates = []
+        for lid in ids:
+            spec = next((sp for sp in specs if sp["id"] == lid), None)
+            if not (spec and _layout_usable(spec, slide) and lid not in recent):
+                continue
+            if fresh_only and used.get(lid, 0):
+                continue
+            candidates.append((used.get(lid, 0), lid))
+        if not candidates:
+            return ""
+        best = min(count for count, _ in candidates)
+        tied = [lid for count, lid in candidates if count == best]
+        return tied[_variant_seed(slide) % len(tied)]
+
+    # 先用同关系的候选（保持语义构图），关系池耗尽再退回该页型全部可用版式，
+    # 保证整稿不会因为「同类页太多」而反复撞同一套几何。
+    return (pick(_RULE_LAYOUT_POOL.get(relationship) or [], fresh_only=True)
+            or pick([sp["id"] for sp in specs]))
+
+
 def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                   recent: Optional[List[str]] = None,
                   used: Optional[Dict[str, int]] = None) -> str:
@@ -560,13 +598,25 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
         "comparison": "compare", "parallel": "three_cards",
         "grouped": "icon_grid", "takeaway": "statement",
     }.get(str(design.get("relationship") or "")) if stype == "content" else None
-    prefers = [(slide.get("layout"), True),
-               (preferred, True),
-               ((template_layouts or {}).get(stype), False)]  # 模板静态偏好：仅兜底
-    for raw, from_model in prefers:
+    prefers = [(slide.get("layout"), True, False),
+               (preferred, False, preferred is not None),
+               ((template_layouts or {}).get(stype), False, False)]  # 模板静态偏好：仅兜底
+    for raw, from_model, from_rule in prefers:
         want = _normalize_layout_id(raw, stype)
         if not want:
             want = _LEGACY_LAYOUT_ALIAS.get((stype, str(raw or "")), "")
+        # 规则层推断的关系整稿常相同：首选版式不可用（点数不符）或已用过时，
+        # 直接在候选池里换几何不同的版式，而不是掉回模板默认的 bullets。
+        if from_rule and not slide.get("layout_locked"):
+            rule_spec = next((sp for sp in specs if sp["id"] == want), None)
+            exhausted = (not rule_spec or not _layout_usable(rule_spec, slide)
+                         or used.get(want, 0) >= 1 or want in recent)
+            if exhausted:
+                alt = _rule_variant_pool(
+                    slide, str(design.get("relationship") or ""),
+                    stype, recent, used)
+                if alt:
+                    return alt
         if want:
             spec = next((sp for sp in specs if sp["id"] == want), None)
             if spec and _layout_usable(spec, slide):

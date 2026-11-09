@@ -116,7 +116,8 @@ class OutlineAdjustIn(BaseModel):
 class CloudCfgIn(BaseModel):
     enabled: bool = False
     api_key: str = ""
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # 内网部署默认留空：不得预置任何公网地址，避免误开云生成开关后材料出网。
+    base_url: str = ""
     mode: str = "general"
     template_id: str = "summary_01"
 

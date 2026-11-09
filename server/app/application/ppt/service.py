@@ -88,7 +88,7 @@ class _PreviewRenderError(Exception):
 _CLOUD_DEFAULT = {
     "enabled": False,
     "api_key": "",
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "base_url": "",  # 内网部署默认不预置公网地址
     "mode": "general",               # general=模板模式 / creative=创意模式
     "template_id": "summary_01",
 }
@@ -2984,6 +2984,9 @@ class PPTService:
         cfg = self._load_cloud()
         if not cfg["enabled"] or not cfg.get("api_key"):
             raise AppError(400, "云端生成未启用或未配置 API Key，请先在「云生成设置」中配置")
+        # 最后一道理网闸：即使开关被误开，未显式填写服务地址也不发任何请求。
+        if not str(cfg.get("base_url") or "").strip():
+            raise AppError(400, "云端生成未配置服务地址；内网部署默认禁止外联")
         d = self._get_doc_checked(body.doc_id, user)
         if not d.outline:
             raise NotFoundError("文档不存在或内容为空")

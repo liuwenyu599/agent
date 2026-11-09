@@ -95,7 +95,9 @@ def plan(slide: dict, layout: str) -> dict | None:
         return None
     stamp = signature(slide, layout)
     previous = slide.get("scene")
-    if isinstance(previous, dict) and previous.get("version") == 2 and previous.get("source") == stamp:
+    if (isinstance(previous, dict) and previous.get("version") == 2
+            and previous.get("source") == stamp
+            and previous.get("layout") == layout):
         elements = previous.get("elements")
         if audit(elements, slide):
             expected = model_visuals(design.get("visuals"), elements)
@@ -104,7 +106,8 @@ def plan(slide: dict, layout: str) -> dict | None:
                 return previous
 
     def scene_from(elements: list) -> dict:
-        scene = {"version": 2, "source": stamp, "elements": elements}
+        scene = {"version": 2, "source": stamp, "layout": layout,
+                 "elements": elements}
         visuals = model_visuals(design.get("visuals"), elements)
         scene["visuals"] = decorations(scene, slide) + (visuals or [])
         return scene

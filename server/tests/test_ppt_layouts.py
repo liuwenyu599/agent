@@ -530,5 +530,74 @@ class TestVisualIntent:
             dict(s), TPL["layouts"])
 
 
+class TestRuleLayoutRotation:
+    """规则层推断出的关系整稿常相同，不能把同型页全锁到一个版式。"""
+
+    @staticmethod
+    def _pages(count=5):
+        return [{"type": "content", "title": f"工作板块{i+1}",
+                 "points": ["建成三级服务平台", "推广线上受理渠道",
+                            "开展企业法治体检", "健全援助保障机制"],
+                 "design": {}} for i in range(count)]
+
+    def test_same_relationship_pages_do_not_share_one_skeleton(self):
+        clean = E.apply_visual_intent(E.normalize_outline(
+            {"title": "t", "slides": self._pages()}, require_bookends=False))
+        used, recent, chosen = {}, [], []
+        for slide in clean["slides"]:
+            lid = E.choose_layout(slide, TPL["layouts"], recent=recent, used=used)
+            used[lid] = used.get(lid, 0) + 1
+            recent = (recent + [lid])[-2:]
+            chosen.append(lid)
+        assert len(set(chosen)) >= 4, chosen
+        assert all(lid in E.layout_ids("content") for lid in chosen)
+
+    def test_unusable_preferred_layout_uses_variant_pool(self):
+        """4 条要点时 three_cards 硬门槛不通过，不能掉回千篇一律的 bullets。"""
+        slide = {"type": "content", "title": "重点任务",
+                 "points": ["一是完善制度", "二是加强培训", "三是强化监督", "四是压实责任"],
+                 "design": {"relationship": "parallel"}}
+        lid = E.choose_layout(slide, TPL["layouts"],
+                              recent=[], used={"content.three_cards": 1})
+        assert lid in E.layout_ids("content")
+        assert lid not in ("content.three_cards", "content.bullets")
+
+    def test_first_rule_page_keeps_preferred(self):
+        slide = {"type": "content", "title": "三项工作",
+                 "points": ["完善制度", "加强培训", "强化监督"],
+                 "design": {"relationship": "parallel"}}
+        assert E.choose_layout(slide, TPL["layouts"]) == "content.three_cards"
+
+    def test_explicit_model_layout_still_wins(self):
+        slide = {"type": "content", "title": "两项对比",
+                 "points": ["过去人工办理", "现在线上办理"],
+                 "design": {"relationship": "comparison"},
+                 "layout": "content.compare"}
+        assert E.choose_layout(slide, TPL["layouts"]) == "content.compare"
+
+
+class TestOfflineDefaults:
+    """政务内网：默认配置里不得预置任何公网端点，误开开关也不能外联。"""
+
+    def test_no_public_endpoint_in_defaults(self):
+        from app.application.ppt.dto import CloudCfgIn
+        from app.application.ppt.service import _CLOUD_DEFAULT
+        assert CloudCfgIn().base_url == ""
+        assert _CLOUD_DEFAULT["base_url"] == ""
+        assert "http" not in (CloudCfgIn().base_url + _CLOUD_DEFAULT["base_url"])
+
+    def test_cloud_generation_refuses_without_endpoint(self, monkeypatch):
+        from app.application.ppt import service as S
+        from app.core.exceptions import AppError
+        monkeypatch.setattr(S.settings, "PPT_CLOUD_ALLOWED", True)
+        svc = object.__new__(S.PPTService)
+        monkeypatch.setattr(svc, "_load_cloud", lambda: {
+            "enabled": True, "api_key": "dummy", "base_url": "",
+            "mode": "general", "template_id": "summary_01"})
+        body = type("Body", (), {"doc_id": "d1", "mode": "", "template_id": ""})()
+        with pytest.raises(AppError):
+            svc.generate_cloud(body, object())
+
+
 
 

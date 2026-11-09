@@ -162,6 +162,41 @@ def _groups(boxes: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def _layout_motif(out: list, scene: dict) -> list:
+    """按版式补一组骨架形状，让同关系多页不只是「换列数」。
+
+    全部落在标题区或页边空白，不与正文文字框重叠；只使用既有 kind，
+    因此 SVG 线框与原生 PPTX 导出共用同一份列表，几何审计不会判 TEXT_HIDDEN。
+    """
+    layout = str((scene or {}).get("layout") or "")
+    boxes = [e for e in (scene or {}).get("elements", [])
+             if str(e.get("ref", "")).startswith("point:")]
+    # 旧缓存 scene 没有 layout 字段：保持原有视觉语言，不给历史稿件凭空加装饰。
+    if not layout or not boxes:
+        return out
+    variant = layout.rsplit(".", 1)[-1]
+    body_top = min(b["y"] for b in boxes)
+    rule_y = min(.205, body_top - .035)
+    add: list[dict] = []
+    if variant in ("two_col", "compare", "symmetric"):
+        if not any(item["kind"] == "line" for item in out):
+            add.append(_line(.5, rule_y + .02, .5, .845, stroke="line", width=1.0))
+        add.append(_box(.055, rule_y, .40, .006, kind="rect", fill="primary", alpha=55))
+    elif variant in ("three_cards", "icon_grid", "cards"):
+        for i, fill in enumerate(("primary", "accent", "primary")):
+            add.append(_box(.055 + i * .30, rule_y, .28, .008,
+                            kind="rect", fill=fill, alpha=70))
+    elif variant in ("center", "statement", "quote"):
+        add.append(_box(.30, rule_y, .40, .008, kind="gradient",
+                        **{"from": "primary", "to": "light"}))
+        add.append(_box(.455, rule_y + .022, .09, .004, kind="rect", fill="accent"))
+    else:  # bullets / image_* / 未知：左侧竖色带，与卡片类明显不同
+        add.append(_box(.035, body_top, .008, max(.10, .845 - body_top),
+                        kind="rect", fill="primary", alpha=45))
+        add.append(_box(.055, rule_y, .11, .006, kind="rect", fill="accent"))
+    return out + add
+
+
 def decorations(scene: dict, slide: dict) -> list[dict]:
     """Build the decoration list for one scene.
 
@@ -200,7 +235,7 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             if box is not main:
                 out.append(_box(box["x"] - .012, box["y"], .006, box["h"],
                                 kind="rect", fill="primary", alpha=55))
-        return out
+        return _layout_motif(out, scene)
 
     if rel == "comparison":
         top = min(b["y"] for b in boxes)
@@ -218,7 +253,7 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             out.append(_card(box))
             out.append(_gradient(box, "primary", "accent"))
             out.append(_badge(box, index, "primary" if index % 2 == 0 else "accent"))
-        return out
+        return _layout_motif(out, scene)
 
     if rel == "parallel":
         for index, box in enumerate(ordered):
@@ -228,7 +263,7 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             out.append(_box(box["x"], box["y"] - .018, box["w"] * .96, .014,
                             kind="chevron", fill=fill, alpha=85))
             out.append(_badge(box, index, fill))
-        return out
+        return _layout_motif(out, scene)
 
     if rel == "grouped":
         serial = 0
@@ -244,7 +279,7 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
                                 kind="rect", fill=fill))
                 out.append(_badge(box, serial, fill))
                 serial += 1
-        return out
+        return _layout_motif(out, scene)
 
     # none / 未知：克制版式，只给每条要点一条竖线与顶部渐变细条，避免整页卡片。
     for index, box in enumerate(boxes):
@@ -252,7 +287,7 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
         out.append(_box(box["x"] - .012, box["y"], .006, box["h"],
                         kind="rect", fill=fill, alpha=75))
         out.append(_gradient(box, fill, "light", y=box["y"], height=.008))
-    return out
+    return _layout_motif(out, scene)
 
 
 def svg_decoration(item: dict, palette: dict | None = None) -> str:
