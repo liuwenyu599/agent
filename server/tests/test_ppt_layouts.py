@@ -865,3 +865,52 @@ class TestDataPromotion:
         assert charts, "升级后的图表页没有渲染出原生图表对象"
         assert list(charts[0].chart.plots[0].categories) == [
             "一季度", "二季度", "三季度", "四季度"]
+
+
+class TestGroupedCardsChrome:
+    """分组多卡不得在卡外拉一条横贯整页的色带（用户 2026-11-09 实机反馈：
+    「三张卡上挂着一条莫名其妙的横线，圆点正好串在线上」）。"""
+
+    @staticmethod
+    def _scene():
+        boxes = [{"ref": f"point:{i}", "x": .055 + i * .315, "y": .30,
+                  "w": .28, "h": .45} for i in range(3)]
+        return {"layout": "content.cards", "elements": boxes}
+
+    def test_grouped_bands_sit_on_card_edge_not_above(self):
+        from app.application.ppt.visual_primitives import decorations
+
+        scene = self._scene()
+        items = decorations(scene, {"design": {"relationship": "grouped"}})
+        bands = [i for i in items
+                 if i["kind"] in ("rect", "gradient") and i["h"] < .02 and i["w"] > .05]
+        assert bands, "分组卡片应当各自带一条色带"
+        for band in bands:
+            assert abs(band["y"] - .30) < .004, "色带悬在卡片上方会连成通栏横线"
+
+    def test_grouped_bands_are_not_continuous_across_the_row(self):
+        from app.application.ppt.visual_primitives import decorations
+
+        items = decorations(self._scene(), {"design": {"relationship": "grouped"}})
+        bands = sorted((i for i in items
+                        if i["kind"] in ("rect", "gradient") and i["h"] < .02 and i["w"] > .05),
+                       key=lambda i: i["x"])
+        for left, right in zip(bands, bands[1:]):
+            gap = right["x"] - (left["x"] + left["w"])
+            assert gap > .02, "相邻色带几乎相连，投影上就是一条通栏横线"
+
+
+class TestDemotedMetricsExplainThemselves:
+    def test_trend_only_metrics_report_how_to_get_a_chart(self):
+        outline = {"title": "t", "slides": [_slide(
+            "data",
+            title="年度核心业务指标概览",
+            blocks={"cards": [
+                {"label": "法律援助案件受理量", "value": "稳步增长"},
+                {"label": "矛盾纠纷调解成功率", "value": "保持高位"},
+                {"label": "公共法律服务覆盖率", "value": "显著提升"},
+                {"label": "群众满意度测评", "value": "持续向好"}]})]}
+        E.apply_visual_intent(outline)
+        warnings = []
+        E.build_pptx(outline, TPL, warnings=warnings)
+        assert any("补充数字" in w for w in warnings), warnings

@@ -189,6 +189,58 @@ def build_drawio_source(outline: dict) -> bytes:
     return ET.tostring(source, encoding="utf-8", xml_declaration=True)
 
 
+def _text_width(text: str, size_pt: float) -> float:
+    """Approximate rendered line width in inches (CJK = 1em, ASCII ≈ .58em)."""
+    units = sum(1.0 if ord(ch) > 127 else .58 for ch in text)
+    return units * size_pt / 72 * 1.02
+
+
+def _balanced_split(line: str) -> tuple[str, str] | None:
+    """Split one over-wide line into two visually balanced halves.
+
+    节点框等比缩放后普遍只剩一百多像素宽，14pt 下「12348+AI智能问答」会被
+    自动换行挤成「…智能问 / 答」，末行只剩一个孤字。这里预先在中点附近断开，
+    断点避开连续西文数字串与连接符（不在「12348+」后面断），读起来是
+    「12348+AI / 智能问答」而不是随机断字。
+    """
+    if len(line) < 4:
+        return None
+    best, cost = None, None
+    for index in range(2, len(line) - 1):
+        head, tail = line[index - 1], line[index]
+        if head.isascii() and head.isalnum() and tail.isascii() and tail.isalnum():
+            continue  # 不切开西文/数字串
+        if head in "+-*/=·、，,;；:：":
+            continue  # 不在连接符后断行
+        gap = abs(_text_width(line[:index], 1) - _text_width(line[index:], 1))
+        if cost is None or gap < cost:
+            best, cost = index, gap
+    return None if best is None else (line[:best], line[best:])
+
+
+def _widen_rhombus(box: tuple, label: str, area: tuple,
+                   target_pt: float = 14.0, limit: float = 1.55) -> tuple:
+    """菱形外接框横向拉宽到可写区容得下一行，避免「需求评 / 估」断字。
+
+    菱形的文字可写区是内接矩形，宽度只有外接框的约 46%；节点框等比缩放后
+    普遍只剩一百多像素宽，四个字连 8pt 都排不下，真实成稿就断成两字一行、四行
+    竖排。与其无限缩字号（可读性归零），不如把菱形拉扁一点：宽高比变扁后
+    可写区同时变大，正好也填掉流程图两侧的大片留白。
+    """
+    left, top, w, h = box
+    lines = [ln for ln in str(label).split("\n") if ln.strip()] or [""]
+    if max(len(ln) for ln in lines) <= 2 or w <= 0:
+        return box
+    need = int(max(_text_width(ln, target_pt) for ln in lines) / .46 * 914400)
+    a_left, _a_top, a_w, _a_h = area
+    target = min(max(w, need), int(w * limit), int(a_w))
+    if target <= w:
+        return box
+    centre = left + w / 2
+    new_left = int(max(a_left, min(centre - target / 2, a_left + a_w - target)))
+    return (new_left, top, target, h)
+
+
 def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int,
                    font: str = DEFAULT_CJK_FONT, colors: dict | None = None) -> None:
     diagram = parse_diagram(xml)
@@ -202,7 +254,11 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
     span_x = max(n["box"][0] + n["box"][2] for n in nodes) - x0
     span_y = max(n["box"][1] + n["box"][3] for n in nodes) - y0
     scale = min(width / span_x, height / span_y)
-    offset_x = left + (width - span_x * scale) / 2
+    # 层数多于横向节点数的图（如四级线性流程）按高定尺后，左右会空出近一半
+    # 页面，成稿上像贴了一张小图。允许最多 1.3 倍的横向拉伸把留白收回来；
+    # 再大圆角矩形和椭圆就会被拉扁得失真。
+    scale_x = min(width / span_x, scale * 1.3) if span_x else scale
+    offset_x = left + (width - span_x * scale_x) / 2
     offset_y = top + (height - span_y * scale) / 2
 
     def color(value, default):
@@ -251,20 +307,38 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         except (TypeError, ValueError):
             font_size = 14
         font_size = max(8, min(font_size, 32))
+        inner = shape.width / 914400 * .46
         if kind == "rhombus":
             # 菱形的可写区只有外接矩形的中间约一半，14pt 下四个字一行必被挤断
             # （实机成稿出现「需求评 / 估」竖排断字）。先清掉默认 0.1 英寸内边距，
-            # 再按最长一行反推可用字号，宁可小 1–2pt 也不能断字。
+            # 再按可写区反推字号，宁可小 1–2pt 也不能断字。
             for side in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
                 try:
                     setattr(shape.text_frame, side, 0)
                 except Exception:
                     pass
-            inner = shape.width / 914400 * .46
-            lines = [ln for ln in str(value).split("\n") if ln.strip()] or [""]
-            need = max(len(ln) for ln in lines) * font_size / 72 * 1.04
-            if need > inner:
-                font_size = max(9.0, font_size * inner / need)
+        else:
+            inner = shape.width / 914400 - .20
+        # 长行先均衡断成两行（避免末行孤字），再按最宽行反推字号：
+        # 节点框等比缩放后只剩一百多像素宽，「12348+AI智能问答」在 14pt 下
+        # 会被 Word 自动换行切成「…智能问 / 答」，末行一个孤零零的「答」。
+        lines = [ln for ln in str(value).split("\n") if ln.strip()] or [""]
+        fitted: list[str] = []
+        for line in lines:
+            if _text_width(line, font_size) <= inner:
+                fitted.append(line)
+                continue
+            # 菱形本来就是多行结构，拆行只会拆成两字一行的竖排，只让字号兜底。
+            split = _balanced_split(line) if kind != "rhombus" else None
+            if split and all(_text_width(part, font_size) <= inner for part in split):
+                fitted.extend(split)
+            else:
+                fitted.append(line)
+        widest = max((_text_width(line, font_size) for line in fitted), default=0.0)
+        if widest > inner > 0:
+            font_size = max(9.0, font_size * inner / widest)
+        if fitted != lines:
+            shape.text_frame.text = "\n".join(fitted)
         try:
             font_style = int(style.get("fontStyle", 0))
         except (TypeError, ValueError):
@@ -288,9 +362,16 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
     rendered = {}
     for node in nodes:
         x, y, w, h = node["box"]
-        box = (int(offset_x + (x - x0) * scale), int(offset_y + (y - y0) * scale),
-               int(w * scale), int(h * scale))
+        box = (int(offset_x + (x - x0) * scale_x), int(offset_y + (y - y0) * scale),
+               int(w * scale_x), int(h * scale))
         style = node["style"]
+        if node["kind"] == "rhombus":
+            try:
+                requested = float(style.get("fontSize", 14))
+            except (TypeError, ValueError):
+                requested = 14.0
+            box = _widen_rhombus(box, node["label"], (left, top, width, height),
+                                 requested if math.isfinite(requested) else 14.0)
         if node["kind"] == "text":
             shape = slide.shapes.add_textbox(*box)
         else:

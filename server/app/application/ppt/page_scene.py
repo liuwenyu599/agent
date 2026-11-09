@@ -134,10 +134,16 @@ def _compose_points(variant: str, n: int, image: bool,
         gap, rows = .045, math.ceil(n / 2)
         w = (.89 - gap) / 2
         h = (.60 - .03 * (rows - 1) - .04) / rows
-        return [{"ref": f"point:{i}",
-                 "x": .055 + (i % 2) * (w + gap),
-                 "y": .245 + (i // 2) * (h + .03) + (i % 2) * .04,
-                 "w": w, "h": h} for i in range(n)]
+        boxes = [{"ref": f"point:{i}",
+                  "x": .055 + (i % 2) * (w + gap),
+                  "y": .245 + (i // 2) * (h + .03) + (i % 2) * .04,
+                  "w": w, "h": h} for i in range(n)]
+        # 三点时最后一张横跨整行：否则右下角空出一个卡片大小的洞，整页读作
+        # 「内容没排完」（三条要点的对照页实测就是这样）。y 要顺到右列底部
+        # 之下，否则横跨卡会压住右列下移的那张。
+        if n == 3:
+            boxes[-1].update({"x": .055, "w": .89, "y": .245 + h + .065})
+        return boxes
     if family == "statement" and n <= 4:
         # 居中大结论 + 其余要点下方横排；单点时就是整页一句大字。
         if n == 1:
@@ -160,10 +166,13 @@ def _compose_points(variant: str, n: int, image: bool,
     gap = .035
     width = (.89 - gap * (columns - 1)) / columns
     height = (.60 - gap * (rows - 1)) / rows
-    return [{"ref": f"point:{i}", "x": .055 + (i % columns) * (width + gap),
-             "y": .245 + (i // columns) * (height + gap),
-             "w": width, "h": height} for i in range(n)]
-
+    boxes = [{"ref": f"point:{i}", "x": .055 + (i % columns) * (width + gap),
+              "y": .245 + (i // columns) * (height + gap),
+              "w": width, "h": height} for i in range(n)]
+    # 末行不满时让最后一张横跨整行：三点的双列网格原本右下空一格，看着像漏排。
+    if n % columns:
+        boxes[-1].update({"x": .055, "w": .89})
+    return boxes
 
 def plan(slide: dict, layout: str) -> dict | None:
     from app.application.ppt.visual_primitives import decorations, model_visuals

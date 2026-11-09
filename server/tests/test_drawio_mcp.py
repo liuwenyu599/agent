@@ -834,3 +834,67 @@ class TestDrawioServiceConfigured:
         svc = DrawioService(timeout=2)
         assert svc.get_reference() is None
         assert svc.health() is False
+
+
+# ===== 节点文字适配：菱形加宽 + 长标签均衡断行（2026-11-09 实机反馈） =====
+
+_FOUR_LEVEL_XML = '''<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="a" value="前端咨询&#10;12348+AI智能问答" vertex="1" parent="1"
+ style="rounded=1;fillColor=#35649C;fontColor=#FFFFFF;fontSize=14;">
+ <mxGeometry x="160" y="0" width="180" height="64" as="geometry"/></mxCell>
+<mxCell id="b" value="需求评估&#10;分流处理" vertex="1" parent="1"
+ style="rhombus;fillColor=#FDF3D8;fontSize=14;">
+ <mxGeometry x="185" y="104" width="130" height="130" as="geometry"/></mxCell>
+<mxCell id="c" value="中端调解&#10;一站式多元解纷" vertex="1" parent="1"
+ style="rounded=1;fillColor=#E8F0FA;fontSize=14;">
+ <mxGeometry x="20" y="270" width="180" height="64" as="geometry"/></mxCell>
+<mxCell id="d" value="后端援助&#10;困难群体全覆盖" vertex="1" parent="1"
+ style="rounded=1;fillColor=#EAF6E4;fontSize=14;">
+ <mxGeometry x="300" y="270" width="180" height="64" as="geometry"/></mxCell>
+<mxCell id="e" value="服务闭环&#10;反馈与优化" vertex="1" parent="1" style="ellipse;fontSize=14;">
+ <mxGeometry x="160" y="340" width="180" height="64" as="geometry"/></mxCell>
+<mxCell id="e1" edge="1" parent="1" source="a" target="b"/>
+<mxCell id="e2" edge="1" parent="1" source="b" target="c"/>
+<mxCell id="e3" edge="1" parent="1" source="b" target="d"/>
+</root></mxGraphModel>'''
+
+
+def _render_page(xml, width_ratio=.88):
+    """按 r_process 的真实可用区（0.88 宽 × 0.64 高）渲染，而不是整页。"""
+    from pptx import Presentation
+    from app.application.ppt.drawio_native import render_diagram
+
+    deck = Presentation()
+    page = deck.slides.add_slide(deck.slide_layouts[6])
+    width, height = deck.slide_width, deck.slide_height
+    render_diagram(page, xml, int(width * .06), int(height * .23),
+                   int(width * width_ratio), int(height * .64))
+    return page, deck
+
+
+def test_rhombus_is_widened_so_four_char_labels_stay_on_two_lines():
+    """正方形菱形（130x130）等比缩放后只够放两字一行，渲染时必须拉扁。"""
+    from pptx.enum.shapes import MSO_SHAPE
+
+    page, _ = _render_page(_FOUR_LEVEL_XML)
+    diamond = next(shape for shape in page.shapes
+                   if getattr(shape, "auto_shape_type", None) == MSO_SHAPE.DIAMOND)
+    assert diamond.width > diamond.height * 1.15, "菱形没被横向加宽"
+    assert diamond.text_frame.text == "需求评估\n分流处理"
+
+
+def test_balanced_split_breaks_between_cjk_and_ascii():
+    """断点落在中英之间，且不切开「12348+AI」这种西文数字串。"""
+    from app.application.ppt.drawio_native import _balanced_split
+
+    assert _balanced_split("12348+AI智能问答") == ("12348+AI", "智能问答")
+    assert _balanced_split("受理") is None
+
+
+def test_long_mixed_label_never_leaves_an_orphan_line():
+    """可用区变窄时宁可拆成两行，也不能让末行只剩一个「答」。"""
+    page, _ = _render_page(_FOUR_LEVEL_XML, width_ratio=.45)
+    node = next(shape for shape in page.shapes if shape.has_text_frame
+                and shape.text.startswith("前端咨询"))
+    lines = [line for line in node.text_frame.text.split("\n") if line.strip()]
+    assert all(len(line) > 1 for line in lines), f"出现孤字行：{lines}"

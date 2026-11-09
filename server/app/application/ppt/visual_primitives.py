@@ -217,9 +217,11 @@ def _layout_motif(out: list, scene: dict) -> list:
                 and not any(item["kind"] == "line" for item in out)):
             add.append(_line(.5, rule_y + .02, .5, .845, stroke="line", width=1.0))
     elif variant in ("center", "statement", "quote"):
-        add.append(_box(.30, rule_y, .40, .008, kind="gradient",
-                        **{"from": "primary", "to": "light"}))
-        add.append(_box(.455, rule_y + .022, .09, .004, kind="rect", fill="accent"))
+        # 这里原本再画一条 0.40 宽渐变条 + 一小截金色短线，读作「居中大结论」
+        # 的引线。但页头已有统一的标题短线，两条叠在标题下方就是用户反复说的
+        # 「双线」；多要点时（scene 是 1 大 + 3 小）更是悬在空白处、不贴任何
+        # 卡片的两条无主横杠。装饰语义已由构图本身表达，不再补线。
+        pass
     # else: bullets / image_* / 未知 —— 标题下方已有统一短线（见 decorations
     # 开头），正文块不再逐条补线，避免条带页出现「一排来历不明的横杠」。
     return out + add
@@ -307,8 +309,12 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             # 「一条多余的横线」）；改成每张卡片顶端各一条自己的色带。
             for box in group:
                 out.append(_card(box))
-                out.append(_box(box["x"], box["y"] - .020, box["w"], .008,
-                                kind="rect", fill=fill, alpha=70))
+                # 色带贴着卡片顶边，不再悬在卡外 .020 处：三张并排的卡各自
+                # 一条悬空色带时，间隙只有 20px，投影上连成一条横贯整页的线，
+                # 三个序号圆点正好挂在线上（用户看到的就是「一条莫名其妙的
+                # 横线穿过圆点」）。贴边后读作卡片自己的顶盖，互不相连。
+                out.append(_box(box["x"], box["y"], box["w"], .008,
+                                kind="rect", fill=fill, alpha=80))
                 out.append(_box(box["x"], box["y"], .006, box["h"],
                                 kind="rect", fill=fill))
                 out.append(_badge(box, serial, fill))

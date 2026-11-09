@@ -557,7 +557,7 @@ _RULE_LAYOUT_POOL: Dict[str, List[str]] = {
     "parallel": ["content.bullets", "content.three_cards", "content.symmetric",
                  "content.icon_grid"],
     "grouped": ["content.bullets", "content.icon_grid", "content.three_cards",
-                "content.center"],
+                "content.cards", "content.mirror"],
     "takeaway": ["content.statement", "content.bullets", "content.symmetric",
                  "content.center"],
 }
@@ -2957,6 +2957,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             used_layouts[chosen] = used_layouts.get(chosen, 0) + 1
             recent_layouts = (recent_layouts + [chosen])[-2:]
     for idx, s in enumerate(slides_list, 1):
+        # 指标卡只有「稳步增长」这类趋势词、没有数值时，规则层不会伪造数字去
+        # 画图，只能降成结论宫格。用户看到的是「该画图却没画」，所以要明确
+        # 说清原因和补救路径：补上数字就会自动成图。
+        if s.get("_promoted") == "demote_fake_cards":
+            warnings.append(
+                f"第 {idx} 页「{s.get('title') or '指标页'}」的指标只有趋势描述、"
+                "没有具体数值，已按结论宫格排版；补充数字后会自动生成图表。")
         slide = (r_scene(s) if adaptive and s.get("scene") and not s.get("layout_locked")
                  and s.get("type") in ("content", "summary")
                  else renderers.get(s.get("type"), r_content)(s))
