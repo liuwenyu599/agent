@@ -746,3 +746,122 @@ class TestSectionBalanceAndFooterRule:
                 if near_bottom and flat:
                     assert sh.width / prs.slide_width < .20, (
                         "页脚又出现了通栏细线（用户反馈的「莫名其妙的线条」）")
+
+
+class TestDataPromotion:
+    """规则层「数据/表格主动化」：有数就该出图，没数就别装指标。
+
+    用户 2026-11-09：成稿 15 页 0 图表 0 表格，「主动画图、做表的主动性差」。
+    根因是决定权全交给模型——模型怕编数据就不写 blocks.chart。这里锁住
+    promote_data_slides 的四条判据，避免以后又退化成纯文字要点。
+    """
+
+    @staticmethod
+    def _outline(*slides):
+        return {"slides": [dict(s) for s in slides]}
+
+    def test_same_unit_metric_cards_become_chart(self):
+        outline = self._outline(_slide("data", blocks={"cards": [
+            {"label": "天河区调解成功率", "value": "96.2%"},
+            {"label": "越秀区调解成功率", "value": "94.8%"},
+            {"label": "白云区调解成功率", "value": "95.5%"}]}))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        chart = slide["blocks"]["chart"]
+        # 公共后缀「调解成功率」被剥出来当系列名，类目只留区名
+        assert chart["categories"] == ["天河区", "越秀区", "白云区"]
+        assert chart["series"][0]["values"] == [96.2, 94.8, 95.5]
+        assert "调解成功率" in chart["series"][0]["name"]
+
+    def test_mixed_units_do_not_share_one_axis(self):
+        outline = self._outline(_slide("data", blocks={"cards": [
+            {"label": "受理量", "value": "3200件"},
+            {"label": "成功率", "value": "98.5%"},
+            {"label": "服务人次", "value": "12万人次"}]}))
+        E.promote_data_slides(outline)
+        # 件、%、人次同轴没有意义，整页保持指标卡
+        assert outline["slides"][0]["type"] == "data"
+        assert "chart" not in (outline["slides"][0].get("blocks") or {})
+
+    def test_trend_words_in_metric_cards_are_demoted(self):
+        outline = self._outline(_slide("data", blocks={"cards": [
+            {"label": "法律援助案件受理量", "value": "稳步增长"},
+            {"label": "矛盾纠纷调解成功率", "value": "保持高位"},
+            {"label": "公共法律服务覆盖率", "value": "显著提升"},
+            {"label": "群众满意度测评", "value": "持续向好"}]}))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        # 形容词不是指标值：降级成结论宫格，不再渲染成大字假指标
+        assert slide["type"] == "content"
+        assert slide["layout"] == "icon_grid"
+        assert slide["points"][0] == "法律援助案件受理量：稳步增长"
+        assert not slide["blocks"]
+
+    def test_points_with_same_unit_become_chart_and_drop_duplicate_points(self):
+        outline = self._outline(_slide("content", points=[
+            "一季度受理法律援助案件3200件", "二季度受理法律援助案件4100件",
+            "三季度受理法律援助案件3800件", "四季度受理法律援助案件4600件"]))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        assert slide["blocks"]["chart"]["categories"] == [
+            "一季度", "二季度", "三季度", "四季度"]
+        # 原要点已搬进图表数据，留着会在页面底部重复渲染一遍
+        assert not slide.get("points")
+
+    def test_point_with_two_numbers_stays_text(self):
+        outline = self._outline(_slide("content", points=[
+            "受理法律援助案件12000件，同比增长12%",
+            "调解矛盾纠纷42600件，同比增长8%",
+            "办理公证事项8600件，同比增长5%"]))
+        E.promote_data_slides(outline)
+        # 带口径的叙述（两个数）不能当并列类目上同一根轴
+        assert outline["slides"][0]["type"] == "content"
+
+    def test_pipe_rows_become_native_table(self):
+        outline = self._outline(_slide("content", points=[
+            "| 指标 | 年度目标 | 完成值 |", "| 法律援助案件 | 1.2万件 | 1.35万件 |",
+            "| 矛盾纠纷调解 | 4万件 | 4.26万件 |"]))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "data"
+        assert slide["layout"] == "table"
+        assert slide["blocks"]["table"]["headers"] == ["指标", "年度目标", "完成值"]
+        assert slide["blocks"]["table"]["rows"][0] == ["法律援助案件", "1.2万件", "1.35万件"]
+        assert not slide.get("points")
+
+    def test_percentage_share_sums_to_pie(self):
+        outline = self._outline(_slide("content", points=[
+            "法律咨询占比42%", "法律援助占比28%", "人民调解占比20%", "公证服务占比10%"]))
+        E.promote_data_slides(outline)
+        assert outline["slides"][0]["blocks"]["chart"]["chart_type"] == "pie"
+
+    def test_year_numbers_are_not_plotted(self):
+        outline = self._outline(_slide("content", points=[
+            "2026年建成公共法律服务中心", "2027年实现站点全覆盖",
+            "2028年完成数字化改造"]))
+        E.promote_data_slides(outline)
+        # 年份不是可比较的量值，画成柱状图毫无意义
+        assert outline["slides"][0]["type"] == "content"
+
+    def test_unitless_numbers_are_not_plotted(self):
+        outline = self._outline(_slide("content", points=[
+            "第一项要求 3", "第二项要求 5", "第三项要求 7"]))
+        E.promote_data_slides(outline)
+        # 全无单位时抽到的多是序号，不拿编号当数据
+        assert outline["slides"][0]["type"] == "content"
+
+    def test_promoted_chart_is_really_rendered_as_native_chart(self):
+        outline = self._outline(
+            _slide("content", title="各季度受理量", points=[
+                "一季度受理3200件", "二季度受理4100件",
+                "三季度受理3800件", "四季度受理4600件"]),
+            _slide("closing", title="谢谢"))
+        outline["title"] = "测试"
+        E.apply_visual_intent(outline)
+        prs = Presentation(io.BytesIO(E.render_pptx(outline, TPL)))
+        charts = [sh for sh in prs.slides[0].shapes if sh.has_chart]
+        assert charts, "升级后的图表页没有渲染出原生图表对象"
+        assert list(charts[0].chart.plots[0].categories) == [
+            "一季度", "二季度", "三季度", "四季度"]

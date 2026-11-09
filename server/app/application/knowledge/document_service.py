@@ -353,9 +353,37 @@ class DocumentService:
         if suffix == 'docx':
             try:
                 from docx import Document as DocxDocument
+                from docx.table import Table
+                from docx.text.paragraph import Paragraph
                 doc = DocxDocument(str(file_path))
-                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                text = "\n\n".join(paragraphs)
+                # 按正文顺序遍历段落与**表格**。原实现只取 doc.paragraphs，
+                # Word 表格里的统计口径、分项指标、进度数据全部丢失——模型
+                # 看不到数据自然不会画图表，成稿只能堆文字要点
+                # （用户 2026-11-09：「主动画图、做表的主动性差」）。
+                # 表格转成管道分隔行：模型能读，规则层也能据此推断表格页。
+                blocks = []
+                for child in doc.element.body.iterchildren():
+                    tag = child.tag.rsplit('}', 1)[-1]
+                    if tag == 'p':
+                        line = Paragraph(child, doc).text.strip()
+                        if line:
+                            blocks.append(line)
+                    elif tag == 'tbl':
+                        rows = []
+                        for row in Table(child, doc).rows:
+                            cells, seen = [], None
+                            for cell in row.cells:
+                                value = cell.text.strip().replace('\n', ' ')
+                                # 合并单元格在 python-docx 里会重复出现同一文本
+                                if value == seen:
+                                    continue
+                                seen = value
+                                cells.append(value)
+                            if any(cells):
+                                rows.append("| " + " | ".join(cells) + " |")
+                        if rows:
+                            blocks.append("\n".join(rows))
+                text = "\n\n".join(blocks)
             except AppError:
                 raise
             except Exception as e:

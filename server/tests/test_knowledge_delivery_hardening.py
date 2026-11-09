@@ -109,3 +109,36 @@ def test_vectorization_failure_is_recorded_not_silently_discarded():
 def test_reindex_route_is_exposed():
     paths = create_app().openapi()["paths"]
     assert "/api/v1/knowledge/documents/{doc_id}/reindex" in paths
+
+
+def test_docx_tables_are_extracted_with_paragraphs(tmp_path: Path):
+    """docx 里的表格必须进正文：政务材料的数据几乎都在表里。
+
+    原实现只取 ``doc.paragraphs``，Word 表格整体丢失——PPT 大纲因此永远
+    看不到分项指标，只能写定性要点（用户 2026-11-09：「主动画图、做表的
+    主动性差」）。这里锁住「段落 + 表格按正文顺序 + 管道分隔」的行为。
+    """
+    from docx import Document
+
+    from app.application.knowledge.document_service import DocumentService
+
+    doc = Document()
+    doc.add_paragraph("2026 年司法行政工作总结")
+    table = doc.add_table(rows=3, cols=3)
+    data = [["季度", "受理量", "调解成功率"],
+            ["一季度", "3200件", "96.2%"],
+            ["二季度", "4100件", "95.8%"]]
+    for row, values in enumerate(data):
+        for col, value in enumerate(values):
+            table.cell(row, col).text = value
+    doc.add_paragraph("以上数据来自业务系统。")
+    path = tmp_path / "summary.docx"
+    doc.save(str(path))
+
+    text = DocumentService().extract_text(path, "summary.docx")
+    assert "2026 年司法行政工作总结" in text          # 表格前的段落
+    assert "以上数据来自业务系统。" in text            # 表格后的段落
+    assert "| 季度 | 受理量 | 调解成功率 |" in text     # 表头
+    assert "| 一季度 | 3200件 | 96.2% |" in text       # 数据行
+    # 顺序不能乱：表头必须排在段落之后、结语之前
+    assert text.index("工作总结") < text.index("季度") < text.index("以上数据")

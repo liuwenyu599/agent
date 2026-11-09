@@ -788,6 +788,8 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
   drawio_kind=process 表示阶段推进，组织层级用 drawio_kind=organization。
   页面涉及有来源的数值对比时，必须优先设为 data（指标卡）或 chart（可绘制图表），
   不能只把数字写进 content.points。缺少真实数值时不要编造数据，可用 process 展示关系。
+  写 chart 时 values 直接照抄材料里的数字与单位，不要换算、不要估算比例；
+  单位不一致的指标不要塞进同一张图表，改拆成 data 指标卡或 table 表格。
   严禁把适合图示或数据展示的页面全部堆成纯文字 content；节点与连线须来自材料，不凭空编造。
 - summary 总结页：title、points（2~4 条结论/展望）
 - closing 结束页（{closing_rule}）：title（如"谢谢聆听，请批评指正"）
@@ -817,6 +819,8 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 7. 不要虚构材料中没有的事实和数据。材料出现 "XX""若干""待填" 等占位值时，不得把占位值
    原样写入 blocks.cards[].value（会被渲染成大字指标卡），也不要为凑页型创建没有真实数值的
    data/chart 页；缺数据时改用不带数字的定性表述。不得编造案例情节、办结天数或成果数字。
+   blocks.cards[].value 必须是带数字的量值（"1.2万件""98.5%"），
+   不得只写"稳步增长""持续向好"这类趋势评价——那会被渲染成假指标卡。
    每页含数字、日期、精确时限或具体案例的，必须在 sources 字段标注所依据的材料名；
    无材料清单或找不到依据时改写为定性表述，不写成确定成果。
 8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选。
@@ -1082,6 +1086,251 @@ def _is_sequence_content(slide: Dict) -> bool:
     return markers >= 2 or arrows >= 2 or (markers >= 1 and arrows >= 1)
 
 
+# ================= 数据/表格主动化（规则层） =================
+# 用户 2026-11-09：成稿 15 页 0 图表 0 表格，「主动画图、做表的主动性差」。
+# 根因不是渲染能力，而是**决定权全给了模型**：大纲把「要不要画」交给 35B，
+# 模型怕编造数据就不写 blocks.chart，规则层又只把顺序内容转流程图——于是同一
+# 批数字要么退成纯文字要点，要么退成 value 填「稳步增长」这种形容词的假指标卡。
+# 这里补一层**确定性搬运**：只搬运页面里已经写明的数值，不计算、不换算、不补造；
+# 判据不满足就原样放过，宁可不画也不编。
+_VALUE_ONLY = re.compile(
+    r"^\s*(?P<num>-?\d+(?:\.\d+)?)\s*(?P<unit>%|％|个百分点|万元|亿元|万件|万人次"
+    r"|人次|万|件|人|户|家|项|次|场次|个工作日|个|天|小时|条|份|宗|起)?\s*$")
+_METRIC_TOKEN = re.compile(
+    r"(?P<num>-?\d+(?:\.\d+)?)\s*(?P<unit>%|％|个百分点|万元|亿元|万件|万人次"
+    r"|人次|万|件|人|户|家|项|次|场次|个工作日|个|天|小时|条|份|宗|起)")
+_LABEL_PREFIX = re.compile(r"^(?:截至|其中|全年|年内|累计|截至目前|目前|共计)")
+
+
+def _parse_metric(text: Any) -> Optional[tuple]:
+    """把「3200」「98.5%」「1.2万件」解析成 (数值, 单位)；不是纯数值返回 None。
+
+    只有整个单元格就是数值（可带单位）才算指标值。中文夹在里面的
+    （「较上年增长12%」）返回 None——那是有口径的表述，不能当坐标轴刻度。
+    """
+    m = _VALUE_ONLY.match(str(text or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group("num")), (m.group("unit") or "").replace("％", "%")
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_from_points(points: List[str]) -> Optional[dict]:
+    """把「指标名 + 单一数值」的并列要点整理成图表规格；不成立返回 None。"""
+    if not 3 <= len(points) <= 6:
+        return None
+    categories: List[str] = []
+    values: List[float] = []
+    units: List[str] = []
+    for point in points:
+        hits = list(_METRIC_TOKEN.finditer(point))
+        # 一条里出现两个数（「3200 件，同比增长 12%」）说明是有口径的叙述，
+        # 不是能并列上轴的类目，整页放弃。
+        if len(hits) != 1:
+            return None
+        hit = hits[0]
+        label = _LABEL_PREFIX.sub("", point[:hit.start()].strip(" 　:：,，、;；"))
+        if len(label) < 2:
+            return None
+        num = float(hit.group("num"))
+        unit = (hit.group("unit") or "").replace("％", "%")
+        # 「2026 年建成…」里的年份会被当成量值，画出来就是一根没有意义的柱。
+        if not unit and abs(num - round(num)) < 1e-9 and 1900 <= num <= 2100:
+            return None
+        categories.append(label[:16])
+        values.append(num)
+        units.append(unit)
+    # 全都没有单位时，抽到的多是年份/序号/条款号而不是可比较的量值，
+    # 宁可不画也不要拿编号当数据。
+    if not any(units):
+        return None
+    return _chart_spec(categories, values, units)
+
+
+def _strip_common_affix(categories: List[str]) -> tuple:
+    """剥掉类目里重复的公共前缀/后缀，返回 (精简后的类目, 被剥掉的词)。
+
+    从要点抽出来的类目常带一整套重复说明：「一季度受理法律援助案件」
+    「二季度受理法律援助案件」……四行叠在一起会把图表的绘图区挤掉一半
+    （实测条形区只剩 60%）。剥掉公共后缀后类目变成「一季度」，
+    被剥掉的「受理法律援助案件」正好可以当系列名，信息不丢。
+    """
+    if len(categories) < 3:
+        return list(categories), ""
+    suffix = os.path.commonprefix([c[::-1] for c in categories])[::-1]
+    prefix = os.path.commonprefix(categories)
+    for candidate, is_suffix in ((suffix, True), (prefix, False)):
+        word = candidate.strip(" ·、-—:：")
+        if len(word) < 2:
+            continue
+        rest = [(c[:-len(word)] if is_suffix else c[len(word):]).strip(" ·、-—:：")
+                for c in categories]
+        if any(len(r) < 2 for r in rest):
+            # 只剩「一/二/三/四」一两个字时，把后缀的头两个字拼回去，
+            # 「一」+「季度」=「一季度」，既短又能区分。
+            rest = [r + word[:2] if 1 <= len(r) < 2 else r for r in rest]
+        # 「天河区」被剥成「天河」丢了行政区尾字，读起来像简称；补回 1 个字。
+        restored = bool(word) and word[0] in "区县镇市街村组" and any(
+            len(r) == 2 for r in rest)
+        if restored:
+            rest = [r + word[0] if len(r) == 2 else r for r in rest]
+        if all(1 <= len(r) <= 12 for r in rest):
+            return rest, (word[1:] if restored else word)
+    return list(categories), ""
+
+
+def _chart_spec(categories: List[str], values: List[float],
+                units: List[str]) -> Optional[dict]:
+    """同类口径才成图：件数与百分比同轴没有意义。"""
+    if len(set(units)) > 1:
+        return None
+    unit = units[0]
+    short, affix = _strip_common_affix(categories)
+    if unit == "%" and 99 <= sum(values) <= 101:
+        chart_type = "pie"          # 占比且合计为 100% 左右
+    elif any(len(c) > 6 for c in short):
+        chart_type = "bar_h"        # 指标名长，横向条形才读得下
+    else:
+        chart_type = "bar"
+    # 系列名要有信息量：剥出来的公共词 > 单位 > 泛称。图上只显示一个
+    # 孤零零的「%」既不像标题也不像图例（实测成稿顶部就是这样）。
+    name = (affix or unit or "数量") + (f"（{unit}）" if affix and unit else "")
+    return {"chart_type": chart_type, "categories": short,
+            "series": [{"name": name, "values": list(values)}]}
+
+
+def _table_from_points(points: List[str]) -> Optional[dict]:
+    """要点已经是「| 列 | 列 | 列 |」形态时转成原生表格规格。
+
+    材料里的 Word 表格经解析后就是这种管道行（见 DocumentService.extract_text），
+    模型偶尔会把整张表原样抄进 points，那这一页就该是表格而不是一串要点。
+    """
+    if not 2 <= len(points) <= 10:
+        return None
+    rows: List[List[str]] = []
+    for point in points:
+        text = str(point).strip()
+        if "|" not in text:
+            return None
+        cells = [c.strip() for c in text.strip("|").split("|")]
+        if len(cells) < 3:
+            return None
+        rows.append(cells)
+    if len({len(r) for r in rows}) != 1:
+        return None
+    first = rows[0]
+    # 表头通常不含数字；第一行就带数字时不能当表头用，只能补通用列名
+    if any(re.search(r"\d", cell) for cell in first):
+        headers = [f"第 {i + 1} 列" for i in range(len(first))]
+        body = rows
+    else:
+        headers, body = first, rows[1:]
+    if len(body) < 2:
+        return None
+    return {"headers": headers, "rows": body}
+
+
+def _promote_slide_to_chart(slide: Dict) -> Optional[dict]:
+    """能升级成图表就返回 chart 规格，否则 None。"""
+    blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+    cards = blocks.get("cards")
+    if isinstance(cards, list) and len(cards) >= 3:
+        categories: List[str] = []
+        values: List[float] = []
+        units: List[str] = []
+        for card in cards:
+            if not isinstance(card, dict):
+                return None
+            label = str(card.get("label") or "").strip()
+            parsed = _parse_metric(card.get("value"))
+            if not label or parsed is None:
+                return None
+            categories.append(label[:16])
+            values.append(parsed[0])
+            units.append(parsed[1])
+        return _chart_spec(categories, values, units)
+    return _metric_from_points(_slide_points(slide))
+
+
+def _demote_fake_metric_cards(slide: Dict) -> bool:
+    """指标卡的 value 全是趋势词（「稳步增长」）→ 不是指标，降成结论宫格。
+
+    value 里只要出现过数字就保留原样：那可能是有口径的真实指标
+    （「较上年增长 12%」），只是不适合上坐标轴，不该被当成假数据删掉。
+    """
+    blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+    cards = blocks.get("cards")
+    if not isinstance(cards, list) or len(cards) < 3:
+        return False
+    usable = [c for c in cards if isinstance(c, dict)]
+    if len(usable) != len(cards):
+        return False
+    if any(re.search(r"\d", str(c.get("value") or "")) for c in usable):
+        return False
+    if not all(str(c.get("label") or "").strip() for c in usable):
+        return False
+    slide["points"] = [f"{str(c['label']).strip()}：{str(c.get('value')).strip()}"
+                       for c in usable]
+    slide["blocks"] = {}
+    slide["type"] = "content"
+    slide["layout"] = "icon_grid" if 3 <= len(usable) <= 4 else None
+    slide["_promoted"] = "demote_fake_cards"
+    return True
+
+
+def promote_data_slides(outline: Dict) -> Dict:
+    """把已经含有并列数值/指标的页主动升级成图表，拦住假指标卡。
+
+    覆盖面刻意保守：只在 content / data / summary 上动作，已有 chart / table /
+    timeline / 图片的页一律跳过（那些已经是结构页，不需要再猜）。
+    """
+    for slide in outline.get("slides") or []:
+        if not isinstance(slide, dict):
+            continue
+        if slide.get("type") not in ("content", "data", "summary"):
+            continue
+        if slide.get("image_id") or slide.get("image_name"):
+            continue
+        blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+        if any(blocks.get(k) for k in ("chart", "table", "timeline", "process",
+                                       "drawio_xml", "diagram_nodes")):
+            continue
+        table = _table_from_points(_slide_points(slide))
+        if table:
+            design = dict(slide.get("design") or {})
+            design.setdefault("relationship", "none")
+            design["intent_source"] = "rule"
+            slide["type"] = "data"
+            slide["blocks"] = {"table": table}
+            slide["layout"] = "table"
+            slide["design"] = design
+            # 表格内容已经搬进 headers/rows，留着会被数据页当正文再画一遍，
+            # 成稿上就是表格下方那两行管道符残文。
+            slide.pop("points", None)
+            slide["_promoted"] = "table"
+            continue
+        spec = _promote_slide_to_chart(slide)
+        if spec:
+            design = dict(slide.get("design") or {})
+            design["relationship"] = "comparison"
+            design["intent_source"] = "rule"
+            slide["type"] = "chart"
+            slide["blocks"] = {"chart": spec}
+            slide["layout"] = None
+            slide["design"] = design
+            # 原要点就是类目的来源，数据已经搬进 categories / series；
+            # 留着会被 r_chart 当「图表结论」画到页面底部，出现
+            # 「天河区调解成功率96.2%」这种与图表重复的残行（实测）。
+            slide.pop("points", None)
+            slide["_promoted"] = "chart"
+            continue
+        if slide.get("type") == "data":
+            _demote_fake_metric_cards(slide)
+    return outline
+
+
 def apply_visual_intent(outline: Dict) -> Dict:
     """规则层补齐页面视觉意图，并让顺序内容页主动承载流程图。
 
@@ -1094,6 +1343,9 @@ def apply_visual_intent(outline: Dict) -> Dict:
     推断值写 ``design.intent_source="rule"``，便于区分模型给的和规则补的。
     """
     slides = outline.get("slides") or []
+    # 先做数据/表格主动化：并列数值该成图、趋势词不该冒充指标。放在关系推断
+    # 之前，升级成 chart 的页就不再参与「顺序 → 流程图」的判断。
+    promote_data_slides(outline)
     for index, slide in enumerate(slides):
         if slide.get("type") not in ("content", "summary"):
             continue
@@ -2256,7 +2508,9 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
     def _draw_chart(slide, chart_spec, x, y, w, h):
         """画原生可编辑图表；数据不完整返回 False 交由调用方降级。"""
         from pptx.chart.data import CategoryChartData
-        from pptx.enum.chart import XL_CHART_TYPE
+        from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION,
+                                     XL_LEGEND_POSITION)
+        from pptx.util import Pt
         cats = chart_spec.get("categories") or []
         series = chart_spec.get("series") or []
         if not (cats and series):
@@ -2283,13 +2537,61 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             return False
         rect(slide, x - lx(0.02), y - ly(0.02), w + lx(0.04), h + ly(0.04), LIGHT, round_=True)
         gf = slide.shapes.add_chart(chart_type, x, y, w, h, data)
-        gf.chart.has_legend = n_series > 1
+        pie_like = chart_spec.get("chart_type") in ("pie", "doughnut")
+        # 饼图没有坐标轴，图例和百分比标签缺一不可：单系列时 has_legend 会
+        # 被下面的规则关掉，成稿就是一张没有说明的色块（实测）。
+        gf.chart.has_legend = n_series > 1 or pie_like
+        try:
+            if pie_like:
+                gf.chart.legend.position = XL_LEGEND_POSITION.RIGHT
+                gf.chart.legend.include_in_layout = False
+                plot = gf.chart.plots[0]
+                plot.has_data_labels = True
+                labels = plot.data_labels
+                labels.show_percentage = True
+                labels.show_value = False
+                labels.show_category_name = False
+                labels.number_format = "0.0%"
+                labels.number_format_is_linked = False
+                labels.font.size = Pt(12)
+                labels.font.bold = True
+                # 标签默认落在扇区内部，深蓝扇区上的深色数字几乎看不见
+                # （实测「20.0%」糊成一片）；移到扇区外侧。
+                labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        except Exception:
+            pass
+        # 单系列时 python-pptx 不写 legend，但 LibreOffice/PowerPoint 会把
+        # 系列名渲染成图表标题，成稿顶部就出现一个孤零零的「%」/「件」。
+        # 明确关掉标题；值轴强制从 0 起，避免条形长度被截断放大误导。
+        try:
+            gf.chart.has_title = False
+            axis = gf.chart.value_axis
+            # 成功率/达标率这类集中在 90% 上下的指标，从 0 起会把差异压平；
+            # 统一从 80 起并保留刻度标注，既能看出差异又不至于误导。
+            flat = [float(v) for se in series for v in (se.get("values") or [])
+                    if isinstance(v, (int, float))]
+            narrow = (chart_spec.get("chart_type") != "pie" and flat
+                      and min(flat) >= 85 and max(flat) <= 105)
+            axis.minimum_scale = 80 if narrow else 0
+            axis.has_major_gridlines = True
+            axis.major_gridlines.format.line.color.rgb = C("DCE3EC")
+        except Exception:
+            pass
         try:
             palette = [PRIMARY, ACCENT, DARK, C("8FAADC")]
-            for si, serie in enumerate(gf.chart.series):
-                serie.format.fill.solid()
-                serie.format.fill.fore_color.rgb = palette[si % len(palette)]
-                serie.format.line.color.rgb = palette[si % len(palette)]
+            if pie_like and gf.chart.series:
+                # 饼图的扇区是「点」不是「系列」，只设 serie.fill 会得到
+                # Office 默认的蓝红绿紫，与本稿模板配色完全脱节（实测）。
+                for si, point in enumerate(gf.chart.series[0].points):
+                    point.format.fill.solid()
+                    point.format.fill.fore_color.rgb = palette[si % len(palette)]
+                    point.format.line.color.rgb = C("FFFFFF")
+                    point.format.line.width = Pt(1.5)
+            else:
+                for si, serie in enumerate(gf.chart.series):
+                    serie.format.fill.solid()
+                    serie.format.fill.fore_color.rgb = palette[si % len(palette)]
+                    serie.format.line.color.rgb = palette[si % len(palette)]
         except Exception:
             pass
         return True
@@ -4093,7 +4395,8 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     from pptx.util import Emu, Pt
     from pptx.dml.color import RGBColor
     from pptx.chart.data import CategoryChartData
-    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    from pptx.enum.chart import (XL_CHART_TYPE, XL_LABEL_POSITION,
+                                     XL_LEGEND_POSITION)
     C = lambda h: RGBColor.from_string(h)
     x, y = Emu(int(region["x"] * sw)), Emu(int(region["y"] * sh))
     w, h = Emu(int(region["w"] * sw)), Emu(int(region["h"] * sh))
