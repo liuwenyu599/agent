@@ -6,7 +6,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
 from app.application.ppt import page_scene, ppt_engine, visual_primitives as vp
-from app.core.fonts import DEFAULT_CJK_FONT
+from app.core.fonts import DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT
 
 
 def test_scene_uses_valid_model_geometry_and_exports_same_positions():
@@ -77,7 +77,7 @@ def test_model_page_visuals_survive_normalization_and_export_as_native_shapes():
         if not shape.has_text_frame or shape.text not in ("两项工作", "工作一", "工作二"):
             continue
         run = shape.text_frame.paragraphs[0].runs[0]
-        assert run.font.name == DEFAULT_CJK_FONT
+        assert run.font.name == DEFAULT_LATIN_FONT
         assert run._r.get_or_add_rPr().find(qn("a:ea")).get("typeface") == DEFAULT_CJK_FONT
         # 高框短句按 26pt 饱满排布（原为 20pt），且同页同级必须一致。
         assert run.font.size.pt == (28 if shape.text == "两项工作" else 26)

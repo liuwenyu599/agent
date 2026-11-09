@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font, normalize_theme_font
+from app.core.fonts import (DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT, apply_cjk_font,
+                            normalize_theme_font)
 """智能 PPT 引擎（移植自旧系统 ppt_service，AI 调用改经 WritingAssistant）。
 
 核心设计：内容与版式分离
@@ -4113,7 +4114,9 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     chart = gf.chart
     chart.has_title = False
     try:
-        chart.font.name = font
+        # 图表里的刻度/数值是西文，走 Times New Roman 才和正文数字一致；
+        # 中文类别名仍由主题的 <a:ea> 兜底。
+        chart.font.name = DEFAULT_LATIN_FONT
         chart.font.size = Pt(11)
     except Exception:
         pass

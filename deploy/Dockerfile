@@ -22,11 +22,14 @@ WORKDIR /app
 #                       再转 PNG。⚠️ 缺了它预览接口会静默降级为空页列表，
 #                       客户端永远显示"暂无预览"（service.py 按设计不报错）
 #   fonts-noto-cjk      LibreOffice 转换时中文字体渲染
+#   fonts-liberation    Times New Roman 的度量兼容替代：成稿西文写 Times，
+#                       容器内 LibreOffice 会映射到 Liberation Serif，
+#                       预览行宽与用户下载后看到的保持一致
 #   curl                健康检查
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        antiword curl poppler-utils graphviz \
-       libreoffice-writer libreoffice-impress fonts-noto-cjk \
+       libreoffice-writer libreoffice-impress fonts-noto-cjk fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装 CPU 版 torch（sentence-transformers 的依赖，避免拉入几个 GB 的 CUDA 版）

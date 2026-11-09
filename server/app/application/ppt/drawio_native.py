@@ -12,7 +12,7 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Pt
 
-from app.core.fonts import DEFAULT_CJK_FONT
+from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font
 from app.application.ppt.third_party.drawio_skill.validate import check_page
 
 
@@ -262,7 +262,9 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
             }.get(style.get("align"), PP_ALIGN.CENTER)
             for run in paragraph.runs:
                 family = str(style.get("fontFamily") or "").strip()
-                run.font.name = (family if len(family) <= 48 and re.fullmatch(
+                # 中文节点标签与西文分开写：<a:ea> 用图示字体，<a:latin> 用
+                # Times New Roman，避免节点里的数字落到 Arial/Calibri。
+                apply_cjk_font(run, family if len(family) <= 48 and re.fullmatch(
                     r"[\w\u4e00-\u9fff .-]+", family) else font)
                 run.font.size = Pt(font_size)
                 run.font.bold = bool(font_style & 1)

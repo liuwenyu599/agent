@@ -150,11 +150,11 @@ def test_prepare_template_bytes_inserts_tokens_and_drops_empty_pages():
     assert "{{title}}" in texts
     assert "{{subtitle}}" in texts
     assert "{{point1}}" in texts
-    from app.core.fonts import DEFAULT_CJK_FONT
+    from app.core.fonts import DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT
     with zipfile.ZipFile(io.BytesIO(out)) as z:
         theme = z.read("ppt/theme/theme1.xml").decode("utf-8")
         assert DEFAULT_CJK_FONT in theme
-    # run 级：中文/西文/复杂文种同字形，模板的斜体衬线数字不会残留
+    # run 级：西文 Times / 中文思源，模板的斜体衬线数字不会残留
     from pptx.oxml.ns import qn
     for slide in prs2.slides:
         for shape in slide.shapes:
@@ -163,7 +163,7 @@ def test_prepare_template_bytes_inserts_tokens_and_drops_empty_pages():
             for para in shape.text_frame.paragraphs:
                 for run in para.runs:
                     r_pr = run._r.get_or_add_rPr()
-                    assert run.font.name == DEFAULT_CJK_FONT
+                    assert run.font.name == DEFAULT_LATIN_FONT
                     for tag in ("a:ea", "a:cs"):
                         node = r_pr.find(qn(tag))
                         assert node is not None and node.get("typeface") == DEFAULT_CJK_FONT

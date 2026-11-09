@@ -212,7 +212,7 @@ def test_drawio_native_keeps_editable_visual_styles_in_pptx():
     assert str(node.fill.gradient_stops[0].color.rgb) == "E8F0FA"
     assert str(node.fill.gradient_stops[-1].color.rgb) == "FFFFFF"
     assert node.line.width.pt == 2.5
-    assert node.text_frame.paragraphs[0].runs[0].font.name == "Noto Sans CJK SC"
+    assert node.text_frame.paragraphs[0].runs[0].font.name == "Times New Roman"
     assert "outerShdw" in node._element.xml
     assert edge.line.width.pt == 3
     assert all(shape.shape_type != 13 for shape in shapes)
@@ -409,7 +409,11 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     assert len(page.shapes) >= 3
     assert all(shape.shape_type != 13 for shape in page.shapes)  # no raster picture
     first = next(shape for shape in page.shapes if shape.has_text_frame and shape.text == "受理")
-    assert first.text_frame.paragraphs[0].runs[0].font.name == "模板字体"
+    # 模板字体透传到 <a:ea>（中文），西文固定 Times New Roman
+    from pptx.oxml.ns import qn
+    run = first.text_frame.paragraphs[0].runs[0]
+    assert run.font.name == "Times New Roman"
+    assert run._r.get_or_add_rPr().find(qn("a:ea")).get("typeface") == "模板字体"
 
 
 def test_graphviz_dot_setting_enables_skill_without_system_path(monkeypatch, tmp_path):

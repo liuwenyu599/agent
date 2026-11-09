@@ -190,9 +190,15 @@ def test_unfittable_page_falls_back_with_full_content_end_to_end():
 # --- 中西文字体统一 / 同级模块字号协调 -------------------------------------
 
 def test_apply_cjk_font_writes_all_three_scripts_and_clears_italic():
-    """只写 <a:latin> 时中文仍按 <a:ea> 继承模板宋体、数字落回斜体 Times。"""
+    """西文落 Times New Roman、中文落 <a:ea>、斜体被清掉。
+
+    只写 <a:latin> 时中文仍按 <a:ea> 继承模板宋体；全写同一个 CJK 字体名时
+    Windows 又匹配不到（用户 2026-11-09：「系统上正常、下载下来不正常」）。
+    所以西文与中文必须分开写：latin=Times New Roman，ea/cs=中文字体。
+    """
     from pptx.oxml.ns import qn
-    from app.core.fonts import DEFAULT_CJK_FONT, apply_cjk_font
+    from app.core.fonts import (DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT,
+                                apply_cjk_font)
 
     prs, blank = _blank_deck()
     shape = prs.slides.add_slide(blank).shapes.add_textbox(
@@ -203,7 +209,7 @@ def test_apply_cjk_font_writes_all_three_scripts_and_clears_italic():
     run.font.italic = True
     apply_cjk_font(run, DEFAULT_CJK_FONT)
     r_pr = run._r.get_or_add_rPr()
-    assert run.font.name == DEFAULT_CJK_FONT
+    assert run.font.name == DEFAULT_LATIN_FONT
     for tag in ("a:ea", "a:cs"):
         node = r_pr.find(qn(tag))
         assert node is not None and node.get("typeface") == DEFAULT_CJK_FONT
@@ -251,7 +257,7 @@ def test_extract_style_does_not_inherit_foreign_theme_font():
 def test_peer_point_slots_share_one_larger_font_and_official_typeface():
     """模板 sibling 槽「一大三小」或全小字：成稿同页同级必须同号，且往大拉齐。"""
     from pptx.oxml.ns import qn
-    from app.core.fonts import DEFAULT_CJK_FONT
+    from app.core.fonts import DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT
 
     prs, blank = _blank_deck()
     slide = prs.slides.add_slide(blank)
@@ -285,7 +291,7 @@ def test_peer_point_slots_share_one_larger_font_and_official_typeface():
         final_sizes.append(max(r.font.size.pt for r in runs
                                if r.font.size is not None))
         r_pr = runs[0]._r.get_or_add_rPr()
-        assert runs[0].font.name == DEFAULT_CJK_FONT
+        assert runs[0].font.name == DEFAULT_LATIN_FONT
         assert r_pr.find(qn("a:ea")).get("typeface") == DEFAULT_CJK_FONT
         assert r_pr.get("i") in (None, "0", "false")
     assert len(set(final_sizes)) == 1, final_sizes
