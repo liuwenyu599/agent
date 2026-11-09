@@ -5,9 +5,10 @@
 """
 import re
 import time
+import unicodedata
 from typing import Dict, List
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.application.knowledge.reranker import reranker
@@ -20,6 +21,30 @@ from app.infrastructure.database.models.identity import UserModel
 from app.infrastructure.database.models.knowledge import ChunkModel, DocumentModel, KnowledgeBaseModel
 
 logger = get_logger(__name__)
+
+
+# 「6+6+n」「W8A8」「Qwen3.6-35B」这类数字/字母/符号混合的强特征串，
+# 中文 bigram 分词会把单个数字和字母全部丢掉（len(word) >= 2 才保留），
+# 只剩「是什么」切出的「是什」「什么」，于是关键词检索按这两个高频疑问词
+# 召回全库噪声，真正含该术语的范文反而进不了候选。
+_LITERAL_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z+＋\-_./·]{1,31}")
+
+
+def _normalize_literal(text: str) -> str:
+    """全角转半角、去空白、转小写，用于字面复核。"""
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or "").lower())
+
+
+def _literal_tokens(query: str) -> List[str]:
+    """提取查询里的符号化术语；纯年份/纯数字不算强特征。"""
+    # 兼容「6 + 6 + n」这种词内空格写法，但不动中英文之间的空格
+    compacted = re.sub(r"(?<=[0-9A-Za-z+＋])\s+(?=[0-9A-Za-z+＋])", "", query or "")
+    tokens: List[str] = []
+    for raw in _LITERAL_RE.findall(compacted):
+        token = _normalize_literal(raw).strip("+-_./·")
+        if len(token) >= 2 and not token.isdigit() and token not in tokens:
+            tokens.append(token)
+    return sorted(tokens, key=len, reverse=True)[:3]
 
 
 class RagService:
@@ -172,7 +197,11 @@ class RagService:
                 continue
             entry = fused.setdefault(cid, {"rrf": 0.0, "v": None, "k": None})
             entry["k"] = hit
-            entry["rrf"] += 1.0 / (rrf_k + rank + 1)
+            weight = 1.0 / (rrf_k + rank + 1)
+            if hit.get("match_type") == "literal":
+                # 精确字面命中优先于泛语义噪声，避免被向量候选的 RRF 分数压过
+                weight *= 2.0
+            entry["rrf"] += weight
 
         feedback_weights = self._feedback_weights(user_id, list(fused.keys()))
         for chunk_id, entry in fused.items():
@@ -227,8 +256,10 @@ class RagService:
                 "kb_type": kb.kb_type if kb else "",
                 "score": score,
                 "rrf_score": entry["rrf"],
-                "match_type": "hybrid" if (vector_hit and keyword_hit) else (
-                    "vector" if vector_hit else "keyword"),
+                "match_type": (
+                    "literal" if keyword_hit and keyword_hit.get("match_type") == "literal"
+                    else "hybrid" if (vector_hit and keyword_hit)
+                    else ("vector" if vector_hit else "keyword")),
                 "feedback_delta": entry.get("feedback_delta", 0.0),
                 "source_type": {"web": "网页", "文件": "文件"}.get(src_type, src_type),
                 "source_url": meta.get("source_url"),
@@ -243,6 +274,17 @@ class RagService:
             results = reranker.rerank(query, candidate_results, final_k)
         else:
             results = candidate_results[:final_k]
+
+        # 字面精确命中至少保留一条：cross-encoder 对「6+6+n」这类符号术语不敏感，
+        # 可能把唯一相关的范文挤到 top_k 之外，模型便误判「未检索到足够依据」。
+        if candidate_results and not any(
+                r.get("match_type") == "literal" for r in results):
+            best_literal = next(
+                (c for c in candidate_results if c.get("match_type") == "literal"), None)
+            if best_literal is not None:
+                kept = [r for r in results
+                        if r.get("chunk_id") != best_literal["chunk_id"]]
+                results = [best_literal] + kept[:max(0, final_k - 1)]
 
         logger.info(
             "[RAG] 最终返回: %d 个（候选 %d / 向量 %d / 关键词 %d / rerank=%s）",
@@ -370,7 +412,75 @@ class RagService:
                     tokens.append(segment[index:index + 2])
         return tokens
 
+    @staticmethod
+    def _literal_variants(token: str) -> List[str]:
+        """SQL 粗筛用的常见写法：半角 + 号与全角 ＋ 号。"""
+        variants = [token]
+        fullwidth = token.replace("+", "＋")
+        if fullwidth != token:
+            variants.append(fullwidth)
+        return variants
+
+    def _literal_search(self, tokens: List[str], kb_ids: List[str],
+                        top_k: int) -> List[Dict]:
+        """按归一化字面串召回，覆盖正文、文档标题、段落标题。
+
+        SQL 只做粗筛（lower + LIKE），命中后再用 NFKC 归一化复核，兼容
+        全角加号、大小写、词内空格等写法差异；不动向量侧 0.7 安全阈值。
+        """
+        columns = (
+            func.lower(ChunkModel.content),
+            func.lower(DocumentModel.title),
+            func.lower(ChunkModel.title),
+        )
+        conds = [
+            column.like(f"%{variant}%")
+            for token in tokens
+            for variant in self._literal_variants(token)
+            for column in columns
+        ]
+        if not conds:
+            return []
+        stmt = (
+            select(ChunkModel)
+            .join(DocumentModel, ChunkModel.doc_id == DocumentModel.id)
+            .where(
+                DocumentModel.kb_id.in_(kb_ids),
+                DocumentModel.status == "published",
+                or_(*conds),
+            )
+        )
+        hits: List[Dict] = []
+        for chunk in self.db.scalars(stmt).all():
+            doc_title = chunk.document.title if chunk.document else ""
+            haystack = _normalize_literal(
+                f"{chunk.content}\n{doc_title}\n{chunk.title or ''}")
+            matched = [token for token in tokens if token in haystack]
+            if not matched:
+                continue
+            hits.append({
+                "chunk_id": chunk.id,
+                "doc_id": chunk.doc_id,
+                "content": chunk.content,
+                "source": f"{doc_title}（第{chunk.chunk_index}段）",
+                "score": min(1.0, len(matched) / len(tokens)),
+                "match_type": "literal",
+                "source_type": "文件",
+                "source_url": None,
+                "source_name": None,
+            })
+        hits.sort(key=lambda item: (-item["score"], item["chunk_id"]))
+        return hits[:top_k]
+
     def _keyword_search(self, query: str, kb_ids: List[str], top_k: int) -> List[Dict]:
+        literal_tokens = _literal_tokens(query)
+        if literal_tokens:
+            literal_hits = self._literal_search(literal_tokens, kb_ids, top_k)
+            if literal_hits:
+                logger.info("[RAG] 字面术语命中 %d 条: %s",
+                            len(literal_hits), literal_tokens)
+                return literal_hits
+            # 库里没有该字面串时退回原有中文 bigram 检索，不改变既有行为
         tokens = self._tokenize(query)
         if not tokens:
             return []
@@ -405,7 +515,8 @@ class RagService:
                           max_chars: int, document_type: str = "",
                           dept_code: str = "", admin: bool = False) -> list:
         tokens = self._tokenize(query)
-        if not tokens:
+        literals = _literal_tokens(query)
+        if not tokens and not literals:
             return []
         docs = self.db.scalars(
             select(DocumentModel).where(
@@ -421,12 +532,17 @@ class RagService:
             if document_type and not self._same_genre(doc, document_type):
                 continue
             searchable = (doc.title or "") + "\n" + (doc.content or "")
-            count = sum(1 for token in tokens if token in searchable)
+            literal_text = _normalize_literal(searchable)
+            literal_count = sum(1 for token in literals if token in literal_text)
+            count = sum(1 for token in tokens if token in searchable) + literal_count
             if count == 0:
                 continue
-            score = min(1.0, count / len(tokens))
-            scored.append((score, doc))
-        scored.sort(key=lambda item: item[0], reverse=True)
+            score = min(1.0, count / max(1, len(tokens) + len(literals)))
+            scored.append((score, literal_count, doc))
+        # 查符号化术语时，命中该术语的范文优先，避免被疑问词召回的噪声占位
+        if literals and any(item[1] for item in scored):
+            scored = [item for item in scored if item[1]]
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [{"title": doc.title, "content": doc.content[:max_chars],
                  "doc_type": doc.doc_type}
-                for _, doc in scored[:top_k]]
+                for _, _, doc in scored[:top_k]]
