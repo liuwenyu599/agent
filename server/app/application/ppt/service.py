@@ -241,6 +241,9 @@ class PPTService:
             logger.info("[PPT] 大纲净化：自动插入目录页并保持总页数")
 
         normalized["slides"] = slides
+        # 规则层补齐视觉意图与顺序页型：不依赖 35B 是否执行 design 契约。
+        # 同步生成 / 异步作业 / 刷新预览 / 复检全部经过本方法，行为一致。
+        ppt_engine.apply_visual_intent(normalized)
         normalized["title"] = (slides[0].get("title") if enforce_bookends else
                                normalized.get("title")) or "演示文稿"
         normalized["subtitle"] = (slides[0].get("subtitle") if enforce_bookends else

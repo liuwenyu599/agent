@@ -65,7 +65,8 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
         if not source_id or source_id in ids or not label:
             return None
         ids[source_id] = f"n{index + 1}"
-        labels.append(label[:19] + "…" if len(label) > 20 else label)
+        # 政务页的节点标签常是完整短句，截得太短会让原文被挤到页脚小字里。
+        labels.append(label[:27] + "…" if len(label) > 28 else label)
     primary = str(colors.get("primary") or "2A5CAA").lstrip("#")
     accent = str(colors.get("accent") or "4A78AD").lstrip("#")
     light = str(colors.get("light") or "E8F0FA").lstrip("#")
@@ -86,16 +87,18 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
             fill, stroke, foreground = accent, primary, "FFFFFF"
         else:
             fill, stroke, foreground = light, accent if kind == "architecture" else primary, dark
-        gradient = ("FFFFFF" if fill == light else fill)
-        return ("rounded=1;whiteSpace=wrap;html=1;"
-                f"fillColor=#{fill};gradientColor=#{gradient};strokeColor=#{stroke};"
-                f"strokeWidth=1.6;shadow=1;"
-                f"fontColor=#{foreground};fontSize=12;")
+        # 扁平政务风：不要渐变填充和投影（旧版 1.6pt 粗边 + 阴影 + 12pt 字
+        # 是「Word 艺术字流程图」观感的主要来源）；字号起步 14pt，字体与整稿统一。
+        # 字体不写死在 XML 里：由 render_diagram 按当前整稿的统一公文字体注入，
+        # 避免模板/主题切换时图示文字与正文脱节。
+        return ("rounded=1;whiteSpace=wrap;html=1;spacing=6;"
+                f"fillColor=#{fill};strokeColor=#{stroke};strokeWidth=1.2;"
+                f"fontColor=#{foreground};fontSize=14;")
     graph = {
         "direction": "LR" if kind == "process" else "TB",
         "nodes": [{"id": ids[str(node["id"])], "label": labels[i],
-                   "width": max(145, min(210, len(labels[i]) * 18 + 34)),
-                   "height": 90,
+                   "width": max(160, min(240, len(labels[i]) * 19 + 40)),
+                   "height": 104,
                    "style": node_style(str(node["id"]))}
                   for i, node in enumerate(raw_nodes)],
         "edges": [],
@@ -109,8 +112,9 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
             return None
         graph["edges"].append({"source": source, "target": target,
                                "label": str(edge.get("label") or "")[:20],
-                               "style": "html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;"
-                                        "strokeColor=#6C757D;strokeWidth=2;endArrow=block;"})
+                               "style": "html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;"
+                                        f"strokeColor=#{primary};strokeWidth=1.4;"
+                                        "endArrow=blockThin;endFill=0;"})
     height, positions, edge_points = autolayout.layout(
         autolayout.build_dot(graph), dot_path=dot_path)
     xml = autolayout.to_drawio(graph, height, positions, edge_points)
@@ -129,8 +133,9 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
     span_x = max(b[0] + b[2] for b in boxes) - x0
     span_y = max(b[1] + b[3] for b in boxes) - y0
     scale = min(880 / max(span_x, 1), 450 / max(span_y, 1))
-    grid = len(vertices) >= 6 or any(
-        width * scale < 110 or node_height * scale < 55
+    # 节点过小时才退网格；旧阈值 6 个节点就强制 3 列网格，连线被自动绕得乱穿。
+    grid = len(vertices) >= 8 or any(
+        width * scale < 128 or node_height * scale < 62
         for _x, _y, width, node_height in boxes)
     if grid:
         columns = 3 if len(vertices) <= 6 else 4
@@ -171,8 +176,8 @@ def layout_slide_graph(slide: dict, kind: str, colors: dict) -> str | None:
         geom = cell.find("mxGeometry")
         width, node_height = float(geom.get("width")), float(geom.get("height"))
         label = str(cell.get("value") or "")
-        font_size = 10
-        for candidate in (16, 14, 12, 10):
+        font_size = 13
+        for candidate in (18, 16, 15, 14, 13):
             chars_per_line = max(1, int((width - 20) / (candidate * 1.1)))
             lines = math.ceil(len(label) / chars_per_line)
             if lines * candidate * 1.35 <= node_height - 12:

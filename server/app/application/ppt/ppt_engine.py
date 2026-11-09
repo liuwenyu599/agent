@@ -529,6 +529,17 @@ def _layout_score(spec: Dict, slide: Dict, recent: List[str], used: Dict[str, in
     return score
 
 
+def _variant_seed(slide: Dict) -> int:
+    """页面内容指纹：同一页在任何调用点（成稿 / 预览 / 复检）都得到同一个值。
+
+    用 ``slide.id`` 而不是页序，保证整篇只出现一次的封面/目录/结束页也会
+    随稿件不同而换版式；同时预览单页与整稿渲染的结果一致。
+    """
+    raw = "|".join([str(slide.get("id") or ""), str(slide.get("title") or ""),
+                    "|".join(str(p) for p in (slide.get("points") or [])[:2])])
+    return int(hashlib.md5(raw.encode("utf-8")).hexdigest()[:8], 16)
+
+
 def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                   recent: Optional[List[str]] = None,
                   used: Optional[Dict[str, int]] = None) -> str:
@@ -571,6 +582,18 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                 if (not from_model and used.get(want, 0) >= static_limit
                         and not slide.get("layout_locked")):
                     continue
+                # 装饰页没有内容差异可打分，且整篇常只出现一次（封面/目录/结束），
+                # 上面的 used 轮换永远触发不到 → 每份稿都长一个样。这里按页面
+                # 内容指纹在该页型的可用版式里确定性取一个，跨稿才有变化。
+                if (not from_model and not slide.get("layout_locked")
+                        and stype in ("section", "toc", "cover", "closing")):
+                    options = [sp["id"] for sp in specs if _layout_usable(sp, slide)]
+                    # 同稿内优先选没用过的版式，避免几页内容相近时指纹相同又撞版；
+                    # 全用过时退回全集，仍由 used/recent 的打分逻辑兜底。
+                    fresh = [o for o in options if not used.get(o)]
+                    pool = fresh or options
+                    if len(options) > 1:
+                        return pool[_variant_seed(slide) % len(pool)]
                 return want
 
     best, best_score = "", float("-inf")
@@ -892,6 +915,114 @@ def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
             logger.warning("PPT 自动图示生成跳过页(kind=%s, title=%s): %s",
                            kind, s.get("title"), type(exc).__name__)
             s.setdefault("diagram_warning", "图示生成未成功，本页将使用基础步骤排版")
+    return outline
+
+
+# ---- 确定性视觉意图：不依赖 35B 是否执行 design 契约 ----
+# 提示词第 9~11 条要求模型给出 relationship / regions / visuals，但真实成稿里
+# 这几个字段几乎恒为空（见 2026-11-09 线上大纲核查）。结果是每页只按页型查表，
+# 整份稿只剩一套几何骨架。这里用规则把「内容形态 → 视觉语言」补齐。
+
+# 只认「明确的先后顺序」；政务稿里的「一、二是三是」多为并列板块，
+# 不当成流程，否则会把工作分类硬画成步骤箭头。
+_SEQ_MARKER = re.compile(
+    r"^\s*(?:第[一二三四五六七八九十百\d]+[步阶段环节项]"
+    r"|首先|其次|再次|接着|然后|最后|最终"
+    r"|Q[1-4]\b|第[一二三四]季度|阶段[一二三四\d]"
+    r"|Step\s*\d+)", re.I)
+_SEQ_ARROW = re.compile(r"(?:→|->|=>|—>|＞|~>)")
+_COMPARE_WORD = re.compile(
+    r"(?:对比|相比|前后|变化|从.{0,10}到|原来|现在|不足|优势|差异|分别"
+    r"|一方面|另一方面|与此同时|而非|反之|vs)", re.I)
+_GROUP_WORD = re.compile(
+    r"(?:一是|二是|三是|其一|其二|分类|分为|类别|领域|板块|方面|各类)", re.I)
+_NUMBER_UNIT = re.compile(r"\d+\s*(?:%|％|件|人|次|万元|亿元|个|家|场次)")
+_TAKEAWAY_WORD = re.compile(r"^(?:总之|综上|因此|可见|总体|概括|结论|核心|关键在于)")
+
+
+def _slide_points(slide: Dict) -> List[str]:
+    return [str(p).strip() for p in (slide.get("points") or []) if str(p).strip()]
+
+
+def infer_relationship(slide: Dict, page_index: int) -> Optional[str]:
+    """补一个 design.relationship；模型已给非 none 时返回 None（尊重模型）。
+
+    推断只看要点形态与关键词，不改写任何文字；``page_index`` 只用于让相邻的
+    同型内容页错开，避免连续几页共用一套视觉语言。
+    """
+    design = slide.get("design") if isinstance(slide.get("design"), dict) else {}
+    if design.get("relationship") in ("comparison", "parallel", "grouped", "takeaway"):
+        return None
+    pts = _slide_points(slide)
+    if not pts:
+        return None
+    joined = " ".join(pts)
+    if len(pts) == 1 or _TAKEAWAY_WORD.search(pts[0]):
+        return "takeaway"
+    if len(pts) == 2 and _COMPARE_WORD.search(joined):
+        return "comparison"
+    if _GROUP_WORD.search(joined) or len(pts) >= 5:
+        return "grouped"
+    if len(pts) in (3, 4):
+        return "parallel" if (page_index + len(pts)) % 2 else "grouped"
+    return None
+
+
+def _is_sequence_content(slide: Dict) -> bool:
+    """是否应把纯文字 content 页改成可画流程图的 process 页。"""
+    if slide.get("type") != "content":
+        return False
+    if slide.get("image_id") or slide.get("image_name"):
+        return False
+    blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+    if any(blocks.get(k) for k in ("cards", "chart", "table", "timeline", "process",
+                                   "drawio_xml", "diagram_nodes")):
+        return False
+    pts = _slide_points(slide)
+    if not 3 <= len(pts) <= 6:
+        return False
+    # 含多组具体数值的页更该做 data/chart，不抢走。
+    if sum(bool(_NUMBER_UNIT.search(p)) for p in pts) >= 2:
+        return False
+    markers = sum(bool(_SEQ_MARKER.search(p)) for p in pts)
+    arrows = sum(bool(_SEQ_ARROW.search(p)) for p in pts)
+    return markers >= 2 or arrows >= 2 or (markers >= 1 and arrows >= 1)
+
+
+def apply_visual_intent(outline: Dict) -> Dict:
+    """规则层补齐页面视觉意图，并让顺序内容页主动承载流程图。
+
+    1. relationship 为空时按要点形态推断 → ``page_scene.decorations`` 与
+       ``choose_layout`` 的 preferred 才能给出不同构图；
+    2. 明显的步骤/阶段内容页由 content 转 process，写入 ``blocks.process``，
+       ``enrich_outline_with_diagrams`` 随后生成可编辑图示。
+
+    纪律：不改标题、要点文字、数字与来源；节点只用原文，不编造关系；
+    推断值写 ``design.intent_source="rule"``，便于区分模型给的和规则补的。
+    """
+    slides = outline.get("slides") or []
+    for index, slide in enumerate(slides):
+        if slide.get("type") not in ("content", "summary"):
+            continue
+        # 页数硬约束补的「补充内容」是占位页，不是真实结论；给它推断视觉语言
+        # 会改变整页装饰（甚至盖掉模板主色），必须原样留给渲染层。
+        if (str(slide.get("title") or "").strip() == "补充内容" or
+                "页数硬约束补位页" in str(slide.get("note") or "")):
+            continue
+        design = dict(slide.get("design") or {})
+        rel = infer_relationship(slide, index)
+        if rel and design.get("relationship") in (None, "", "none"):
+            design["relationship"] = rel
+            design["intent_source"] = "rule"
+        if _is_sequence_content(slide):
+            pts = _slide_points(slide)
+            slide["type"] = "process"
+            slide["layout"] = None
+            slide["blocks"] = {"process": pts, "drawio_kind": "process"}
+            slide["design"] = {**design, "relationship": "parallel",
+                               "intent_source": "rule"}
+        elif design != (slide.get("design") or {}):
+            slide["design"] = design
     return outline
 
 

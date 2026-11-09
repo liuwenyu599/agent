@@ -234,5 +234,9 @@ def test_section_layouts_rotate_when_template_has_static_preference() -> None:
             {"section": "section.side"}, used=used)
         chosen.append(layout)
         used[layout] = used.get(layout, 0) + 1
-    assert chosen[0] == "section.side"       # 仍尊重模板静态偏好
-    assert len(set(chosen)) >= 2             # 但不再整篇复用
+    # 装饰页按页面内容指纹确定性换版：首个章节页也不再被模板静态偏好锁死；
+    # 同一页在成稿 / 预览 / 复检里必须得到同一个结果（指纹只取 slide 自身字段）。
+    assert len(set(chosen)) >= 2
+    same = {"type": "section", "title": "章节", "points": []}
+    assert (ppt_engine.choose_layout(same, {"section": "section.side"}) ==
+            ppt_engine.choose_layout(dict(same), {"section": "section.side"}))

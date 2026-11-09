@@ -9,6 +9,7 @@
 原生（双击可改数据）的 PowerPoint 图表/表格对象，而不是一张静态图片。
 """
 import io
+import json
 
 import pytest
 from pptx import Presentation
@@ -441,6 +442,92 @@ class TestAutoDiagramEnrichment:
         ]}
         E.enrich_outline_with_diagrams(object(), outline)
         assert hits == [], "无内容的流程页不应触发 drawio 生成"
+
+
+class TestVisualIntent:
+    """规则层补齐 design 与页型，不依赖 35B 是否执行提示词契约。"""
+
+    def test_model_intent_is_respected(self):
+        s = {"design": {"relationship": "comparison"},
+             "points": ["总之要抓好落实"]}
+        assert E.infer_relationship(s, 0) is None
+
+    def test_relationship_tracks_content_shape(self):
+        assert E.infer_relationship({"points": ["总之要抓好落实"]}, 0) == "takeaway"
+        assert E.infer_relationship(
+            {"points": ["过去主要靠人工", "现在改为线上办理"]}, 0) == "comparison"
+        assert E.infer_relationship(
+            {"points": ["一是完善制度", "二是加强培训", "三是强化监督"]}, 0) == "grouped"
+
+    def test_apply_intent_keeps_wording_and_marks_source(self):
+        pts = ["完善公共法律服务体系", "加强基层队伍建设", "推进数字化转型"]
+        outline = {"slides": [{"type": "content", "title": "重点任务",
+                               "points": list(pts), "design": {}}]}
+        s = E.apply_visual_intent(outline)["slides"][0]
+        assert s["points"] == pts
+        assert s["design"]["intent_source"] == "rule"
+        assert s["design"]["relationship"] in ("parallel", "grouped")
+
+    def test_sequence_content_becomes_process(self):
+        pts = ["第一步 受理申请", "第二步 审核材料", "第三步 办结归档"]
+        outline = {"slides": [{"type": "content", "title": "办理流程",
+                               "points": list(pts), "blocks": {}}]}
+        s = E.apply_visual_intent(outline)["slides"][0]
+        assert s["type"] == "process"
+        assert s["blocks"]["process"] == pts
+        assert s["blocks"]["drawio_kind"] == "process"
+        assert s["points"] == pts
+
+    def test_page_count_filler_keeps_its_design(self):
+        """页数补位页不是真实内容，不能因一条要点被判成「单一结论」。"""
+        outline = {"slides": [{"type": "content", "title": "补充内容",
+                               "points": ["本页内容待根据已确认材料补充"],
+                               "note": "页数硬约束补位页；不得自行编造事实或数据",
+                               "blocks": {}}]}
+        s = E.apply_visual_intent(outline)["slides"][0]
+        assert (s.get("design") or {}).get("intent_source") != "rule"
+        assert s["type"] == "content"
+
+    def test_enumerated_sections_are_not_turned_into_process(self):
+        """「一、二、三」多为并列板块，不能被硬画成步骤箭头。"""
+        pts = ["一、健全工作机制", "二、强化队伍建设", "三、压实主体责任"]
+        outline = {"slides": [{"type": "content", "title": "重点工作",
+                               "points": list(pts), "blocks": {}}]}
+        assert E.apply_visual_intent(outline)["slides"][0]["type"] == "content"
+
+    def test_numeric_content_not_stolen_from_data_pages(self):
+        pts = ["完成审核 120 件", "开展评查 35 次", "整改问题 18 处"]
+        outline = {"slides": [{"type": "content", "title": "数据",
+                               "points": list(pts), "blocks": {}}]}
+        assert E.apply_visual_intent(outline)["slides"][0]["type"] == "content"
+
+    def test_idempotent(self):
+        outline = {"slides": [{"type": "content", "title": "办理流程",
+                               "points": ["首先受理", "其次审核", "最后办结"]}]}
+        first = E.apply_visual_intent(outline)
+        snapshot = json.dumps(first, ensure_ascii=False, sort_keys=True)
+        E.apply_visual_intent(first)
+        assert json.dumps(first, ensure_ascii=False, sort_keys=True) == snapshot
+
+    def test_sanitize_outline_applies_intent(self):
+        from app.application.ppt.service import PPTService
+        out = PPTService.sanitize_outline(
+            {"title": "x", "slides": [
+                {"type": "content", "title": "办理流程",
+                 "points": ["第一步 受理", "第二步 审核", "第三步 办结"]}]},
+            ensure_toc=False, enforce_bookends=False)
+        assert out["slides"][0]["type"] == "process"
+
+    def test_decorative_layout_varies_but_is_stable_per_slide(self):
+        seen = set()
+        for i in range(12):
+            s = {"type": "cover", "title": f"第{i}次汇报", "id": f"id{i:04d}",
+                 "points": []}
+            seen.add(E.choose_layout(s, TPL["layouts"]))
+        assert len(seen) >= 2, "不同稿件的封面不应永远是同一个版式"
+        s = {"type": "cover", "title": "同一页", "id": "fixed001", "points": []}
+        assert E.choose_layout(s, TPL["layouts"]) == E.choose_layout(
+            dict(s), TPL["layouts"])
 
 
 

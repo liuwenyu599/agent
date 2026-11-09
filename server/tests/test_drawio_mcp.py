@@ -387,8 +387,12 @@ def test_agents365_skill_layout_turns_planned_graph_into_editable_nodes(monkeypa
     assert [node["label"] for node in parsed["nodes"]] == ["受理", "审核"]
     assert len(parsed["edges"]) == 1
     assert parsed["nodes"][0]["style"]["strokeColor"] == "#123456"
-    assert parsed["nodes"][0]["style"]["shadow"] == "1"
-    assert parsed["edges"][0]["style"]["strokeWidth"] == "2"
+    # 扁平政务风：不要投影与渐变，节点字号不低于 14pt，连线用主题色细线。
+    assert "shadow" not in parsed["nodes"][0]["style"]
+    assert "gradientColor" not in parsed["nodes"][0]["style"]
+    assert float(parsed["nodes"][0]["style"]["fontSize"]) >= 14
+    assert parsed["edges"][0]["style"]["strokeColor"] == "#123456"
+    assert float(parsed["edges"][0]["style"]["strokeWidth"]) <= 1.5
 
     svc = DrawioService(base_url="")
     class NoModel:
