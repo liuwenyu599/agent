@@ -8,7 +8,8 @@
 
 默认行为（只给 --out 时）就完成全部机械处理：
   · 打 token：{{title}}/{{subtitle}}/{{pointN}}/{{image}} 自动写入
-  · 统一字体：默认「Noto Sans CJK SC」（中西文同字形，后端与国产 OS 都有）
+  · 统一字体：默认「Microsoft YaHei」（Windows 原生；麒麟/容器走 fontconfig
+    别名落思源黑体），西文另写 Times New Roman
   · 去品牌：自动移除版式/母版层的 logo 图与品牌字（--keep-brand 可保留）
   · 自动去空页：处理完仍无任何 token/图片的页（如结束页艺术字）自动删
 
@@ -109,7 +110,7 @@ def main() -> int:
     ap.add_argument("--strip-pictures", action="store_true",
                     help="清除第 2 页起所有未锚定图片（真实旧稿改模板用：照片/截图是旧内容不是装饰）")
     ap.add_argument("--font", default=DEFAULT_FONT,
-                    help="统一字体名（默认公文字体 Noto Sans CJK SC；--no-font 可跳过）")
+                    help="统一字体名（默认 Microsoft YaHei；--no-font 可跳过）")
     ap.add_argument("--no-font", action="store_true", help="不统一字体，保留模板原字体")
     ap.add_argument("--no-auto-drop", action="store_true",
                     help="关闭自动删除无 token/无图的空页（默认开启）")

@@ -32,6 +32,12 @@ RUN apt-get update \
        libreoffice-writer libreoffice-impress fonts-noto-cjk fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
+# 成稿写的是 Windows 原生字体名（Microsoft YaHei / Times New Roman），
+# Windows/WPS 打开即命中；容器里用 fontconfig 别名落到思源黑体与 Liberation
+# Serif，保证「预览」与「下载后」的行宽、字宽一致。改别名后必须重建镜像。
+COPY deploy/fonts/51-ppt-fonts.conf /etc/fonts/conf.d/51-ppt-fonts.conf
+RUN fc-cache -f >/dev/null
+
 # 先装 CPU 版 torch（sentence-transformers 的依赖，避免拉入几个 GB 的 CUDA 版）
 RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 

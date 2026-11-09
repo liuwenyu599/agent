@@ -844,7 +844,8 @@ def test_selected_template_adaptive_mode_persists_through_generate(client, accou
     with zipfile.ZipFile(io.BytesIO(deck.content)) as package:
         first_xml = package.read("ppt/slides/slide1.xml")
     assert b"365472" in first_xml
-    assert b"Noto Sans CJK SC" in first_xml
+    from app.core.fonts import DEFAULT_CJK_FONT
+    assert DEFAULT_CJK_FONT.encode("utf-8") in first_xml
     assert "微软雅黑".encode("utf-8") not in first_xml
 
     recolored = {**outline, "color_override": True,

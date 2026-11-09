@@ -14,20 +14,25 @@
    `fonts-noto-cjk`（注释即写明「LibreOffice 转换时中文字体渲染」），
    **没有 SimHei / 微软雅黑**。
 
-## 中文为什么是 Noto Sans CJK SC
+## 中文为什么是 Microsoft YaHei（而不是 Noto Sans CJK SC）
 
-必须**后端与国产客户端都有**，逐个排除：
+原则：**字体名优先保证「分发端原生」，缺的那一端用 fontconfig 别名补。**
+反过来做不到——Windows 没有 fontconfig，Linux 端却可以给任意家族名做别名。
 
-| 字体 | Windows | 麒麟/统信 | 后端容器 |
+| 字体名 | Windows | 麒麟/统信（配别名后） | 后端容器（配别名后） |
 |---|---|---|---|
-| 微软雅黑 | 有 | **无** | **无** |
-| SimHei | 有 | 通常无 | **无**（Linux 无此商业字体） |
-| SimSun | 有 | 无 | 无 |
-| **Noto Sans CJK SC** | 需另装 | **标配** | **已装**（fonts-noto-cjk） |
+| **Microsoft YaHei** | 原生（Win7+ 自带） | → 思源黑体 | → 思源黑体 |
+| **Times New Roman** | 原生（Office/WPS 自带） | → Liberation Serif | → Liberation Serif |
 
-结论：`Noto Sans CJK SC` 是唯一同时覆盖「后端渲染」与「国产客户端」的选项。
-Windows 侧未装时会回退到系统中文字体——但预览走第 1 条链路（后端渲染），
-Windows 客户端看到的同样是后端渲好的 PNG，故回退影响面很小。
+别名配置见 `deploy/fonts/51-ppt-fonts.conf`，客户端执行一次
+`deploy/install-ppt-fonts-aliases.sh`，容器由 Dockerfile 在构建时 COPY + fc-cache。
+这样两端都不需要用户安装任何字体。
+
+2026-10-08 的旧结论是写 `Noto Sans CJK SC`（麒麟与容器原生）。它忽略了 Windows
+才是主要的演示与分发端：这个 family 在 Windows 上不存在，PowerPoint 匹配不到会
+把**整行**回退成宋体，中文黑体直接变宋体（用户 2026-11-09 反馈「系统上正常、
+下载下来不正常」）。旧模板里存的 `Noto Sans CJK SC` 由迁移 022 升级为
+`Microsoft YaHei`。
 
 ## 西文为什么单独走 Times New Roman
 
@@ -46,19 +51,19 @@ PowerPoint/WPS 打开时匹配不到这个名字，整行会一起回退——�
 
 import os
 
-# 写进 pptx 的中文字体名，由后端容器与客户端的中文环境共同解析。
-DEFAULT_CJK_FONT = os.getenv("PPT_CJK_FONT", "").strip() or "Noto Sans CJK SC"
+# 写进 pptx 的中文字体名。Windows 原生，麒麟/统信靠 fontconfig 别名落到思源黑体。
+DEFAULT_CJK_FONT = os.getenv("PPT_CJK_FONT", "").strip() or "Microsoft YaHei"
 
 # 写进 pptx 的西文/数字字体名。Times New Roman 是全平台自带，且不随容器变化。
 DEFAULT_LATIN_FONT = os.getenv("PPT_LATIN_FONT", "").strip() or "Times New Roman"
 
-# 模板 font 字段的建议选项（按国产化环境的可用性排序）
+# 模板 font 字段的建议选项（按「分发端原生」优先排序）
 SUGGESTED_CJK_FONTS = (
-    "Noto Sans CJK SC",   # 后端已装、国产 OS 标配（默认）
+    "Microsoft YaHei",      # Windows/Office 自带（默认）；麒麟配别名落思源
+    "SimHei",               # Windows 自带黑体
+    "FangSong_GB2312",      # 仿宋，公文常用
+    "Noto Sans CJK SC",     # 麒麟/容器原生，Windows 端需目标机自行安装
     "WenQuanYi Micro Hei",  # 国产 OS 常见
-    "Source Han Sans SC",   # 思源黑体，部分版本预装
-    "FangSong_GB2312",      # 仿宋，公文常用（需目标机装有）
-    "SimSun",               # 宋体，仅 Windows
 )
 
 # 模板主题里常见的西文/衬线字体名。模板自带的字体只反映原设计者的示例排法，
