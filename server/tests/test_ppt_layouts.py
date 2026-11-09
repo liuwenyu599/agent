@@ -810,14 +810,70 @@ class TestDataPromotion:
         # 原要点已搬进图表数据，留着会在页面底部重复渲染一遍
         assert not slide.get("points")
 
-    def test_point_with_two_numbers_stays_text(self):
+    def test_narrative_points_with_growth_rate_become_chart(self):
+        """整句叙述（主值 + 同比增长）是模型最常见的写法，必须能成图。
+
+        用户 2026-11-09：「没有主动作图」。原规则要求一条里只能有一个数，
+        而真实大纲几乎总是「受理 12000 件，同比增长 12%」，于是整页退回文字。
+        增长率是附注，不是并列类目，取主值上轴即可。
+        """
         outline = self._outline(_slide("content", points=[
             "受理法律援助案件12000件，同比增长12%",
             "调解矛盾纠纷42600件，同比增长8%",
             "办理公证事项8600件，同比增长5%"]))
         E.promote_data_slides(outline)
-        # 带口径的叙述（两个数）不能当并列类目上同一根轴
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        chart = slide["blocks"]["chart"]
+        assert chart["series"][0]["values"] == [12000, 42600, 8600]
+        assert chart["unit_family"] == "count"
+
+    def test_points_with_different_unit_families_stay_text(self):
+        """三条主值分属件数/比率/金额时不能并排上同一根轴。"""
+        outline = self._outline(_slide("content", points=[
+            "受理法律援助案件12000件", "调解成功率96.2%", "投入经费380万元"]))
+        E.promote_data_slides(outline)
         assert outline["slides"][0]["type"] == "content"
+
+    def test_thousand_separated_values_are_parsed(self):
+        """模型常写「32,180 件」，带千分位与空格也要认。"""
+        outline = self._outline(_slide("data", blocks={"cards": [
+            {"label": "受理量", "value": "32,180 件"},
+            {"label": "办结量", "value": "31,500 件"},
+            {"label": "咨询量", "value": "28,600 件"}]}))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        assert slide["blocks"]["chart"]["series"][0]["values"] == [32180, 31500, 28600]
+
+    def test_count_words_share_one_axis_with_per_point_units(self):
+        """件 / 人次 / 项 都是数量，同量级时同轴可比，但标签各带各的单位。"""
+        outline = self._outline(_slide("content", points=[
+            "受理法律援助案件32180件", "接待群众咨询28600人次", "办理公证事项18400项"]))
+        E.promote_data_slides(outline)
+        chart = outline["slides"][0]["blocks"]["chart"]
+        assert chart["unit_family"] == "count"
+        assert chart["point_units"] == ["件", "人次", "项"]
+
+    def test_orders_of_magnitude_gap_falls_back_to_cards(self):
+        """32180 件与 42 个同轴时小的那条只剩一条线，宁可退回文字。"""
+        outline = self._outline(_slide("content", points=[
+            "受理法律援助案件32180件", "接待群众咨询28600人次", "建成工作站42个"]))
+        E.promote_data_slides(outline)
+        assert outline["slides"][0]["type"] == "content"
+        assert len(outline["slides"][0]["points"]) == 3
+
+    def test_mixed_units_chart_the_count_and_keep_the_rest(self):
+        outline = self._outline(_slide("data", blocks={"cards": [
+            {"label": "受理量", "value": "32180件"},
+            {"label": "办结量", "value": "31500件"},
+            {"label": "咨询量", "value": "28600人次"},
+            {"label": "满意度", "value": "96.8分"}]}))
+        E.promote_data_slides(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        assert len(slide["blocks"]["chart"]["series"][0]["values"]) == 3
+        assert slide["points"] == ["满意度：96.8分"]
 
     def test_pipe_rows_become_native_table(self):
         outline = self._outline(_slide("content", points=[

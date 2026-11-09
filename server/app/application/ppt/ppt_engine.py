@@ -1093,13 +1093,44 @@ def _is_sequence_content(slide: Dict) -> bool:
 # 批数字要么退成纯文字要点，要么退成 value 填「稳步增长」这种形容词的假指标卡。
 # 这里补一层**确定性搬运**：只搬运页面里已经写明的数值，不计算、不换算、不补造；
 # 判据不满足就原样放过，宁可不画也不编。
+_NUM = r"-?\d[\d,]*(?:\.\d+)?"
+_UNIT = (r"%|％|个百分点|万元|亿元|万件|万人次|人次|万|件|人|户|家|项|场次"
+         r"|个工作日|个|天|小时|条|份|宗|起|分(?!钟)")
 _VALUE_ONLY = re.compile(
-    r"^\s*(?P<num>-?\d+(?:\.\d+)?)\s*(?P<unit>%|％|个百分点|万元|亿元|万件|万人次"
-    r"|人次|万|件|人|户|家|项|次|场次|个工作日|个|天|小时|条|份|宗|起)?\s*$")
-_METRIC_TOKEN = re.compile(
-    r"(?P<num>-?\d+(?:\.\d+)?)\s*(?P<unit>%|％|个百分点|万元|亿元|万件|万人次"
-    r"|人次|万|件|人|户|家|项|次|场次|个工作日|个|天|小时|条|份|宗|起)")
+    rf"^\s*(?P<num>{_NUM})\s*(?P<unit>{_UNIT})?\s*$")
+_METRIC_TOKEN = re.compile(rf"(?P<num>{_NUM})\s*(?P<unit>{_UNIT})")
 _LABEL_PREFIX = re.compile(r"^(?:截至|其中|全年|年内|累计|截至目前|目前|共计)")
+
+
+def _to_float(raw: str) -> Optional[float]:
+    try:
+        return float(str(raw).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _unit_family(unit: str) -> str:
+    """把量词归到可同轴的族：件/人次/人/户都能比大小，% 与元不能混。
+
+    模型写「受理 32180 件 / 咨询 28600 人次 / 建成 42 个」时单位字面不同，
+    但都是「数量」，并排成柱状图是有意义的；严格按字面比会整页放弃。
+    """
+    u = (unit or "").replace("％", "%")
+    if u in ("%", "个百分点"):
+        return "ratio"
+    if u in ("万元", "亿元"):
+        return "money"
+    if u in ("分",):
+        return "score"
+    return "count" if u else ""
+
+
+_FAMILY_UNIT = {"count": "", "ratio": "%", "money": "元", "score": "分"}
+
+
+def _format_point_value(value: float, unit: str) -> str:
+    text = f"{value:,.2f}".rstrip("0").rstrip(".") if value % 1 else f"{value:,.0f}"
+    return f"{text}{unit}" if unit else text
 
 
 # ---- 指标数值回补：把「稳步增长」换回材料里写明的真实数字 ----
@@ -1117,9 +1148,8 @@ _SENTENCE_SPLIT = re.compile(r"[。；;！？!?\n]+")
 # 按整句取窗口会把两个数的贴合度拉平、判成歧义。先按逗号切到分句级。
 _FRAGMENT_SPLIT = re.compile(r"[。；;！？!?\n，,、]+")
 _METRIC_NUM = re.compile(
-    r"(?<![0-9.])(?P<num>\d{1,7}(?:\.\d+)?)(?!\d)\s*"
-    r"(?P<unit>%|％|个百分点|万元|亿元|万件|万人次|人次|万|件|人|户|家|项|场次"
-    r"|个工作日|个|天|小时|条|份|宗|起)?")
+    r"(?<![0-9.,])(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{1,9}(?:\.\d+)?)(?![\d,])"
+    rf"\s*(?P<unit>{_UNIT})?")
 
 
 def looks_like_trend(text: Any) -> bool:
@@ -1190,10 +1220,12 @@ def _locate_metric_value(material: str, label: str,
         for sentence in windows:
             for m in _METRIC_NUM.finditer(sentence):
                 num = m.group("num")
+                plain = num.replace(",", "")
                 unit = (m.group("unit") or "").replace("％", "%")
-                if re.fullmatch(r"\d{7,}", num):
+                if re.fullmatch(r"\d{7,}", plain):
                     continue                  # 电话/热线/账号
-                if not unit and re.fullmatch(r"\d{4}", num) and 1900 <= int(num) <= 2100:
+                if (not unit and re.fullmatch(r"\d{4}", plain)
+                        and 1900 <= int(plain) <= 2100):
                     continue                  # 年份
                 prefix = sentence[max(0, m.start() - 3):m.start()]
                 if prefix.endswith(("第", "号", "编号", "电话", "热线", "工号")):
@@ -1350,10 +1382,46 @@ def _parse_metric(text: Any) -> Optional[tuple]:
     m = _VALUE_ONLY.match(str(text or ""))
     if not m:
         return None
-    try:
-        return float(m.group("num")), (m.group("unit") or "").replace("％", "%")
-    except (TypeError, ValueError):
+    num = _to_float(m.group("num"))
+    if num is None:
         return None
+    return num, (m.group("unit") or "").replace("％", "%")
+
+
+_GROWTH_CUE = re.compile(r"(?:同比|环比|较上年|较去年|增长|提高|提升|下降|减少|增幅|降幅)[^，,。；;]{0,4}$")
+
+
+def _pick_primary_metric(point: str) -> Optional[tuple]:
+    """从一条要点里挑出可上轴的主值，返回 (类目名, 数值, 单位)。
+
+    模型写数据页极少用「受理量：32180 件」这种机读格式，更常见的是整句
+    「全市共受理法律援助案件 32180 件，同比增长 12.4%」。原实现要求一条
+    里只有**一个**数，于是这种最典型的写法整页放弃，成稿就只剩文字。
+
+    取第一条带单位、非年份、非「增长/下降」语境的数：句中第二个数多是
+    增长率或口径说明，上轴会与主值同轴并列、误导读者。
+    """
+    for hit in _METRIC_TOKEN.finditer(point):
+        num = _to_float(hit.group("num"))
+        if num is None:
+            continue
+        unit = (hit.group("unit") or "").replace("％", "%")
+        if unit == "个百分点":
+            continue
+        if not unit and abs(num - round(num)) < 1e-9 and 1900 <= num <= 2100:
+            continue                      # 年份
+        before = point[max(0, hit.start() - 8):hit.start()]
+        if unit == "%" and _GROWTH_CUE.search(before):
+            continue                      # 增长率不是主指标
+        label = point[:hit.start()].strip(" 　:：,，、;；")
+        label = _LABEL_PREFIX.sub("", label)
+        label = re.sub(r"^(?:全市|全市共|全区|全县|我市|本区|本年度|全年|年内|累计|共|共计|其中)+",
+                       "", label)
+        label = label.strip(" 　的")
+        if len(label) < 2:
+            return None
+        return label[:16], num, unit
+    return None
 
 
 def _metric_from_points(points: List[str]) -> Optional[dict]:
@@ -1364,27 +1432,19 @@ def _metric_from_points(points: List[str]) -> Optional[dict]:
     values: List[float] = []
     units: List[str] = []
     for point in points:
-        hits = list(_METRIC_TOKEN.finditer(point))
-        # 一条里出现两个数（「3200 件，同比增长 12%」）说明是有口径的叙述，
-        # 不是能并列上轴的类目，整页放弃。
-        if len(hits) != 1:
+        picked = _pick_primary_metric(point)
+        if not picked:
             return None
-        hit = hits[0]
-        label = _LABEL_PREFIX.sub("", point[:hit.start()].strip(" 　:：,，、;；"))
-        if len(label) < 2:
-            return None
-        num = float(hit.group("num"))
-        unit = (hit.group("unit") or "").replace("％", "%")
-        # 「2026 年建成…」里的年份会被当成量值，画出来就是一根没有意义的柱。
-        if not unit and abs(num - round(num)) < 1e-9 and 1900 <= num <= 2100:
-            return None
-        categories.append(label[:16])
+        label, num, unit = picked
+        categories.append(label)
         values.append(num)
         units.append(unit)
     # 全都没有单位时，抽到的多是年份/序号/条款号而不是可比较的量值，
     # 宁可不画也不要拿编号当数据。
     if not any(units):
         return None
+    if len(set(categories)) < len(categories):
+        return None                       # 剥前缀后类目撞车，画出来分不清谁是谁
     return _chart_spec(categories, values, units)
 
 
@@ -1422,12 +1482,26 @@ def _strip_common_affix(categories: List[str]) -> tuple:
 
 def _chart_spec(categories: List[str], values: List[float],
                 units: List[str]) -> Optional[dict]:
-    """同类口径才成图：件数与百分比同轴没有意义。"""
-    if len(set(units)) > 1:
+    """同一口径族才成图：件数与百分比同轴没有意义。
+
+    族内量词可以不同（件 / 人次 / 个 都是数量），但「率」与「金额」必须分开；
+    量词不一致时不给统一单位，改由 ``point_units`` 逐点标注。
+    """
+    families = [_unit_family(u) for u in units]
+    if not families or len(set(families)) > 1:
         return None
-    unit = units[0]
+    family = families[0]
+    if not family:
+        return None
+    # 同族不等于同量级：32180 件与 42 个同轴时小的那根只剩一条线（实测），
+    # 有标签也读不出「这根条代表什么」。量级差两个数量级以上，宁可退回卡片。
+    positives = [abs(float(v)) for v in values if v]
+    if positives and min(positives) > 0 and max(positives) / min(positives) > 60:
+        return None
+    distinct = {u for u in units if u}
+    unit = units[0] if len(distinct) == 1 else _FAMILY_UNIT.get(family, "")
     short, affix = _strip_common_affix(categories)
-    if unit == "%" and 99 <= sum(values) <= 101:
+    if family == "ratio" and 99 <= sum(values) <= 101:
         chart_type = "pie"          # 占比且合计为 100% 左右
     elif any(len(c) > 6 for c in short):
         chart_type = "bar_h"        # 指标名长，横向条形才读得下
@@ -1436,8 +1510,14 @@ def _chart_spec(categories: List[str], values: List[float],
     # 系列名要有信息量：剥出来的公共词 > 单位 > 泛称。图上只显示一个
     # 孤零零的「%」既不像标题也不像图例（实测成稿顶部就是这样）。
     name = (affix or unit or "数量") + (f"（{unit}）" if affix and unit else "")
-    return {"chart_type": chart_type, "categories": short,
-            "series": [{"name": name, "values": list(values)}], "unit": unit}
+    spec = {"chart_type": chart_type, "categories": short,
+            "series": [{"name": name, "values": list(values)}],
+            "unit": unit, "unit_family": family}
+    if len(distinct) > 1:
+        # 逐点量词不同（件 / 人次 / 个）：统一 number_format 写不出各自单位，
+        # 交给 _draw_chart 逐点写标签文本。
+        spec["point_units"] = list(units)
+    return spec
 
 
 def _table_from_points(points: List[str]) -> Optional[dict]:
@@ -1491,15 +1571,16 @@ def _promote_slide_to_chart(slide: Dict) -> Optional[dict]:
                 return None
             parsed.append((label[:16], metric[0], metric[1], card))
         units = [item[2] for item in parsed]
-        if len(set(units)) == 1:
+        families = [_unit_family(u) for u in units]
+        if len(set(families)) == 1:
             return _chart_spec([i[0] for i in parsed], [i[1] for i in parsed], units)
         groups: Dict[str, List[tuple]] = {}
-        for item in parsed:
-            groups.setdefault(item[2], []).append(item)
-        _, best = max(groups.items(), key=lambda kv: len(kv[1]))
+        for item, family in zip(parsed, families):
+            groups.setdefault(family, []).append(item)
+        family, best = max(groups.items(), key=lambda kv: len(kv[1]))
         if len(best) < 3 or len(best) * 2 < len(parsed):
             return None
-        rest = [item for item in parsed if item[2] != best[0][2]]
+        rest = [item for item, fam in zip(parsed, families) if fam != family]
         if rest:
             slide["_chart_leftover"] = [
                 f"{item[0]}：{item[3].get('value')}" for item in rest]
@@ -1587,7 +1668,14 @@ def promote_data_slides(outline: Dict) -> Dict:
             slide["_promoted"] = "chart"
             continue
         if slide.get("type") == "data":
-            _demote_fake_metric_cards(slide)
+            if _demote_fake_metric_cards(slide):
+                continue
+            # 既没成图也没有任何数据块的数据页（模型给了 data 页型却只写要点）：
+            # 退回内容页，否则渲染层按数据页的留白骨架画，三条要点会挤在页面
+            # 底部、上半页整片空白（实测）。
+            if not any(blocks.get(k) for k in ("chart", "table", "cards")):
+                slide["type"] = "content"
+                slide["layout"] = None
     return outline
 
 
@@ -2857,6 +2945,22 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 labels.position = (XL_LABEL_POSITION.ABOVE
                                    if ct in ("line", "area")
                                    else XL_LABEL_POSITION.OUTSIDE_END)
+                # 同族不同量词（件 / 人次 / 个）没法用一个 number_format 写出
+                # 各自单位，逐点写标签文本，否则图上只剩一串裸数字。
+                point_units = chart_spec.get("point_units") or []
+                if point_units:
+                    for si, serie_obj in enumerate(gf.chart.series):
+                        vals = (series[si].get("values")
+                                if si < len(series) else None) or []
+                        for pi, point_obj in enumerate(serie_obj.points):
+                            if pi >= len(point_units) or pi >= len(vals):
+                                break
+                            label = point_obj.data_label
+                            label.text_frame.text = _format_point_value(
+                                float(vals[pi]), point_units[pi])
+                            label.font.size = Pt(12)
+                            label.font.bold = True
+                            label.font.color.rgb = DARK
         except Exception:
             pass
         # 横向条形的类目轴默认自下而上，第一条要点落在最底部，与阅读顺序相反。
