@@ -23,6 +23,7 @@ import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.Card
 import androidx.compose.material.Divider
 import androidx.compose.material.Icon
+import androidx.compose.material.IconButton
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.RadioButton
 import androidx.compose.material.RadioButtonDefaults
@@ -32,6 +33,7 @@ import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
@@ -346,6 +348,11 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // 列表筛选只按「知识库名称」；提前算好，供计数提示与空态共用。
+        // 注意：这里的筛选纯前端，不查文档内容，也不影响知识问答的 RAG 检索。
+        val filtered = vm.kbs.filter {
+            search.isBlank() || it["name"].str().contains(search.trim(), true)
+        }
         // 统计条：公共 / 科室 / 个人知识库数目 + 文档总数
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             vm.stats.forEach { (label, value) ->
@@ -369,12 +376,26 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = search, onValueChange = { search = it },
-                    placeholder = { Text("搜索知识库", fontSize = 13.sp) },
+                    placeholder = { Text("按名称搜索知识库", fontSize = 13.sp) },
                     leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
+                    trailingIcon = {
+                        if (search.isNotEmpty()) {
+                            IconButton(onClick = { search = "" }) {
+                                Icon(Icons.Default.Close, "清除筛选", tint = TextSecondary)
+                            }
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier.width(220.dp).heightIn(min = 56.dp),
                     colors = TextFieldDefaults.outlinedTextFieldColors(
                         focusedBorderColor = EpPrimary, cursorColor = EpPrimary),
+                )
+                // 统计条基于全量数据，不随搜索变化；这里把「总数 / 当前显示数」说清，
+                // 避免出现「公共知识库 1、文档 369」但列表空白的矛盾观感。
+                Text(
+                    if (search.isBlank()) "共 ${vm.kbs.size} 个知识库"
+                    else "共 ${vm.kbs.size} 个知识库，匹配 ${filtered.size} 个",
+                    fontSize = 12.sp, color = TextSecondary,
                 )
                 Spacer(Modifier.weight(1f))
                 Button(onClick = { showCreate = true },
@@ -405,13 +426,25 @@ private fun KnowledgeList(vm: KnowledgeViewModel) {
                     Text("创建时间", Modifier.width(160.dp), fontSize = 13.sp, color = TextSecondary)
                     Text("操作", Modifier.width(240.dp), fontSize = 13.sp, color = TextSecondary)
                 }
-                val filtered = vm.kbs.filter {
-                    search.isBlank() || it["name"].str().contains(search, true)
-                }
                 if (filtered.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().padding(40.dp),
-                        contentAlignment = Alignment.Center) {
-                        Text("暂无知识库", color = TextSecondary, fontSize = 13.sp)
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (search.isBlank()) {
+                            Text("暂无知识库", color = TextSecondary, fontSize = 13.sp)
+                        } else {
+                            Text("没有名称包含「${search.trim()}」的知识库",
+                                color = TextRegular, fontSize = 13.sp)
+                            Text("知识库和文档都还在：上方搜索只按「知识库名称」筛选，不影响知识问答的检索结果。",
+                                color = TextSecondary, fontSize = 12.sp)
+                            Text("要查文档内容，请清除筛选后进入知识库使用「搜索文档」，或到「知识库问答」提问。",
+                                color = TextSecondary, fontSize = 12.sp)
+                            TextButton(onClick = { search = "" }) {
+                                Text("清除筛选，显示全部知识库", color = EpPrimary, fontSize = 13.sp)
+                            }
+                        }
                     }
                 }
                 filtered.forEachIndexed { i, kb ->
