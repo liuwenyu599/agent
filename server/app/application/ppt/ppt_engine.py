@@ -618,6 +618,10 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
     前两者都要过 ``_layout_usable`` 硬门槛，不通过就落到打分兜底。
     """
     stype = slide.get("type") or "content"
+    # 规则层自造的混合版式（图 + 举措双栏）不在 LAYOUT_CATALOG 里，
+    # 走打分兜底会被换成 chart.full，数据图又把两条举措挤到页脚 12pt。
+    if slide.get("layout") == "insight_split":
+        return "insight_split"
     specs = LAYOUT_CATALOG.get(stype) or []
     if not specs:
         return ""
@@ -1094,7 +1098,7 @@ def _is_sequence_content(slide: Dict) -> bool:
 # 这里补一层**确定性搬运**：只搬运页面里已经写明的数值，不计算、不换算、不补造；
 # 判据不满足就原样放过，宁可不画也不编。
 _NUM = r"-?\d[\d,]*(?:\.\d+)?"
-_UNIT = (r"%|％|个百分点|万元|亿元|万件|万人次|人次|万|件|人|户|家|项|场次"
+_UNIT = (r"%|％|个百分点|万元|亿元|万件|万人次|人次|万|件|人|户|家|项|场次|场|次"
          r"|个工作日|个|天|小时|条|份|宗|起|分(?!钟)")
 _VALUE_ONLY = re.compile(
     rf"^\s*(?P<num>{_NUM})\s*(?P<unit>{_UNIT})?\s*$")
@@ -1424,6 +1428,44 @@ def _pick_primary_metric(point: str) -> Optional[tuple]:
     return None
 
 
+def _metrics_in_sentence(text: str) -> List[tuple]:
+    """从一句话里抽出多组「主体 + 数值 + 单位」。
+
+    模型写数据时经常把四组并列指标串成一句：
+    「全年开展"第一议题"学习 35 次，中心组专题学习 17 场，"三会一课" 23 次，
+    主题党日 11 场。」——按分句切开后每组一个数，正好是一张图的类目。
+    ``_pick_primary_metric`` 只取第一个数，这类句子的其余三组会被丢掉。
+    """
+    out: List[tuple] = []
+    for frag in _FRAGMENT_SPLIT.split(str(text or "")):
+        frag = frag.strip(" 　\t")
+        if len(frag) < 3:
+            continue
+        hit = _METRIC_TOKEN.search(frag)
+        if not hit:
+            continue
+        num = _to_float(hit.group("num"))
+        if num is None:
+            continue
+        unit = (hit.group("unit") or "").replace("％", "%")
+        if unit == "个百分点":
+            continue
+        if not unit and abs(num - round(num)) < 1e-9 and 1900 <= num <= 2100:
+            continue                      # 年份
+        if unit == "%" and _GROWTH_CUE.search(frag[:hit.start()]):
+            continue                      # 增长率是附注，不是并列类目
+        label = re.sub(r"^【[^】]{1,12}】", "", frag[:hit.start()])
+        label = label.strip(" 　:：,，、;；\"“”'‘’《》()（）")
+        label = _LABEL_PREFIX.sub("", label)
+        label = re.sub(r"^(?:全市|我局|我区|全县|本年|本年度|全年|年内|累计|共|共计|其中)+",
+                       "", label)
+        label = label.strip(" 　的")
+        if len(label) < 2:
+            continue
+        out.append((label[:12], num, unit))
+    return out
+
+
 def _metric_from_points(points: List[str]) -> Optional[dict]:
     """把「指标名 + 单一数值」的并列要点整理成图表规格；不成立返回 None。"""
     if not 3 <= len(points) <= 6:
@@ -1586,7 +1628,23 @@ def _promote_slide_to_chart(slide: Dict) -> Optional[dict]:
                 f"{item[0]}：{item[3].get('value')}" for item in rest]
         return _chart_spec([i[0] for i in best], [i[1] for i in best],
                            [i[2] for i in best])
-    return _metric_from_points(_slide_points(slide))
+    pts = _slide_points(slide)
+    # 混合页：一条要点里串了 3 组以上并列数值，其余是要点长文。汇报类材料
+    # 极常见（「【关键数据】全年开展…35 次，中心组学习 17 场，「三会一课」
+    # 23 次，主题党日 11 场」），原来只认「一条一个数」，整页退回卡片，
+    # 四组数据就被埋在一段话里（用户 2026-11-09 实机）。
+    if len(pts) >= 2:
+        parsed = [(p, _metrics_in_sentence(p)) for p in pts]
+        heavy = [(p, m) for p, m in parsed if len(m) >= 3]
+        if len(heavy) == 1:
+            data_point, metrics = heavy[0]
+            spec = _chart_spec([m[0] for m in metrics], [m[1] for m in metrics],
+                               [m[2] for m in metrics])
+            if spec:
+                slide["_chart_notes"] = [p for p, _ in parsed if p != data_point]
+                slide["layout"] = "insight_split"
+                return spec
+    return _metric_from_points(pts)
 
 
 def _demote_fake_metric_cards(slide: Dict) -> bool:
@@ -1653,7 +1711,9 @@ def promote_data_slides(outline: Dict) -> Dict:
             design["intent_source"] = "rule"
             slide["type"] = "chart"
             slide["blocks"] = {"chart": spec}
-            slide["layout"] = None
+            # 混合页（数据 + 举措长文）保留 insight_split，图在左、文字在右；
+            # 其余整页数据图用默认满幅版式。
+            slide["layout"] = "insight_split" if slide.get("_chart_notes") else None
             slide["design"] = design
             # 原要点就是类目的来源，数据已经搬进 categories / series；
             # 留着会被 r_chart 当「图表结论」画到页面底部，出现
@@ -1661,8 +1721,13 @@ def promote_data_slides(outline: Dict) -> Dict:
             # 唯一例外是混合单位时没进图的指标：那几条必须留在页面上，
             # 否则「群众满意度 96.8 分」整个消失。
             leftover = slide.pop("_chart_leftover", None)
+            notes = slide.pop("_chart_notes", None)
             if leftover:
                 slide["points"] = [str(p)[:150] for p in leftover][:2]
+            elif notes:
+                # 混合页：成图的那条要点已经变成图，其余举措原样留在右侧，
+                # 一个字都不能删（删了就是「画了图丢了内容」）。
+                slide["points"] = [str(p)[:150] for p in notes][:3]
             else:
                 slide.pop("points", None)
             slide["_promoted"] = "chart"
@@ -2454,14 +2519,20 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         items = s["points"][:6]
         v = lay_of(s) or "list"
         if v == "grid":
+            # 4 个条目按 3 列排会变成「3 + 1 通栏」：第四条独占一行、右侧全空
+            # （用户 2026-11-09 实机目录页）。奇数条目才用 3 列，4 条用 2×2。
+            cols = 2 if len(items) == 4 else 3
+            gap = .035
+            cw = (.885 - gap * (cols - 1)) / cols
             for i, it in enumerate(items[:6]):
-                cx = 0.06 + (i % 3) * 0.295
-                cy = 0.285 + (i // 3) * 0.275
-                rect(slide, lx(cx), ly(cy), lx(0.275), ly(0.215), LIGHT, round_=True)
-                rect(slide, lx(cx), ly(cy), lx(0.275), ly(0.010), ACCENT)
+                cx = 0.06 + (i % cols) * (cw + gap)
+                cy = 0.285 + (i // cols) * 0.275
+                rect(slide, lx(cx), ly(cy), lx(cw), ly(0.215), LIGHT, round_=True)
+                rect(slide, lx(cx), ly(cy), lx(cw), ly(0.010), ACCENT)
                 text(slide, lx(cx + 0.022), ly(cy + 0.032), lx(0.13), ly(0.09),
                      f"{i+1:02d}", 26, True, ACCENT)
-                text(slide, lx(cx + 0.022), ly(cy + 0.122), lx(0.235), ly(0.08), it, 14, True, DARK)
+                text(slide, lx(cx + 0.022), ly(cy + 0.122), lx(cw - 0.04), ly(0.08),
+                     it, 14, True, DARK)
         elif v == "cards":
             cols = 2
             cw, ch = 0.415, 0.155
@@ -3002,7 +3073,22 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         page_header(slide, s["title"])
         chart_spec = (s.get("blocks") or {}).get("chart") or {}
         points = [str(p) for p in (s.get("points") or [])]
-        if (lay_of(s) or "full") == "split":
+        layout = lay_of(s) or "full"
+        if layout == "insight_split" and points:
+            # 数据 + 举措同页：图占左侧 60%，其余举措竖排右侧。汇报材料常见
+            # 「关键数据 + 两条做法」，整页转图会挤掉文字，整页文字会埋掉数据。
+            _draw_chart(slide, chart_spec, lx(0.05), ly(0.245), lx(0.585), ly(0.615))
+            rect(slide, lx(0.658), ly(0.255), lx(0.005), ly(0.59), C("DDE3EC"))
+            slot = 0.585 / max(1, len(points[:3]))
+            y = 0.265
+            for p in points[:3]:
+                size = adaptive_design.fit_font_size(
+                    p, 0.255, slot - .035, 16, min_pt=11) or 12
+                text(slide, lx(0.68), ly(y), lx(0.255), ly(slot - .035),
+                     p, size, False, DARK)
+                y += slot
+            return slide
+        if layout == "split":
             _draw_chart(slide, chart_spec, lx(0.065), ly(0.245), lx(0.575), ly(0.60))
             rect(slide, lx(0.685), ly(0.245), lx(0.07), ly(0.008), ACCENT)
             y = 0.295

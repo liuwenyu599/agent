@@ -1051,3 +1051,87 @@ class TestMetricBackfill:
         chart = slide["blocks"]["chart"]
         assert len(chart["series"][0]["values"]) == 3
         assert slide["points"] == ["法律援助案件受理量：32180件"]
+
+
+class TestSceneBodyFontCeiling:
+    """三卡页正文不能按「框高」无脑放大（用户 2026-11-09：字号太大、不和谐）。"""
+
+    @staticmethod
+    def _plan(points, layout="content.three_cards"):
+        from app.application.ppt import page_scene
+
+        return page_scene.plan({"type": "content", "title": "t", "points": points},
+                               layout)
+
+    def test_long_paragraph_keeps_body_under_20pt(self):
+        long_texts = [
+            "【深度融合】紧扣“学纪、知纪、明纪、守纪”目标，将党纪学习教育与贯彻"
+            "党中央决策部署及“干部作风大转变、营商环境大提升”专项行动深度融合。",
+            "【常态长效】严格落实“第一议题”制度，及时传达总书记重要讲话指示，"
+            "通过常态化学习推动党纪教育从“指尖”入“心间”。",
+            "【关键数据】全年开展“第一议题”学习35次，中心组专题学习17场。"]
+        scene = self._plan(long_texts)
+        assert scene is not None
+        sizes = [item["font_pt"] for item in scene["elements"]
+                 if str(item["ref"]).startswith("point:")]
+        assert sizes and max(sizes) <= 20, f"正文被放大到 {sizes}"
+
+    def test_short_points_may_still_grow(self):
+        scene = self._plan(["压实责任", "健全机制", "强化督导"])
+        sizes = [item["font_pt"] for item in scene["elements"]
+                 if str(item["ref"]).startswith("point:")]
+        assert max(sizes) > 20, f"短句应该提号，实际 {sizes}"
+
+
+class TestNarrativeBands:
+    """三条都超过 45 字时走通栏横条带，不排「上二下一 + 末条通栏」。"""
+
+    def test_three_long_points_use_full_width_bands(self):
+        from app.application.ppt import page_scene
+
+        points = [
+            "【系统解读】组织广大党员干部深学细悟《中国共产党纪律处分条例》，"
+            "举办专题学习会，分章节进行深度解读。",
+            "【头雁领航】坚持示范带头，局党组书记及班子成员分别到挂钩联系党支部"
+            "讲授专题纪律党课，层层传导压力。",
+            "【交流互鉴】13名党员干部结合自身工作实际，围绕《条例》内容分享学习"
+            "体会，实现从“被动听”到“主动讲”的转变。"]
+        scene = page_scene.plan({"type": "content", "title": "t", "points": points},
+                                "content.three_cards")
+        boxes = [item for item in scene["elements"]
+                 if str(item["ref"]).startswith("point:")]
+        assert all(abs(box["x"] - .10) < 1e-6 and abs(box["w"] - .80) < 1e-6
+                   for box in boxes), boxes
+
+
+class TestMixedDataSlide:
+    """一条要点里串了 3 组以上数值 → 图在左、其余举措在右（2026-11-09）。"""
+
+    POINTS = [
+        "【关键数据】全年开展“第一议题”学习35次，中心组专题学习17场，"
+        "“三会一课”23次，主题党日11场。",
+        "【深度融合】紧扣“学纪、知纪、明纪、守纪”目标，将党纪学习教育与贯彻"
+        "党中央决策部署及“干部作风大转变、营商环境大提升”专项行动深度融合。",
+        "【常态长效】严格落实“第一议题”制度，及时传达总书记重要讲话指示。"]
+
+    def test_mixed_page_becomes_chart_and_keeps_the_other_points(self):
+        outline = {"slides": [{"type": "content", "title": "拉紧纪律防线",
+                               "points": list(self.POINTS)}]}
+        E.apply_visual_intent(outline)
+        slide = outline["slides"][0]
+        assert slide["type"] == "chart"
+        assert slide["layout"] == "insight_split"
+        chart = slide["blocks"]["chart"]
+        assert chart["series"][0]["values"] == [35, 17, 23, 11]
+        assert chart["point_units"] == ["次", "场", "次", "场"]
+        # 成图的那条变成了图，另外两条举措一个字都不能丢
+        assert slide["points"] == self.POINTS[1:]
+
+    def test_single_number_stays_text(self):
+        """只有一组数值时不做混合图，避免把一句话拆成一根柱。"""
+        outline = {"slides": [{"type": "content", "title": "t", "points": [
+            "【精准培训】组织参加民法典、安全生产法等专题讲座7场次，补齐知识短板。",
+            "【警示教育】参加党员干部警示教育会，强化底线思维和保密意识。",
+            "【成果转化】报送微视频获优秀奖，展现队伍风采。"]}]}
+        E.apply_visual_intent(outline)
+        assert outline["slides"][0]["type"] == "content"

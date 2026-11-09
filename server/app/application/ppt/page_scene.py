@@ -44,9 +44,15 @@ def audit(elements: list, slide: dict) -> bool:
             return False
         preferred = 28 if ref == "title" else (30 if len(values) == 2 else 20)
         # 大框短句原来恒按 20pt 排，卡片占 60% 页高却只有一两行字，
-        # 形成明显空卡；高框放宽到 26pt，窄条带保持 20pt 以免挤出多行。
-        if ref.startswith("point:") and h >= .16:
-            preferred = 26
+        # 形成明显空卡；高框放宽到 26pt。
+        # ⚠ 但「框高」不等于「字数少」：三卡页的每个卡都占 56% 页高，
+        # 塞 51 个字的段落时同样会放宽到 26pt，实测成稿正文 26pt、标题
+        # 28pt，层级几乎相同，卡片被字挤满（用户 2026-11-09：字号太大、
+        # 不和谐）。所以放宽条件必须同时看字数：只有真正的短句才提号。
+        if ref.startswith("point:"):
+            chars = sum(len(str(t)) for t in values[ref])
+            if h >= .16 and chars <= 24:
+                preferred = 26
         inset = 0 if ref == "title" else .04
         if w <= inset or h <= inset:
             return False
@@ -175,6 +181,8 @@ def _compose_points(variant: str, n: int, image: bool,
         return [{"ref": f"point:{i}", "x": .10, "y": .245 + i * (h + gap),
                  "w": .80, "h": h} for i in range(n)]
     # grid：三卡 / 双栏 / 对称多点沿用等宽网格，但列数由版式决定。
+    # 保留三列：4 条要点时末条通栏，是 three_cards 与 two_col / symmetric
+    # 的关键几何差异（选版要能区分它们）。目录页的 2×2 另有 r_toc 处理。
     columns = 3 if variant in ("three_cards", "cards") else min(2, n)
     rows = math.ceil(n / columns)
     gap = .035
@@ -227,8 +235,12 @@ def plan(slide: dict, layout: str) -> dict | None:
     elements = [{"ref": "title", "x": .055, "y": .05, "w": .89, "h": .12}]
     n = len(points)
     variant = layout.split(".")[-1]
-    long_text = (variant == "compare"
-                 and any(len(str(p)) > 80 for p in points))
+    avg_chars = sum(len(str(p)) for p in points) / max(1, n)
+    # 每条都长（>45 字）时竖卡/双列都放不下：三卡会把 60 字挤进 3 英寸宽的
+    # 窄框（字号只能压到 12pt），双列则排成「上二下一 + 末条通栏」，那条
+    # 又宽又扁、右侧全空。这类页统一走通栏横条带，每行读 30~38 字最舒服。
+    long_text = (any(len(str(p)) > 80 for p in points) if variant == "compare"
+                 else (n >= 3 and avg_chars > 45))
     elements.extend(_compose_points(
         variant, n, image, long_text,
         comparison=(design.get("relationship") == "comparison")))

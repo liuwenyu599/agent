@@ -338,3 +338,21 @@ class TestCompositionFamilies:
         scene = page_scene.plan(slide, "content.two_col")
         assert scene is not None
         assert page_scene.audit(scene["elements"], slide)
+
+
+def test_toc_grid_with_four_items_is_two_by_two():
+    """目录 4 条不能排成「3 + 1」：第四条独占一行、右侧全空（2026-11-09）。"""
+    from pptx import Presentation
+    from app.application.ppt import ppt_engine
+
+    tpl = dict(ppt_engine.BUILTIN_TEMPLATES[0])
+    outline = {"title": "t", "slides": [{
+        "type": "toc", "title": "汇报目录",
+        "points": ["一、强化思想引领", "二、深学细悟条例",
+                   "三、注重学用结合", "四、下一步工作打算"]}]}
+    data = ppt_engine.build_pptx(outline, tpl)
+    prs = Presentation(io.BytesIO(data))
+    boxes = [sh for sh in prs.slides[0].shapes
+             if sh.has_text_frame and sh.text_frame.text.strip().startswith("0")]
+    columns = {round(sh.left / 914400, 2) for sh in boxes}
+    assert len(columns) == 2, f"目录应排 2 列，实际列起点 {columns}"
