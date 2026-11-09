@@ -152,3 +152,87 @@ def test_model_failure_still_keeps_rule_layer_fix(monkeypatch) -> None:
         {"title": "t", "slides": [slide]}, target_count=None, content="")
     assert out["slides"][0]["layout"] is None
     assert out["slides"][0]["points"] == slide["points"]
+
+
+# ---- 2026-11-09 真实验收：脱敏材料产出「XXXX 件」大字卡 + 无来源案例 ----
+
+def _real_world_outline():
+    return {
+        "title": "2026年度司法行政工作总结",
+        "slides": [
+            {"type": "cover", "title": "2026年度司法行政工作总结",
+             "subtitle": "XX市/县司法局 | 2026年11月", "points": []},
+            {"type": "data", "title": "2026年度核心业务数据概览", "points": [],
+             "blocks": {"cards": [
+                 {"label": "调解纠纷总数", "value": "XXXX 件"},
+                 {"label": "普法活动场次", "value": "XXX 场"},
+                 {"label": "法律援助案件", "value": "XXX 件"},
+                 {"label": "社区矫正对象", "value": "XXX 人"},
+             ]}},
+            {"type": "content", "title": "多元化解机制实战成效",
+             "points": ["启动警调+诉调联动机制，3日内达成和解协议。"]},
+        ],
+    }
+
+
+def test_placeholder_cards_and_unsourced_case_are_flagged() -> None:
+    outline = _real_world_outline()
+    report = outline_gate.audit_outline(outline, "")
+    codes = _codes(report)
+    assert "placeholder_value" in codes
+    assert "unsourced_specific" in codes
+    assert report["stats"]["placeholder_pages"] >= 2
+    assert report["stats"]["unsourced_pages"] >= 1
+    # 规则层只诊断：不删卡、不改要点、不改标题。
+    result = report["outline"]["slides"]
+    assert len(result[1]["blocks"]["cards"]) == 4
+    assert result[1]["blocks"]["cards"][0]["value"] == "XXXX 件"
+    assert result[2]["points"] == outline["slides"][2]["points"]
+
+
+def test_sourced_numbers_do_not_trigger_unsourced_warning() -> None:
+    outline = _real_world_outline()
+    outline["slides"][2]["sources"] = ["司法行政工作总结（2026）"]
+    report = outline_gate.audit_outline(outline, "")
+    assert "unsourced_specific" not in _codes(report)
+    assert "placeholder_value" in _codes(report)
+
+
+def test_render_never_prints_placeholder_kpi_cards() -> None:
+    """渲染层兜底：占位数值不放大成大字，明确显示「数据待填」。"""
+    import io
+    from pptx import Presentation
+    from app.application.ppt import ppt_engine
+
+    outline = ppt_engine.normalize_outline(
+        {"title": "t", "slides": [
+            {"type": "cover", "title": "t", "subtitle": "", "points": []},
+            _real_world_outline()["slides"][1],
+            {"type": "closing", "title": "谢谢聆听", "points": []},
+        ]}, require_bookends=False)
+    warnings = []
+    data = ppt_engine.render_pptx(
+        outline, ppt_engine.template_to_dict(ppt_engine.BUILTIN_TEMPLATES[0]),
+        warnings=warnings, adaptive=True)
+    prs = Presentation(io.BytesIO(data))
+    texts = "\n".join(shape.text for slide in prs.slides
+                      for shape in slide.shapes if shape.has_text_frame)
+    assert "XXXX" not in texts
+    assert "数据待填" in texts
+    assert any("占位" in item for item in warnings)
+
+
+def test_section_layouts_rotate_when_template_has_static_preference() -> None:
+    """4 个章节页不能全用同一个静态偏好版式。"""
+    from app.application.ppt import ppt_engine
+
+    used = {}
+    chosen = []
+    for _ in range(4):
+        layout = ppt_engine.choose_layout(
+            {"type": "section", "title": "章节", "points": []},
+            {"section": "section.side"}, used=used)
+        chosen.append(layout)
+        used[layout] = used.get(layout, 0) + 1
+    assert chosen[0] == "section.side"       # 仍尊重模板静态偏好
+    assert len(set(chosen)) >= 2             # 但不再整篇复用

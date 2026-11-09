@@ -2794,6 +2794,15 @@ class PPTService:
         if not outline:
             raise AppError(400, "大纲为空")
         warnings: List[str] = []
+        # 材料里的 XX 占位、无来源的精确数值：渲染层已兜底不放大假数字，
+        # 这里把规则闸诊断回传给用户，明确「缺数据」而不是「生成失败」。
+        report = outline_gate.audit_outline(outline, d.source_content or "")
+        for issue in report["issues"]:
+            if issue.get("code") == "placeholder_value" and len(warnings) < 4:
+                warnings.append(issue["message"])
+        if report["stats"].get("placeholder_pages"):
+            logger.warning("[PPT] 大纲含占位数据：doc_id=%s pages=%d",
+                           d.id, report["stats"]["placeholder_pages"])
         self._render_and_store(d, outline, user, body.template_id, warnings=warnings)
         return {"message": "已生成", "warnings": warnings,
                 "download_url": f"/api/v1/ppt/documents/{d.id}/download"}

@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.llm_json import LLMJsonError, loads_lenient, truncate_for_log
 from app.core.logging import get_logger
-from app.application.ppt import adaptive_design
+from app.application.ppt import adaptive_design, outline_gate
 
 logger = get_logger(__name__)
 
@@ -562,9 +562,13 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                 if (stype == "content" and want in recent
                         and not slide.get("layout_locked")):
                     continue
-                # 模型没给意图时，模板静态偏好不锁版：整篇已用 2 次以上
-                # 就改走打分均衡，避免"每页都是同一版式"的模板感
-                if (not from_model and used.get(want, 0) >= 2
+                # 模型没给意图时，模板静态偏好不锁版：用满次数就改走打分均衡，
+                # 避免"每页都是同一版式"的模板感。章节/目录/封面这类装饰页
+                # 整篇会出现多次且没有内容差异可打分，用过一次即轮换；
+                # 正文页保留 2 次，让内容相近的页仍可沿用同一结构。
+                static_limit = (1 if stype in ("section", "toc", "cover", "closing")
+                                else 2)
+                if (not from_model and used.get(want, 0) >= static_limit
                         and not slide.get("layout_locked")):
                     continue
                 return want
@@ -694,7 +698,11 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 4. {count_rule}
 5. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
 6. 图片规则：仅当正文页内容与图片的画面说明明显相关时设置 image_id（必须取自可用图片清单），否则为 null；image_hint 用一句话说明本页希望呈现的画面。不要重复使用同一图片；
-7. 不要虚构材料中没有的事实和数据。
+7. 不要虚构材料中没有的事实和数据。材料出现 "XX""若干""待填" 等占位值时，不得把占位值
+   原样写入 blocks.cards[].value（会被渲染成大字指标卡），也不要为凑页型创建没有真实数值的
+   data/chart 页；缺数据时改用不带数字的定性表述。不得编造案例情节、办结天数或成果数字。
+   每页含数字、日期、精确时限或具体案例的，必须在 sources 字段标注所依据的材料名；
+   无材料清单或找不到依据时改写为定性表述，不写成确定成果。
 8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选。
 9. 每页增加 design：job 写读者看完本页应理解的结论，relationship 从
    none、comparison（对比）、parallel（并列）、grouped（分组）、takeaway（单一结论）中选。
@@ -791,7 +799,16 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             "（从清单中选择，可多选；确实无依据则为空数组）。\n"
             "凡含数字、日期、排名的内容必须标注来源；"
             "禁止使用清单之外的旧数据充当本次数据。")
+    else:
+        prompt += (
+            "\n\n【来源标注】本次未提供材料名清单。每页 slide 仍须包含 \"sources\" 字段"
+            "（无依据时写空数组）。没有可核对依据时，不得写具体数值、日期、办结天数、"
+            "案例过程与结果，只写定性表述；宁可少写数字，也不要把占位值当成成果。")
     raw = _call_outline_model(assistant, prompt, temperature=0.5)
+    # 验收可观测：以前只有「解析失败」才截断打印模型原文，正常生成时无从判断
+    # 35B 到底给了什么。这里留一份截断原文（内网日志，便于 grep OUTLINE_RAW）。
+    logger.info("[PPT][OUTLINE_RAW] 模型原始返回 len=%d\n%s",
+                len(raw or ""), truncate_for_log(raw or "", 4000))
     outline = _parse_outline(raw)
     if outline is None and _looks_truncated(raw):
         # 输出被 max_tokens 截断（常见于接入知识库材料后输入变长、
@@ -1929,6 +1946,15 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         points = [str(p) for p in (s.get("points") or [])]
         v = lay_of(s) or "cards"
         slide = prs.slides.add_slide(blank)
+        # 脱敏材料经模型后常变成四张「XXXX 件」大字卡。占位值不放大展示：
+        # 过滤成「数据待填」提示，并留 warning，绝不把假数字印进成稿。
+        raw_cards = list(cards)
+        cards = [c for c in cards if isinstance(c, dict)
+                 and str(c.get("value", "")).strip()
+                 and not outline_gate.PLACEHOLDER_RE.search(str(c.get("value", "")))]
+        if raw_cards and not cards and warnings is not None:
+            warnings.append("数据页指标值为占位或空值，未填入具体数字，"
+                            "请补充真实数据后重新生成")
 
         if v == "table" and table.get("rows"):
             page_header(slide, s["title"])
@@ -1970,6 +1996,13 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 rect(slide, lx(cx + cw / 2 - 0.02), ly(0.535), lx(0.04), ly(0.006), ACCENT)
                 text(slide, lx(cx), ly(0.555), lx(cw), ly(0.06), str(c.get("label", "")),
                      14, False, GRAY, align=PP_ALIGN.CENTER)
+        elif raw_cards:
+            rect(slide, lx(0.06), ly(0.34), lx(0.88), ly(0.26), LIGHT, round_=True)
+            text(slide, lx(0.10), ly(0.40), lx(0.80), ly(0.08), "数据待填", 24, True,
+                 PRIMARY, align=PP_ALIGN.CENTER)
+            text(slide, lx(0.10), ly(0.49), lx(0.80), ly(0.06),
+                 "材料未提供可核对的具体数值，请补充后重新生成", 14, False, GRAY,
+                 align=PP_ALIGN.CENTER)
         for j, p in enumerate(points[:3]):
             rect(slide, lx(0.065), ly(0.735 + j * 0.068), lx(0.010), lx(0.010), ACCENT)
             text(slide, lx(0.088), ly(0.72 + j * 0.068), lx(0.84), ly(0.06), p, 14, False, GRAY)

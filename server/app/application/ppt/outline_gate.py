@@ -6,11 +6,17 @@
 本模块补上「规则层」：无论模型表现如何，都能给出可观测的结构诊断，并把
 明显不合法的 ``layout`` 清掉，交回 ``choose_layout`` 自动选版。
 
+除结构外还查两类内容真实性问题（2026-11-09 真实验收：脱敏材料经 35B 后
+产出 4 张 ``XXXX 件`` 大指标卡，以及无来源的「3日内达成和解」案例）：
+- ``placeholder_value``：XX / 待填 / 若干等占位数据，成稿会印成大字；
+- ``unsourced_specific``：含具体数值、时限或结果但 ``sources`` 为空。
+
 设计约束（重要）：
 - 不新增/改写任何标题、要点、数字、来源；不删页、不擅自改页型。
 - 唯一的自动修复是清除与内容形态不符的显式 layout（等价于引擎原本的
   ``_layout_usable`` 降级，只是提前到大纲阶段并留下问题记录）。
-- 其余问题只进 ``issues``，交给模型定点修或管理员目检。
+- 其余问题只进 ``issues``，交给模型定点修或管理员目检；渲染层另行兜底，
+  占位数值不会被印成大字指标卡。
 """
 from __future__ import annotations
 
@@ -31,6 +37,16 @@ _TIME_HINT = re.compile(
     r"|\d{1,2}\s*月(?:启动|推进|完成|验收|前|底|份)?"
     r"|时间节点|下一步安排|分阶段)")
 
+# 脱敏/空白材料里的占位值。渲染层共用此正则，避免把 XXXX 放大成指标卡。
+PLACEHOLDER_RE = re.compile(
+    r"(?:X{2,}|ｘ{2,}|×{2,}|＿+|__+|待填|待补充|若干|暂无数据|待定|TBD)",
+    re.IGNORECASE)
+# 精确事实：数值 + 量词、精确日期、几日内办结等。命中且无 sources 时需人工复核。
+_SPECIFIC_FACT = re.compile(
+    r"(\d+(?:\.\d+)?\s*(?:%|件|人|人次|户|家|个|项|次|万元|亿元|日内|天内|个工作日)"
+    r"|20\d{2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"
+    r"|同比(?:增长|下降)\s*\d+|达\s*\d+\s*%)")
+
 _CHROME_TYPES = {"cover", "toc", "section", "closing"}
 _STRUCTURE_TYPES = {"data", "chart", "timeline", "process", "case"}
 
@@ -48,6 +64,36 @@ _LAYOUT_MAX_POINTS = {
 
 def _points(slide: Dict[str, Any]) -> List[str]:
     return [str(p).strip() for p in (slide.get("points") or []) if str(p).strip()]
+
+
+def _block_texts(slide: Dict[str, Any]) -> List[str]:
+    """把 blocks 里的指标值、表格单元格、时间轴/流程文字摊平成字符串列表。
+
+    占位数值最常出现在 ``blocks.cards[].value``（会被渲染成大字指标卡），
+    只看 ``points`` 会漏掉真实验收里最刺眼的那类问题。
+    """
+    blocks = slide.get("blocks") if isinstance(slide.get("blocks"), dict) else {}
+    out: List[str] = []
+    for key in ("cards", "timeline", "process", "steps", "items", "kpis"):
+        for item in blocks.get(key) or []:
+            if isinstance(item, dict):
+                out.extend(str(item.get(field) or "") for field in
+                           ("label", "value", "text", "time", "name", "title"))
+            elif item is not None:
+                out.append(str(item))
+    table = blocks.get("table") or {}
+    if isinstance(table, dict):
+        for row in table.get("rows") or []:
+            out.extend(str(cell) for cell in
+                       (row if isinstance(row, (list, tuple)) else [row]))
+        out.extend(str(cell) for cell in (table.get("headers") or []))
+    chart = blocks.get("chart") or {}
+    if isinstance(chart, dict):
+        out.extend(str(cell) for cell in (chart.get("categories") or []))
+        for series in chart.get("series") or []:
+            if isinstance(series, dict):
+                out.append(str(series.get("name") or ""))
+    return [value for value in out if value]
 
 
 def _shape(slide: Dict[str, Any]) -> Tuple:
@@ -111,6 +157,8 @@ def audit_outline(outline: Dict[str, Any],
                        "severity": "warn"})
 
     seen_titles: Dict[str, int] = {}
+    placeholder_pages = 0
+    unsourced_pages = 0
     for index, slide in enumerate(slides):
         page = index + 1
         title = re.sub(r"\s+", "", str(slide.get("title") or ""))
@@ -132,6 +180,29 @@ def audit_outline(outline: Dict[str, Any],
                 if any(word in p for word in _BOILERPLATE):
                     add("boilerplate", page, f"要点含空话或补位话术：{p[:24]}")
                     break
+
+        # 内容真实性：占位数值（含 blocks.cards[].value 的大字指标卡）与
+        # 无来源的精确事实。都只诊断，不改写；渲染层另有兜底。
+        texts = (pts + _block_texts(slide) +
+                 [str(slide.get("title") or ""), str(slide.get("subtitle") or "")])
+        placeholders = [value for value in texts if PLACEHOLDER_RE.search(value)]
+        if placeholders:
+            placeholder_pages += 1
+            add("placeholder_value", page,
+                f"含占位数据（{placeholders[0][:24]}），成稿会显示 XX/待填，"
+                "请补真实数据或改为定性表述")
+        sources = slide.get("sources")
+        has_sources = isinstance(sources, list) and any(
+            str(item).strip() for item in sources)
+        if not has_sources:
+            facts = [value for value in texts
+                     if _SPECIFIC_FACT.search(value) and not PLACEHOLDER_RE.search(value)]
+            if facts:
+                unsourced_pages += 1
+                if unsourced_pages <= 5:   # 避免整稿刷屏，统计里保留总数
+                    add("unsourced_specific", page,
+                        f"含具体数值/时限但 sources 为空：{facts[0][:24]}，"
+                        "请核对材料依据，不得写成确定成果")
 
         reason = _layout_conflict(slide)
         if reason:
@@ -190,6 +261,8 @@ def audit_outline(outline: Dict[str, Any],
             "has_structure_page": has_structure,
             "material_number_hits": number_hits,
             "material_time_hits": time_hits,
+            "placeholder_pages": placeholder_pages,
+            "unsourced_pages": unsourced_pages,
         },
         "outline": result,
     }
