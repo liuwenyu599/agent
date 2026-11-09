@@ -162,6 +162,25 @@ def _groups(boxes: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def _band_covered(out: list, x: float, y: float) -> bool:
+    """该列顶端是否已经有一条色带（避免同一位置叠两条，成稿看着像双线）。
+
+    ``grouped`` 分组自带顶端色带，motif 再按列补一条就会错位重叠：一条比卡片
+    略窄、一条略宽，投影上是「一条线旁边挂了一小截」的廉价感。
+    """
+    for item in out:
+        if item.get("kind") not in ("rect", "gradient", "chevron"):
+            continue
+        if float(item.get("h", 1)) >= .02:      # 卡片本体不算色带
+            continue
+        if abs(float(item.get("y", 0)) - y) > .03:
+            continue
+        left, right = float(item["x"]), float(item["x"]) + float(item["w"])
+        if left <= x + .012 and right >= x + .012:
+            return True
+    return False
+
+
 def _layout_motif(out: list, scene: dict) -> list:
     """按版式补一组骨架形状，让同关系多页不只是「换列数」。
 
@@ -187,6 +206,8 @@ def _layout_motif(out: list, scene: dict) -> list:
             column_boxes = [b for b in boxes if abs(b["x"] - x) <= .01]
             width = min(b["w"] for b in column_boxes)
             band_y = max(.02, min(b["y"] for b in column_boxes) - .018)
+            if _band_covered(out, x, band_y):
+                continue
             add.append(_box(x, band_y, width, .006, kind="rect",
                             fill=("primary", "accent", "primary", "accent")[i % 4],
                             alpha=70))
@@ -248,9 +269,16 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
         top = min(b["y"] for b in boxes)
         bottom = max(b["y"] + b["h"] for b in boxes)
         axis = (min(b["x"] for b in boxes) + max(b["x"] + b["w"] for b in boxes)) / 2
-        out.append(_line(axis, top - .012, axis, bottom + .012,
-                         stroke="line", width=1.5))
-        out.append(_disc(axis, (top + bottom) / 2, .030, fill="primary"))
+        # 中轴只有在「左右两栏之间有缝」时才是对照线。整页竖排的三条要点也被
+        # 归为 comparison，旧逻辑会在正中间拉一条竖线 + 一个圆点，正好压在正文
+        # 上（用户 2026-11-09 第三次反馈「线穿过文字」就是这么来的）。
+        columns = {round(b["x"], 3) for b in boxes}
+        gutter = len(columns) >= 2 and not any(
+            b["x"] + .012 < axis < b["x"] + b["w"] - .012 for b in boxes)
+        if gutter:
+            out.append(_line(axis, top - .012, axis, bottom + .012,
+                             stroke="line", width=1.5))
+            out.append(_disc(axis, (top + bottom) / 2, .030, fill="primary"))
         for index, box in enumerate(ordered[:2]):
             fill = "primary" if index == 0 else "accent"
             out.append(_card(box, fill=fill, alpha=11))
@@ -265,7 +293,8 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             fill = "primary" if index % 2 == 0 else "accent"
             out.append(_card(box))
             # 并行步骤用 chevron 顶条代替普通色带，形成明确的推进方向。
-            out.append(_box(box["x"], box["y"] - .018, box["w"] * .96, .014,
+            # 宽度与卡片同宽：留 4% 缩进会让色带右端比卡片短一截，看着像没对齐。
+            out.append(_box(box["x"], box["y"] - .018, box["w"], .014,
                             kind="chevron", fill=fill, alpha=85))
             out.append(_badge(box, index, fill))
         return _layout_motif(out, scene)
@@ -274,12 +303,12 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
         serial = 0
         for gi, group in enumerate(_groups(ordered)):
             fill = "primary" if gi % 2 == 0 else "accent"
-            gx = min(b["x"] for b in group)
-            gw = max(b["x"] + b["w"] for b in group) - gx
-            out.append(_box(gx, group[0]["y"] - .020, gw, .010,
-                            kind="rect", fill=fill, alpha=60))
+            # 一条横贯整行的色带会让三列卡片像挂在同一根晾衣绳上（用户看到的是
+            # 「一条多余的横线」）；改成每张卡片顶端各一条自己的色带。
             for box in group:
                 out.append(_card(box))
+                out.append(_box(box["x"], box["y"] - .020, box["w"], .008,
+                                kind="rect", fill=fill, alpha=70))
                 out.append(_box(box["x"], box["y"], .006, box["h"],
                                 kind="rect", fill=fill))
                 out.append(_badge(box, serial, fill))

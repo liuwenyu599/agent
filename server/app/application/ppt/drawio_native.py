@@ -238,7 +238,7 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         effects.append(shadow)
         sp_pr.append(effects)
 
-    def put_text(shape, value, style):
+    def put_text(shape, value, style, kind: str = ""):
         shape.text_frame.text = value
         shape.text_frame.word_wrap = True
         shape.text_frame.vertical_anchor = {
@@ -251,6 +251,20 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
         except (TypeError, ValueError):
             font_size = 14
         font_size = max(8, min(font_size, 32))
+        if kind == "rhombus":
+            # 菱形的可写区只有外接矩形的中间约一半，14pt 下四个字一行必被挤断
+            # （实机成稿出现「需求评 / 估」竖排断字）。先清掉默认 0.1 英寸内边距，
+            # 再按最长一行反推可用字号，宁可小 1–2pt 也不能断字。
+            for side in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
+                try:
+                    setattr(shape.text_frame, side, 0)
+                except Exception:
+                    pass
+            inner = shape.width / 914400 * .46
+            lines = [ln for ln in str(value).split("\n") if ln.strip()] or [""]
+            need = max(len(ln) for ln in lines) * font_size / 72 * 1.04
+            if need > inner:
+                font_size = max(9.0, font_size * inner / need)
         try:
             font_style = int(style.get("fontStyle", 0))
         except (TypeError, ValueError):
@@ -299,13 +313,34 @@ def render_diagram(slide, xml: str, left: int, top: int, width: int, height: int
             shape.line.width = line_width(style)
             if style.get("shadow") == "1":
                 add_shadow(shape)
-        put_text(shape, node["label"], style)
+        put_text(shape, node["label"], style, node["kind"])
         rendered[node["id"]] = shape
     for edge in diagram["edges"]:
         source, target = rendered[edge["source"]], rendered[edge["target"]]
-        horizontal = abs(target.left - source.left) >= abs(target.top - source.top)
-        start_site, end_site = ((3, 1) if target.left >= source.left else (1, 3)) if horizontal else (
-            (2, 0) if target.top >= source.top else (0, 2))
+        # 连接点必须按「两个框的实际间隙」选，不能只看中心偏移：中心略偏右的
+        # 下层节点也会被判成左→右，折线于是先右后左地绕一圈，横段还从旁边的
+        # 框里穿过去（实机成稿「中端调解」文字上压着一条竖线就是这样来的）。
+        l1, t1 = source.left, source.top
+        r1, b1 = l1 + source.width, t1 + source.height
+        l2, t2 = target.left, target.top
+        r2, b2 = l2 + target.width, t2 + target.height
+        gap = max(2, int(min(source.width, target.width) * .02))
+        clear_v = b1 <= t2 + gap or b2 <= t1 + gap
+        clear_h = r1 <= l2 + gap or r2 <= l1 + gap
+        overlap_y = min(b1, b2) - max(t1, t2) > gap
+        overlap_x = min(r1, r2) - max(l1, l2) > gap
+        if clear_v and not (clear_h and overlap_y):
+            vertical = True
+        elif clear_h:
+            vertical = False
+        else:
+            vertical = clear_v or not overlap_x
+        dx = (l2 + target.width / 2) - (l1 + source.width / 2)
+        dy = (t2 + target.height / 2) - (t1 + source.height / 2)
+        if vertical:
+            start_site, end_site = (2, 0) if dy >= 0 else (0, 2)
+        else:
+            start_site, end_site = (3, 1) if dx >= 0 else (1, 3)
         connector = slide.shapes.add_connector(MSO_CONNECTOR.ELBOW, 0, 0, 1, 1)
         connector.begin_connect(source, start_site)
         connector.end_connect(target, end_site)
