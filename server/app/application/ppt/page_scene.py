@@ -136,6 +136,15 @@ def _compose_points(variant: str, n: int, image: bool,
         return [{"ref": f"point:{i}", "x": .055 + i * .49, "y": .32,
                  "w": .40, "h": .40} for i in range(n)]
     if family == "mirror" and n > 2:
+        # 三点对称页不再「上二下一、末条横跨整行」：一张 28 字的句子铺满整行
+        # 会变成半页空白，且与 icon_grid 的 2+1 撞脸（用户 2026-11-09 说
+        # 「还是同质化」就是这页）。改成三列等宽，靠装饰层的数字水印与卡片
+        # 网格区分，不再靠几何硬凑。
+        if n == 3:
+            gap = .05
+            width = (.89 - gap * 2) / 3
+            return [{"ref": f"point:{i}", "x": .055 + i * (width + gap),
+                     "y": .30, "w": width, "h": .50} for i in range(3)]
         # 多点对称：交错双栏，右列整体下移，避免与 two_col 的规整网格撞脸。
         gap, rows = .045, math.ceil(n / 2)
         w = (.89 - gap) / 2
@@ -144,11 +153,6 @@ def _compose_points(variant: str, n: int, image: bool,
                   "x": .055 + (i % 2) * (w + gap),
                   "y": .245 + (i // 2) * (h + .03) + (i % 2) * .04,
                   "w": w, "h": h} for i in range(n)]
-        # 三点时最后一张横跨整行：否则右下角空出一个卡片大小的洞，整页读作
-        # 「内容没排完」（三条要点的对照页实测就是这样）。y 要顺到右列底部
-        # 之下，否则横跨卡会压住右列下移的那张。
-        if n == 3:
-            boxes[-1].update({"x": .055, "w": .89, "y": .245 + h + .065})
         return boxes
     if family == "statement" and n <= 4:
         # 居中大结论 + 其余要点下方横排；单点时就是整页一句大字。
@@ -184,6 +188,10 @@ def _compose_points(variant: str, n: int, image: bool,
     # 保留三列：4 条要点时末条通栏，是 three_cards 与 two_col / symmetric
     # 的关键几何差异（选版要能区分它们）。目录页的 2×2 另有 r_toc 处理。
     columns = 3 if variant in ("three_cards", "cards") else min(2, n)
+    # 图标网格三条要点本来就该三列并排；落到两列会变成「上二下一」，
+    # 和对称页/双栏页看不出区别。
+    if variant == "icon_grid" and n == 3:
+        columns = 3
     rows = math.ceil(n / columns)
     gap = .035
     width = (.89 - gap * (columns - 1)) / columns
@@ -246,9 +254,67 @@ def plan(slide: dict, layout: str) -> dict | None:
         comparison=(design.get("relationship") == "comparison")))
     if image:
         elements.append({"ref": "image", "x": .58, "y": .245, "w": .365, "h": .60})
+    # 两点对照（窄高框 + 中央留白）与单点大结论（整页一句大字）是专门设计的
+    # 几何，不参与"按内容收紧 + 居中"——收紧会把对照页压成两块小框浮在中间，
+    # 骨架感就没了。
+    is_two_way_compare = (n == 2 and design.get("relationship") == "comparison"
+                          and not image)
+    is_single_statement = (variant == "statement" and n == 1)
     if not audit(elements, slide):
         return None
+    if not (is_two_way_compare or is_single_statement):
+        _tighten(elements, slide, points)
     return scene_from(elements)
+
+
+def _tighten(elements: list, slide: dict, points: list) -> list:
+    """按文字实际行数收紧正文块，整组在正文区垂直居中。
+
+    排版器把正文框按格子平分（三卡页每卡占 56% 页高），但一条要点常常只有
+    两三行，卡片上下各空一大块，读起来像「框没用完」——这是用户说的
+    「同质化」里最刺眼的一层：每页都是几个大空块。收紧只缩小、不放大，
+    字号沿用 audit 回填的结果，所以不会把字挤爆。
+    """
+    rows: list[list[dict]] = []
+    for item in elements:
+        ref = str(item.get("ref", ""))
+        if not ref.startswith("point:"):
+            continue
+        try:
+            text = str(points[int(ref.split(":", 1)[1])])
+        except (ValueError, IndexError):
+            continue
+        size = float(item.get("font_pt") or 18)
+        inner = max(.05, item["w"] - .04) * 960          # 内宽（磅）
+        per_line = max(4, int(inner / max(1.0, size)))   # 一行约放多少个汉字
+        lines = max(1, math.ceil(len(text) / per_line))
+        need = min(item["h"], lines * size * 1.34 / 540 + .05)
+        # 下限保证卡片有呼吸感，上限避免「一句话一张大卡」；真正的目标是
+        # 让框高跟着内容走，而不是每页都撑成同样的几个大块。
+        item["_need"] = min(.44, max(.30, need))
+        for group in rows:
+            if abs(group[0]["y"] - item["y"]) < .02:
+                group.append(item)
+                break
+        else:
+            rows.append([item])
+    if not rows:
+        return elements
+    rows.sort(key=lambda g: min(i["y"] for i in g))
+    gap = .035
+    total = sum(max(i["_need"] for i in g) for g in rows) + gap * (len(rows) - 1)
+    # 整组在正文区 .245–.86 内垂直居中：单排顶对齐会在下方空出半页，
+    # 上下对称的留白才读作「排完了」。超过可用高度就保持原样（不压字）。
+    if total > .86 - .245:
+        return elements
+    y = .245 + (.86 - .245 - total) / 2
+    for group in rows:
+        height = max(i["_need"] for i in group)
+        for item in group:
+            item["y"] = round(y, 4)
+            item["h"] = round(height, 4)
+        y += height + gap
+    return elements
 
 
 def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:

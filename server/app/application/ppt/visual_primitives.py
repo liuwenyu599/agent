@@ -200,8 +200,7 @@ def _layout_motif(out: list, scene: dict) -> list:
     # 色条必须对齐真实列，且跟着该列的实际顶部走：mirror（上下错落）布局里
     # 两列起点相差 4%，统一钉在 rule_y 会让右列色条悬空在卡片外 0.08 处。
     columns = sorted({round(b["x"], 3) for b in boxes})[:4]
-    if variant in ("two_col", "compare", "symmetric", "icon_grid",
-                   "three_cards", "cards"):
+    if variant in ("two_col", "compare", "three_cards", "cards"):
         for i, x in enumerate(columns):
             column_boxes = [b for b in boxes if abs(b["x"] - x) <= .01]
             width = min(b["w"] for b in column_boxes)
@@ -281,13 +280,49 @@ def decorations(scene: dict, slide: dict) -> list[dict]:
             out.append(_line(axis, top - .012, axis, bottom + .012,
                              stroke="line", width=1.5))
             out.append(_disc(axis, (top + bottom) / 2, .030, fill="primary"))
+        # 双色卡片只属于「真的左右对照」（两条）。三点并列被归为 comparison
+        # 时，前两张一绿一棕、第三张又是浅底，读起来像三种不同的卡（用户
+        # 2026-11-09 截图第 4 页就是这个）。并列一律同一种浅底卡。
+        dual = len(boxes) == 2
         for index, box in enumerate(ordered[:2]):
-            fill = "primary" if index == 0 else "accent"
-            out.append(_card(box, fill=fill, alpha=11))
+            if dual:
+                fill = "primary" if index == 0 else "accent"
+                out.append(_card(box, fill=fill, alpha=11))
+            else:
+                fill = "primary"
+                out.append(_card(box))
             out.append(_badge(box, index, fill))
         for index, box in enumerate(ordered[2:], 2):
             out.append(_card(box))
             out.append(_badge(box, index, "primary" if index % 2 == 0 else "accent"))
+        return _layout_motif(out, scene)
+
+    # 同一关系下不同版式必须长成不同的东西，否则「换版式」只是换列数，
+    # 读者看到的还是一排浅底块（用户 2026-11-09「现在还是同质化」）。
+    # icon_grid / symmetric 单独一套无卡片语言：白底文字 + 只留序号或题头。
+    variant = str((scene or {}).get("layout") or "").rsplit(".", 1)[-1]
+    if variant == "icon_grid":
+        # 极简三栏：不铺卡片、不放序号，只留三列文字本身。卡片页已经很多了，
+        # 这一页的作用就是"什么都不加"，让整稿有呼吸。
+        return _layout_motif(out, scene)
+
+    if variant == "symmetric":
+        # 引用块：左侧一条竖色线，不封口（早先"顶横线 + 左竖线"读作画了一半
+        # 的边框，像没渲染完）。线长取框高的六成并居中，否则竖线上下各伸出
+        # 一大截，比文字还高，看着像栏线而不是引用符。
+        for index, box in enumerate(ordered):
+            fill = "primary" if index % 2 == 0 else "accent"
+            bar = box["h"] * .60
+            out.append(_box(box["x"] - .014, box["y"] + (box["h"] - bar) / 2,
+                            .006, bar, kind="rect", fill=fill, alpha=85))
+        return _layout_motif(out, scene)
+
+    if variant in ("center", "statement", "quote"):
+        # 结论式版式：一段段并列的结论，不铺卡片；每块只留一条短题头。
+        for index, box in enumerate(ordered):
+            fill = "primary" if index % 2 == 0 else "accent"
+            out.append(_box(box["x"], box["y"], .045, .007, kind="rect",
+                            fill=fill, alpha=90))
         return _layout_motif(out, scene)
 
     if rel == "parallel":

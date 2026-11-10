@@ -556,8 +556,12 @@ _RULE_LAYOUT_POOL: Dict[str, List[str]] = {
                    "content.two_col"],
     "parallel": ["content.bullets", "content.three_cards", "content.symmetric",
                  "content.icon_grid"],
+    # 这里曾经写着 content.cards / content.mirror——两个在 LAYOUT_CATALOG 里
+    # 根本不存在的 id，等于池子里有两个永远选不中的空位。grouped 页换族时
+    # 只剩 icon_grid 一个候选，于是连着三页都落回三列卡片（用户 2026-11-09
+    # 「现在还是同质化」）。池子里的 id 必须和 catalog 一一对得上。
     "grouped": ["content.bullets", "content.icon_grid", "content.three_cards",
-                "content.cards", "content.mirror"],
+                "content.symmetric"],
     "takeaway": ["content.statement", "content.bullets", "content.symmetric",
                  "content.center"],
 }
