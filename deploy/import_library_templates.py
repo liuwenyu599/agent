@@ -74,6 +74,10 @@ def main() -> None:
             use_count=row.get("use_count") or 0,
         )
         db.add(m)
+        # 空环境（新装服务、独立卷）里这两个目录可能还不存在；不先建目录会
+        # 在 db.add 之后抛 FileNotFoundError，事务虽回滚但导入整体失败。
+        (ppt_dir / "tpl_src").mkdir(parents=True, exist_ok=True)
+        (ppt_dir / "tpl_prev").mkdir(parents=True, exist_ok=True)
         shutil.copy2(base, ppt_dir / "tpl_src" / f"{row['id']}.pptx")
         prev_src = export / "tpl_prev" / row["id"]
         if prev_src.exists():
