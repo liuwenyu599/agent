@@ -110,7 +110,10 @@ def test_unselected_template_photo_cannot_become_generated_content():
     assert not any(shape.shape_type == 13 for shape in slide.shapes)
     assert "明确职责与时限" in " ".join(
         shape.text for shape in slide.shapes if shape.has_text_frame)
-    assert any("可读版式" in warning for warning in warnings)
+    # 2026-11-10 起不再强制退回可读版式：示例照片能被精确删掉之后，这一页
+    # 继续用模板自己的版式（用户要求「把他们的模板用起来」）。守卫点仍是
+    # 「模板的示例照片不能变成成稿内容」，不是「必须退化」。
+    assert warnings == [] or not any("示例图片未替换" in w for w in warnings)
 
 
 def test_picture_fill_inside_rectangle_is_an_example_photo():

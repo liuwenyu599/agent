@@ -4491,6 +4491,15 @@ def _rank_layouts(layouts: list, slide: Dict, used: Dict,
         scored = score_layouts(borrow=True)
     if not scored:
         return []
+    # 同一套模板里，作者常从别处粘几页"外来插页"（白底 + 另配色，无页脚装饰）。
+    # 它们容量分数可能最高（横幅大、槽少），插进成品就是全书视觉断裂——
+    # 用户看到的"这页跟前面不是一套"多半是这么来的。只在模板确实存在带固定
+    # 装饰的版式时才排除外来页；一个都没有就照常按分选。
+    def decorated(layout_obj) -> bool:
+        return any(element.get("role") == "fixed" and element.get("kind") == "picture"
+                   for element in layout_obj.get("element_schema") or [])
+    if any(decorated(item[4]) for item in scored):
+        scored = [item for item in scored if decorated(item[4])]
     scored.sort(key=lambda item: (-item[0], item[2], item[3]))
     best = scored[0][0]
     pool = [item for item in scored if item[0] >= best - 0.2]
@@ -4586,6 +4595,29 @@ def _element_is_image_slot(element: Dict) -> bool:
             and element.get("y", 0) + element.get("h", 0) <= .92)
 
 
+def _title_box(element: Dict, texts: list) -> tuple:
+    """标题槽的安全扩容宽度。
+
+    模板的标题槽常按三五个字设计（0.28×0.09 这类），政务稿标题十几个字，
+    按原槽判容量会把 35 个版式里的 11 个直接判死，只剩一个"异类插页"能用。
+    标题槽右侧通常是空白，扩到"不压住任何同级文本槽、不出右边界"为止；
+    容量判据与填充期必须用同一套几何，否则闸门放行的页填充时仍会溢出。
+    """
+    x, w = element["x"], element["w"]
+    y, h = element["y"], element["h"]
+    right = .95
+    for other in texts:
+        if other is element:
+            continue
+        oy, oh = other.get("y", 0), other.get("h", 0)
+        if oy + oh <= y + .01 or oy >= y + h - .01:
+            continue            # 纵向不重叠，可以横穿
+        other_x = other.get("x", 1)
+        if other_x > x + w:
+            right = min(right, other_x - .012)
+    return max(w, right - x), h
+
+
 def _layout_fit_score(layout: Dict, slide: Dict,
                       borrow: bool = False) -> Optional[float]:
     """该版式装这页内容的复用质量分：1.0=不用缩号，越小越勉强，None=装不下。
@@ -4628,15 +4660,27 @@ def _layout_fit_score(layout: Dict, slide: Dict,
     if (has_image and not image_slots and
             kind not in {"cover", "toc", "section", "closing"}):
         return reject("用户已选图片，但此版式没有安全配图区")
+    image_missing = False
     if kind not in {"cover", "section", "closing"} and not has_image and any(
             (element.get("kind") == "picture" and element.get("role") != "fixed")
             or element.get("image_fill")
             for element in image_slots):
-        return reject("正文图像槽缺少本次素材图")
+        # 模板正文页大多带示例照片槽（本单位活动的实景照）。没有本次素材图时
+        # 直接枪毙的话，35 个版式只剩 1 个可用——14 个正文版式里 9 个带图槽，
+        # 全被判死，"模板的多套版式轮换"就无从谈起，成品只能千页一面。
+        # 改为允许使用：填充期把示例照片槽删掉（不留别人活动的照片），
+        # 分数上扣一档，让不带图槽的版式优先。
+        image_missing = True
+
+    # 与封面共用页脚/页眉装饰的版式，才是模板那一套视觉；没有固定装饰的
+    # 页面（常见于模板作者从别处粘进来的插页）留着会与全书割裂。
+    decorated = any(
+        element.get("role") == "fixed" and element.get("kind") == "picture"
+        for element in layout.get("element_schema") or [])
 
     def done(value: float) -> float:
         """Keep the fit score explicit for later layout-specific adjustments."""
-        return value
+        return value - (.12 if image_missing else 0.0) + (.08 if decorated else 0.0)
     title_slot = next((element for element in texts
                        if "title" in (element.get("placeholder_keys") or [])), None)
     if title_slot is None:
@@ -4670,7 +4714,7 @@ def _layout_fit_score(layout: Dict, slide: Dict,
     # 下限放宽到 0.3；正文页保持 0.55（缩过半主次关系就崩了）。
     min_ratio = MIN_SHRINK_RATIO if kind not in {"toc", "section", "closing"} else 0.3
 
-    def rate(element: Dict, values) -> Optional[float]:
+    def rate(element: Dict, values, floor: Optional[float] = None) -> Optional[float]:
         """该槽装下 values 需缩到原字号的几成；缩过头视为装不下。"""
         orig = max(14.0, element.get("font_size") or 18)
         box_w, box_h = _circle_text_box(element, deck_w, deck_h)
@@ -4683,9 +4727,14 @@ def _layout_fit_score(layout: Dict, slide: Dict,
         # 「物理装得下」，三行小字挤在圆里也是叠压灾难——必须几乎不缩号才可用。
         if _slot_is_circle(element, deck_w, deck_h) and ratio < 0.85:
             return None
-        return ratio if ratio >= min_ratio else None
+        return ratio if ratio >= (floor or min_ratio) else None
 
-    title_score = rate(title_slot, [str(slide.get("title") or "")])
+    # 标题槽比正文槽宽得多，能容忍更大比例缩号：政务标题十几二十字，模板
+    # 的标题槽往往是给四五个字设计的。卡 0.72 会把 11 个模板正文页判死，
+    # 只剩一个"异类插页"能用，成品自然千页一面。
+    tw, th = _title_box(title_slot, texts)
+    title_score = rate({**title_slot, "w": tw, "h": th},
+                       [str(slide.get("title") or "")], floor=.5)
     if title_score is None:
         return reject(f"标题装不下（槽 {title_slot['w']:.2f}×{title_slot['h']:.2f}）")
     scores = [title_score]
@@ -5401,6 +5450,11 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         role = role_of(e)
         kind = e["kind"]
         if role == "fixed":
+            # 标成 fixed 的通常是底纹/logo，但不少模板把整块示例照片也标成
+            # fixed。示例照片留在正文页会被读成"这是本次活动的照片"，
+            # 必须按图片槽处理（无本次素材图时删掉）。
+            if kind == "picture" and _is_example_photo(slide, shp):
+                pics.append((shp, e))
             continue
         if kind == "text":
             texts.append((shp, e))
@@ -5633,8 +5687,6 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
             warnings.append(
                 f"「{title or '本页'}」正文在模板文本框中缩号后仍放不下"
                 f"（{'、'.join(unfit_texts[:3])}…），该页需改用可读版式")
-    return bool(unfit_texts)
-
 
     # 选图落位：只在真正的配图区插（页脚细条、整页底图、贴边装饰都排除），
     # 并按长宽比贴近程度挑一个，避免把竖图塞进横条里压成薄片。
@@ -5672,10 +5724,17 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
                 continue
             except Exception as exc:
                 logger.warning("配图插入失败: %s", exc)
+        # 没选素材图时，模板自带的照片一律清掉：只有贴顶/贴底的页眉页脚装饰
+        # 才算模板视觉的一部分。原先用 _is_example_photo 判"是不是照片"，
+        # 少量纯色/矢量风格的示例图会被漏判，成品里留下与本次工作无关的照片。
+        top_ratio = e.get("y", 0)
+        bottom_ratio = top_ratio + e.get("h", 0)
+        # 页脚建筑往往从 0.55 就开始，别把阈值卡到 .94/.55 这么死——
+        # 判错的代价是整本丢了页脚装饰，比留一张示例照片严重得多。
+        templated_chrome = (top_ratio < .10 and top_ratio + e.get("h", 0) <= .45) \
+            or (bottom_ratio > .90 and top_ratio > .40)
         if not is_cover and e.get("w", 0) * e.get("h", 0) >= .08 \
-                and _is_example_photo(slide, shp):
-            # Unreplaced example photos are not facts about the current topic;
-            # flat vector artwork is part of the template's design and stays.
+                and not templated_chrome:
             _delete_shape(shp, prune=True)
             # 大块示例照片删掉后会留一个空洞，观感像排版事故；
             # 补一块主色浅底圆角卡片占位，用户选了图时这块会被真图替换。
@@ -5702,6 +5761,7 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         if texts and len(texts) > 1:
             shp, e = texts[1]
             _fill_text_region(shp, points + [f"（图表数据：{names}）"] if points else [f"（图表数据：{names}）"])
+    return bool(unfit_texts)
 
 
 def _fill_basic_page(slide, sdata: Dict, colors: Dict, font: str, sw: int, sh: int) -> None:
@@ -5745,6 +5805,88 @@ def _fill_basic_page(slide, sdata: Dict, colors: Dict, font: str, sw: int, sh: i
                 run.font.color.rgb = dark
 
 
+def _shape_plain_text(shape) -> str:
+    try:
+        if shape.has_text_frame:
+            return shape.text_frame.text.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _group_has_text(group) -> bool:
+    try:
+        children = list(group.shapes)
+    except Exception:
+        return False
+    return any(_shape_plain_text(child) or
+               (getattr(child, "shape_type", None) == 6 and _group_has_text(child))
+               for child in children)
+
+
+def _keep_template_decorations(slide, sw: int, sh: int):
+    """删掉模板页的示例文字/示例照片，保留装饰形状。
+
+    返回文字可用区的上下边界（页高比例）。兜底页此前把模板形状全删、再盖
+    一张纯白板，整本只剩封面目录有模板味，正文页全成白板自绘——这既是
+    「同质化」也是「模板没用起来」的来源。模板真正值钱的是底色、页脚
+    建筑、红色装饰这些视觉语言，把它们留住、文字绕开排，才算"用他们的
+    模板"。
+    """
+    top_marks: list = []
+    bottom_marks: list = []
+    for shape in list(slide.shapes):
+        text = _shape_plain_text(shape)
+        is_group = getattr(shape, "shape_type", None) == 6
+        if is_group and not text:
+            text = "" if not _group_has_text(shape) else "x"
+        if text:
+            # 示例标题/要点文字：位置留给新内容，形状一并删（原位会重画）
+            _delete_shape(shape)
+            continue
+        keep = True
+        is_picture = getattr(shape, "shape_type", None) == 13
+        has_blip = False
+        try:
+            has_blip = bool(shape._element.xpath(".//a:blip"))
+        except Exception:
+            has_blip = False
+        if is_picture or has_blip:
+            # 图片、以及"图片填充的自选图形"（异形框 + a:blip，模板里常用来
+            # 摆示例照片）都要按示例照片处理：只留贴顶/贴底的页眉页脚装饰，
+            # 其余留在正文页上会被读成"这是本次活动的照片"。
+            try:
+                top = shape.top / sh
+                bottom = (shape.top + shape.height) / sh
+            except TypeError:
+                # 拿不到几何（占位符/继承位置）时按示例照片处理，删掉更安全：
+                # 留一张说不清出处的照片，比少一张装饰严重得多。
+                top, bottom = .5, .5
+            decorative = ((top < .06 and bottom < .40) or
+                          (bottom > .94 and top > .55))
+            if not decorative:
+                keep = False
+        if not keep:
+            _delete_shape(shape)
+            continue
+        try:
+            top = shape.top / sh
+            bottom = (shape.top + shape.height) / sh
+        except TypeError:
+            continue
+        # 贴顶/贴底的窄装饰（页脚建筑、页眉飘带）才参与可用区计算；
+        # 占满整页的背景大图不收缩文字区。
+        if top < .06 and bottom < .40:
+            top_marks.append(bottom)
+        elif bottom > .94 and top > .55:
+            bottom_marks.append(top)
+    top_limit = max([.12] + [value + .015 for value in top_marks])
+    bottom_limit = min([.89] + [value - .015 for value in bottom_marks])
+    if bottom_limit - top_limit < .35:
+        return .12, .89
+    return top_limit, bottom_limit
+
+
 def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                                  font: str, sw: int, sh: int,
                                  warnings: Optional[List[str]] = None) -> None:
@@ -5755,8 +5897,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     from pptx.util import Pt
     from app.application.ppt.adaptive_design import point_rows
 
-    for shape in list(slide.shapes):
-        _delete_shape(shape)
+    body_top, body_bottom = _keep_template_decorations(slide, sw, sh)
     def readable_color(value: str) -> RGBColor:
         channels = [int(value[index:index + 2], 16) for index in (0, 2, 4)]
         # Source themes sometimes use pale gray for decorative labels. On a
@@ -5775,17 +5916,32 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     dark = readable_color(colors.get("dark", "15365D"))
     white = RGBColor(255, 255, 255)
 
+    # 正文区上下界：模板贴顶/贴底装饰保留后，文字要缩进它们之间。
+    # 兜底排版内部按 .12~.89 这套坐标写死，这里做一次纵向映射，
+    # 不必逐个分支改常量。
+    region = {"on": False, "top": body_top, "bottom": body_bottom}
+
+    def my(y):
+        if not region["on"]:
+            return y
+        return region["top"] + (y - .12) * (region["bottom"] - region["top"]) / (.89 - .12)
+
+    def mh(h):
+        if not region["on"]:
+            return h
+        return h * (region["bottom"] - region["top"]) / (.89 - .12)
+
     def box(x, y, w, h, fill):
         shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
-            int(sw * x), int(sh * y), int(sw * w), int(sh * h))
+            int(sw * x), int(sh * my(y)), int(sw * w), int(sh * mh(h)))
         shape.fill.solid()
         shape.fill.fore_color.rgb = fill
         shape.line.fill.background()
         return shape
 
     def label(value, x, y, w, h, size, bold=False, color=dark, align=None):
-        shape = slide.shapes.add_textbox(int(sw * x), int(sh * y),
-                                         int(sw * w), int(sh * h))
+        shape = slide.shapes.add_textbox(int(sw * x), int(sh * my(y)),
+                                         int(sw * w), int(sh * mh(h)))
         shape.text_frame.word_wrap = True
         shape.text_frame.margin_left = shape.text_frame.margin_right = 0
         paragraph = shape.text_frame.paragraphs[0]
@@ -5808,7 +5964,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
 
     def circle(x, y, d, fill):
         shape = slide.shapes.add_shape(MSO_SHAPE.OVAL,
-            int(sw * x), int(sh * y), int(sw * d), int(sw * d))
+            int(sw * x), int(sh * my(y)), int(sw * d), int(sw * d))
         shape.fill.solid()
         shape.fill.fore_color.rgb = fill
         shape.line.fill.background()
@@ -5817,7 +5973,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     def card(x, y, w, h, fill, rounded=True):
         shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE
         shape = slide.shapes.add_shape(shape_type,
-            int(sw * x), int(sh * y), int(sw * w), int(sh * h))
+            int(sw * x), int(sh * my(y)), int(sw * w), int(sh * mh(h)))
         if rounded:
             try:
                 shape.adjustments[0] = .08
@@ -5831,7 +5987,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     def badge(number, x, y, d, fill, size=15):
         """圆形序号徽章 + 居中白字。"""
         circle(x, y, d, fill)
-        shape = slide.shapes.add_textbox(int(sw * x), int(sh * y),
+        shape = slide.shapes.add_textbox(int(sw * x), int(sh * my(y)),
                                          int(sw * d), int(sw * d))
         frame = shape.text_frame
         frame.word_wrap = False
@@ -5862,7 +6018,9 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
             size -= 1
         return size
 
-    box(.055, .12, .89, .77, white)
+    # 有保留的模板装饰时不盖整页白底：模板的米色底、页脚建筑才留得住。
+    if body_top <= .121 and body_bottom >= .889:
+        box(.055, .12, .89, .77, white)
     longest = max((len(str(point)) for point in points), default=0)
     count = len(points)
 
@@ -5892,6 +6050,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         label(title, .22, .415, .62, .13, 32, True, white, PP_ALIGN.CENTER)
         return
 
+    region["on"] = True
     label(sdata.get("title") or "", .105, .19, .78, .12, 30, True, dark)
     box(.105, .325, .79, .004, primary)
 
