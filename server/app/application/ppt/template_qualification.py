@@ -36,7 +36,7 @@ def _slot_contract(layout: dict) -> list[dict]:
     return budget[0]["slots"] if budget else []
 
 
-def _source_issues(layout: dict) -> list[str]:
+def _source_issues(layout: dict, primary: str = "") -> list[str]:
     """Reject defects that content fitting cannot repair."""
     issues = []
     elements = [item for item in layout.get("element_schema") or []
@@ -63,6 +63,8 @@ def _source_issues(layout: dict) -> list[str]:
                 issues.append("标题槽可能误识别为正文数字或卡片")
     if layout.get("detected_type") not in _SPECIAL and not _content_slots(layout):
         issues.append("缺少可编辑正文区域")
+    if primary and not ppt_engine._layout_matches_theme(layout, primary):
+        issues.append("版式配色与模板主色不一致")
 
     # Same-sized peer cards are one visual level.  An enormous first-card font
     # beside three small peers makes the page look broken even when each fits.
@@ -142,7 +144,8 @@ def qualify_template(source: bytes, learned: dict) -> dict:
     """
     qualified = 0
     for layout in learned.get("layouts") or []:
-        source_issues = _source_issues(layout)
+        source_issues = _source_issues(
+            layout, (learned.get("colors") or {}).get("primary", ""))
         probe_issues = []
         probes = {}
         if not source_issues:

@@ -133,29 +133,36 @@ def _render_local_previews(pptx_path: Path, doc_id: str,
         return 0
     prev_dir = settings.ppt_dir / "preview" / doc_id
     prev_dir.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + 30  # 页图可降级，不能长期阻塞 PPTX 完成状态
+
+    def _time_left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("本地页图转换超出总耗时上限")
+        return remaining
 
     def _count() -> int:
         return len(glob.glob(os.path.join(str(prev_dir), "pg-*.png")))
 
     try:
+        for old in prev_dir.glob("pg-*.png"):
+            old.unlink()
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "gen.pptx")
             shutil.copyfile(pptx_path, src)
             subprocess.run([soffice, "--headless", "--convert-to", "pdf",
-                            "--outdir", td, src], timeout=180, capture_output=True)
+                            "--outdir", td, src], timeout=_time_left(), capture_output=True)
             pdf = os.path.join(td, "gen.pdf")
             if not os.path.exists(pdf):
                 logger.info("PPT 本地页图失败：LibreOffice 未产出 PDF（doc_id=%s）", doc_id)
                 return 0
-            for old in prev_dir.glob("pg-*.png"):
-                old.unlink()
             # 总页数取自 PDF 本身（pdfinfo 与 pdftoppm 同属 poppler-utils，
             # 有 pdftoppm 就有 pdfinfo；万一缺失则退回一次性全量转换）
             total = 0
             pdfinfo = shutil.which("pdfinfo")
             if pdfinfo:
                 try:
-                    out = subprocess.run([pdfinfo, pdf], timeout=15,
+                    out = subprocess.run([pdfinfo, pdf], timeout=min(15, _time_left()),
                                          capture_output=True, text=True)
                     for line in (out.stdout or "").splitlines():
                         if line.startswith("Pages:"):
@@ -166,7 +173,7 @@ def _render_local_previews(pptx_path: Path, doc_id: str,
             if total <= 0:
                 subprocess.run([pdftoppm, "-png", "-r", "90", pdf,
                                 os.path.join(str(prev_dir), "pg")],
-                               timeout=120, capture_output=True)
+                               timeout=_time_left(), capture_output=True)
                 pages = _count()
                 logger.info("PPT 本地页图完成（全量）：%d 张（doc_id=%s）",
                             pages, doc_id)
@@ -177,7 +184,7 @@ def _render_local_previews(pptx_path: Path, doc_id: str,
                 subprocess.run([pdftoppm, "-png", "-r", "90",
                                 "-f", str(i), "-l", str(i), pdf,
                                 os.path.join(str(prev_dir), "pg")],
-                               timeout=60, capture_output=True)
+                               timeout=_time_left(), capture_output=True)
                 done = _count()
                 if on_progress is not None:
                     try:
@@ -190,7 +197,7 @@ def _render_local_previews(pptx_path: Path, doc_id: str,
     except Exception as e:  # noqa: BLE001 - 预览失败绝不能拖垮 job
         logger.warning("PPT 本地页图渲染失败（不影响导出，doc_id=%s）：%s: %s",
                        doc_id, type(e).__name__, e)
-        return 0
+        return _count()
 
 
 def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool, str]:
@@ -218,7 +225,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             adjusted_outline = doc.outline
         else:
             data, adjusted_outline = svc.render_adaptive_pptx(
-                doc, doc.outline, doc.user_id)
+                doc, doc.outline, doc.user_id,
+                vision_review=False, model_rewrite=False)
         ok, why = looks_like_pptx(data)
         if not ok:
             return False, f"本地渲染产物非法：{why}"

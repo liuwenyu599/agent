@@ -105,7 +105,7 @@ class KnowledgeAccessPolicy:
         ).all()]
 
     def can_read_kb(self, kb, user) -> bool:
-        if kb is None:
+        if kb is None or not getattr(kb, "is_active", True):
             return False
         if self.is_system_admin(user):
             return True
@@ -118,7 +118,7 @@ class KnowledgeAccessPolicy:
 
     def can_write_kb(self, kb, user) -> bool:
         """能否向该知识库导入/上传文档。"""
-        if kb is None:
+        if kb is None or not getattr(kb, "is_active", True):
             return False
         if self.is_system_admin(user):
             return True
@@ -132,7 +132,7 @@ class KnowledgeAccessPolicy:
 
     def can_manage_kb(self, kb, user) -> bool:
         """能否改名/删除知识库、以及审核其下文档。"""
-        if kb is None:
+        if kb is None or not getattr(kb, "is_active", True):
             return False
         if self.is_system_admin(user):
             return True

@@ -1245,7 +1245,7 @@ class PptViewModel(private val repo: PptRepository) {
     fun switchTemplate(id: String?) {
         if (templateId == id) return
         templateId = id
-        strictTemplate = false
+        strictTemplate = id != null
         loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
             ?.get("name").str().ifBlank { null } ?: "自适应排版"

@@ -37,6 +37,34 @@ def test_homogeneous_twelve_pages_are_flagged() -> None:
     assert report["outline"]["slides"][0]["points"] == outline["slides"][0]["points"]
 
 
+def test_section_followed_by_one_content_page_is_flagged() -> None:
+    report = outline_gate.audit_outline({"slides": [
+        {"type": "cover", "title": "工作汇报"},
+        {"type": "section", "title": "一、学习教育"},
+        _content_page(1),
+        {"type": "section", "title": "二、下一步"},
+        _content_page(2),
+        {"type": "closing", "title": "谢谢聆听"},
+    ]})
+    assert [item["page"] for item in report["issues"]
+            if item["code"] == "thin_section"] == [2, 4]
+
+
+def test_redundant_one_page_section_is_removed_only_when_toc_retains_title() -> None:
+    slides = [
+        {"type": "toc", "title": "目录", "points": ["一、学习教育", "二、工作成效"]},
+        {"type": "section", "title": "一、学习教育"},
+        _content_page(1),
+        {"type": "section", "title": "二、工作成效"},
+        _content_page(2), _content_page(3),
+    ]
+    result = outline_gate.remove_redundant_sections({"slides": slides})
+    assert [slide["title"] for slide in result["slides"]] == [
+        "目录", "第1部分工作进展", "二、工作成效",
+        "第2部分工作进展", "第3部分工作进展"]
+    assert len(slides) == 6  # source remains available to the caller
+
+
 def test_mixed_structure_outline_has_no_diversity_warning() -> None:
     slides = [
         {"type": "cover", "title": "年度工作汇报", "points": []},
@@ -137,6 +165,25 @@ def test_model_review_receives_rule_diagnostics(monkeypatch) -> None:
     assert out["slides"][0]["layout"] is None
 
 
+def test_flexible_outline_removes_redundant_section_after_model_review(monkeypatch) -> None:
+    class ReviewingAssistant:
+        def complete(self, messages, **kwargs):
+            return json.dumps({"needs_fix": False, "issues": [], "outline": {}})
+
+    monkeypatch.setattr(PPTService, "_ppt_assistant",
+                        lambda self: ReviewingAssistant())
+    svc = object.__new__(PPTService)
+    outline = {"title": "工作汇报", "slides": [
+        {"type": "toc", "title": "目录", "points": ["一、学习教育"]},
+        {"type": "section", "title": "一、学习教育"},
+        _content_page(1),
+    ]}
+    flexible = svc._audit_and_repair_outline(outline, target_count=None, content="")
+    exact = svc._audit_and_repair_outline(outline, target_count=3, content="")
+    assert [page["type"] for page in flexible["slides"]] == ["toc", "content"]
+    assert [page["type"] for page in exact["slides"]] == ["toc", "section", "content"]
+
+
 def test_model_failure_still_keeps_rule_layer_fix(monkeypatch) -> None:
     """模型审查不可用时不静默退回原始大纲：规则层清掉的坏 layout 必须保留。"""
 
@@ -152,6 +199,53 @@ def test_model_failure_still_keeps_rule_layer_fix(monkeypatch) -> None:
         {"title": "t", "slides": [slide]}, target_count=None, content="")
     assert out["slides"][0]["layout"] is None
     assert out["slides"][0]["points"] == slide["points"]
+
+
+def test_model_review_cannot_replace_source_number_with_unsupported_number(monkeypatch) -> None:
+    class ReviewingAssistant:
+        def complete(self, messages, **kwargs):
+            return json.dumps({
+                "needs_fix": True,
+                "issues": ["精简措辞"],
+                "outline": {"title": "工作汇报", "slides": [{
+                    "type": "content", "title": "全年办理情况",
+                    "points": ["全年办理999件"],
+                    "sources": ["2026年业务台账"],
+                }]},
+            })
+
+    monkeypatch.setattr(PPTService, "_ppt_assistant", lambda self: ReviewingAssistant())
+    svc = object.__new__(PPTService)
+    original = {"title": "工作汇报", "slides": [{
+        "type": "content", "title": "全年办理情况",
+        "points": ["全年办理120件"],
+        "sources": ["2026年业务台账"],
+    }]}
+    out = svc._audit_and_repair_outline(original, target_count=None,
+                                        content="2026年业务台账：全年办理120件。")
+    assert out["slides"][0]["points"] == ["全年办理120件"]
+
+
+def test_model_review_can_add_number_present_in_material(monkeypatch) -> None:
+    class ReviewingAssistant:
+        def complete(self, messages, **kwargs):
+            return json.dumps({
+                "needs_fix": True,
+                "issues": ["补入材料数字"],
+                "outline": {"title": "工作汇报", "slides": [{
+                    "type": "content", "title": "全年办理情况",
+                    "points": ["全年办理120件"],
+                }]},
+            })
+
+    monkeypatch.setattr(PPTService, "_ppt_assistant", lambda self: ReviewingAssistant())
+    svc = object.__new__(PPTService)
+    original = {"title": "工作汇报", "slides": [{
+        "type": "content", "title": "全年办理情况", "points": ["完成年度任务"],
+    }]}
+    out = svc._audit_and_repair_outline(original, target_count=None,
+                                        content="2026年业务台账：全年办理120件。")
+    assert out["slides"][0]["points"] == ["全年办理120件"]
 
 
 # ---- 2026-11-09 真实验收：脱敏材料产出「XXXX 件」大字卡 + 无来源案例 ----

@@ -88,6 +88,19 @@ def test_cover_only_after_qualification_is_not_usable():
     assert not template_qualification.has_qualified_content(learned)
 
 
+def test_foreign_palette_layout_is_rejected_during_qualification():
+    layout = {"detected_type": "content", "element_schema": [
+        {"kind": "text", "role": "content", "x": .1, "y": .1,
+         "w": .8, "h": .1, "font_size": 28, "placeholder_keys": ["title"]},
+        {"kind": "text", "role": "content", "x": .1, "y": .3,
+         "w": .8, "h": .4, "font_size": 20, "placeholder_keys": ["point1"]},
+        {"kind": "shape", "role": "content", "fill": "007CA8"},
+        {"kind": "shape", "role": "content", "fill": "619428"},
+    ], "text_regions": [{"role": "body", "w": .8, "h": .4, "y": .3}]}
+    assert "版式配色与模板主色不一致" in template_qualification._source_issues(
+        layout, "C00000")
+
+
 def test_large_kpi_number_cannot_be_mistaken_for_the_page_title():
     layout = {"detected_type": "data", "element_schema": [
         {"kind": "text", "role": "content", "x": .08, "y": .06,

@@ -919,6 +919,9 @@ def test_job_status_flow_and_export(monkeypatch, doc_and_token):
 def test_job_falls_back_to_local_on_agent_failure(monkeypatch, doc_and_token):
     """PPTAgent 调不通 → 回退本地渲染，产物必须仍是能打开的合法 pptx。"""
     token, doc_id = doc_and_token
+    # 页图转换另有独立用例；本用例只校验 PPTX 回退产物。
+    monkeypatch.setattr(agent_job._core, "_render_local_previews",
+                        lambda *args, **kwargs: 0)
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
@@ -932,6 +935,29 @@ def test_job_falls_back_to_local_on_agent_failure(monkeypatch, doc_and_token):
     r = client.get(f"{BASE}/ppt/jobs/{doc_id}/export", headers=_hdr(token))
     assert r.status_code == 200
     assert len(Presentation(io.BytesIO(r.content)).slides) >= 1
+
+
+def test_optional_preview_conversion_has_total_time_budget(monkeypatch, tmp_path):
+    import subprocess
+
+    pptx_path = tmp_path / "sample.pptx"
+    pptx_path.write_bytes(b"pptx bytes are not parsed by this test")
+    doc_id = f"preview-budget-{uuid.uuid4().hex}"
+    stale = settings.ppt_dir / "preview" / doc_id / "pg-1.png"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"old preview")
+    timeouts = []
+
+    def slow_converter(*args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(agent_job._core.shutil, "which", lambda name: name)
+    monkeypatch.setattr(subprocess, "run", slow_converter)
+    assert agent_job._core._render_local_previews(pptx_path, doc_id) == 0
+    assert not stale.exists()
+    assert len(timeouts) == 1
+    assert 0 < timeouts[0] <= 30
 
 
 def test_job_auto_handles_agent_question_without_user_interruption(
@@ -1130,6 +1156,9 @@ def test_local_render_current_page_counts_real_previews(monkeypatch):
     """页图 2/3：job 成功，current_page=2（真值），total_pages=3。"""
     token = _dev_token()
     doc_id = _blank_doc_with_outline(token, 3)
+    def model_must_not_run(self):
+        raise AssertionError("本地作业不应调用模型复检")
+    monkeypatch.setattr(PPTService, "_ppt_assistant", model_must_not_run)
     seen_progress = []
 
     def fake_preview(pptx_path, doc, on_progress=None):

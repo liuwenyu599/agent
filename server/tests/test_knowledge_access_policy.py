@@ -26,6 +26,19 @@ def test_department_admin_can_read_global_public_knowledge():
     assert policy.can_read_kb(_kb("public", ""), user) is True
 
 
+def test_inactive_knowledge_base_cannot_be_read_or_modified():
+    policy = KnowledgeAccessPolicy(_Db())
+    kb = _kb("public", "")
+    kb.is_active = False
+    for user in (_user("dev", "developer"), _user("ka", "knowledge_admin", "justice")):
+        assert policy.can_read_kb(kb, user) is False
+        assert policy.can_write_kb(kb, user) is False
+        assert policy.can_manage_kb(kb, user) is False
+        doc = SimpleNamespace(kb_id=kb.id, knowledge_base=kb, department_code="")
+        assert policy.can_read_doc(doc, user) is False
+        assert policy.can_manage_doc(doc, user) is False
+
+
 def test_system_admin_can_manage_global_public_knowledge():
     policy = KnowledgeAccessPolicy(_Db())
     user = _user("dev", "developer", "")

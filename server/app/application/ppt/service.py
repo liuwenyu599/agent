@@ -78,6 +78,19 @@ DEFAULT_DESIGN_PROMPT: Dict[str, str] = {
 }
 DEFAULT_GOV_TEMPLATE_ID = "gov_report_blue"
 _TOC_TITLE_RE = re.compile(r"^(目录|汇报提纲|内容提要|主要内容|汇报目录)$")
+_CONTENT_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*%?")
+
+
+def _outline_content_numbers(outline: Dict[str, Any]) -> set[str]:
+    """取大纲可见内容中的数字，不把来源标签或内部字段当作事实依据。"""
+    def visible(slide: dict) -> dict:
+        return {key: slide.get(key) for key in ("title", "subtitle", "points", "blocks")}
+
+    pages = [visible(page) for page in (outline.get("slides") or [])
+             if isinstance(page, dict)]
+    content = {"title": outline.get("title"), "subtitle": outline.get("subtitle"),
+               "slides": pages}
+    return set(_CONTENT_NUMBER_RE.findall(_json.dumps(content, ensure_ascii=False)))
 
 
 def _official_preview_id(spec: dict) -> str:
@@ -296,6 +309,14 @@ class PPTService:
         issues = [str(x)[:160] for x in (data.get("issues") or []) if str(x).strip()]
         repaired = data.get("outline")
         if data.get("needs_fix") and isinstance(repaired, dict) and repaired.get("slides"):
+            new_numbers = (_outline_content_numbers(repaired)
+                           - _outline_content_numbers(clean)
+                           - set(_CONTENT_NUMBER_RE.findall(content or "")))
+            if new_numbers:
+                logger.warning("[PPT] 大纲复审引入 %d 个材料外数字，保留原大纲",
+                               len(new_numbers))
+                repaired = None
+        if isinstance(repaired, dict) and data.get("needs_fix") and repaired.get("slides"):
             logger.info("[PPT] 大纲自动审查触发修正：%s", "；".join(issues) or "结构质量")
             prior = {slide["id"]: slide for slide in clean["slides"] if slide.get("id")}
             for slide in repaired["slides"]:
@@ -311,6 +332,8 @@ class PPTService:
             if not clean.get("style") and planned_style:
                 clean["style"] = planned_style
             clean["design_spec"] = planned_spec
+        if target_count is None:
+            clean = outline_gate.remove_redundant_sections(clean)
         # 模型修回的大纲可能重新写入不合法的 layout；再过一次规则层兜底，
         # 同时把最终结构指标写入日志，便于上线后核对「页型单一」等退化现象。
         final_gate = outline_gate.audit_outline(clean, content)
@@ -2690,7 +2713,8 @@ class PPTService:
     def render_adaptive_pptx(self, d: PPTDocument, outline: dict,
                              user_id: str,
                              warnings: Optional[List[str]] = None,
-                             vision_review: bool = True) -> Tuple[bytes, dict]:
+                             vision_review: bool = True,
+                             model_rewrite: bool = True) -> Tuple[bytes, dict]:
         """自由生成使用主题配色；只在用户显式选模板时加载模板底稿。"""
         native = self._render_native_import(d, outline)
         if native is not None:
@@ -2704,7 +2728,8 @@ class PPTService:
             clean, self._user_images(user_id, selected_ids, strict=False))
         return self._render_with_feedback(clean, template, warnings,
                                           vision_review=vision_review,
-                                          assistant=self._ppt_assistant())
+                                          assistant=(self._ppt_assistant()
+                                                     if model_rewrite else None))
 
     def scene_preview(self, doc_id: str, page: int, user: User) -> str:
         from app.application.ppt import page_scene

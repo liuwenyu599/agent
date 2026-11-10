@@ -592,6 +592,41 @@ def test_overflow_points_merge_into_last_slot_without_fallback():
     assert not any("仅该页" in warning for warning in warnings)
 
 
+def test_chart_data_survives_when_template_has_no_chart_slot():
+    source = _minimal_deck([[
+        ("{{title}}", 0.6, 0.3, 11, 0.9, 36),
+        ("{{point1}}", 0.8, 1.6, 10, 1.0, 20),
+        ("{{point2}}", 0.8, 3.2, 10, 1.2, 20),
+    ]])
+    library = ppt_engine.analyze_template(source)["layouts"]
+    outline = {"slides": [{
+        "type": "chart", "title": "学习活动数据",
+        "points": ["专题学习覆盖主要岗位", "培训活动分批开展"],
+        "blocks": {"chart": {"chart_type": "bar", "categories": ["专题学习", "集中培训"],
+                              "series": [{"name": "场次", "values": [35, 17]}]}},
+    }]}
+    warnings = []
+    data = ppt_engine.build_pptx_learned(outline, _TPL_KW, source, library, warnings)
+    slide = Presentation(io.BytesIO(data)).slides[0]
+    assert any(shape.has_chart for shape in slide.shapes)
+    assert all(point in " ".join(shape.text for shape in slide.shapes
+                                 if shape.has_text_frame)
+               for point in outline["slides"][0]["points"])
+
+
+def test_pasted_in_layout_from_another_palette_is_excluded():
+    foreign = {"element_schema": [
+        {"kind": "shape", "fill": "007CA8"},
+        {"kind": "shape", "fill": "619428"},
+    ]}
+    matching = {"element_schema": [
+        {"kind": "shape", "fill": "C00000"},
+        {"kind": "shape", "fill": "D9A441"},
+    ]}
+    assert not ppt_engine._layout_matches_theme(foreign, "C00000")
+    assert ppt_engine._layout_matches_theme(matching, "C00000")
+
+
 def test_special_page_borrows_content_layout_when_type_missing():
     """模板没有章节页型：目录/章节页应借用正文版式保留模板设计，而不是退通用页。"""
     source = _minimal_deck([[
@@ -651,3 +686,88 @@ def test_section_page_big_shape_survives_empty_slot_cleanup():
                   if shape.width and shape.width >= Inches(2.5)
                   and not (shape.has_text_frame and shape.text_frame.text.strip())]
     assert big_shapes, "章节页大色块被空槽清理误删，模板设计被掏空"
+
+
+def test_learned_section_number_and_three_card_grid_are_complete():
+    """A four-slot grouped layout must not leave a hole after filling three points."""
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR
+    from pptx.util import Pt
+
+    prs, blank = _blank_deck()
+    section = prs.slides.add_slide(blank)
+    section.notes_slide.notes_text_frame.text = "PPT_LAYOUT_TYPE:section"
+    title = section.shapes.add_textbox(Inches(4), Inches(1.2), Inches(8), Inches(1))
+    title.text = "{{title}}"
+    title.text_frame.paragraphs[0].runs[0].font.size = Pt(32)
+    badge = section.shapes.add_group_shape()
+    badge_shape = badge.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Inches(1.5), Inches(1.2), Inches(2.3), Inches(1.2))
+    badge_shape.fill.solid()
+    badge_shape.fill.fore_color.rgb = RGBColor.from_string("C00000")
+
+    content = prs.slides.add_slide(blank)
+    content.notes_slide.notes_text_frame.text = "PPT_LAYOUT_TYPE:two_col"
+    title = content.shapes.add_textbox(Inches(1.3), Inches(.35), Inches(8), Inches(.7))
+    title.text = "{{title}}"
+    title.text_frame.paragraphs[0].runs[0].font.size = Pt(30)
+    positions = [(1.39, 1.94, 3.33, 2.12), (6.08, 1.94, 6.17, 2.12),
+                 (1.39, 4.49, 3.33, 2.12), (6.08, 4.49, 6.17, 2.12)]
+    for index, (x, y, w, h) in enumerate(positions, 1):
+        group = content.shapes.add_group_shape()
+        card = group.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+        card.fill.solid()
+        card.fill.fore_color.rgb = RGBColor.from_string(
+            "C00000" if index in (1, 3) else "FFF8F2")
+        card.text = "{{point%d}}" % index
+        card.text_frame.paragraphs[0].runs[0].font.size = Pt(18)
+    content.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                 Inches(5.08), Inches(3), Inches(5.85), Inches(3))
+    content.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                 Inches(5.08), Inches(5.55), Inches(5.85), Inches(5.55))
+    source = io.BytesIO()
+    prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    outline = {"slides": [
+        {"type": "section", "title": "二、深化学习", "index": 2},
+        {"type": "content", "title": "学习举措", "points": [
+            "深入学习党纪法规并开展专题研讨", "领导干部带头宣讲推动学习落实",
+            "组织党员交流经验并总结有效做法"]},
+    ]}
+    data = ppt_engine.build_pptx_learned(
+        outline, {"colors": {"primary": "C00000", "accent": "D9A441",
+                             "dark": "361818", "light": "FFF8F2"},
+                  "font": "微软雅黑", "layouts": {}}, source.getvalue(),
+        learned["layouts"], [])
+    result = Presentation(io.BytesIO(data))
+    badge_groups = [shape for shape in result.slides[0].shapes
+                    if shape.shape_type == 6]
+    assert any(child.has_text_frame and child.text.strip() == "二"
+               for group in badge_groups for child in group.shapes)
+    section_text = " ".join(shape.text for shape in result.slides[0].shapes
+                            if shape.has_text_frame)
+    assert "深化学习" in section_text
+    assert "二、深化学习" not in section_text
+    groups = [shape for shape in result.slides[1].shapes
+              if shape.shape_type == 6 and ppt_engine._has_visible_text(shape)]
+    # 2026-11-10 起正文页统一走「模板皮 + 引擎骨架」：模板的 2+1 卡片网格在
+    # 条数/字数一变就留空框、半边空白（用户连拍三处）。几何复用让位给排整齐，
+    # 守卫点从「必须复用模板分组」改为「三条要点都在页面上、不留占位符」。
+    page_text = " ".join(shape.text for shape in result.slides[1].shapes
+                         if shape.has_text_frame)
+    for point in outline["slides"][1]["points"]:
+        assert point in page_text
+    assert "{{" not in page_text
+    two_points = {"slides": [{"type": "content", "title": "学习举措",
+                              "points": outline["slides"][1]["points"][:2]}]}
+    two_data = ppt_engine.build_pptx_learned(
+        two_points, {"colors": {"primary": "C00000", "accent": "D9A441",
+                                "dark": "361818", "light": "FFF8F2"},
+                     "font": "微软雅黑", "layouts": {}}, source.getvalue(),
+        learned["layouts"], [])
+    two_page = Presentation(io.BytesIO(two_data)).slides[0]
+    two_text = " ".join(shape.text for shape in two_page.shapes
+                        if shape.has_text_frame)
+    for point in two_points["slides"][0]["points"]:
+        assert point in two_text

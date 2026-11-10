@@ -781,6 +781,7 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 - cover 封面（{cover_rule}）：title、subtitle
 - toc 目录页（只有内容分组确实有助于阅读时使用）：points 为章节名
 - section 章节页：title
+- 章节过渡页只在其后至少有 2 页实质内容时使用；若一个章节只有 1 页，直接用正文页标题呈现，避免整稿反复出现只有标题的空页
 - content 正文页：title、points（按内容密度组织，避免为了凑条数拆句）
 - data 数据页：title、blocks={{"cards":[{{"label":"指标名","value":"数值"}},...]}}（材料里有具体数据时用，3~4 张卡）
 - chart 图表页：title、blocks={{"chart":{{"chart_type":"bar或bar_h或line或pie或stacked或area或doughnut","categories":["类别"...],"series":[{{"name":"系列名","values":[数值...]}}]}}}}（材料有对比/趋势/占比数据时用：横向对比多选 bar_h，趋势选 line，占比选 pie；每页最多 1 张图表）
@@ -823,6 +824,8 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 3. 每页 slide 的字段：type、title、points、blocks、image_id、image_hint、note（演讲备注，一句话）；
 4. {count_rule}
 5. 内容要实：要点是有信息量的完整句子，材料中的具体数据、做法、案例必须用起来，禁止"加强领导""高度重视"式空话；
+   每页优先呈现可核对的做法、对象、过程和结果；当材料不足以支撑具体结果时保留已知做法，不编造细节。
+   有可绘制的数据、时间顺序、流程或层级时主动使用图表/时间轴/流程图，不等待用户另行要求“生成图”；
 6. 图片规则：主动为 2–4 个确实有实景场景的正文页配图（开会部署、培训讲座、普法宣传、窗口接待、调解、启动仪式），image_id 必须取自「可用图片」清单且画面与页面内容相符；没有相符画面就留 null，不要为凑数配无关图，不要用合影图配正文页。不要重复使用同一图片；image_hint 用一句话说明本页希望呈现的画面（写清场所+活动+人物，供无合适图时按画面检索）；
 7. 不要虚构材料中没有的事实和数据。材料出现 "XX""若干""待填" 等占位值时，不得把占位值
    原样写入 blocks.cards[].value（会被渲染成大字指标卡），也不要为凑页型创建没有真实数值的
@@ -5034,7 +5037,12 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     x, y = Emu(int(region["x"] * sw)), Emu(int(region["y"] * sh))
     w, h = Emu(int(region["w"] * sw)), Emu(int(region["h"] * sh))
     cd = CategoryChartData()
-    cd.categories = chart_spec.get("categories", [])
+    categories = list(chart_spec.get("categories", []))
+    point_units = chart_spec.get("point_units") or []
+    if len(point_units) == len(categories):
+        categories = [f"{name}（{unit}）" if unit else name
+                      for name, unit in zip(categories, point_units)]
+    cd.categories = categories
     for serie in chart_spec.get("series", []):
         cd.add_series(serie.get("name", ""), serie.get("values", []))
     ct = {"bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
@@ -5049,6 +5057,11 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     gf = slide.shapes.add_chart(ct, x, y, w, h, cd)
     chart = gf.chart
     chart.has_title = False
+    try:
+        chart.plots[0].has_data_labels = True
+        chart.plots[0].data_labels.font.size = Pt(11)
+    except Exception:
+        pass
     try:
         # 图表里的刻度/数值是西文，走 Times New Roman 才和正文数字一致；
         # 中文类别名仍由主题的 <a:ea> 兜底。
@@ -5254,6 +5267,172 @@ def _delete_empty_slot(slide, element: Dict, slot_shape, sw, sh) -> None:
         _delete_shape(slot_shape, prune=True)
     except Exception:
         pass
+
+
+def _force_badge_contrast(slide, sw: int, sh: int) -> int:
+    """把章节序号调成与底色对比的字色。
+
+    模板给序号留的块常是主色实底（红底），沿用模板字色就会「红底红字」，
+    数字填了但看不见。按铺底色的亮度选白字或深字，并统一到 34pt 粗体。
+    """
+    from pptx.dml.color import RGBColor
+    from pptx.util import Pt
+
+    def luminance(value: str) -> Optional[float]:
+        try:
+            channels = [int(str(value)[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        except (TypeError, ValueError):
+            return None
+        linear = [part / 12.92 if part <= .04045 else ((part + .055) / 1.055) ** 2.4
+                  for part in channels]
+        return sum(weight * part for weight, part in
+                   zip((.2126, .7152, .0722), linear))
+
+    fixed = 0
+    for shape, _rect, _depth in _iter_shapes(slide.shapes):
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        text = (shape.text or "").strip()
+        if len(text) != 1 or text not in "一二三四五六七八九十":
+            continue
+        fill = str(_solid_fill_hex(shape) or "").lstrip("#")
+        ratio = luminance(fill) if fill else None
+        # 取不到底色（序号常在组合里，fill 在父级）时按深底处理：模板给序号
+        # 留的块基本都是主色实底，白字是更稳的一侧。
+        color = (RGBColor(34, 34, 34) if ratio is not None and ratio >= .6
+                 else RGBColor(255, 255, 255))
+        frame = shape.text_frame
+        runs = [run for para in frame.paragraphs for run in para.runs]
+        if not runs:
+            # 模板序号的文本直接挂在 <a:t> 上（没有 <a:r>），改字号/字色无从下手，
+            # 重写一遍并保留原有对齐与锚点。
+            from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+            align = (frame.paragraphs[0].alignment
+                     if frame.paragraphs else None) or PP_ALIGN.CENTER
+            anchor = frame.vertical_anchor or MSO_ANCHOR.MIDDLE
+            frame.clear()
+            frame.margin_left = frame.margin_right = 0
+            frame.margin_top = frame.margin_bottom = 0
+            frame.vertical_anchor = anchor
+            para = frame.paragraphs[0]
+            para.alignment = align
+            runs = [para.add_run()]
+            runs[0].text = text
+        for run in runs:
+            run.text = text
+            run.font.color.rgb = color
+            run.font.bold = True
+            try:
+                run.font.size = Pt(34)
+            except Exception:
+                pass
+        fixed += 1
+    return fixed
+
+
+def _fill_section_badge(slide, sdata: Dict, colors: Dict, font: str,
+                        sw: int, sh: int) -> bool:
+    """Fill an empty colored chapter badge with the outline's chapter number."""
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.util import Pt
+
+    title = str(sdata.get("title") or "")
+    match = re.match(r"^\s*([一二三四五六七八九十]+)[、.．]", title)
+    numeral = match.group(1) if match else ""
+    if not numeral:
+        try:
+            index = int(sdata.get("index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        if 1 <= index <= 10:
+            numeral = "一二三四五六七八九十"[index - 1]
+    if not numeral:
+        return False
+    primary = str(colors.get("primary") or "").upper()
+    for group in slide.shapes:
+        if getattr(group, "shape_type", None) != 6 or _has_visible_text(group):
+            continue
+        if not (.06 <= group.left / sw <= .35 and .08 <= group.top / sh <= .4
+                and .07 <= group.width / sw <= .28
+                and .07 <= group.height / sh <= .25):
+            continue
+        for child in group.shapes:
+            if not getattr(child, "has_text_frame", False):
+                continue
+            if str(_solid_fill_hex(child) or "").upper() != primary:
+                continue
+            frame = child.text_frame
+            frame.clear()
+            frame.margin_left = frame.margin_right = 0
+            frame.margin_top = frame.margin_bottom = 0
+            frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+            para = frame.paragraphs[0]
+            para.alignment = PP_ALIGN.CENTER
+            run = para.add_run()
+            run.text = numeral
+            apply_cjk_font(run, font)
+            run.font.size = Pt(34)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(255, 255, 255)
+            return True
+    return False
+
+
+def _rebalance_learned_point_grid(slide, layout: Dict, points: list,
+                                  sw: int, sh: int) -> None:
+    """Reflow a grouped 2×2 template when only two or three slots are filled."""
+    if len(points) not in (2, 3) or len(set(points)) != len(points):
+        return
+    slots = [item for item in layout.get("element_schema") or []
+             if item.get("kind") == "text" and item.get("in_group")
+             and any(re.fullmatch(r"point\d+", key)
+                     for key in item.get("placeholder_keys") or [])]
+    if len(slots) != 4:
+        return
+    by_x = sorted(slots, key=lambda item: (item["x"], item["y"]))
+    left, right = sorted(by_x[:2], key=lambda item: item["y"]), \
+                  sorted(by_x[2:], key=lambda item: item["y"])
+    if not (abs(left[0]["x"] - left[1]["x"]) < .06
+            and abs(right[0]["x"] - right[1]["x"]) < .06
+            and right[0]["x"] - left[0]["x"] > .25
+            and abs(left[0]["y"] - right[0]["y"]) < .10
+            and abs(left[1]["y"] - right[1]["y"]) < .10
+            and left[1]["y"] - left[0]["y"] > .20):
+        return
+
+    def group_text(group) -> str:
+        return "\n".join(child.text_frame.text for child, _rect, _depth in
+                         _iter_shapes(group.shapes)
+                         if getattr(child, "has_text_frame", False))
+
+    groups = [shape for shape in slide.shapes
+              if getattr(shape, "shape_type", None) == 6
+              and .15 <= shape.top / sh <= .90
+              and _has_visible_text(shape)]
+    ordered = []
+    for point in points:
+        matches = [group for group in groups if point in group_text(group)
+                   and group not in ordered]
+        if len(matches) != 1:
+            return
+        ordered.append(matches[0])
+    if len(groups) != len(points):
+        return
+    positions = ([(.10, .32, .38, .42), (.52, .32, .38, .42)]
+                 if len(points) == 2 else
+                 [(.10, .24, .38, .28), (.52, .24, .38, .28),
+                  (.21, .59, .58, .28)])
+    for group, (x, y, w, h) in zip(ordered, positions):
+        group.left, group.top = int(x * sw), int(y * sh)
+        group.width, group.height = int(w * sw), int(h * sh)
+    # The old horizontal arrows connected the source grid's left and right
+    # cells. After reflow their endpoints no longer describe the layout.
+    for shape in list(slide.shapes):
+        if "LINE" not in str(getattr(shape, "shape_type", "")):
+            continue
+        if .18 <= shape.top / sh <= .90 and .32 <= shape.left / sw <= .55:
+            _delete_shape(shape)
 
 
 def _solid_fill_hex(shape) -> Optional[str]:
@@ -5671,6 +5850,19 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
             continue
         _delete_empty_slot(slide, e, shp, sw, sh)
 
+    if sdata.get("type") == "section":
+        if _fill_section_badge(slide, sdata, colors, font, sw, sh):
+            heading = str(sdata.get("title") or "")
+            without_number = re.sub(
+                r"^\s*[一二三四五六七八九十]+[、.．]\s*", "", heading, count=1)
+            if without_number != heading:
+                for shape in slide.shapes:
+                    if (getattr(shape, "has_text_frame", False)
+                            and shape.text_frame.text.strip() == heading.strip()):
+                        _fill_text_region(shape, [without_number])
+    elif not chart_spec and not img_path:
+        _rebalance_learned_point_grid(slide, layout, points, sw, sh)
+
     # 深色实底上的继承色文字对比度兜底（模板红块/深色块上塞深字的情况）。
     _fix_text_contrast(slide, sw, sh)
     # 模板装饰图标（党徽水印等）压在长句文字中央时删除，否则字被图案打断。
@@ -5736,11 +5928,17 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         if not is_cover and e.get("w", 0) * e.get("h", 0) >= .08 \
                 and not templated_chrome:
             _delete_shape(shp, prune=True)
-            # 大块示例照片删掉后会留一个空洞，观感像排版事故；
-            # 补一块主色浅底圆角卡片占位，用户选了图时这块会被真图替换。
+            # 没有本次照片时，不留下无内容的图片占位。若本页有真实数值，
+            # 用原材料中的指标填这个区域，形成可编辑的视觉重点。
             if not image_drawn and e.get("w", 0) * e.get("h", 0) >= .10 \
                     and sdata.get("type") == "content":
-                _add_tint_panel(slide, e, colors, sw, sh)
+                metric = None
+                for point in points:
+                    metric = _pick_primary_metric(point)
+                    if metric:
+                        break
+                if metric:
+                    _add_metric_panel(slide, e, metric, colors, font, sw, sh)
     if (not image_drawn and img_path and os.path.exists(img_path)
             and not is_cover and warnings is not None):
         warnings.append(f"「{title or '本页'}」的模板版式没有可用的配图区，所选图片未插入")
@@ -5761,6 +5959,11 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
         if texts and len(texts) > 1:
             shp, e = texts[1]
             _fill_text_region(shp, points + [f"（图表数据：{names}）"] if points else [f"（图表数据：{names}）"])
+
+    # 章节序号：模板给序号留的块多是主色实底，沿用模板原字色等于「红底红字」，
+    # 数字填了却看不见（用户 2026-11-10 标图问「这个红框是不是放数字的」）。
+    if sdata.get("type") == "section":
+        _force_badge_contrast(slide, sw, sh)
     return bool(unfit_texts)
 
 
@@ -5889,7 +6092,8 @@ def _keep_template_decorations(slide, sw: int, sh: int):
 
 def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                                  font: str, sw: int, sh: int,
-                                 warnings: Optional[List[str]] = None) -> None:
+                                 warnings: Optional[List[str]] = None,
+                                 variant: int = 0) -> None:
     """Keep the source deck's master/background, but give dense text safe geometry."""
     from pptx.dml.color import RGBColor
     from pptx.enum.shapes import MSO_SHAPE
@@ -6054,6 +6258,33 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     label(sdata.get("title") or "", .105, .19, .78, .12, 30, True, dark)
     box(.105, .325, .79, .004, primary)
 
+    chart_spec = (sdata.get("blocks") or {}).get("chart")
+    if chart_spec:
+        # A learned layout may have no chart placeholder. Keep the actual data
+        # as an editable chart and place its accompanying conclusions beside it.
+        chart_region = {"x": .105, "y": my(.36), "w": .78 if not points else .54,
+                        "h": mh(.49)}
+        try:
+            _add_native_chart(slide, chart_spec, chart_region, colors, font, sw, sh)
+        except Exception as exc:
+            logger.warning("可读版式图表绘制失败: %s", exc)
+            if warnings is not None:
+                warnings.append(f"「{sdata.get('title') or '本页'}」图表未能绘制，已保留数据文字")
+            categories = chart_spec.get("categories") or []
+            series = chart_spec.get("series") or []
+            points = points + [
+                f"{category}：" + "、".join(
+                    f"{item.get('name') or '数值'} {item['values'][index]}"
+                    for item in series if index < len(item.get("values") or []))
+                for index, category in enumerate(categories)]
+        else:
+            if points:
+                size, rows = point_rows(points, .22, top=.39, bottom=.83, preferred_pt=17)
+                for point, (y, height) in zip(points, rows):
+                    label(point, .68, y, .21, max(height - .01, .05),
+                          fit_size(point, .21, height - .01, size), False, dark)
+            return
+
     selected_image = (sdata.get("_image") or {}).get("file_path")
     if selected_image and os.path.isfile(selected_image) and 1 <= count <= 6:
         # A per-page readable fallback must retain an image the user selected.
@@ -6065,19 +6296,33 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         except OSError:
             image_w = image_h = 0
         if image_w > 0 and image_h > 0:
-            target_x, target_y = int(sw * .58), int(sh * .38)
-            target_w, target_h = int(sw * .31), int(sh * .43)
+            # 图文页左右交替：全本都是「左文右图」时，配图页反而成了新的一种
+            # 雷同。按标题奇偶镜像，同一份稿里两种方向都会出现。
+            mirror = sum(ord(ch) for ch in str(sdata.get("title") or "")) % 2 == 1
+            if mirror:
+                card_box = (.07, .36, .35, .47)
+                text_x, text_w = .49, .40
+                target_x, target_w = int(sw * .085), int(sw * .32)
+            else:
+                card_box = (.56, .36, .35, .47)
+                text_x, text_w = .11, .35
+                target_x, target_w = int(sw * .58), int(sw * .31)
+            target_y, target_h = int(sh * .38), int(sh * .43)
             scale = min(target_w / image_w, target_h / image_h)
             pic_w, pic_h = max(1, int(image_w * scale)), max(1, int(image_h * scale))
-            card(.56, .36, .35, .47, tint(primary, .04))
+            card(*card_box, tint(primary, .04))
             slide.shapes.add_picture(selected_image,
                 target_x + (target_w - pic_w) // 2,
                 target_y + (target_h - pic_h) // 2, pic_w, pic_h)
-            size, rows = point_rows(points, .39, top=.37, bottom=.83, preferred_pt=17)
+            size, rows = point_rows(points, text_w + .04, top=.37, bottom=.83,
+                                    preferred_pt=17)
+            badge_x = text_x - .065 if mirror else text_x
+            label_x = text_x + (0 if mirror else .06)
+            inner_w = text_w - (.06 if not mirror else 0)
             for index, (point, (y, height)) in enumerate(zip(points, rows), 1):
-                badge(f"{index:02d}", .11, y + .01, .045, primary, 12)
-                label(point, .17, y, .35, max(height - .015, .05),
-                      fit_size(point, .35, height - .02, size), False, dark)
+                badge(f"{index:02d}", badge_x, y + .01, .045, primary, 12)
+                label(point, label_x, y, max(inner_w, .28), max(height - .015, .05),
+                      fit_size(point, max(inner_w, .28), height - .02, size), False, dark)
             return
     if selected_image and warnings is not None:
         warnings.append(f"「{sdata.get('title') or '本页'}」所选图片未能放入当前页，请减少该页文字或更换图片")
@@ -6096,7 +6341,36 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         return
 
     if count == 3 and longest <= 60:
-        # 三要点：三条独立圆角色卡
+        # 同条数、同长度的页最容易被读成「每页都长得一样」。按标题派生出三种
+        # 并列骨架（纵排三卡 / 三列横卡 / 竖线引用块），同一本里轮换。
+        # 用字符和取模而不是 hash()：跨进程稳定，同一份稿每次生成结果一致。
+        style = variant % 3
+        if style == 1:
+            col_w, gap = .278, .028
+            x0 = .055 + (.89 - (col_w * 3 + gap * 2)) / 2
+            # 卡高按最长要点实际行数收紧（只缩不放），否则短句下方会空掉半张卡。
+            per_line = max(4, int(col_w * 960 / 15))
+            lines = max(2, math.ceil(longest / per_line))
+            col_h = min(.50, max(.34, lines * 15 * 1.3 / 540 + .22))
+            y0 = .28
+            common = min(fit_size(p, col_w - .05, col_h - .10, 16) for p in points)
+            for index, point in enumerate(points):
+                x = x0 + index * (col_w + gap)
+                card(x, y0, col_w, col_h, tint(primary, .05))
+                box(x, y0, col_w, .011, primary)
+                badge(f"{index + 1:02d}", x + .018, y0 + .03, .040, primary, 11)
+                label(point, x + .02, y0 + .09, col_w - .04, col_h - .11,
+                      common, False, dark)
+            return
+        if style == 2:
+            size, rows = point_rows(points, .74, top=.30, bottom=.86, preferred_pt=19)
+            for point, (y, height) in zip(points, rows):
+                row_h = max(height - .02, .10)
+                box(.095, y + .012, .006, row_h - .024, primary)
+                label(point, .125, y + .01, .74, row_h - .02,
+                      fit_size(point, .74, row_h - .02, size), False, dark)
+            return
+        # style == 0：三条独立圆角色卡（下方保持原有实现）
         size, rows = point_rows(points, .58, top=.36, bottom=.85, preferred_pt=20)
         row_heights = [max(height - .015, .09) for _, height in rows]
         common_size = min(fit_size(p, .67, min(row_heights) - .03, size)
@@ -6228,6 +6502,39 @@ def _add_tint_panel(slide, region: Dict, colors: Dict, sw: int, sh: int) -> None
     shape.shadow.inherit = False
 
 
+def _add_metric_panel(slide, region: Dict, metric: tuple, colors: Dict,
+                      font: str, sw: int, sh: int) -> None:
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    from pptx.util import Pt
+
+    _add_tint_panel(slide, region, colors, sw, sh)
+    _label, value, unit = metric
+    display = f"{value:g}{unit}"
+    left, top = int(region["x"] * sw), int(region["y"] * sh)
+    width, height = int(region["w"] * sw), int(region["h"] * sh)
+    color = RGBColor.from_string(colors.get("primary", "17365D"))
+    number = slide.shapes.add_textbox(left + width // 12, top + height // 5,
+                                      width * 5 // 6, height * 2 // 5)
+    number.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    number.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    run = number.text_frame.paragraphs[0].add_run()
+    run.text = display
+    apply_cjk_font(run, font)
+    run.font.size = Pt(38 if len(display) <= 8 else 28)
+    run.font.bold = True
+    run.font.color.rgb = color
+    caption = slide.shapes.add_textbox(left + width // 10, top + height * 3 // 5,
+                                       width * 4 // 5, height // 4)
+    caption.text_frame.word_wrap = True
+    caption.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    run = caption.text_frame.paragraphs[0].add_run()
+    run.text = "本页关键数据"
+    apply_cjk_font(run, font)
+    run.font.size = Pt(14)
+    run.font.color.rgb = RGBColor.from_string(colors.get("dark", "15365D"))
+
+
 def _glyph_rect(shape, left, top, width, height, value, size, sw, sh):
     """估算文字实际占用的区域（EMU）：按行数×行高，再按垂直锚点贴靠。
 
@@ -6256,6 +6563,11 @@ def _glyph_rect(shape, left, top, width, height, value, size, sw, sh):
 def _filled_page_issue(slide, sdata: Dict, sw: int, sh: int) -> Optional[str]:
     """Check the actual filled page before accepting a learned layout."""
     from app.application.ppt.adaptive_design import fit_font_size
+
+    if (sdata.get("blocks") or {}).get("chart") and not any(
+            getattr(shape, "has_chart", False)
+            for shape, _rect, _depth in _iter_shapes(slide.shapes)):
+        return "图表数据未绘制"
 
     # 内容缺失检测（P0）：正文型页型的要点大量未出现在成品页面上，说明版式
     # 没有可用正文槽而兜底未接管——空页比溢出更伤观感，且不出错不报警，
@@ -6376,7 +6688,61 @@ def _filled_page_issue(slide, sdata: Dict, sw: int, sh: int) -> Optional[str]:
                       max(0, min(ay + ah, by + bh) - max(ay, by))
             if overlap / min(max(aw * ah, 1), max(bw * bh, 1)) > .25:
                 return "文字区域明显重叠"
+
+    # 装得下 ≠ 装得好看：模板槽位比内容多时，空槽留成空框、半边页面空着
+    # （用户 2026-11-10 标图「上面有下面没有」「上面有下面没」）。按正文区
+    # 纵向分带统计内容覆盖，空带过半说明这页在硬塞模板骨架，改走混合页重排。
+    if sdata.get("type") in {"content", "case", "summary"} and not (
+            sdata.get("blocks") or {}).get("chart"):
+        bands = [False] * 8
+        quads = [[0.0, 0.0], [0.0, 0.0]]
+        top_bound = .14
+        span = .74                       # 正文带 .14~.88，页眉页脚不参与
+        for shape, rect, _ in _iter_shapes(slide.shapes):
+            if not rect:
+                continue
+            x, y = rect[0] / sw, rect[1] / sh
+            w, h = rect[2] / sw, rect[3] / sh
+            if y + h <= top_bound or y >= .88:
+                continue
+            if w * h > .55:
+                continue                 # 整页底图/大色块是背景，不是内容
+            has_content = (
+                (getattr(shape, "has_text_frame", False)
+                 and (shape.text or "").strip())
+                or getattr(shape, "has_chart", False)
+                or bool(shape._element.xpath(".//a:blip")))
+            if not has_content:
+                continue
+            low = max(0, min(7, int((y - top_bound) / span * 8)))
+            high = max(0, min(7, int((y + h - top_bound) / span * 8)))
+            for band in range(low, high + 1):
+                bands[band] = True
+        if bands.count(False) >= 3:
+            return "模板槽位与内容数量不匹配，版面留白过多"
     return None
+
+
+def _layout_matches_theme(layout: Dict, primary: str) -> bool:
+    """Exclude pasted-in pages whose colored decorations belong to another theme."""
+    import colorsys
+
+    def hue(value):
+        try:
+            rgb = [int(str(value)[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        except (TypeError, ValueError):
+            return None
+        h, saturation, brightness = colorsys.rgb_to_hsv(*rgb)
+        return h if saturation >= .25 and .2 <= brightness <= 1 else None
+
+    theme_hue = hue(primary)
+    if theme_hue is None:
+        return True
+    fills = {h for element in layout.get("element_schema") or []
+             if element.get("kind") == "shape"
+             for h in [hue(element.get("fill"))] if h is not None}
+    return len(fills) < 2 or any(
+        min(abs(h - theme_hue), 1 - abs(h - theme_hue)) <= .16 for h in fills)
 
 
 def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
@@ -6386,7 +6752,9 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
     from pptx import Presentation
     warnings = warnings if warnings is not None else []
     layout_library = [layout for layout in layout_library
-                      if (layout.get("qualification") or {}).get("status") != "rejected"]
+                      if (layout.get("qualification") or {}).get("status") != "rejected"
+                      and _layout_matches_theme(
+                          layout, (template.get("colors") or {}).get("primary", ""))]
     colors = template["colors"]
     font = template.get("font") or DEFAULT_CJK_FONT
     prs = Presentation(io.BytesIO(base_pptx))
@@ -6441,8 +6809,18 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
         except Exception:
             pass
     sw, sh = prs.slide_width, prs.slide_height
+    hybrid_index = 0
     for ns, lay, s in new_slides:
         try:
+            # 正文页统一走「模板皮 + 引擎骨架」：保留模板的底色、页脚装饰、配色
+            # 与字体，正文由自适应排版重排。原因是模板的正文槽位是给原稿那几句
+            # 话设计的，条数/字数一变就出现空框、半边空白、配图无处安放（用户
+            # 2026-11-10 连拍三处）；封面/目录/章节/结尾槽位简单，仍用原版式。
+            if s.get("type") in {"content", "case", "summary", "chart", "data"}:
+                _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings,
+                                             variant=hybrid_index)
+                hybrid_index += 1
+                continue
             if lay is None:
                 _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings)
                 continue

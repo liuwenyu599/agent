@@ -221,6 +221,19 @@ def audit_outline(outline: Dict[str, Any],
         add("repeated_shape_run", max(1, run_end - longest_run + 1),
             f"连续 {longest_run} 页内容形态相同，建议至少一页改用数据/图表/时间轴/案例结构")
 
+    for index, slide in enumerate(slides):
+        if slide.get("type") != "section":
+            continue
+        following = 0
+        for later in slides[index + 1:]:
+            if later.get("type") in {"section", "closing"}:
+                break
+            if later.get("type") not in _CHROME_TYPES:
+                following += 1
+        if following < 2:
+            add("thin_section", index + 1,
+                "章节页后不足 2 页实质内容，建议把章节标题并入正文页")
+
     body_pages = [s for s in slides
                   if str(s.get("type") or "content") not in _CHROME_TYPES]
     content_pages = [s for s in body_pages
@@ -266,6 +279,34 @@ def audit_outline(outline: Dict[str, Any],
         },
         "outline": result,
     }
+
+
+def remove_redundant_sections(outline: Dict[str, Any]) -> Dict[str, Any]:
+    """For flexible page counts, omit one-page chapter dividers already listed in TOC."""
+    slides = list(outline.get("slides") or [])
+    toc_titles = {re.sub(r"\s+", "", point) for slide in slides
+                  if slide.get("type") == "toc" for point in _points(slide)}
+    if not toc_titles:
+        return outline
+    remove = set()
+    for index, slide in enumerate(slides):
+        if slide.get("type") != "section":
+            continue
+        title = re.sub(r"\s+", "", str(slide.get("title") or ""))
+        if title not in toc_titles:
+            continue
+        following = 0
+        for later in slides[index + 1:]:
+            if later.get("type") in {"section", "closing"}:
+                break
+            if later.get("type") not in _CHROME_TYPES:
+                following += 1
+        if following < 2:
+            remove.add(index)
+    if not remove:
+        return outline
+    return {**outline, "slides": [slide for index, slide in enumerate(slides)
+                                  if index not in remove]}
 
 
 def summary_for_prompt(report: Dict[str, Any], limit: int = 10) -> str:

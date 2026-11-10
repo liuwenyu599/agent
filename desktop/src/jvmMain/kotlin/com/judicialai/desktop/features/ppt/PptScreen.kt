@@ -444,7 +444,7 @@ private fun PptEntryPane(
         Row(verticalAlignment = Alignment.Bottom) {
             Text("视觉风格", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Spacer(Modifier.width(8.dp))
-            Text("选模板后默认沿用配色，正文使用系统兼容中文字体，逐页智能排版", fontSize = 11.sp, color = Muted)
+            Text("选模板后默认沿用原版式；文字过多时会逐页调整到可读版式", fontSize = 11.sp, color = Muted)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
         }
@@ -460,7 +460,7 @@ private fun PptEntryPane(
                 StyleCard(t, i, Modifier.width(190.dp),
                     selected = t["id"].str() == vm.templateId) {
                     vm.templateId = t["id"].str()
-                    vm.strictTemplate = false
+                    vm.strictTemplate = true
                 }
             }
         }
@@ -580,6 +580,10 @@ private fun MaterialLibraryPanel(vm: PptViewModel) {
               Text(if (vm.autoImagesEnabled) "✓ 自动配图（点击改为手选）"
                    else "手选图片（点击开启自动配图）", fontSize = 11.sp)
           }
+        if (vm.autoImagesEnabled && vm.libraryMaterials.none { it.caption.isNotBlank() }) {
+            Text("当前没有可自动匹配的实景图片。上传图片并填写画面说明后，生成时会按内容配图。",
+                fontSize = 11.sp, color = Color(0xFF9A5900))
+        }
         Row(Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             (listOf("全部", "我的", "公共") + vm.libraryMaterials.map { it.category }
