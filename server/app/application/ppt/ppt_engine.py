@@ -5124,8 +5124,24 @@ def _add_native_chart(slide, chart_spec, region, colors, font, sw, sh):
     chart = gf.chart
     chart.has_title = False
     try:
-        chart.plots[0].has_data_labels = True
-        chart.plots[0].data_labels.font.size = Pt(11)
+        plot = chart.plots[0]
+        plot.has_data_labels = True
+        labels = plot.data_labels
+        labels.font.size = Pt(10)
+        labels.font.bold = True
+        # 标签默认贴着条尾画，深色字压在主色条上几乎看不见（用户截图里
+        # 「11 / 23 / 17 / 35」直接糊在红条右端）。条图/柱图一律放到条末端外侧。
+        if chart_spec.get("chart_type") not in {"pie", "doughnut", "stacked"}:
+            labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        labels.font.color.rgb = C(colors.get("dark", "333333"))
+        if chart_spec.get("chart_type") in {"bar_h", "bar", "column"}:
+            plot.gap_width = 70
+    except Exception:
+        pass
+    try:
+        # 类别名是这页真正的信息量，缩到 8pt 就只剩装饰。
+        chart.category_axis.tick_labels.font.size = Pt(10)
+        chart.value_axis.tick_labels.font.size = Pt(9)
     except Exception:
         pass
     try:
@@ -5669,6 +5685,60 @@ def _harmonize_peer_point_sizes(peers, sw, sh, font) -> bool:
     return False
 
 
+_POINT_TOKEN_RE = re.compile(r"\{\{\s*point(\d+)\s*\}\}")
+
+
+def _ensure_point_slots(slide, need: int, sw: int, sh: int) -> None:
+    """列表类模板页的槽位数是写死的，条目比槽位多时，多出来的会被并进最后
+    一个框——用户 2026-11-10 的截图就是「三、注重学用结合…」下面紧接着
+    「四、下一步工作打算」，两条挤在同一个红条里，读起来像排版漏了一条。
+
+    槽位本来就是同一个形状复制出来的，所以缺几个克隆几个：填充、圆角、字号、
+    内边距全部继承，只把 token 换成 pointN+1，然后整列等距重排。目录条目数
+    因此可以自由变化，模板的视觉语言一点不动。
+    """
+    from copy import deepcopy
+
+    def collect():
+        found = []
+        for shp, _rect, _depth in _iter_shapes(slide.shapes):
+            hits = _POINT_TOKEN_RE.findall(_shape_plain_text(shp))
+            if len(hits) == 1:
+                found.append(shp)
+        found.sort(key=lambda item: (item.top or 0, item.left or 0))
+        return found
+
+    slots = collect()
+    if not slots or len(slots) >= need:
+        return
+    last = slots[-1]
+    anchor = last._element
+    for index in range(len(slots) + 1, need + 1):
+        element = deepcopy(last._element)
+        for node in element.xpath(".//a:t"):
+            if node.text and "point" in node.text:
+                node.text = _POINT_TOKEN_RE.sub("{{point%d}}" % index, node.text)
+        anchor.addnext(element)
+        anchor = element
+
+    slots = collect()
+    if len(slots) != need:
+        return
+    tops = [slot.top or 0 for slot in slots]
+    step = (tops[1] - tops[0]) if len(tops) > 1 else (slots[0].height or 0) * 1.4
+    height = slots[0].height or 0
+    # 页脚线描约在 .855 处起笔，重排不许压上去；空间不够就先压缩行距，
+    # 再收条高（同号字仍装得下），绝不把最后一条挤出页面。
+    span = int(sh * .855) - tops[0]
+    if need > 1 and span > 0:
+        step = min(step, (span - height) / (need - 1))
+    if step < height * 1.12:
+        height = max(int(sh * .075), int(step * .88))
+    for index, slot in enumerate(slots):
+        slot.top = int(tops[0] + index * step)
+        slot.height = height
+
+
 def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warnings=None):
     """把大纲一页的内容填进克隆出来的模板页：
     - 标题/副标题/正文 → 对应文本区域（示例文字全部替换）
@@ -5677,6 +5747,11 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
     - 有图表块且有图表区域 → 绘制原生图表
     """
     schema = layout.get("element_schema", [])
+
+    if layout.get("detected_type") == "toc":
+        need = len(_split_multiline_points([str(p) for p in (sdata.get("points") or [])]))
+        if need:
+            _ensure_point_slots(slide, need, sw, sh)
 
     def role_of(e):
         for se in schema:
@@ -6157,6 +6232,23 @@ def _keep_template_decorations(slide, sw: int, sh: int):
         if not keep:
             _delete_shape(shape)
             continue
+        # 贴右边缘的窄装饰条（模板拿它封住右边界）：正文页会盖一块内容白板，
+        # 白板一压就只剩一条悬空的红色竖片——用户截图里 p4/p6/p9 右缘那道
+        # 突兀的红杠就是它。整条可见或彻底不要，压掉一半最难看。
+        try:
+            if (shape.width or 0) / sw < .09 and (shape.left or 0) / sw > .82:
+                _delete_shape(shape)
+                continue
+            # 模板自带的横向分隔线是按它自己的栏目位置画的。我们重排后卡片
+            # 正好压在线上，只在卡片缝里露出两小截红杠，像断掉的箭头。兜底
+            # 排版自己会画标题线，这条留着只会添乱。
+            top_ratio = (shape.top or 0) / sh
+            if ((shape.height or 0) / sh < .022 and (shape.width or 0) / sw > .28
+                    and .10 < top_ratio < .92):
+                _delete_shape(shape)
+                continue
+        except TypeError:
+            pass
         try:
             top = shape.top / sh
             bottom = (shape.top + shape.height) / sh
@@ -6360,7 +6452,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     if chart_spec:
         # A learned layout may have no chart placeholder. Keep the actual data
         # as an editable chart and place its accompanying conclusions beside it.
-        chart_region = {"x": .105, "y": my(.36), "w": .78 if not points else .54,
+        chart_region = {"x": .105, "y": my(.36), "w": .78 if not points else .50,
                         "h": mh(.49)}
         try:
             _add_native_chart(slide, chart_spec, chart_region, colors, font, sw, sh)
@@ -6377,10 +6469,12 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                 for index, category in enumerate(categories)]
         else:
             if points:
-                size, rows = point_rows(points, .22, top=.39, bottom=.83, preferred_pt=17)
+                # 结论栏原来只有 .21 宽（一行 6～7 字，字号被压到 9pt），图表
+                # 左侧又空着一截。这里把图表收 0.04、结论栏放 0.10。
+                size, rows = point_rows(points, .31, top=.39, bottom=.83, preferred_pt=17)
                 for point, (y, height) in zip(points, rows):
-                    label(point, .68, y, .21, max(height - .01, .05),
-                          fit_size(point, .21, height - .01, size), False, dark)
+                    label(point, .625, y, .31, max(height - .01, .05),
+                          fit_size(point, .31, height - .01, size), False, dark)
             return
 
     selected_image = (sdata.get("_image") or {}).get("file_path")
@@ -6453,38 +6547,52 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
         if style == 1:
             col_w, gap = .278, .028
             x0 = .055 + (.89 - (col_w * 3 + gap * 2)) / 2
-            # 卡高按最长要点实际行数收紧（只缩不放），否则短句下方会空掉半张卡。
-            per_line = max(4, int(col_w * 960 / 15))
+            # 卡高由内容决定，不再按固定比例。三行字的卡撑到半页高，卡片下半
+            # 截和整页底部会同时空掉——用户截图里「下一步工作打算」就是这个
+            # 样子：内容只有三条短句，页面空了三分之一。
+            common = min(fit_size(p, col_w - .05, .34, 18) for p in points)
+            per_line = max(4, int((col_w - .05) * 960 / common))
             lines = max(2, math.ceil(longest / per_line))
-            col_h = min(.50, max(.34, lines * 15 * 1.3 / 540 + .22))
-            y0 = .28
-            common = min(fit_size(p, col_w - .05, col_h - .10, 16) for p in points)
+            col_h = min(.50, max(.26, lines * common * 1.35 / 540 + .17))
+            y0 = .315 + max(0.0, (.825 - .315 - col_h) / 2)
             for index, point in enumerate(points):
                 x = x0 + index * (col_w + gap)
                 card(x, y0, col_w, col_h, tint(primary, .05))
                 box(x, y0, col_w, .011, primary)
-                badge(f"{index + 1:02d}", x + .018, y0 + .03, .040, primary, 11)
-                label(point, x + .02, y0 + .09, col_w - .04, col_h - .11,
+                badge(f"{index + 1:02d}", x + .018, y0 + .032, .044, primary, 11)
+                label(point, x + .02, y0 + .095, col_w - .04, col_h - .11,
                       common, False, dark)
             return
         if style == 2:
-            size, rows = point_rows(points, .74, top=.30, bottom=.86, preferred_pt=19)
+            # top 必须落在标题红线（.325）之下，否则第一段文字正好被那条线
+            # 划过去，像给整段加了删除线。
+            size, rows = point_rows(points, .74, top=.355, bottom=.875, preferred_pt=20)
             for point, (y, height) in zip(points, rows):
-                row_h = max(height - .02, .10)
-                box(.095, y + .012, .006, row_h - .024, primary)
-                label(point, .125, y + .01, .74, row_h - .02,
-                      fit_size(point, .74, row_h - .02, size), False, dark)
+                # 竖条按文字实际高度画。按整行高度画会伸出一大截悬在段落下
+                # 方，读起来像三条断掉的引号线。
+                from app.application.ppt.adaptive_design import estimated_lines
+                lines = max(1, estimated_lines(point, .74, size))
+                bar_h = min(height - .02, lines * size * 1.35 / 540 + .015)
+                box(.095, y + .008, .006, max(.05, bar_h), primary)
+                label(point, .125, y + .006, .74, max(height - .02, .06),
+                      fit_size(point, .74, max(height - .02, .06), size), False, dark)
             return
         # style == 0：三条独立圆角色卡（下方保持原有实现）
-        size, rows = point_rows(points, .58, top=.36, bottom=.85, preferred_pt=20)
+        from app.application.ppt.adaptive_design import estimated_lines
+        size, rows = point_rows(points, .60, top=.36, bottom=.85, preferred_pt=20)
         row_heights = [max(height - .015, .09) for _, height in rows]
-        common_size = min(fit_size(p, .67, min(row_heights) - .03, size)
+        common_size = min(fit_size(p, .68, min(row_heights) - .03, size)
                           for p in points)
         for index, (point, (y, height)) in enumerate(zip(points, rows), 1):
             row_h = max(height - .015, .09)
             card(.105, y, .79, row_h, tint(primary, .06))
-            badge(f"{index:02d}", .13, y + row_h / 2 - .028, .056, primary, 14)
-            label(point, .21, y + .012, .67, row_h - .024, common_size, False, dark)
+            # 文字在卡内垂直居中：行数少的要点原来顶在卡片上沿，下方空半张
+            # 卡，六个这样的卡片叠起来整页就显得没排满。
+            lines = max(1, estimated_lines(point, .68, common_size))
+            text_h = min(row_h - .02, lines * common_size * 1.35 / 540)
+            badge(f"{index:02d}", .125, y + row_h / 2 - .025, .05, primary, 13)
+            label(point, .195, y + max(.01, (row_h - text_h) / 2), .68,
+                  text_h + .02, common_size, False, dark)
         return
 
     if count == 4 and longest <= 46:

@@ -1273,3 +1273,54 @@ class TestImageBudgetByPageType:
              "points": ["召开专题学习会，分章节解读条例。"]}
             for i in range(40)])
         assert sum(1 for s in slides if s.get("_image")) <= E._image_budget(40)
+
+
+class TestTemplatePointSlots:
+    """模板列表页槽位不足时必须扩槽，不能把多出来的条目塞进最后一个框。
+
+    用户 2026-11-10 的截图：目录四条，模板只有三条红条，第四条直接接在
+    第三条下面，同一条里出现「三、…」「四、…」两行——读起来像漏排。
+    """
+
+    def _slide(self):
+        from pptx.enum.shapes import MSO_SHAPE
+
+        prs = Presentation()
+        prs.slide_width, prs.slide_height = 12192000, 6858000
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        for index in range(3):
+            box = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                int(prs.slide_width * .46),
+                int(prs.slide_height * (.20 + .20 * index)),
+                int(prs.slide_width * .44),
+                int(prs.slide_height * .13))
+            box.text_frame.text = "{{point%d}}" % (index + 1)
+        return prs, slide
+
+    def test_extra_points_get_their_own_slot(self):
+        prs, slide = self._slide()
+        E._ensure_point_slots(slide, 4, prs.slide_width, prs.slide_height)
+        tokens = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and "point" in shape.text_frame.text:
+                tokens.append(shape.text_frame.text)
+        assert sorted(tokens) == ["{{point1}}", "{{point2}}",
+                                  "{{point3}}", "{{point4}}"]
+
+    def test_slots_are_redistributed_inside_the_page(self):
+        prs, slide = self._slide()
+        E._ensure_point_slots(slide, 5, prs.slide_width, prs.slide_height)
+        tops = sorted(shape.top for shape in slide.shapes
+                      if shape.has_text_frame and "point" in shape.text_frame.text)
+        assert len(tops) == 5
+        assert tops[-1] <= prs.slide_height * .88
+        gaps = [b - a for a, b in zip(tops, tops[1:])]
+        assert max(gaps) - min(gaps) <= prs.slide_height * .01
+
+    def test_enough_slots_are_left_untouched(self):
+        prs, slide = self._slide()
+        before = [(s.left, s.top, s.height) for s in slide.shapes]
+        E._ensure_point_slots(slide, 2, prs.slide_width, prs.slide_height)
+        after = [(s.left, s.top, s.height) for s in slide.shapes]
+        assert before == after
