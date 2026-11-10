@@ -196,6 +196,39 @@ def test_explicit_image_uses_readable_layout_when_template_has_only_text(tmp_pat
     assert any("可读版式" in item for item in warnings)
 
 
+def test_template_image_area_follows_page_content_not_source_slot(tmp_path):
+    from PIL import Image
+
+    source_prs, blank = _blank_deck()
+    source_slide = source_prs.slides.add_slide(blank)
+    source_slide.shapes.add_textbox(Inches(.8), Inches(.5), Inches(10), Inches(.8)).text = "{{title}}"
+    source_slide.shapes.add_textbox(Inches(.8), Inches(2), Inches(10), Inches(3)).text = "{{point1}}"
+    source = io.BytesIO()
+    source_prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    image_path = tmp_path / "wide.png"
+    Image.new("RGB", (1200, 700), "blue").save(image_path)
+    template = {"colors": learned["colors"], "font": learned["font"],
+                "layout_library": learned["layouts"]}
+
+    def rendered(points):
+        payload = {"slides": [{"type": "content", "title": "培训安排",
+                               "points": points,
+                               "_image": {"file_path": str(image_path)}}]}
+        data = ppt_engine.render_pptx(payload, template, source.getvalue())
+        return Presentation(io.BytesIO(data)).slides[0]
+
+    brief = rendered(["完成专题培训"])
+    dense_points = ["组织各部门围绕法规开展专题学习和交流研讨。" * 2
+                    for _ in range(5)]
+    dense = rendered(dense_points)
+    brief_image = next(shape for shape in brief.shapes if shape.shape_type == 13)
+    dense_image = next(shape for shape in dense.shapes if shape.shape_type == 13)
+    assert brief_image.width > dense_image.width
+    dense_text = " ".join(shape.text for shape in dense.shapes if shape.has_text_frame)
+    assert all(point in dense_text for point in dense_points)
+
+
 def test_fill_learned_text_keeps_template_run_format():
     from pptx.dml.color import RGBColor
     from pptx.util import Pt

@@ -216,12 +216,53 @@ def test_adaptive_image_layout_uses_landscape_as_feature_image(tmp_path):
     outline = {"slides": [{"type": "content", "layout": "content.image_right",
                            "title": "现场情况", "points": ["开展现场检查", "完成情况核查"],
                            "_image": {"file_path": str(path), "name": "现场图片"}}]}
-    slide = Presentation(BytesIO(ppt_engine.render_pptx(
-        outline, template, adaptive=True))).slides[0]
+    deck = Presentation(BytesIO(ppt_engine.render_pptx(
+        outline, template, adaptive=True)))
+    slide = deck.slides[0]
     picture = next(shape for shape in slide.shapes if shape.shape_type == 13)
     first_point = next(shape for shape in slide.shapes
                        if shape.has_text_frame and shape.text == "开展现场检查")
     assert picture.left < first_point.left
+
+
+def test_image_composition_responds_to_text_load_and_image_ratio():
+    plan = adaptive_design.plan_image_composition
+    brief = plan(["现场检查", "完成核查"], 1.8,
+                 left=.055, right=.94, top=.25, bottom=.79)
+    dense = plan(["较长的工作说明" * 7 for _ in range(5)], 1.8,
+                 left=.055, right=.94, top=.25, bottom=.79)
+    portrait = plan(["第一项", "第二项", "第三项"], .65,
+                    left=.055, right=.94, top=.25, bottom=.79)
+    panorama = plan(["一项简短结论"], 2.5,
+                    left=.055, right=.94, top=.25, bottom=.79)
+    assert brief["image"][2] > brief["text"][2]
+    assert dense["text"][2] > dense["image"][2]
+    assert portrait["image"][2] < brief["image"][2]
+    assert panorama["mode"] == "banner"
+    assert panorama["image"][1] + panorama["image"][3] < panorama["text"][1]
+
+
+@pytest.mark.parametrize("adaptive", [True, False])
+def test_adaptive_panorama_places_image_above_short_text(tmp_path, adaptive):
+    from io import BytesIO
+    from PIL import Image
+    from pptx import Presentation
+
+    path = tmp_path / "panorama.png"
+    Image.new("RGB", (1800, 600), "blue").save(path)
+    template = {"colors": ppt_engine.DEFAULT_COLORS,
+                "layouts": ppt_engine.DEFAULT_LAYOUTS, "font": "思源黑体"}
+    outline = {"slides": [{"type": "content", "title": "现场情况",
+                           "points": ["完成现场检查"],
+                           "_image": {"file_path": str(path), "name": "现场图片"}}]}
+    deck = Presentation(BytesIO(ppt_engine.render_pptx(
+        outline, template, adaptive=adaptive)))
+    slide = deck.slides[0]
+    picture = next(shape for shape in slide.shapes if shape.shape_type == 13)
+    point = next(shape for shape in slide.shapes
+                 if shape.has_text_frame and shape.text == "完成现场检查")
+    assert picture.width > deck.slide_width * .75
+    assert picture.top + picture.height < point.top
 
 
 def test_visual_feedback_reports_unresolved_problem(monkeypatch):

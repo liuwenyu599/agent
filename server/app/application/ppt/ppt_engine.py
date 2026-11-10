@@ -2018,7 +2018,18 @@ _SCENE_CUES = (
 # 合影类照片只适合封面/结尾/活动留影，配到正文页像"贴图凑数"。
 _GROUP_PHOTO_CUES = ("合影", "集体合影", "活动留影")
 # 一稿里自动配图的正文页上限：政务稿配满会显得杂。
-_SCENE_IMAGE_CAP = 4
+_SCENE_IMAGE_CAP = 4      # 兼容保留：旧版全篇上限，现由 _image_budget 取代
+
+# 自动配图可落在哪些页型。用户 2026-11-10 定「每 2～3 页必配一张」，所以章节
+# 过渡页也要吃图——它天然每 3 页出现一次，是密度的骨架。封面不参与：党徽、
+# 标题、副标题胶囊、页脚线描已把版面排满，没有连续留白可放照片。目录、总结、
+# 结尾是纯导航页，塞照片只会打断翻页节奏。
+_AUTO_IMAGE_TYPES = {"content", "case", "section"}
+
+
+def _image_budget(total: int) -> int:
+    """全篇自动配图预算：每 2.5 页一张，不少于 3 张。"""
+    return max(3, int(round(total / 2.5)))
 
 
 def _scene_wanted(text: str) -> Dict[str, int]:
@@ -2085,40 +2096,110 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
         return best if best_score else None
 
     used_auto_ids: set[str] = set()
-    scene_used = 0
-    for s in outline.get("slides", []):
+    slides = outline.get("slides", [])
+    for s in slides:
+        s["_image"] = None
+    budget = _image_budget(len(slides))
+
+    def _page_text(slide: Dict) -> str:
+        return " ".join([
+            str(slide.get("title") or ""),
+            " ".join(str(p) for p in (slide.get("points") or [])),
+            str(slide.get("note") or ""),
+        ])
+
+    def _chapter_text(index: int) -> str:
+        """章节页配图的依据：本章标题 + 紧随其后两页正文。
+
+        章节页自己只有一句标题（「强化思想引领，筑牢政治忠诚」），没有任何
+        场景词，直接拿标题去匹配永远落空。真正能说明"这一章在做什么"的是
+        接下来的正文——那里才会出现"专题学习会""警示教育基地"。
+        """
+        parts = []
+        for offset, slide in enumerate(slides[index:index + 3]):
+            if offset and slide.get("type") in {"section", "cover", "toc"}:
+                break
+            parts.append(_page_text(slide))
+        return " ".join(parts)
+
+    def _assign(slide: Dict, text: str) -> bool:
         img = None
-        if s.get("type") not in {"content", "case"}:
-            s["_image"] = None
-            continue
-        if s.get("image_id"):
-            img = by_id.get(str(s["image_id"]))
-        if not img and s.get("image_name"):
-            img = by_name.get(str(s["image_name"]))
+        # 页面上写了具体的 image_id / image_name，就只认这一张：它不在本次
+        # 授权素材里时，宁可这页没图，也不能换成一张"看着像"的——否则用户
+        # 指定的图会被悄悄替换，比空白更难发现。
+        explicit = bool(slide.get("image_id") or slide.get("image_name"))
+        if slide.get("image_id"):
+            img = by_id.get(str(slide["image_id"]))
+        if not img and slide.get("image_name"):
+            img = by_name.get(str(slide["image_name"]))
         if img and str(img.get("id")) in used_auto_ids:
             img = None
-        if (not img and not (s.get("image_id") or s.get("image_name"))
-                and (s.get("design") or {}).get("image_role") != "none"):
-            page_text = " ".join([
-                str(s.get("title") or ""),
-                " ".join(str(p) for p in (s.get("points") or [])),
-                str(s.get("note") or ""),
-            ])
-            if scene_used < _SCENE_IMAGE_CAP:
-                img = _scene_match(page_text)
-                if img:
-                    scene_used += 1
-            if not img:
-                # 词形兜底只看模型写的画面描述或标题本身，不拼正文：正文几千字
-                # 拿去比二元组重合，任何一页都能凑够 0.55，会把无关照片硬塞进来。
-                hint = str(s.get("image_hint") or s.get("title") or "").strip()
-                if hint:
-                    img = _relevant(hint)
-        if img:
-            used_auto_ids.add(str(img.get("id")))
-            s["image_id"] = img["id"]
-            s["image_name"] = img["name"]
-        s["_image"] = img
+        if not img:
+            if explicit:
+                return False
+            img = _scene_match(text)
+        if not img:
+            # 词形兜底只看模型写的画面描述或标题本身，不拼正文：正文几千字
+            # 拿去比二元组重合，任何一页都能凑够 0.55，会把无关照片硬塞进来。
+            hint = str(slide.get("image_hint") or slide.get("title") or "").strip()
+            if hint:
+                img = _relevant(hint)
+        if not img:
+            return False
+        used_auto_ids.add(str(img.get("id")))
+        slide["image_id"] = img["id"]
+        slide["image_name"] = img["name"]
+        slide["_image"] = img
+        return True
+
+    # 1) 用户或大纲显式指定的图：任何页型都照办（含封面），不占自动预算。
+    for s in slides:
+        if s.get("image_id") or s.get("image_name"):
+            _assign(s, _page_text(s))
+
+    # 2) 章节过渡页优先配。它每章一次、位置均匀，是「每 2～3 页一张」的骨架；
+    #    更要紧的是三张章节页必须长得一样——两张有图、一张没图，翻页时会被
+    #    读成"排版漏了"，而不是"这章没素材"。配图依据取本章标题 + 后两页正文：
+    #    章节页自己只有一句口号，拿它去匹配永远落空。
+    for index, s in enumerate(slides):
+        if len(used_auto_ids) >= budget:
+            break
+        if s.get("type") != "section" or s.get("_image"):
+            continue
+        if (s.get("design") or {}).get("image_role") == "none":
+            continue
+        _assign(s, _chapter_text(index))
+
+    # 3) 剩余预算给正文/案例页：场景命中优先，其次词形兜底。
+    for s in slides:
+        if len(used_auto_ids) >= budget:
+            break
+        if s.get("type") not in {"content", "case"} or s.get("_image"):
+            continue
+        if (s.get("design") or {}).get("image_role") == "none":
+            continue
+        _assign(s, _page_text(s))
+
+    # 4) 缺口回填：正文连续两页没图时，借所属章节的语境做一次弱匹配，
+    #    把「每 3 页必有一张」补住。仍不中就留白——为凑密度硬塞无关照片，
+    #    比留白更糟。
+    chapter = ""
+    gap = 0
+    for s in slides:
+        if s.get("type") == "section":
+            chapter = str(s.get("title") or "")
+        if s.get("type") not in {"content", "case"}:
+            gap = 0
+            continue
+        if s.get("_image"):
+            gap = 0
+            continue
+        gap += 1
+        if gap < 2 or len(used_auto_ids) >= budget:
+            continue
+        hint = f"{chapter} {s.get('image_hint') or ''}".strip()
+        if hint and _assign(s, hint):
+            gap = 0
     return outline
 
 
@@ -2694,45 +2775,30 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         page_header(slide, s["title"])
         img = s["_image"]
         points = s["points"]
-        if adaptive:
-            from PIL import Image
-            with Image.open(img["file_path"]) as source:
-                ratio = source.width / max(source.height, 1)
-            mode = adaptive_design.image_geometry(points, ratio)
-            if mode == "panorama":
-                ix, iy, iw, ih = lx(0.055), ly(0.25), lx(0.56), ly(0.54)
-                tx, tw = 0.655, 0.285
-            else:
-                image_width = 0.37 if ratio < 0.95 or sum(
-                    adaptive_design.text_units(p) for p in points) > 100 else 0.43
-                ix, iy, iw, ih = lx(0.055 if side == "left" else 0.94 - image_width), ly(0.25), lx(image_width), ly(0.54)
-                tx, tw = (0.10 + image_width, 0.82 - image_width) if side == "left" else (0.065, 0.82 - image_width)
-            rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
-            picture_fit(slide, img["file_path"], ix, iy, iw, ih,
-                        (s.get("design") or {}).get("image_fit"))
-            text(slide, ix, iy + ih + ly(0.012), iw, ly(0.05),
-                 f"▲ {img.get('caption') or img['name']}",
-                 adaptive_design.TOKENS.caption_pt, False, GRAY, align=PP_ALIGN.CENTER)
-            size, rows = adaptive_design.point_rows(
-                points, tw - 0.025, top=0.26, bottom=0.82,
-                preferred_pt=16)
-            for point, (y, height) in zip(points, rows):
-                rect(slide, lx(tx), ly(y + 0.012), lx(0.012), lx(0.012), ACCENT)
-                text(slide, lx(tx + 0.025), ly(y), lx(tw - 0.025),
-                     ly(max(height - 0.012, 0.01)), point, size, False, GRAY)
-            return slide
-        y = 0.26
-        step = 0.125 if len(points) <= 4 else 0.105
-        for p in points:
-            rect(slide, lx(0.06), ly(y + 0.014), lx(0.013), lx(0.013), ACCENT)
-            text(slide, lx(0.085), ly(y), lx(0.40), ly(0.13), p, 16, False, GRAY)
-            y += step
-        ix, iy, iw, ih = lx(0.53), ly(0.235), lx(0.43), ly(0.60)
+        from PIL import Image
+        with Image.open(img["file_path"]) as source:
+            ratio = source.width / max(source.height, 1)
+        composition = adaptive_design.plan_image_composition(
+            points, ratio, left=.055, right=.94, top=.25, bottom=.79,
+            side=side)
+        image_box = composition["image"]
+        text_box = composition["text"]
+        ix, iy, iw, ih = (lx(image_box[0]), ly(image_box[1]),
+                          lx(image_box[2]), ly(image_box[3]))
         rect(slide, ix + lx(0.008), iy + ly(0.015), iw, ih, LIGHT, round_=True)
         picture_fit(slide, img["file_path"], ix, iy, iw, ih,
                     (s.get("design") or {}).get("image_fit"))
-        text(slide, ix, iy + ih + ly(0.012), iw, ly(0.045),
-             f"▲ {img.get('caption') or img['name']}", 11, False, GRAY, align=PP_ALIGN.CENTER)
+        text(slide, ix, iy + ih + ly(0.012), iw, ly(0.05),
+             f"▲ {img.get('caption') or img['name']}",
+             adaptive_design.TOKENS.caption_pt, False, GRAY, align=PP_ALIGN.CENTER)
+        size, rows = adaptive_design.point_rows(
+            points, text_box[2] - .025, top=text_box[1],
+            bottom=text_box[1] + text_box[3],
+            preferred_pt=composition["preferred_pt"])
+        for point, (y, height) in zip(points, rows):
+            rect(slide, lx(text_box[0]), ly(y + 0.012), lx(0.012), lx(0.012), ACCENT)
+            text(slide, lx(text_box[0] + 0.025), ly(y), lx(text_box[2] - 0.025),
+                 ly(max(height - 0.012, 0.01)), point, size, False, GRAY)
         return slide
 
     def _content_bullets(s):
@@ -5940,6 +6006,25 @@ def _fill_learned_slide(slide, layout, sdata, colors, font, sw, sh, prs, warning
                 if metric:
                     _add_metric_panel(slide, e, metric, colors, font, sw, sh)
     if (not image_drawn and img_path and os.path.exists(img_path)
+            and not is_cover and str(sdata.get("type") or "") == "section"):
+        # 章节页在这套模板里只有「折角标签 + 标题」，没有任何图片槽——但标题
+        # 以下整条是空的。图不该因为"没有槽"就丢掉，找块空白放进去。
+        box = _free_banner_box(slide, sw, sh, _picture_ratio(img_path))
+        if box:
+            left, top, width, height = box
+            # 居中：章节页下半条整片空白，靠左会让人误读成"排版掉了"。
+            centered = max(int(sw * .06), (sw - width) // 2)
+            try:
+                picture = _add_picture_fill(slide, img_path, centered, top,
+                                            width, height)
+                # 细红边，与模板的线描语言对齐；不加边时照片像浮贴上去的。
+                from pptx.util import Pt as _Pt
+                picture.line.color.rgb = _hex_rgb(colors.get("primary") or "C00000")
+                picture.line.width = _Pt(1)
+                image_drawn = True
+            except Exception as exc:
+                logger.warning("章节页配图插入失败: %s", exc)
+    if (not image_drawn and img_path and os.path.exists(img_path)
             and not is_cover and warnings is not None):
         warnings.append(f"「{title or '本页'}」的模板版式没有可用的配图区，所选图片未插入")
 
@@ -6244,6 +6329,19 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     if kind in {"section", "closing"}:
         # 章节过渡页：主色实底大横带 + 白字标题 + 章节编号，告别白框观感。
         title = sdata.get("title") or ""
+        selected_image = (sdata.get("_image") or {}).get("file_path")
+        if (kind == "section" and selected_image
+                and os.path.isfile(selected_image)):
+            # 有配图的章节页：标题在上，横幅图占中段，模板的底纹和页脚线描
+            # 仍然保留。这里不用主色实底大横带——照片本身就是这页的视觉重心。
+            label(title, .07, .13, .86, .14, 30, True, dark)
+            box(.07, .285, .86, .006, primary)
+            ratio = _picture_ratio(selected_image)
+            width = .86
+            height = min(width * (sw / sh) / max(.1, ratio), .40)
+            _add_picture_fill(slide, selected_image, int(sw * .07), int(sh * .32),
+                              int(sw * width), int(sh * height))
+            return
         card(.055, .295, .89, .35, primary)
         numeral = {"一": "01", "二": "02", "三": "03", "四": "04", "五": "05",
                    "六": "06", "七": "07", "八": "08", "九": "09", "十": "10"}.get(
@@ -6287,42 +6385,49 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
 
     selected_image = (sdata.get("_image") or {}).get("file_path")
     if selected_image and os.path.isfile(selected_image) and 1 <= count <= 6:
-        # A per-page readable fallback must retain an image the user selected.
-        # Fit it inside the right column without stretching the source bitmap.
+        # Plan the image/text relationship from this page's content and image
+        # aspect ratio. Template image placeholders only supply style cues.
         from PIL import Image
+        from app.application.ppt.adaptive_design import plan_image_composition
         try:
             with Image.open(selected_image) as image:
                 image_w, image_h = image.size
         except OSError:
             image_w = image_h = 0
         if image_w > 0 and image_h > 0:
-            # 图文页左右交替：全本都是「左文右图」时，配图页反而成了新的一种
-            # 雷同。按标题奇偶镜像，同一份稿里两种方向都会出现。
             mirror = sum(ord(ch) for ch in str(sdata.get("title") or "")) % 2 == 1
-            if mirror:
-                card_box = (.07, .36, .35, .47)
-                text_x, text_w = .49, .40
-                target_x, target_w = int(sw * .085), int(sw * .32)
+            composition = plan_image_composition(
+                points, image_w / image_h, left=.085, right=.915,
+                top=.36, bottom=.83, side="left" if mirror else "right")
+            image_x, image_y, image_area_w, image_area_h = composition["image"]
+            text_x, text_y, text_w, text_h = composition["text"]
+            card(image_x, image_y, image_area_w, image_area_h, tint(primary, .04))
+            target_x, target_y = int(sw * image_x), int(sh * my(image_y))
+            target_w, target_h = int(sw * image_area_w), int(sh * mh(image_area_h))
+            if (sdata.get("design") or {}).get("image_fit") == "contain":
+                scale = min(target_w / image_w, target_h / image_h)
+                pic_w, pic_h = max(1, int(image_w * scale)), max(1, int(image_h * scale))
+                picture = slide.shapes.add_picture(selected_image,
+                    target_x + (target_w - pic_w) // 2,
+                    target_y + (target_h - pic_h) // 2, pic_w, pic_h)
             else:
-                card_box = (.56, .36, .35, .47)
-                text_x, text_w = .11, .35
-                target_x, target_w = int(sw * .58), int(sw * .31)
-            target_y, target_h = int(sh * .38), int(sh * .43)
-            scale = min(target_w / image_w, target_h / image_h)
-            pic_w, pic_h = max(1, int(image_w * scale)), max(1, int(image_h * scale))
-            card(*card_box, tint(primary, .04))
-            slide.shapes.add_picture(selected_image,
-                target_x + (target_w - pic_w) // 2,
-                target_y + (target_h - pic_h) // 2, pic_w, pic_h)
-            size, rows = point_rows(points, text_w + .04, top=.37, bottom=.83,
-                                    preferred_pt=17)
-            badge_x = text_x - .065 if mirror else text_x
-            label_x = text_x + (0 if mirror else .06)
-            inner_w = text_w - (.06 if not mirror else 0)
+                picture = _add_picture_fill(slide, selected_image, target_x, target_y,
+                                            target_w, target_h)
+            # 与章节页同一套处理：照片压模板米白底时，没有边框会像贴上去的。
+            try:
+                from pptx.util import Pt as _Pt
+                picture.line.color.rgb = _hex_rgb(colors.get("primary"))
+                picture.line.width = _Pt(1)
+            except Exception:
+                pass
+            inner_w = max(.15, text_w - .06)
+            size, rows = point_rows(
+                points, inner_w, top=text_y, bottom=text_y + text_h,
+                preferred_pt=composition["preferred_pt"])
             for index, (point, (y, height)) in enumerate(zip(points, rows), 1):
-                badge(f"{index:02d}", badge_x, y + .01, .045, primary, 12)
-                label(point, label_x, y, max(inner_w, .28), max(height - .015, .05),
-                      fit_size(point, max(inner_w, .28), height - .02, size), False, dark)
+                badge(f"{index:02d}", text_x, y + .01, .045, primary, 12)
+                label(point, text_x + .06, y, inner_w, max(height - .015, .05),
+                      fit_size(point, inner_w, height - .02, size), False, dark)
             return
     if selected_image and warnings is not None:
         warnings.append(f"「{sdata.get('title') or '本页'}」所选图片未能放入当前页，请减少该页文字或更换图片")
@@ -6399,6 +6504,93 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     for index, (point, (y, height)) in enumerate(zip(points, rows), 1):
         label(f"{index:02d}", .115, y, .065, .05, 15, True, primary)
         label(point, .19, y, .69, max(height - .012, .05), size, False, dark)
+
+
+def _hex_rgb(value, fallback: str = "C00000"):
+    """'#C00000' / 'C00000' → RGBColor；格式不对时用模板主色兜底。"""
+    from pptx.dml.color import RGBColor
+    text = str(value or "").lstrip("#").strip()
+    if len(text) == 6:
+        try:
+            return RGBColor.from_string(text.upper())
+        except Exception:
+            pass
+    return RGBColor.from_string(fallback)
+
+
+def _picture_ratio(path: str) -> float:
+    """图片像素长宽比；读不出来返回 1.5（接近 3:2 的保守值）。"""
+    try:
+        from PIL import Image as _PILImage
+        with _PILImage.open(path) as image:
+            return (image.width / image.height) if image.height else 1.5
+    except Exception:
+        return 1.5
+
+
+def _free_banner_box(slide, sw: int, sh: int, ratio: float):
+    """在「只有标题、下面整条空着」的页上找一块能放照片的空白带。
+
+    章节过渡页就是这种页：模板给了折角标签和标题，标题以下是一片空白。没有
+    图片槽不等于不能配图——只要找得到不压文字的空白，就能放一张，模板底纹、
+    页脚线描都完整保留。找不到就返回 None，调用方照旧发警告。
+
+    占位按**页面上真实存在的形状**算，不按版式 schema：章节页的 schema 里
+    还留着模板那几行导语框，要点填不满时它们已经被清空，按 schema 判会把整条
+    空白带都算成占用，照片永远放不进去。空文本框不占位。
+    """
+    occupied = []
+    for shape, rect, _depth in _iter_shapes(slide.shapes):
+        left, top, width, height = rect
+        if not width or not height:
+            continue
+        x, y = left / sw, top / sh
+        w, h = width / sw, height / sh
+        if w * h >= .85:
+            continue                       # 整页底纹：照片可以压在上面
+        if w >= .9 and y > .3:
+            continue                       # 通栏页脚线描：透明底，不必避让
+        if w * h < .003:
+            continue                       # 极小的序号/图标
+        try:
+            if shape.has_text_frame and not shape.text_frame.text.strip():
+                continue                   # 空文本框（模板导语位）不占位
+        except Exception:
+            pass
+        occupied.append((x, y, w, h))
+
+    def clear(box) -> bool:
+        bx, by, bw, bh = box
+        for ox, oy, ow, oh in occupied:
+            overlap_x = max(0, min(bx + bw, ox + ow) - max(bx, ox))
+            overlap_y = max(0, min(by + bh, oy + oh) - max(by, oy))
+            if overlap_x * overlap_y > .008:
+                return False
+        return True
+
+    # 候选框排在折角标签（.13~.30）以下的空白带里，底边不超过 .70 以免压住
+    # 页脚线描。左右两套位置都试，取裁剪最少、面积最大的那块。
+    candidates = [
+        (.13, .32, .40, .40), (.50, .32, .40, .40),
+        (.13, .32, .46, .34), (.49, .32, .46, .34),
+        (.13, .34, .34, .32), (.55, .34, .34, .32),
+        (.13, .36, .30, .28), (.58, .36, .30, .28),
+    ]
+    scored = []
+    for left, top, width, height in candidates:
+        if top + height > .70 or left + width > .95:
+            continue
+        if not clear((left, top, width, height)):
+            continue
+        # 版面比例越贴近原图（少裁剪）越优先，同等比例下取面积大的。
+        box_ratio = (width * sw) / max(1.0, height * sh)
+        aspect = abs(math.log(box_ratio / max(.1, ratio)))
+        scored.append((aspect - width * height * .5, (left, top, width, height)))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0])
+    left, top, width, height = scored[0][1]
+    return (int(left * sw), int(top * sh), int(width * sw), int(height * sh))
 
 
 def _add_picture_fill(slide, path: str, left: int, top: int,

@@ -122,8 +122,45 @@ def compare_geometry(points: Sequence[str]) -> tuple[str, list[tuple[float, floa
                     (0.09 + left_width, 0.265, right_width, 0.53)]
 
 
-def image_geometry(points: Sequence[str], image_ratio: float) -> str:
-    """Give a wide image more space when the accompanying text is brief."""
-    if image_ratio >= 1.6 and len(points) <= 3 and sum(text_units(p) for p in points) <= 115:
-        return "panorama"
-    return "side"
+def plan_image_composition(points: Sequence[str], image_ratio: float, *,
+                           left: float, right: float, top: float, bottom: float,
+                           side: str = "right") -> dict:
+    """Choose the image/text relationship before either region is drawn.
+
+    Coordinates are page fractions. A selected image is content, so template
+    placeholders do not determine its size or whether it appears at all.
+    """
+    count = len(points)
+    units = sum(text_units(point) for point in points)
+    width, height = right - left, bottom - top
+    gap = min(.035, width * .045)
+    if image_ratio >= 2.1 and count == 1 and units <= 55:
+        image_h = height * .62
+        return {"mode": "banner",
+                "image": (left, top, width, image_h),
+                "text": (left + .02, top + image_h + .07,
+                         width - .04, height - image_h - .07),
+                "preferred_pt": 20}
+    if count >= 4 or units > 150:
+        share = .31
+        preferred_pt = 15
+    elif image_ratio < .9:
+        share = .35
+        preferred_pt = 17
+    elif count <= 2 and units <= 80:
+        share = .56
+        preferred_pt = 20
+    else:
+        share = .44
+        preferred_pt = 17
+    if image_ratio >= 1.6 and count <= 3 and units <= 115:
+        side = "left"
+    image_w = width * share
+    text_w = width - image_w - gap
+    if side == "left":
+        image_x, text_x = left, left + image_w + gap
+    else:
+        image_x, text_x = right - image_w, left
+    return {"mode": "side", "image": (image_x, top, image_w, height),
+            "text": (text_x, top, text_w, height),
+            "preferred_pt": preferred_pt}

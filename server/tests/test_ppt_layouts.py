@@ -1210,3 +1210,66 @@ class TestSceneImageMatching:
              "points": ["围绕条例开展研讨交流，分享学习体会。"]}])
         ids = [s["_image"]["id"] for s in slides if s.get("_image")]
         assert len(ids) == len(set(ids))
+
+
+class TestImageBudgetByPageType:
+    """配图按页型分预算（用户 2026-11-10 定「每 2～3 页必配一张」）。
+
+    旧实现只给 content/case 配图，封面、章节页一律 `_image = None`：11 页稿
+    在 32 张图里只落 2 张，且全压在正文页——该配图的章节页空着，不该配图的
+    条目页反而被切成左右两半。配图预算现在按页数算，章节页优先占位。
+    """
+
+    IMAGES = TestSceneImageMatching.IMAGES
+
+    def _resolve(self, slides):
+        outline = {"slides": slides}
+        E.resolve_slide_images(outline, list(self.IMAGES))
+        return outline["slides"]
+
+    def test_budget_scales_with_page_count(self):
+        assert E._image_budget(11) == 4
+        assert E._image_budget(20) == 8
+        assert E._image_budget(3) == 3
+
+    def test_section_page_matches_on_chapter_body(self):
+        """章节页只有一句口号，配图依据要取本章正文。"""
+        slides = self._resolve([
+            {"type": "section", "title": "一、强化思想引领，筑牢政治忠诚"},
+            {"type": "content", "title": "深学细悟",
+             "points": ["局党组书记讲授专题纪律党课，分章节深度解读。"]},
+        ])
+        assert slides[0]["_image"] is not None
+
+    def test_every_section_page_gets_a_photo_before_body_pages(self):
+        slides = self._resolve([
+            {"type": "section", "title": "一、强化思想引领，筑牢政治忠诚"},
+            {"type": "content", "title": "专题学习会",
+             "points": ["召开专题学习会，分章节解读条例。"]},
+            {"type": "section", "title": "二、深学细悟条例，丰富学习载体"},
+            {"type": "content", "title": "研讨交流",
+             "points": ["围绕条例开展研讨交流，分享学习体会。"]},
+            {"type": "section", "title": "三、注重学用结合，提升履职能力"},
+            {"type": "content", "title": "户外普法咨询",
+             "points": ["在社区设宣传台，群众现场咨询。"]},
+        ])
+        sections = [s for s in slides if s["type"] == "section"]
+        assert all(s["_image"] for s in sections)
+        assert sum(1 for s in slides if s.get("_image")) <= E._image_budget(len(slides))
+
+    def test_cover_toc_summary_closing_stay_text_only(self):
+        """封面被党徽、标题、页脚线描排满，塞照片只会压掉模板设计。"""
+        slides = self._resolve([
+            {"type": "cover", "title": "专题学习会 培训讲座"},
+            {"type": "toc", "title": "汇报目录 培训讲座"},
+            {"type": "summary", "title": "下一步工作打算 培训讲座"},
+            {"type": "closing", "title": "谢谢聆听 培训讲座"},
+        ])
+        assert [s["type"] for s in slides if s.get("_image")] == []
+
+    def test_long_deck_never_exceeds_budget(self):
+        slides = self._resolve([
+            {"type": "content", "title": f"专题学习会{i}",
+             "points": ["召开专题学习会，分章节解读条例。"]}
+            for i in range(40)])
+        assert sum(1 for s in slides if s.get("_image")) <= E._image_budget(40)
