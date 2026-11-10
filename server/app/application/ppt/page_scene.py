@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import math
 import copy
@@ -25,23 +26,73 @@ def references(slide: dict) -> dict:
 
 
 def audit(elements: list, slide: dict) -> bool:
+    return explain(elements, slide) == ""
+
+
+def intent_issue(elements: list, slide: dict) -> str:
+    """Check whether model geometry carries the page's stated relationship."""
+    design = slide.get("design") or {}
+    points = {item.get("ref"): item for item in elements
+              if isinstance(item, dict) and str(item.get("ref", "")).startswith("point:")}
+    if design.get("relationship") == "comparison" and len(points) == 2:
+        left, right = sorted(points.values(), key=lambda item: item["x"])
+        horizontal_gap = right["x"] - (left["x"] + left["w"])
+        vertical_overlap = min(left["y"] + left["h"], right["y"] + right["h"]) - max(
+            left["y"], right["y"])
+        if horizontal_gap < .015 or vertical_overlap < .25 * min(left["h"], right["h"]):
+            return "本页是对比关系，两项须并排形成可直接比较的左右两栏"
+    if design.get("relationship") == "takeaway" and len(points) >= 2:
+        areas = sorted((item["w"] * item["h"] for item in points.values()), reverse=True)
+        if areas[0] < areas[1] * 1.3:
+            return "本页有主结论，最大的正文区域须明显大于次要说明区域"
+    image = next((item for item in elements if item.get("ref") == "image"), None)
+    if image and design.get("image_role") == "evidence":
+        if image["w"] * image["h"] < .16:
+            return "本页图片承担证据作用，图片区域须足够大以辨认现场细节"
+    return ""
+
+
+def explain(elements: list, slide: dict) -> str:
+    """Return why a composition is rejected, or "" when it passes.
+
+    audit() used to answer only True/False, so the retry prompt could not tell
+    the model what was wrong — it always sent the same catch-all sentence back
+    and the second attempt failed the same way. The reason has to be specific
+    (which region, how far out of bounds, which two regions overlap) to be
+    actionable. audit() now delegates here, so both stay in lockstep.
+    """
     values = references(slide)
-    if not isinstance(elements, list) or len(elements) != len(values):
-        return False
+    if not isinstance(elements, list):
+        return "regions 不是数组"
+    if len(elements) != len(values):
+        present = {str(item.get("ref")) for item in elements if isinstance(item, dict)}
+        missing = [ref for ref in values if ref not in present]
+        extra = sorted(present - set(values) - {"None"})
+        parts = []
+        if missing:
+            parts.append("缺少 " + "、".join(missing))
+        if extra:
+            parts.append("多出 " + "、".join(extra))
+        return (f"regions 有 {len(elements)} 个，应为 {len(values)} 个"
+                + ("（" + "；".join(parts) + "）" if parts else ""))
+    overlay = (slide.get("design") or {}).get("image_overlay") == "dark"
     found, boxes = set(), []
     for item in elements:
         if not isinstance(item, dict) or not isinstance(item.get("ref"), str):
-            return False
+            return "有区域缺少 ref 字段"
         ref = item["ref"]
-        if ref not in values or ref in found:
-            return False
+        if ref not in values:
+            return f"未知区域 {ref}（只允许 {'、'.join(values)}）"
+        if ref in found:
+            return f"区域 {ref} 重复出现"
         found.add(ref)
         numbers = [item.get(key) for key in ("x", "y", "w", "h")]
         if any(type(value) not in (int, float) or not math.isfinite(value) for value in numbers):
-            return False
+            return f"区域 {ref} 的坐标不是有限数值"
         x, y, w, h = numbers
         if x < .035 or y < .025 or w <= .03 or h <= .02 or x+w > .965 or y+h > .89:
-            return False
+            return (f"区域 {ref} 越界：x={x:.3f} y={y:.3f} 右缘={x + w:.3f} "
+                    f"底边={y + h:.3f}，须满足 x≥.035 y≥.025 右缘≤.965 底边≤.89")
         preferred = 28 if ref == "title" else (30 if len(values) == 2 else 20)
         # 大框短句原来恒按 20pt 排，卡片占 60% 页高却只有一两行字，
         # 形成明显空卡；高框放宽到 26pt。
@@ -55,19 +106,32 @@ def audit(elements: list, slide: dict) -> bool:
                 preferred = 26
         inset = 0 if ref == "title" else .04
         if w <= inset or h <= inset:
-            return False
+            return f"区域 {ref} 太小（{w:.2f}×{h:.2f}），扣除内边距后没有可排字的面积"
         size = (20 if ref == "image" else fit_font_size(
             values[ref], w-inset, h-inset, preferred,
             min_pt=18 if ref == "title" else 14))
         if size is None:
-            return False
+            chars = sum(len(str(t)) for t in values[ref])
+            return (f"区域 {ref} 只有 {w:.2f}×{h:.2f} 页宽页高，"
+                    f"装不下 {chars} 个字（连 14pt 都放不进）；请加宽或加高该区域")
         item["font_pt"] = size
         item["budget_chars"] = (0 if ref == "image" else
                                budget_chars(w-inset, h-inset, size))
-        for bx, by, bw, bh in boxes:
+        for other, bx, by, bw, bh in boxes:
             if min(x+w, bx+bw)-max(x, bx) > .002 and min(y+h, by+bh)-max(y, by) > .002:
-                return False
-        boxes.append((x, y, w, h))
+                if overlay and ((ref == "image" and other.startswith("point:"))
+                                or (other == "image" and ref.startswith("point:"))):
+                    image_box = (x, y, w, h) if ref == "image" else (bx, by, bw, bh)
+                    text_box = (x, y, w, h) if ref.startswith("point:") else (bx, by, bw, bh)
+                    ix, iy, iw, ih = image_box
+                    tx, ty, tw, th = text_box
+                    if (tx >= ix + .015 and ty >= iy + .015
+                            and tx + tw <= ix + iw - .015
+                            and ty + th <= iy + ih - .015):
+                        continue
+                return (f"区域 {ref} 与 {other} 重叠，每个区域必须互不相交；"
+                        f"请缩小其中一个或改为上下排列")
+        boxes.append((ref, x, y, w, h))
     # 同页同级模块字号一致：各框先取「装得下的最大字号」，整组再取
     # 最小值（即所有槽共同装得下的最大字号），绝不出现一大三小。
     point_sizes = [item["font_pt"] for item in elements
@@ -80,7 +144,19 @@ def audit(elements: list, slide: dict) -> bool:
             item["font_pt"] = common
             item["budget_chars"] = budget_chars(
                 item["w"] - .04, item["h"] - .04, common)
-    return found == set(values)
+    missing = [ref for ref in values if ref not in found]
+    if missing:
+        return "缺少区域 " + "、".join(missing)
+    if overlay and ("image" not in values or not any(
+            item["ref"].startswith("point:") and any(
+                image["ref"] == "image" and
+                item["x"] >= image["x"] + .015 and
+                item["y"] >= image["y"] + .015 and
+                item["x"] + item["w"] <= image["x"] + image["w"] - .015 and
+                item["y"] + item["h"] <= image["y"] + image["h"] - .015
+                for image in elements) for item in elements)):
+        return "图文叠加须有图片，并把至少一条正文完整放在图片内侧"
+    return ""
 
 
 def clamp_regions(elements: list) -> list:
@@ -207,7 +283,7 @@ def _compose_points(variant: str, n: int, image: bool,
 def plan(slide: dict, layout: str) -> dict | None:
     from app.application.ppt.visual_primitives import decorations, model_visuals
 
-    if slide.get("type") not in ("content", "summary"):
+    if slide.get("type") not in ("content", "case", "summary") or slide.get("blocks"):
         return None
     points = slide.get("points") or []
     if not points:
@@ -238,7 +314,24 @@ def plan(slide: dict, layout: str) -> dict | None:
     suggested = design.get("regions")
     if isinstance(suggested, list):
         elements = clamp_regions(copy.deepcopy(suggested))
-        if audit(elements, slide):
+        if audit(elements, slide) and not intent_issue(elements, slide):
+            elements, visuals, changed = (
+                (elements, design.get("visuals"), False) if design.get("image_overlay") == "dark"
+                else compact_regions(elements, slide, design.get("visuals")))
+            if changed and (not audit(elements, slide) or intent_issue(elements, slide)):
+                # 收紧后反而越界/重叠：保留模型原构图，宁可留白也不压字。
+                elements = clamp_regions(copy.deepcopy(suggested))
+                visuals, changed = design.get("visuals"), False
+            if changed:
+                # 收紧结果写回 design：预览、缓存、导出三处必须读到同一份几何，
+                # 否则线框里还是「大框短句」，成稿却是收过的。
+                design["regions"] = [{key: item[key] for key in
+                                      ("ref", "x", "y", "w", "h")} for item in elements]
+                if isinstance(visuals, list):
+                    design["visuals"] = visuals
+                # 几何写回后指纹跟着变：不重算的话第二次 plan 会拿旧指纹去比
+                # 缓存，每次都当未命中重排一遍（场景缓存等于失效）。
+                stamp = signature(slide, layout)
             return scene_from(elements)
     elements = [{"ref": "title", "x": .055, "y": .05, "w": .89, "h": .12}]
     n = len(points)
@@ -317,7 +410,161 @@ def _tighten(elements: list, slide: dict, points: list) -> list:
     return elements
 
 
-def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:
+def _needed_height(text: str, width: float, size: float, limit: float) -> float:
+    """一段正文排完需要多高（页高比例），口径与 _tighten 一致。"""
+    inner = max(.05, width - .04) * 960          # 内宽（磅）
+    per_line = max(4, int(inner / max(1.0, size)))
+    lines = max(1, math.ceil(len(text) / per_line))
+    return min(limit, lines * size * 1.34 / 540 + .045)
+
+
+def compact_regions(elements: list, slide: dict, visuals: object = None):
+    """把模型给的「大框短句」收成文字实际高度，模型画的卡片跟着一起走。
+
+    模型只负责构图（谁在左、谁在右），不管字号和行数：一句十四字的话被分
+    进占 46% 页高的框里，成稿就是「卡片顶上挂一行字、底下空一大片」。内置
+    版式的网格早就用 _tighten 解决同一个问题，模型构图这条路一直没接——样稿
+    里两张半页空的卡就是这么来的。
+
+    收框必须连卡片一起搬：只缩文字框，卡片会留在原地，成稿变成一张空卡加
+    一段悬空的字，比不收更糟。所以按「视觉元素包住了哪些区域」把收缩量传导
+    过去，保持卡片与文字的上下留白不变。
+
+    返回 (elements, visuals, changed)；视觉层无法解释时不强改，宁可留白也不
+    做出压字或错位的构图。
+    """
+    points = slide.get("points") or []
+    boxes = [item for item in elements
+             if str(item.get("ref", "")).startswith("point:") and item.get("font_pt")]
+    if not boxes:
+        return elements, visuals, False
+    before = {item["ref"]: {key: item[key] for key in ("x", "y", "w", "h")}
+              for item in boxes}
+    for item in boxes:
+        try:
+            text = str(points[int(str(item["ref"]).split(":", 1)[1])])
+        except (ValueError, IndexError):
+            text = ""
+        need = _needed_height(text, item["w"], float(item["font_pt"]), item["h"])
+        # 收紧要幂等：第二次进 explain 时字号可能从 26 掉到 25，需求高度跟着变
+        # 一两千分之一；不设阈值的话每渲染一次框就再小一点（场景缓存重算、
+        # 导出重建都会触发）。留 20% 余量，只收真正「大框短句」的那种。
+        item["_need"] = need if need < item["h"] * .8 else item["h"]
+    rows: list[list[dict]] = []
+    for item in sorted(boxes, key=lambda b: (b["y"], b["x"])):
+        if rows and abs(rows[-1][0]["y"] - item["y"]) <= .02:
+            rows[-1].append(item)
+        else:
+            rows.append([item])
+    gap = .035
+    total = sum(max(entry["_need"] for entry in row) for row in rows)
+    total += gap * (len(rows) - 1)
+    top = min(entry["y"] for entry in boxes)
+    has_image = any(item.get("ref") == "image" for item in elements)
+    if total > .86 - .245:
+        # 装不下就只收高度、不动起点，绝不压缩行距硬塞。
+        for row in rows:
+            height = round(max(entry["_need"] for entry in row), 4)
+            for entry in row:
+                entry["h"] = height
+    else:
+        # 图文页从正文起点往下排：卡片顶边跟图片顶边齐平，读起来是「左边两段
+        # 说明、右边一张现场」，整组下移到页面正中反而比照片低一截。纯文字页
+        # 才在正文区居中，上下留白对称。
+        y = top if has_image else .245 + (.86 - .245 - total) / 2
+        for row in rows:
+            height = round(max(entry["_need"] for entry in row), 4)
+            for entry in row:
+                entry["y"], entry["h"] = round(y, 4), height
+            y += height + gap
+    for item in elements:
+        item.pop("_need", None)
+    changed = any(before[item["ref"]] != {key: item[key] for key in
+                                          ("x", "y", "w", "h")} for item in boxes)
+    adjusted = copy.deepcopy(visuals) if isinstance(visuals, list) else visuals
+    if not isinstance(adjusted, list) or not changed:
+        return elements, adjusted, changed
+    band_top = min(before[item["ref"]]["y"] for item in boxes)
+    band_bottom = max(before[item["ref"]]["y"] + before[item["ref"]]["h"]
+                      for item in boxes)
+    moved: list[tuple[float, float, float, float]] = []   # x, w, old_y, delta
+    for visual in adjusted:
+        if not isinstance(visual, dict) or visual.get("kind") == "line":
+            continue
+        if not all(type(visual.get(key)) in (int, float)
+                   for key in ("x", "y", "w", "h")) or visual["h"] < .03:
+            continue        # 色带/细线不包住区域，第二遍单独跟着区域平移
+        inside = [item for item in boxes
+                  if item["x"] >= visual["x"] - .006
+                  and item["x"] + item["w"] <= visual["x"] + visual["w"] + .006
+                  and item["y"] >= visual["y"] - .006
+                  and item["y"] + item["h"] <= visual["y"] + visual["h"] + .006]
+        if not inside:
+            continue
+        old_top = min(before[item["ref"]]["y"] for item in inside)
+        old_bottom = max(before[item["ref"]]["y"] + before[item["ref"]]["h"]
+                         for item in inside)
+        new_top = min(item["y"] for item in inside)
+        new_bottom = max(item["y"] + item["h"] for item in inside)
+        pad_top = max(0.0, old_top - visual["y"])
+        pad_bottom = max(0.0, (visual["y"] + visual["h"]) - old_bottom)
+        was = visual["y"]
+        visual["y"] = round(max(.02, new_top - pad_top), 4)
+        visual["h"] = round(max(.03, (new_bottom - new_top) + pad_top + pad_bottom), 4)
+        if visual["y"] + visual["h"] > .90:
+            visual["h"] = round(max(.03, .90 - visual["y"]), 4)
+        moved.append((visual["x"], visual["w"], was, visual["y"] - was))
+
+    def _shift(left: float, width: float, top: float, bottom: float) -> float:
+        """色带/细线该跟着谁走：先看正下方最近的那块文字，再看卡片。"""
+        best = None
+        for item in boxes:
+            old = before[item["ref"]]
+            overlap = (min(left + width, item["x"] + item["w"])
+                       - max(left, item["x"]))
+            if overlap <= .4 * min(width, item["w"]):
+                continue
+            distance = abs(old["y"] - bottom)
+            if distance <= .03 and (best is None or distance < best[0]):
+                best = (distance, item["y"] - old["y"])
+        if best is not None:
+            return best[1]
+        for card_x, card_w, card_old_y, card_delta in moved:
+            overlap = min(left + width, card_x + card_w) - max(left, card_x)
+            if overlap <= .4 * min(width, card_w):
+                continue
+            if abs(card_old_y - top) <= .04:
+                return card_delta
+        return 0.0
+
+    for visual in adjusted:
+        if not isinstance(visual, dict):
+            continue
+        if visual.get("kind") == "line":
+            if not all(type(visual.get(key)) in (int, float)
+                       for key in ("x1", "y1", "x2", "y2")):
+                continue
+            ys = (visual["y1"], visual["y2"])
+            if not all(band_top - .03 <= value <= band_bottom + .03 for value in ys):
+                continue      # 标题下的分隔线不属于正文组，不动
+            shift = _shift(min(visual["x1"], visual["x2"]),
+                           abs(visual["x2"] - visual["x1"]), min(ys), max(ys))
+            if shift:
+                visual["y1"] = round(visual["y1"] + shift, 4)
+                visual["y2"] = round(visual["y2"] + shift, 4)
+            continue
+        if not all(type(visual.get(key)) in (int, float)
+                   for key in ("x", "y", "w", "h")) or visual["h"] >= .03:
+            continue
+        shift = _shift(visual["x"], visual["w"], visual["y"],
+                       visual["y"] + visual["h"])
+        if shift:
+            visual["y"] = round(visual["y"] + shift, 4)
+    return elements, adjusted, changed
+
+
+def wireframe(scene: dict, slide: dict, colors: dict | None = None,
+              canvas_height: int = 540) -> str:
     """Preview drawn from the same decoration list as the exported deck.
 
     Still a line-frame (not a pixel-perfect design proof), but relationship
@@ -325,14 +572,28 @@ def wireframe(scene: dict, slide: dict, colors: dict | None = None) -> str:
     share their geometry with ``r_scene``.
     """
     values = references(slide)
-    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540">',
-             '<rect width="960" height="540" fill="white"/>']
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 {canvas_height}">',
+             f'<rect width="960" height="{canvas_height}" fill="white"/>']
+    svg = (slide.get("design") or {}).get("svg")
+    if svg:
+        try:
+            from app.application.ppt.svg_layer import to_png
+            encoded = base64.b64encode(to_png(svg, scale=1)).decode("ascii")
+            parts.append(f'<image href="data:image/png;base64,{encoded}" '
+                         f'x="0" y="0" width="960" height="{canvas_height}"/>')
+        except Exception:
+            pass
     from app.application.ppt import visual_primitives as vp
+    if canvas_height != 540:
+        parts.append(f'<g transform="scale(1,{canvas_height / 540})">')
     for item in scene.get("visuals") or []:
         parts.append(vp.svg_decoration(item, colors))
+    if canvas_height != 540:
+        parts.append('</g>')
     for element in scene["elements"]:
         x, y, w, h = (element[k] * scale for k, scale in
-                       (("x", 960), ("y", 540), ("w", 960), ("h", 540)))
+                       (("x", 960), ("y", canvas_height),
+                        ("w", 960), ("h", canvas_height)))
         label = escape(element["ref"] + " · " + values[element["ref"]][:16])
         parts.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" '
                      'fill="none" stroke="#304557" stroke-dasharray="4 3"/>')

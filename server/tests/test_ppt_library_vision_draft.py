@@ -32,6 +32,7 @@ def test_vision_draft_uses_image_content_and_stays_disabled(tmp_path):
     assert "待核对" in entry["review_note"]
     assert manifest["defaults"] == {"source": "", "license_note": ""}
     assert "不能只做 OCR" in PROMPT
+    assert "清晰可读的活动主题" in PROMPT
 
 
 def test_failed_vision_draft_does_not_invent_a_caption(tmp_path):

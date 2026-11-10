@@ -39,7 +39,12 @@ class ImageCaptionIn(BaseModel):
 
 class OutlineIn(BaseModel):
     template_id: Optional[str] = None
-    template_mode: Literal["adaptive", "strict"] = "adaptive"
+    template_mode: Literal["adaptive", "strict", "designed"] = "adaptive"
+    # 模型构图被拒后的退路：readable=引擎可读版式（历史默认），
+    # learned=先试模板原版式再退可读，none=留空并报告，不做替代排版。
+    fallback_mode: Literal["readable", "learned", "none"] = "readable"
+    # 演示保底：完全跳过模型构图，直接出接入 designed 之前那套模板化版式。
+    force_template_layout: bool = False
     color_override: bool = False
     source_type: str = "topic"          # topic / text / document / kb
     topic: str = ""

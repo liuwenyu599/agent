@@ -340,6 +340,88 @@ class TestCompositionFamilies:
         assert page_scene.audit(scene["elements"], slide)
 
 
+class TestModelRegionCompaction:
+    """模型给的大框要按文字收紧，模型画的卡片必须跟着走。
+
+    样例是 2026-11-11 样稿里真实出现的构图：一条 24 字的要点分到 46% 页高的
+    框里，成稿是「卡片顶上挂一行字、下面空掉半页」。
+    """
+
+    slide = {"type": "content", "title": "以制度建设推动工作落实",
+             "points": ["建立定期学习和交流机制，明确各部门责任分工。",
+                        "围绕重点任务开展督促检查，及时梳理落实情况。"],
+             "design": {"regions": [
+                 {"ref": "title", "x": .08, "y": .05, "w": .84, "h": .12},
+                 {"ref": "point:0", "x": .08, "y": .30, "w": .38, "h": .46},
+                 {"ref": "point:1", "x": .54, "y": .30, "w": .38, "h": .46}],
+                 "visuals": [
+                     {"kind": "rect", "x": .065, "y": .285, "w": .41, "h": .49,
+                      "fill": "light", "radius": True},
+                     {"kind": "rect", "x": .525, "y": .285, "w": .41, "h": .49,
+                      "fill": "light", "radius": True},
+                     {"kind": "rect", "x": .065, "y": .285, "w": .41, "h": .008,
+                      "fill": "primary"},
+                     {"kind": "rect", "x": .525, "y": .285, "w": .41, "h": .008,
+                      "fill": "primary"}]}}
+
+    def _compacted(self, slide=None):
+        slide = copy.deepcopy(slide or self.slide)
+        elements = copy.deepcopy(slide["design"]["regions"])
+        assert page_scene.explain(elements, slide) == ""
+        return slide, page_scene.compact_regions(
+            elements, slide, slide["design"].get("visuals"))
+
+    def test_tall_boxes_shrink_to_the_text_and_stay_equal_height(self):
+        _, (elements, _, changed) = self._compacted()
+        assert changed
+        bodies = [item for item in elements if item["ref"].startswith("point:")]
+        assert all(.10 < item["h"] < .30 for item in bodies)
+        assert bodies[0]["h"] == bodies[1]["h"]
+        assert page_scene.explain(elements, self.slide) == ""
+
+    def test_card_and_top_band_follow_their_text(self):
+        _, (elements, visuals, _) = self._compacted()
+        bodies = [item for item in elements if item["ref"].startswith("point:")]
+        cards = [item for item in visuals if item["h"] > .03]
+        bands = [item for item in visuals if item["kind"] == "rect"
+                 and item["h"] < .01]
+        for body, card, band in zip(bodies, cards, bands):
+            # 卡片与文字的相对留白（上下各 1.5%）保持不变
+            assert abs(card["y"] - (body["y"] - .015)) < .002
+            assert abs(card["h"] - (body["h"] + .03)) < .002
+            # 顶盖色带贴在卡片顶边，不能悬在半空
+            assert abs(band["y"] - card["y"]) < .002
+
+    def test_image_page_keeps_cards_top_aligned_with_the_photo(self):
+        slide = {"type": "content", "title": "开展业务学习与交流研讨",
+                 "points": ["围绕岗位要求开展集中学习，交流具体做法。",
+                            "结合业务实践梳理常见问题和处理思路。"],
+                 "_image": {"file_path": "photo.png"},
+                 "design": {"relationship": "grouped", "regions": [
+                     {"ref": "title", "x": .08, "y": .05, "w": .84, "h": .12},
+                     {"ref": "point:0", "x": .08, "y": .29, "w": .38, "h": .22},
+                     {"ref": "point:1", "x": .08, "y": .57, "w": .38, "h": .22},
+                     {"ref": "image", "x": .52, "y": .27, "w": .40, "h": .54}]}}
+        _, (elements, _, changed) = self._compacted(slide)
+        assert changed
+        by_ref = {item["ref"]: item for item in elements}
+        assert by_ref["point:0"]["y"] == .29          # 顶边不动，跟照片顶边齐
+        assert by_ref["point:1"]["y"] < .57            # 第二条上移，不再留大洞
+        assert by_ref["point:1"]["y"] > by_ref["point:0"]["y"] + by_ref["point:0"]["h"]
+        assert by_ref["image"]["h"] == .54             # 图片区域不受影响
+
+    def test_plan_writes_the_compacted_geometry_back(self):
+        slide = copy.deepcopy(self.slide)
+        scene = page_scene.plan(slide, "content.two_col")
+        bodies = [item for item in scene["elements"] if item["ref"].startswith("point:")]
+        regions = {item["ref"]: item for item in slide["design"]["regions"]}
+        for body, ref in zip(bodies, ("point:0", "point:1")):
+            assert regions[ref]["h"] == body["h"]
+            assert regions[ref]["y"] == body["y"]
+        # 几何写回后指纹必须重算，否则场景缓存每次都被判未命中。
+        assert page_scene.plan(slide, "content.two_col") == scene
+
+
 def test_toc_grid_with_four_items_is_two_by_two():
     """目录 4 条不能排成「3 + 1」：第四条独占一行、右侧全空（2026-11-09）。"""
     from pptx import Presentation

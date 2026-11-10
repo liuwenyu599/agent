@@ -50,6 +50,7 @@ pymupdf==1.28.2            # [需验证] 含 C 扩展，确认 aarch64 wheel
 openpyxl==3.1.5
 xlsxwriter==3.2.9
 lxml==6.1.1                # [需验证] 含 C 扩展
+defusedxml==0.7.1          # 纯 Python，SVG 视觉层解析用
 pillow==12.2.0             # [需验证] 含 C 扩展
 beautifulsoup4==4.15.0
 

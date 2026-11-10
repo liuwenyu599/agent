@@ -16,7 +16,8 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.application.ppt import outline_gate, ppt_engine, template_prepare
+from app.application.ppt import (outline_gate, page_authoring, ppt_engine,
+                                 template_prepare, template_style)
 from app.application.ppt.ppt_engine import BUILTIN_TEMPLATES, DEFAULT_COLORS, DEFAULT_LAYOUTS
 from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
@@ -557,6 +558,14 @@ class PPTService:
 
     def _layout_preview_path(self, template_id: str, layout_id: str) -> Path:
         return self.ppt_dir / "tpl_prev" / template_id / f"{layout_id}.png"
+
+    def _design_reference_image(self, template: dict,
+                                template_row: Optional[PPTTemplate]) -> bytes | None:
+        template_id = getattr(template_row, "id", None)
+        if not template_id:
+            return None
+        return template_style.read_template_reference(
+            template, self.ppt_dir / "tpl_prev" / template_id)
 
     # ================= 模板 =================
     def template_dto(self, t: PPTTemplate, user_id: str,
@@ -1373,6 +1382,7 @@ class PPTService:
             # 客户端只回传 slides 时若直接整体替换，会丢掉 material_ids，
             # 导出重新渲染时公共图库图片便无法解析，表现为「图没了」。
             for key in ("material_ids", "image_selection_mode", "native_edit", "template_mode",
+                        "fallback_mode", "force_template_layout",
                         "color_override", "color_theme_id", "base_theme_id"):
                 if key not in payload and key in previous:
                     payload[key] = previous[key]
@@ -2086,6 +2096,8 @@ class PPTService:
                     kb_ids: Optional[List[str]] = None,
                     enforce_exact_count: bool = True,
                     template_mode: str = "adaptive",
+                    fallback_mode: str = "readable",
+                    force_template_layout: bool = False,
                     color_override: bool = False) -> dict:
         content, material_names = self._apply_kb_material(
             user, kb_ids, topic, content, material_names)
@@ -2126,6 +2138,8 @@ class PPTService:
         base_theme_id = ppt_engine.pick_builtin_template(
             topic or outline.get("title"), outline.get("style"))
         outline["template_mode"] = template_mode
+        outline["fallback_mode"] = fallback_mode
+        outline["force_template_layout"] = bool(force_template_layout)
         outline["base_theme_id"] = base_theme_id
         outline["color_override"] = explicit_color
         if explicit_color:
@@ -2147,7 +2161,7 @@ class PPTService:
     def make_outline(self, body, user: User) -> dict:
         explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
         mode = (body.template_mode if "template_mode" in getattr(body, "model_fields_set", set())
-                else "strict" if body.template_id else "adaptive")
+                else "designed" if body.template_id else "adaptive")
         return self._do_outline(user, body.source_type, body.topic, body.content,
                                 body.slide_count, body.audience, body.scene,
                                 material_names=body.material_names,
@@ -2158,6 +2172,8 @@ class PPTService:
                                 kb_ids=getattr(body, "kb_ids", None),
                                 enforce_exact_count=explicit_count,
                                 template_mode=mode,
+                                fallback_mode=getattr(body, "fallback_mode", "readable"),
+                                force_template_layout=getattr(body, "force_template_layout", False),
                                 color_override=body.color_override)
 
     def outline_stream(self, body, user: User) -> Iterator[str]:
@@ -2172,7 +2188,7 @@ class PPTService:
             return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
 
         mode = (body.template_mode if "template_mode" in getattr(body, "model_fields_set", set())
-                else "strict" if body.template_id else "adaptive")
+                else "designed" if body.template_id else "adaptive")
 
         yield _sse({"type": "stage", "text": "正在理解材料与任务要求…"})
         kb_ids = getattr(body, "kb_ids", None) or []
@@ -2224,6 +2240,8 @@ class PPTService:
                                       "manual" if body.material_ids else
                                       "auto" if body.auto_images else "off")
             outline["template_mode"] = mode
+            outline["fallback_mode"] = getattr(body, "fallback_mode", "readable")
+            outline["force_template_layout"] = getattr(body, "force_template_layout", False)
             base_theme_id = ppt_engine.pick_builtin_template(
                 body.topic or outline.get("title"), outline.get("style"))
             outline["base_theme_id"] = base_theme_id
@@ -2380,17 +2398,22 @@ class PPTService:
         native = self._render_native_import(d, outline)
         if native is not None:
             return native, "native_edit"
+        designed = self._designed_template_mode(outline) and bool(base_pptx)
         def local_render() -> bytes:
             """Adaptive pages use the chosen palette/font on a clean canvas."""
-            if adaptive:
+            if adaptive or designed:
+                # designed 页面的构图已经定死，内容重写只该在自适应路径用。
                 data, adjusted = self._render_with_feedback(
-                    outline, template, warnings=warnings, assistant=self._ppt_assistant())
+                    outline, template, warnings=warnings,
+                    assistant=None if designed else self._ppt_assistant(),
+                    base_pptx=base_pptx if designed else None,
+                    adaptive=not designed)
                 outline.clear()
                 outline.update(adjusted)
                 return data
             return ppt_engine.render_pptx(outline, template, base_pptx=base_pptx, warnings=warnings)
 
-        if adaptive or not (settings.PPT_AGENT_URL or "").strip():
+        if adaptive or designed or not (settings.PPT_AGENT_URL or "").strip():
             logger.debug("PPT 自适应或未配置旧渲染器，走本地可编辑版式")
             return local_render(), "local"
 
@@ -2489,7 +2512,11 @@ class PPTService:
     @staticmethod
     def _strict_template_mode(outline: dict) -> bool:
         # Older clients and saved decks have no mode field and used cloning.
-        return (outline or {}).get("template_mode") != "adaptive"
+        return (outline or {}).get("template_mode") not in {"adaptive", "designed"}
+
+    @staticmethod
+    def _designed_template_mode(outline: dict) -> bool:
+        return (outline or {}).get("template_mode") == "designed"
 
     @staticmethod
     def _rewrite_scene_page(slide: dict, issues: list, assistant) -> Optional[dict]:
@@ -2549,7 +2576,8 @@ class PPTService:
     def _render_with_feedback(outline: dict, template: Dict,
                               warnings: Optional[List[str]] = None,
                               vision_review: bool = True, assistant=None,
-                              base_pptx: Optional[bytes] = None) -> Tuple[bytes, dict]:
+                              base_pptx: Optional[bytes] = None,
+                              adaptive: bool = True) -> Tuple[bytes, dict]:
         """针对检测出排版问题的页面试用其他可行版式，保留内容和页数。"""
         from copy import deepcopy
 
@@ -2557,7 +2585,7 @@ class PPTService:
         rendered = None
         render_warnings: List[str] = []
         data = ppt_engine.render_pptx(current, template, base_pptx=base_pptx,
-                                      warnings=render_warnings, adaptive=True)
+                                      warnings=render_warnings, adaptive=adaptive)
         review = PPTService.review_pptx_visuals(data)
 
         def score(result: dict, page: Optional[int] = None) -> int:
@@ -2591,7 +2619,7 @@ class PPTService:
                 try:
                     trial_data = ppt_engine.render_pptx(
                         trial, template, base_pptx=base_pptx,
-                        warnings=trial_warnings, adaptive=True)
+                        warnings=trial_warnings, adaptive=adaptive)
                 except Exception as exc:  # noqa: BLE001 - 候选版式失败不影响已生成的基线版本
                     logger.warning("[PPT] 替代版式渲染失败：page=%d layout=%s error=%s",
                                    page, layout, type(exc).__name__)
@@ -2630,7 +2658,7 @@ class PPTService:
                     trial_warnings = []
                     trial_data = ppt_engine.render_pptx(
                         trial, template, base_pptx=base_pptx,
-                        warnings=trial_warnings, adaptive=True)
+                        warnings=trial_warnings, adaptive=adaptive)
                     trial_geometry = PPTService.review_pptx_visuals(trial_data)
                     trial_visual = PPTService.review_rendered_pages(trial_data)
                     if (trial_visual["status"] not in ("unavailable", "partial")
@@ -2668,7 +2696,7 @@ class PPTService:
                 trial_data = ppt_engine.render_pptx(trial, template,
                                                    base_pptx=base_pptx,
                                                    warnings=trial_warnings,
-                                                   adaptive=True)
+                                                   adaptive=adaptive)
                 trial_review = PPTService.review_pptx_visuals(trial_data)
                 improved = score(trial_review) < score(review)
                 trial_visual = rendered
@@ -2719,17 +2747,35 @@ class PPTService:
         native = self._render_native_import(d, outline)
         if native is not None:
             return native, outline
-        template, _ = self._resolve_render_style(d.template_id, d.theme_id or "", outline)
+        template, trow = self._resolve_render_style(d.template_id, d.theme_id or "", outline)
         clean = self.sanitize_outline(
             outline, target_count=len((outline or {}).get("slides") or []) or None,
             ensure_toc=False, enforce_bookends=False)
         selected_ids = clean.get("material_ids")
         clean = ppt_engine.resolve_slide_images(
             clean, self._user_images(user_id, selected_ids, strict=False))
+        designed = bool(d.template_id and self._designed_template_mode(clean))
+        if designed:
+            clean = page_authoring.author_pages(
+                clean, template, self._ppt_assistant(), warnings,
+                reference_image=self._design_reference_image(template, trow))
+        base = self._tpl_base_bytes(trow) if designed else None
+        if designed and not base:
+            # 库里记着 template_id、盘上却没有源文件：会退回干净画布渲染，
+            # 模型构图虽然留在 outline 里，最终一页也用不上。
+            logger.warning("[PPT] template_id=%s 源文件缺失，本次未按模板排版",
+                           d.template_id)
+            if warnings is not None:
+                warnings.append("模板源文件缺失，本次未按模板版式排版")
+        # designed 的承诺是「模型只排版、不改写事实」，而内容重写会把要点精简掉，
+        # 二者直接冲突：构图阶段已按字数算过容量，溢出交给版式/可读兜底处理。
+        rewrite = model_rewrite and not designed
         return self._render_with_feedback(clean, template, warnings,
                                           vision_review=vision_review,
                                           assistant=(self._ppt_assistant()
-                                                     if model_rewrite else None))
+                                                     if rewrite else None),
+                                          base_pptx=base,
+                                          adaptive=not (designed and bool(base)))
 
     def scene_preview(self, doc_id: str, page: int, user: User) -> str:
         from app.application.ppt import page_scene
@@ -2754,7 +2800,11 @@ class PPTService:
         raw = theme.get("colors") or {}
         colors = {key: f"#{value}" for key, value in raw.items()
                   if isinstance(value, str) and len(value) == 6}
-        return page_scene.wireframe(scene, slide, colors=colors or None)
+        from app.application.ppt.svg_layer import viewbox_height
+        canvas = page_authoring._canvas_size(theme)
+        return page_scene.wireframe(
+            scene, slide, colors=colors or None,
+            canvas_height=viewbox_height(*canvas))
 
     def _render_and_store(self, d: PPTDocument, outline: dict, user: User,
                           template_id: Optional[str],
@@ -2786,6 +2836,10 @@ class PPTService:
         available = self._user_images(user.id, selected_ids, strict=False)
         resolved_ids = {str(item["id"]) for item in available}
         outline = ppt_engine.resolve_slide_images(outline, available)
+        if selected_template_id and self._designed_template_mode(outline):
+            outline = page_authoring.author_pages(
+                outline, template, self._ppt_assistant(), warnings,
+                reference_image=self._design_reference_image(template, trow))
         # 图片被下架/删除后仍留在页面 image_id 上，渲染只能跳过。不能静默：
         # 生成链路把页码放进 warnings，导出链路至少留日志，便于定位「图没了」。
         missing_pages = sorted(
@@ -2797,12 +2851,21 @@ class PPTService:
             logger.warning("[PPT] %s：doc_id=%s", message, d.id)
             if warnings is not None:
                 warnings.append(message)
+        base = (self._tpl_base_bytes(trow) if selected_template_id and (
+            self._strict_template_mode(outline) or
+            self._designed_template_mode(outline)) else None)
+        strict_selected = bool(selected_template_id and self._strict_template_mode(outline))
+        designed_canvas = bool(base and selected_template_id and
+                               self._designed_template_mode(outline))
+        if (selected_template_id and self._designed_template_mode(outline)
+                and not base):
+            logger.warning("[PPT] template_id=%s 源文件缺失，本次未按模板排版",
+                           selected_template_id)
+            if warnings is not None:
+                warnings.append("模板源文件缺失，本次未按模板版式排版")
         data, renderer = self._render_pptx_bytes(
             d, outline, template,
-            self._tpl_base_bytes(trow) if selected_template_id and
-            self._strict_template_mode(outline) else None,
-            warnings=warnings, adaptive=not (
-                selected_template_id and self._strict_template_mode(outline)))
+            base, warnings=warnings, adaptive=not (strict_selected or designed_canvas))
         review = self.review_pptx_visuals(data)
         hard = [issue for issue in review.get("issues") or []
                 if issue.get("severity") == "error"]

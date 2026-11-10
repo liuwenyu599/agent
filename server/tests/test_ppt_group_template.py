@@ -229,6 +229,150 @@ def test_template_image_area_follows_page_content_not_source_slot(tmp_path):
     assert all(point in dense_text for point in dense_points)
 
 
+def test_learned_template_uses_valid_model_regions_for_body_page():
+    from pptx.enum.shapes import MSO_SHAPE
+
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    page.shapes.add_textbox(Inches(.8), Inches(.5), Inches(10), Inches(.8)).text = "{{title}}"
+    page.shapes.add_textbox(Inches(.8), Inches(2), Inches(10), Inches(3)).text = "{{point1}}"
+    stale = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(7.5), Inches(2.5),
+                                  Inches(2), Inches(2))
+    stale.name = "stale-content-card"
+    brand = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(.15), Inches(.1),
+                                  Inches(.4), Inches(.15))
+    brand.name = "top-brand-decoration"
+    source = io.BytesIO()
+    prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    outline = {"slides": [{
+        "type": "content", "title": "工作成效", "points": ["办理流程更加清晰", "群众咨询更加便利"],
+        "design": {"regions": [
+            {"ref": "title", "x": .12, "y": .05, "w": .76, "h": .13},
+            {"ref": "point:0", "x": .12, "y": .30, "w": .33, "h": .36},
+            {"ref": "point:1", "x": .55, "y": .30, "w": .33, "h": .36},
+        ], "visuals": [
+            {"kind": "rect", "x": .10, "y": .28, "w": .37, "h": .40,
+             "fill": "light", "radius": True},
+            {"kind": "rect", "x": .53, "y": .28, "w": .37, "h": .40,
+             "fill": "light", "radius": True},
+            {"kind": "gradient", "x": .12, "y": .205, "w": .76, "h": .008,
+             "from": "light", "to": "white"},
+            {"kind": "line", "x1": .50, "y1": .30, "x2": .50, "y2": .66,
+             "stroke": "line", "width": 1.2},
+        ]},
+    }]}
+    template = {"colors": learned["colors"], "font": learned["font"],
+                "layout_library": learned["layouts"]}
+    data = ppt_engine.render_pptx(outline, template, source.getvalue())
+    result = Presentation(io.BytesIO(data))
+    rendered = result.slides[0]
+    positions = {shape.text: shape.left / result.slide_width
+                 for shape in rendered.shapes if shape.has_text_frame and shape.text.strip()}
+    # 模型给的是文字框，卡片是它自己画的装饰壳；成稿按内置版式同样的 2% 内缩
+    # 排字，否则文字会直接压在卡片边框和顶盖色带上（样稿实测就是这样）。
+    assert abs(positions["工作成效"] - .12) < .01
+    assert abs(positions["办理流程更加清晰"] - .14) < .01
+    assert abs(positions["群众咨询更加便利"] - .57) < .01
+    assert "stale-content-card" not in {shape.name for shape in rendered.shapes}
+    assert "top-brand-decoration" in {shape.name for shape in rendered.shapes}
+    assert sum(shape.name.startswith("Rounded Rectangle") for shape in rendered.shapes) == 2
+    assert any(shape._element.xpath(".//a:gradFill") for shape in rendered.shapes)
+
+
+def test_learned_template_rejects_overlapping_model_regions():
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    page.shapes.add_textbox(Inches(.8), Inches(.5), Inches(10), Inches(.8)).text = "{{title}}"
+    page.shapes.add_textbox(Inches(.8), Inches(2), Inches(10), Inches(3)).text = "{{point1}}"
+    source = io.BytesIO()
+    prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    outline = {"slides": [{
+        "type": "content", "title": "工作成效", "points": ["办理流程更加清晰", "群众咨询更加便利"],
+        "design": {"regions": [
+            {"ref": "title", "x": .12, "y": .05, "w": .76, "h": .13},
+            {"ref": "point:0", "x": .12, "y": .30, "w": .50, "h": .36},
+            {"ref": "point:1", "x": .55, "y": .30, "w": .33, "h": .36},
+        ]},
+    }]}
+    template = {"colors": learned["colors"], "font": learned["font"],
+                "layout_library": learned["layouts"]}
+    data = ppt_engine.render_pptx(outline, template, source.getvalue())
+    result = Presentation(io.BytesIO(data))
+    texts = [shape.text for shape in result.slides[0].shapes
+             if shape.has_text_frame and shape.text.strip()]
+    assert "工作成效" in texts
+    assert all(point in " ".join(texts) for point in outline["slides"][0]["points"])
+    assert not any(shape.text == "{{title}}" for shape in result.slides[0].shapes
+                   if shape.has_text_frame)
+
+
+def test_learned_template_uses_model_image_region(tmp_path):
+    from PIL import Image
+
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    page.shapes.add_textbox(Inches(.8), Inches(.5), Inches(10), Inches(.8)).text = "{{title}}"
+    source = io.BytesIO()
+    prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    image_path = tmp_path / "scene.png"
+    Image.new("RGB", (640, 360), "blue").save(image_path)
+    outline = {"slides": [{
+        "type": "content", "title": "普法宣传", "points": ["面向社区居民讲解常见法律问题"],
+        "_image": {"file_path": str(image_path)},
+        "design": {"regions": [
+            {"ref": "title", "x": .08, "y": .05, "w": .84, "h": .13},
+            {"ref": "point:0", "x": .08, "y": .30, "w": .38, "h": .40},
+            {"ref": "image", "x": .52, "y": .27, "w": .40, "h": .48},
+        ]},
+    }]}
+    template = {"colors": learned["colors"], "font": learned["font"],
+                "layout_library": learned["layouts"]}
+    data = ppt_engine.render_pptx(outline, template, source.getvalue())
+    result = Presentation(io.BytesIO(data))
+    slide = result.slides[0]
+    picture = next(shape for shape in slide.shapes if shape.shape_type == 13)
+    assert abs(picture.left / result.slide_width - .52) < .01
+    assert abs(picture.width / result.slide_width - .40) < .01
+    assert "普法宣传" in " ".join(shape.text for shape in slide.shapes
+                                  if shape.has_text_frame)
+
+
+def test_template_body_starts_below_inherited_header_rule():
+    from copy import deepcopy
+    from pptx.enum.shapes import MSO_SHAPE
+
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    rule = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, int(prs.slide_height * .157),
+                                 prs.slide_width, int(prs.slide_height * .002))
+    blank.shapes._spTree.insert_element_before(deepcopy(rule._element), "p:extLst")
+    ppt_engine._delete_shape(rule)
+    top, _ = ppt_engine._keep_template_decorations(
+        page, prs.slide_width, prs.slide_height)
+    assert top >= .17
+
+
+def test_model_regions_keep_source_template_body_font_scale():
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    slide = {"type": "content", "title": "工作进展", "points": ["组织专题学习"],
+             "design": {"regions": [
+                 {"ref": "title", "x": .08, "y": .05, "w": .84, "h": .12},
+                 {"ref": "point:0", "x": .08, "y": .30, "w": .84, "h": .42},
+             ]}}
+    used = ppt_engine._fill_model_regions_on_template(
+        page, slide, {"primary": "C00000", "dark": "262626"}, "思源黑体",
+        prs.slide_width, prs.slide_height, .12, .89,
+        {"title_font_pt": 32, "body_font_pt": 20})
+    assert used
+    text = {shape.text: shape for shape in page.shapes if shape.has_text_frame}
+    body = text["组织专题学习"].text_frame.paragraphs[0].runs[0]
+    assert body.font.size.pt == 20
+
+
 def test_fill_learned_text_keeps_template_run_format():
     from pptx.dml.color import RGBColor
     from pptx.util import Pt
@@ -804,3 +948,116 @@ def test_learned_section_number_and_three_card_grid_are_complete():
                         if shape.has_text_frame)
     for point in two_points["slides"][0]["points"]:
         assert point in two_text
+
+
+# ============ 兜底链路可配置（readable / learned / none） ============
+
+def _fallback_deck():
+    prs, blank = _blank_deck()
+    page = prs.slides.add_slide(blank)
+    page.shapes.add_textbox(Inches(.8), Inches(.5), Inches(10), Inches(.8)).text = "{{title}}"
+    page.shapes.add_textbox(Inches(.8), Inches(2.2), Inches(9), Inches(1.6)).text = "{{point1}}"
+    source = io.BytesIO()
+    prs.save(source)
+    learned = ppt_engine.analyze_template(source.getvalue())
+    return source.getvalue(), {"colors": learned["colors"], "font": learned["font"],
+                               "layout_library": learned["layouts"]}
+
+
+def _rejected_outline(fallback):
+    # 只给标题区域：缺少 point:0，模型构图必然在编译期被拒，正好卡在兜底分叉上。
+    return {"template_mode": "designed", "fallback_mode": fallback, "slides": [{
+        "type": "content", "title": "工作成效", "points": ["办理流程更加清晰"],
+        "design": {"regions": [{"ref": "title", "x": .08, "y": .05,
+                                "w": .84, "h": .12}]}}]}
+
+
+def _render_texts(fallback):
+    base, template = _fallback_deck()
+    warnings: list = []
+    diags: list = []
+    data = ppt_engine.render_pptx(_rejected_outline(fallback), template, base,
+                                  warnings=warnings, diagnostics=diags)
+    page = Presentation(io.BytesIO(data)).slides[0]
+    texts = [shape.text_frame.text.strip() for shape in page.shapes
+             if shape.has_text_frame and shape.text_frame.text.strip()]
+    return texts, warnings, diags
+
+
+def test_fallback_none_leaves_page_bare_and_says_why():
+    texts, warnings, diags = _render_texts("none")
+    assert diags[0]["composition"] == "none"
+    assert texts == []
+    assert any("已关闭兜底排版" in item and "缺少 point:0" in item for item in warnings)
+
+
+def test_fallback_readable_keeps_engine_skeleton():
+    texts, warnings, diags = _render_texts("readable")
+    assert diags[0]["composition"] == "readable"
+    assert "工作成效" in texts and "办理流程更加清晰" in texts
+
+
+def test_fallback_learned_attempts_template_slots_before_readable():
+    # 这套模板只有封面版式，学不到正文版式；learned 档必须明确说出来，
+    # 而不是静默按 readable 跑完让用户以为「先试原版式」生效了。
+    texts, warnings, diags = _render_texts("learned")
+    assert any("没有可容纳正文的原版式" in item for item in warnings)
+    assert "办理流程更加清晰" in texts
+
+
+def test_fallback_readable_never_touches_template_slots():
+    texts, warnings, diags = _render_texts("readable")
+    assert not any("原版式" in item for item in warnings)
+
+
+def test_unknown_fallback_falls_back_to_readable():
+    texts, warnings, diags = _render_texts("bogus")
+    assert diags[0]["composition"] == "readable"
+    assert "办理流程更加清晰" in texts
+
+
+# ============ 演示保底：一键彻底不试模型构图 ============
+
+def _safe_mode_outline(force, with_regions, fallback="readable"):
+    slide = {"type": "content", "title": "工作成效",
+             "points": ["办理流程更加清晰"]}
+    if with_regions:
+        # 合法的模型构图：不重叠、不越界、放得下文字。
+        slide["design"] = {"regions": [
+            {"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+            {"ref": "point:0", "x": .06, "y": .28, "w": .86, "h": .22}]}
+    return {"template_mode": "designed", "force_template_layout": force,
+            "fallback_mode": fallback, "slides": [slide]}
+
+
+def _safe_mode_render(outline):
+    base, template = _fallback_deck()
+    diags: list = []
+    data = ppt_engine.render_pptx(outline, template, base, diagnostics=diags)
+    prs = Presentation(io.BytesIO(data))
+    shapes = tuple(
+        (str(item.shape_type), round(item.left / prs.slide_width, 3),
+         round(item.top / prs.slide_height, 3),
+         round(item.width / prs.slide_width, 3),
+         round(item.height / prs.slide_height, 3),
+         item.text_frame.text if item.has_text_frame else "")
+        for item in prs.slides[0].shapes)
+    return shapes, diags
+
+
+def test_force_template_layout_ignores_even_a_valid_model_composition():
+    plain, _ = _safe_mode_render(_safe_mode_outline(False, False))
+    _, modeled = _safe_mode_render(_safe_mode_outline(False, True))
+    forced, forced_diag = _safe_mode_render(_safe_mode_outline(True, True))
+    # 构图本身是合法的，不开保底时确实会用它；保底必须能盖过它。
+    assert modeled[0]["composition"] == "model"
+    assert forced_diag[0]["composition"] == "readable"
+    assert "演示保底" in forced_diag[0]["composition_skip"]
+    assert forced == plain          # 与昨天的模板化版式逐形状一致
+
+
+def test_force_template_layout_overrides_none_fallback():
+    # 演示保底优先于「留空并提示」：勾了保底就不能反而给出空页。
+    shapes, diags = _safe_mode_render(_safe_mode_outline(True, True, "none"))
+    assert diags[0]["composition"] == "readable"
+    assert any("办理流程更加清晰" in item[-1] for item in shapes)

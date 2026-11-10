@@ -802,6 +802,8 @@ def test_selected_template_defaults_to_adaptive_but_legacy_decks_keep_clone(monk
     from app.application.ppt.service import PPTService
 
     assert not PPTService._strict_template_mode({"template_mode": "adaptive"})
+    assert not PPTService._strict_template_mode({"template_mode": "designed"})
+    assert PPTService._designed_template_mode({"template_mode": "designed"})
     assert PPTService._strict_template_mode({"template_mode": "strict"})
     assert PPTService._strict_template_mode({})
 
@@ -814,6 +816,96 @@ def test_selected_template_defaults_to_adaptive_but_legacy_decks_keep_clone(monk
     assert ppt_engine.render_pptx({}, template, b"source", adaptive=True) == b"adaptive"
     assert calls == ["adaptive"]
     assert ppt_engine.render_pptx({}, template, b"source", adaptive=False) == b"clone"
+
+
+def test_designed_template_uses_local_compiler_even_when_agent_url_is_set(monkeypatch):
+    from app.application.ppt.service import PPTService
+    from app.core.config import settings
+
+    service = object.__new__(PPTService)
+    calls = []
+    monkeypatch.setattr(settings, "PPT_AGENT_URL", "http://unused-agent")
+    monkeypatch.setattr(service, "_render_native_import", lambda *_: None)
+    monkeypatch.setattr(service, "_ppt_assistant", lambda: object())
+    monkeypatch.setattr(service, "_render_with_feedback", lambda outline, template,
+                        **kwargs: (calls.append(kwargs) or b"designed", outline))
+    outline = {"template_mode": "designed", "slides": []}
+    data, renderer = service._render_pptx_bytes(
+        object(), outline, {"colors": {}}, b"template")
+    assert data == b"designed" and renderer == "local"
+    assert calls[0]["base_pptx"] == b"template"
+    assert calls[0]["adaptive"] is False
+
+
+def test_designed_template_authors_pages_after_images_are_resolved(monkeypatch):
+    from types import SimpleNamespace
+    from app.application.ppt import page_authoring
+    from app.application.ppt.service import PPTService
+
+    service = object.__new__(PPTService)
+    original = {"template_mode": "designed", "slides": [
+        {"type": "content", "title": "工作安排", "points": ["组织学习"]}]}
+    captured = []
+    monkeypatch.setattr(service, "_render_native_import", lambda *_: None)
+    monkeypatch.setattr(service, "_resolve_render_style", lambda *_: ({"colors": {}}, "row"))
+    monkeypatch.setattr(service, "sanitize_outline", lambda outline, **_: outline)
+    monkeypatch.setattr(service, "_user_images", lambda *_a, **_k: [])
+    monkeypatch.setattr(service, "_ppt_assistant", lambda: "model")
+    monkeypatch.setattr(service, "_tpl_base_bytes", lambda _row: b"template")
+    monkeypatch.setattr(ppt_engine, "resolve_slide_images",
+                        lambda outline, _images: (captured.append("images") or outline))
+    monkeypatch.setattr(page_authoring, "author_pages",
+                        lambda outline, _template, _assistant, _warnings, **_kwargs:
+                        (captured.append("design") or outline))
+    monkeypatch.setattr(service, "_render_with_feedback",
+                        lambda outline, template, _warnings, **kwargs:
+                        (captured.append(kwargs) or (b"pptx", outline)))
+    data, _ = service.render_adaptive_pptx(
+        SimpleNamespace(template_id="tpl", theme_id=""), original, "user")
+    assert data == b"pptx"
+    assert captured[:2] == ["images", "design"]
+    assert captured[2]["base_pptx"] == b"template"
+    assert captured[2]["adaptive"] is False
+    captured.clear()
+    monkeypatch.setattr(service, "_tpl_base_bytes", lambda _row: None)
+    service.render_adaptive_pptx(
+        SimpleNamespace(template_id="tpl", theme_id=""), original, "user")
+    assert captured[:2] == ["images", "design"]
+    assert captured[2]["base_pptx"] is None
+    assert captured[2]["adaptive"] is True
+
+
+def test_designed_template_uses_original_page_preview(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.application.ppt.service import PPTService
+
+    service = object.__new__(PPTService)
+    monkeypatch.setattr(PPTService, "ppt_dir", property(lambda _self: tmp_path))
+    folder = tmp_path / "tpl_prev" / "template-1"
+    folder.mkdir(parents=True)
+    (folder / "original.png").write_bytes(b"source-preview")
+    (folder / "filled.png").write_bytes(b"filled-preview")
+    template = {"layout_library": [{"detected_type": "content",
+                                    "source_preview": "original.png",
+                                    "preview": "filled.png"}]}
+    assert service._design_reference_image(
+        template, SimpleNamespace(id="template-1")) == b"source-preview"
+
+
+def test_template_outline_defaults_to_designed_mode_when_not_specified(monkeypatch):
+    from app.application.ppt.dto import OutlineIn
+    from app.application.ppt.service import PPTService
+
+    service = object.__new__(PPTService)
+    captured = []
+    monkeypatch.setattr(service, "_do_outline", lambda *_args, **kwargs:
+                        (captured.append(kwargs) or {"ok": True}))
+    body = OutlineIn(template_id="selected", topic="工作汇报")
+    service.make_outline(body, object())
+    assert captured[0]["template_mode"] == "designed"
+    explicit = OutlineIn(template_id="selected", template_mode="strict", topic="工作汇报")
+    service.make_outline(explicit, object())
+    assert captured[1]["template_mode"] == "strict"
 
 
 def test_selected_template_adaptive_mode_persists_through_generate(client, accounts):

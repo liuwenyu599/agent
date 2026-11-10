@@ -44,6 +44,7 @@ pymupdf==1.28.2
 openpyxl==3.1.5
 xlsxwriter==3.2.9
 lxml==6.1.1
+defusedxml==0.7.1       # SVG 视觉层解析（svg_layer.py），非 lxml 的传递依赖
 pillow==12.2.0
 beautifulsoup4==4.15.0
 

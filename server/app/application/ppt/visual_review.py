@@ -13,6 +13,7 @@ from typing import Any
 
 from pptx import Presentation
 
+from app.core.config import settings
 from app.core.llm_json import loads_lenient
 from app.core.logging import get_logger
 
@@ -35,11 +36,15 @@ def render_slide_images(data: bytes) -> list[bytes]:
     soffice, pdftoppm = shutil.which("soffice"), shutil.which("pdftoppm")
     if not soffice or not pdftoppm:
         raise RuntimeError("服务器缺少 PPT 页面渲染组件")
-    with tempfile.TemporaryDirectory(prefix="ppt-vision-") as tmp:
+    temp_root = settings.DATA_DIR / "ppt" / "tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ppt-vision-", dir=temp_root) as tmp:
         root = Path(tmp)
         source = root / "slides.pptx"
         source.write_bytes(data)
-        subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+        profile = root / "lo-profile"
+        subprocess.run([soffice, f"-env:UserInstallation={profile.as_uri()}",
+                        "--headless", "--convert-to", "pdf",
                         "--outdir", str(root), str(source)],
                        timeout=120, capture_output=True, check=True)
         pdf = root / "slides.pdf"

@@ -444,7 +444,7 @@ private fun PptEntryPane(
         Row(verticalAlignment = Alignment.Bottom) {
             Text("视觉风格", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Spacer(Modifier.width(8.dp))
-            Text("选模板后默认沿用原版式；文字过多时会逐页调整到可读版式", fontSize = 11.sp, color = Muted)
+            Text("选模板后先定每页图文关系，再沿用模板风格完成排版", fontSize = 11.sp, color = Muted)
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onOpenTemplates) { Text("更多模板 →", fontSize = 12.sp) }
         }
@@ -455,28 +455,61 @@ private fun PptEntryPane(
             StyleCardAuto(Modifier.width(190.dp), selected = vm.templateId == null) {
                 vm.templateId = null
                 vm.strictTemplate = false
+                vm.designedTemplate = false
             }
             vm.templates.forEachIndexed { i, t ->
                 StyleCard(t, i, Modifier.width(190.dp),
                     selected = t["id"].str() == vm.templateId) {
                     vm.templateId = t["id"].str()
-                    vm.strictTemplate = true
+                    vm.strictTemplate = false
+                    vm.designedTemplate = true
                 }
             }
         }
         val selectedTemplateName = vm.templates.firstOrNull { it["id"].str() == vm.templateId }
             ?.get("name").str()
-        Text(if (vm.templateId == null) "本次未套用模板，将使用自适应排版。"
+        Text(if (vm.safeMode) "演示保底已开：本次完全不调用模型构图，成稿与昨天的模板化版式一致。"
+             else if (vm.templateId == null) "本次未套用模板，将使用自适应排版。"
              else if (vm.strictTemplate) "本次严格沿用「${selectedTemplateName.ifBlank { "所选模板" }}」的原版式与原配色。"
+             else if (vm.designedTemplate) (
+                 "本次将先设计每页图文关系，再沿用「${selectedTemplateName.ifBlank { "所选模板" }}」的配色和装饰导出。"
+                 + when (vm.fallbackMode) {
+                     "learned" -> "构图未通过时先试该页原版式，仍放不下才退回可读版式。"
+                     "none" -> "构图未通过时该页留空并在提示里点名，不做替代排版。"
+                     else -> ""
+                 })
              else if (vm.colorOverride) "本次使用模板版式风格，并采用所选主题色逐页排版。"
              else "本次将使用「${selectedTemplateName.ifBlank { "所选模板" }}」的配色，按内容逐页排版。",
             fontSize = 11.sp, color = Muted, modifier = Modifier.padding(top = 8.dp))
         if (vm.templateId != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { vm.chooseTemplateMode(false) },
-                    colors = sel(!vm.strictTemplate)) { Text("智能排版") }
+                    colors = sel(vm.designedTemplate && !vm.strictTemplate)) { Text("模型逐页构图") }
                 OutlinedButton(onClick = { vm.chooseTemplateMode(true) },
                     colors = sel(vm.strictTemplate)) { Text("严格沿用原版式") }
+            }
+            // 模型构图被拒时退到哪条链路。默认沿用历史行为（可读版式），
+            // 「留空并提示」用于不接受替代排版、要一眼看出哪页没生效的场合。
+            if (vm.designedTemplate && !vm.strictTemplate && !vm.safeMode) {
+                Text("构图未通过时", fontSize = 11.sp, color = Muted,
+                    modifier = Modifier.padding(top = 10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.fallbackMode = "readable" },
+                        colors = sel(vm.fallbackMode == "readable")) { Text("退回可读版式") }
+                    OutlinedButton(onClick = { vm.fallbackMode = "learned" },
+                        colors = sel(vm.fallbackMode == "learned")) { Text("先试原版式") }
+                    OutlinedButton(onClick = { vm.fallbackMode = "none" },
+                        colors = sel(vm.fallbackMode == "none")) { Text("留空并提示") }
+                }
+            }
+        }
+        // 演示保底：一键彻底不试模型构图。模型给了「能过校验但不好看」的构图时，
+        // 自动兜底不会触发，这个开关才是现场最稳的那道保险。
+        Row(modifier = Modifier.padding(top = 8.dp)) {
+            OutlinedButton(onClick = { vm.safeMode = !vm.safeMode },
+                colors = sel(vm.safeMode)) {
+                Text(if (vm.safeMode) "✓ 演示保底已开（只用昨天那套）"
+                     else "演示保底：只用昨天那套模板化")
             }
         }
 

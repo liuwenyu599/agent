@@ -128,6 +128,11 @@ class PptViewModel(private val repo: PptRepository) {
         private set
     var templateId by mutableStateOf<String?>(null)
     var strictTemplate by mutableStateOf(false)
+    var designedTemplate by mutableStateOf(false)
+    // 模型构图被拒后走哪条兜底链路：readable / learned / none
+    var fallbackMode by mutableStateOf("readable")
+    // 演示保底：完全不调用模型构图，直接出接入 designed 之前那套模板化版式
+    var safeMode by mutableStateOf(false)
     var themeId by mutableStateOf<String?>(null)
     var colorOverride by mutableStateOf(false)
     var themes by mutableStateOf(listOf<JsonObject>())
@@ -716,7 +721,9 @@ class PptViewModel(private val repo: PptRepository) {
             "theme_id" to themeId,
             "color_override" to colorOverride,
             "template_id" to templateId,
-            "template_mode" to if (strictTemplate) "strict" else "adaptive",
+            "template_mode" to if (strictTemplate) "strict" else if (templateId != null && designedTemplate) "designed" else "adaptive",
+            "fallback_mode" to fallbackMode,
+            "force_template_layout" to safeMode,
             "kb_ids" to selectedKbIds.toList(),
         ).apply {
             // “页数（可选）”为空时不要偷偷补默认值，让服务端按建议页数处理；
@@ -967,6 +974,9 @@ class PptViewModel(private val repo: PptRepository) {
         outlineSubtitle = outline["subtitle"].str()
         outlineDesignSpec = outline["design_spec"].obj()
         strictTemplate = outline["template_mode"].str() == "strict"
+        designedTemplate = outline["template_mode"].str() == "designed"
+        fallbackMode = outline["fallback_mode"].str().ifBlank { "readable" }
+        safeMode = outline["force_template_layout"].str() == "true"
         colorOverride = outline["color_override"].str() == "true"
         themeId = if (colorOverride) outline["color_theme_id"].str().ifBlank { null } else null
         selectedMaterialIds.clear()
@@ -1178,7 +1188,9 @@ class PptViewModel(private val repo: PptRepository) {
     private fun outlineJson(): JsonObject = buildJsonObject {
         put("title", outlineTitle)
         put("subtitle", outlineSubtitle)
-        put("template_mode", if (strictTemplate) "strict" else "adaptive")
+        put("template_mode", if (strictTemplate) "strict" else if (templateId != null && designedTemplate) "designed" else "adaptive")
+        put("fallback_mode", fallbackMode)
+        put("force_template_layout", safeMode)
         put("color_override", colorOverride)
         if (colorOverride) themeId?.let { put("color_theme_id", it) }
         outlineDesignSpec?.let { put("design_spec", it) }
@@ -1245,7 +1257,8 @@ class PptViewModel(private val repo: PptRepository) {
     fun switchTemplate(id: String?) {
         if (templateId == id) return
         templateId = id
-        strictTemplate = id != null
+        strictTemplate = false
+        designedTemplate = id != null
         loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
             ?.get("name").str().ifBlank { null } ?: "自适应排版"
@@ -1254,10 +1267,11 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     fun chooseTemplateMode(value: Boolean) {
-        if (strictTemplate == value) return
+        if (strictTemplate == value && (value || designedTemplate)) return
         strictTemplate = value
+        designedTemplate = !value && templateId != null
         status = if (value) "已选择严格沿用原模板版式，正在刷新预览"
-            else "已选择按模板风格自适应排版，正在刷新预览"
+            else "已选择模型逐页构图并沿用模板风格，正在刷新预览"
         if (docId != null) refreshPreview()
     }
 

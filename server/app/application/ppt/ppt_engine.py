@@ -819,7 +819,7 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 
 【输出要求】
 1. 只输出 JSON，不要用 markdown 代码块包裹，不要输出其他文字：
-{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","style":"风格类别","design_spec":{{"density":"balanced"}},"slides":[{outline_example},...]}}
+{{"title":"PPT主标题（≤20字）","subtitle":"副标题（≤30字）","style":"风格类别","design_spec":{{"density":"balanced","audience":"汇报对象","communication_intent":"演示要完成的任务","core_message":"整稿最重要的结论","delivery_context":"汇报或阅读场景"}},"slides":[{outline_example},...]}}
 2. 顶层 "style" 字段：从「工作汇报、政策解读、培训课件、经验交流、总结汇报、宣传展示、党建廉政、公共服务、数字治理、调研分析」中选最贴合主题的类别。法律援助/人民调解选「公共服务」，信息化/智慧平台选「数字治理」，调研/评估选「调研分析」。整份稿使用同一套颜色、字体和间距，不要逐页换色或自行输出绝对坐标；
 3. 每页 slide 的字段：type、title、points、blocks、image_id、image_hint、note（演讲备注，一句话）；
 4. {count_rule}
@@ -834,7 +834,9 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
    不得只写"稳步增长""持续向好"这类趋势评价——那会被渲染成假指标卡。
    每页含数字、日期、精确时限或具体案例的，必须在 sources 字段标注所依据的材料名；
    无材料清单或找不到依据时改写为定性表述，不写成确定成果。
-8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选。
+8. 整稿 design_spec.density 从 spacious（少量核心信息）和 balanced（常规汇报）中选；
+   audience、communication_intent、core_message、delivery_context 用简短文字说明整稿的沟通任务，
+   只能依据用户要求和材料，不能凭空添加事实；不要自行指定字体、色号或绝对坐标。
 9. 每页增加 design：job 写读者看完本页应理解的结论，relationship 从
    none、comparison（对比）、parallel（并列）、grouped（分组）、takeaway（单一结论）中选。
    该字段决定整页视觉语言：comparison 左右对照中轴、parallel 圆形序号与步骤箭头、
@@ -843,13 +845,15 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
    确需配图时才写 image_hint，
    以可观察的场景描述图片用途。不需要图片时设置 design.image_role=none，需要场景证据时
    设置 design.image_role=evidence。需要保留整个画面时设置 design.image_fit=contain，否则为 crop。
-10. content/summary 页可给 design.regions 设计文字和已选图片区域。
+10. content/summary 页应先决定图文关系，再用 design.regions 给出文字和图片区域；
+    不要先挑模板槽位再找图片。常规正文页尽量写出 regions，让每页的内容与图片决定构图。
     每个区域只写 ref、x、y、w、h，坐标是页面宽高的 0 到 1 比例。
     ref 为 title 或 point:0、point:1 等，每段必须且只出现一次。已有 image_id 时还需 image 区域。
     标题在 y=0.03~0.18，正文在 y=0.23~0.88，左右至少留 0.055。
     区域互不重叠，长文留足高度。可选择并排、上下、重点大区配次要小区，
-    不要全篇重复同一种构图。不确定时省略 regions，交给程序按内容布局。
-11. content/summary 页还可给 design.visuals 追加 0~6 个无文字装饰图形，
+    不要全篇重复同一种构图。内容太长或关系不清时可省略 regions，交给程序按内容布局。
+11. content/summary 页可给 design.visuals 追加 0~6 个无文字装饰图形；
+    有明确分组、对比、并列关系时，优先给 1~3 个能帮助阅读的图形，
     让版式与内容关系相配，而不是每页套相同色块。只用主题语义色
     primary/accent/light/dark/white/line，不输出具体色号或外部素材。
     形状示例：{{"kind":"rect","x":0.06,"y":0.21,"w":0.4,"h":0.01,"fill":"accent"}}；
@@ -968,11 +972,16 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             logger.warning("[PPT] 大纲重试后仍解析失败，原始输出：%s",
                            truncate_for_log(raw, 800))
             raise RuntimeError(_OUTLINE_PARSE_FAILED_MSG)
-    return normalize_outline(
+    result = normalize_outline(
         outline,
         target_count=(slide_count if enforce_exact_count and not free_structure else None),
         require_bookends=not free_structure,
     )
+    if audience:
+        result["design_spec"]["audience"] = str(audience)[:120]
+    if scene:
+        result["design_spec"]["delivery_context"] = str(scene)[:120]
+    return result
 
 
 def enrich_outline_with_diagrams(assistant, outline: Dict) -> Dict:
@@ -1937,9 +1946,12 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
                 "image_fit": "contain" if design.get("image_fit") == "contain" else "crop",
                 "image_role": design.get("image_role") if design.get("image_role") in (
                     "none", "evidence") else "auto",
-                "regions": design.get("regions")[:7] if isinstance(design.get("regions"), list) else None,
+                "image_overlay": "dark" if design.get("image_overlay") == "dark" else "none",
+                "svg": str(design.get("svg") or "")[:60000],
+                "regions": design.get("regions")[:8] if isinstance(design.get("regions"), list) else None,
                 "visuals": design.get("visuals") if (isinstance(design.get("visuals"), list)
                                                     and len(design["visuals"]) <= 6) else None,
+                "plan_signature": str(design.get("plan_signature") or "")[:20],
             },
             "title": (s.get("title") or "")[:60],
             "subtitle": (s.get("subtitle") or "")[:80],
@@ -1984,6 +1996,10 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
     outline["design_spec"] = {
         "density": "spacious" if isinstance(spec, dict) and spec.get("density") == "spacious"
         else "balanced",
+        **({key: str(spec.get(key) or "")[:limit]
+            for key, limit in (("audience", 120), ("communication_intent", 200),
+                               ("core_message", 200), ("delivery_context", 120))
+            if isinstance(spec, dict) and spec.get(key)}),
     }
     outline.setdefault("title", norm[0]["title"])
     outline.setdefault("subtitle", norm[0].get("subtitle", ""))
@@ -2060,13 +2076,34 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
         return (f"{im.get('caption') or ''} {im.get('name') or ''} "
                 f"{im.get('category') or ''} {' '.join(im.get('tags') or [])}")
 
-    def _relevant(hint: str) -> Optional[Dict]:
+    def _conflicting_visible_topic(page_text: str, im: Dict) -> bool:
+        """Reject a stock scene whose legible screen/banner announces another topic.
+
+        Scene similarity (both are lectures) is not enough when the photo itself
+        states what the event was about. This only applies to automatic choices;
+        an image explicitly selected by the user remains authoritative.
+        """
+        caption = str(im.get("caption") or "")
+        match = re.search(
+            r"(?:屏幕|大屏|LED\s*屏|投影|横幅|海报|背景板|展板|课件|幻灯片|PPT)"
+            r"(?:上|中|里|前)?\s*(?:显示|写有|写着|印有|印着|主题为|内容为|标题为)"
+            r"[《“\"「\s]*([^》”\"」，。；;：:\n]{6,35})", caption, re.IGNORECASE)
+        if not match:
+            return False
+        topic = match.group(1).strip()
+        grams = _grams(topic)
+        if len(grams) < 3:
+            return False
+        shared = grams & _grams(page_text)
+        return len(shared) < 2 and len(shared) / len(grams) < .2
+
+    def _relevant(hint: str, page_text: str) -> Optional[Dict]:
         query = _grams(hint)
         if len(query) < 2:
             return None
         best, best_score = None, 0.0
         for im in images:
-            if im.get("id") in used_auto_ids:
+            if im.get("id") in used_auto_ids or _conflicting_visible_topic(page_text, im):
                 continue
             common = len(query & _grams(_blob(im)))
             score = common / len(query) if query else 0.0
@@ -2081,7 +2118,8 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
             return None
         best, best_score = None, 0
         for im in images:
-            if im.get("id") in used_auto_ids or _is_group_photo(im):
+            if (im.get("id") in used_auto_ids or _is_group_photo(im)
+                    or _conflicting_visible_topic(page_text, im)):
                 continue
             name = str(im.get("name") or "")
             body = _blob(im)
@@ -2143,7 +2181,7 @@ def resolve_slide_images(outline: Dict, images: List[Dict]) -> Dict:
             # 拿去比二元组重合，任何一页都能凑够 0.55，会把无关照片硬塞进来。
             hint = str(slide.get("image_hint") or slide.get("title") or "").strip()
             if hint:
-                img = _relevant(hint)
+                img = _relevant(hint, text)
         if not img:
             return False
         used_auto_ids.add(str(img.get("id")))
@@ -2458,16 +2496,15 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         return tb
 
     def picture_fit(slide, path, x, y, w, h, fit="crop"):
-        from PIL import Image
-        with Image.open(path) as im:
-            iw, ih = im.size
+        from app.application.ppt.image_media import prepared_picture
+        source, iw, ih = prepared_picture(path, w, h)
         box_ratio, img_ratio = w / h, iw / ih
         if fit == "contain":
             width, height = ((w, int(w / img_ratio)) if img_ratio > box_ratio
                              else (int(h * img_ratio), h))
             return slide.shapes.add_picture(
-                path, x + (w - width) // 2, y + (h - height) // 2, width, height)
-        pic = slide.shapes.add_picture(path, x, y, w, h)
+                source, x + (w - width) // 2, y + (h - height) // 2, width, height)
+        pic = slide.shapes.add_picture(source, x, y, w, h)
         if img_ratio > box_ratio:
             crop = (1 - box_ratio / img_ratio) / 2
             pic.crop_left = pic.crop_right = crop
@@ -2520,10 +2557,14 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                     grad_fill(shp, palette.get(d["from"], PRIMARY),
                               palette.get(d["to"], ACCENT))
                 continue
-            if kind not in ("oval", "chevron", "badge"):
+            if kind not in ("oval", "chevron", "badge", "donut", "trapezoid", "down_arrow"):
                 continue
+            preset = {"oval": MSO_SHAPE.OVAL, "chevron": MSO_SHAPE.CHEVRON,
+                      "badge": MSO_SHAPE.OVAL, "donut": MSO_SHAPE.DONUT,
+                      "trapezoid": MSO_SHAPE.TRAPEZOID,
+                      "down_arrow": MSO_SHAPE.DOWN_ARROW}[kind]
             shp = slide.shapes.add_shape(
-                MSO_SHAPE.OVAL if kind != "chevron" else MSO_SHAPE.CHEVRON,
+                preset,
                 lx(d["x"]), ly(d["y"]), lx(d["w"]), ly(d["h"]))
             shp.fill.solid()
             shp.fill.fore_color.rgb = color
@@ -3545,20 +3586,43 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
 
     def r_scene(s):
         from app.application.ppt.page_scene import references
+        from app.application.ppt import svg_layer
         slide = prs.slides.add_slide(blank)
         values = references(s)
+        design = s.get("design") or {}
+        if design.get("svg"):
+            try:
+                svg_layer.add_to_slide(slide, design["svg"], SW, SH)
+            except Exception as exc:
+                logger.warning("[PPT] SVG 视觉层未采用：page=%s", s.get("title"))
+                warnings.append(
+                    f"「{s.get('title') or '本页'}」SVG 装饰未采用："
+                    + (str(exc) if isinstance(exc, ValueError)
+                       else "视觉层无法渲染"))
         # 视觉原语与线框预览共用同一份 decorations()；整层先于文字绘制。
         draw_decorations(slide, s["scene"], s)
+        overlay = design.get("image_overlay") == "dark"
+        image_box = next((item for item in s["scene"]["elements"]
+                          if item["ref"] == "image"), None)
+        if overlay and image_box:
+            x, y, w, h = (image_box[key] for key in ("x", "y", "w", "h"))
+            picture_fit(slide, s["_image"]["file_path"], lx(x), ly(y), lx(w), ly(h), "crop")
+            rect(slide, lx(x), ly(y), lx(w), ly(h), DARK, alpha=58)
         for item in s["scene"]["elements"]:
             x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
             if item["ref"] == "image":
-                picture_fit(slide, s["_image"]["file_path"], lx(x), ly(y), lx(w), ly(h),
-                            (s.get("design") or {}).get("image_fit"))
+                if not overlay:
+                    picture_fit(slide, s["_image"]["file_path"], lx(x), ly(y), lx(w), ly(h),
+                                design.get("image_fit"))
                 continue
             title = item["ref"] == "title"
             inset = 0 if title else .02
+            color = WHITE if overlay and not title and image_box and (
+                x >= image_box["x"] and y >= image_box["y"] and
+                x+w <= image_box["x"]+image_box["w"] and
+                y+h <= image_box["y"]+image_box["h"]) else DARK
             text(slide, lx(x+inset), ly(y+inset), lx(w-2*inset), ly(h-2*inset),
-                 values[item["ref"]], item["font_pt"], title, DARK,
+                 values[item["ref"]], item["font_pt"], title, color,
                  anchor=MSO_ANCHOR.MIDDLE)
         return slide
 
@@ -4926,6 +4990,20 @@ def _clone_slide(prs, src_slide):
     return new_slide
 
 
+def _drop_orphaned_slide_images(slide) -> None:
+    """Remove source-template image parts after their example shapes are deleted."""
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.oxml.ns import qn
+
+    embed = qn("r:embed")
+    link = qn("r:link")
+    used = {value for element in slide._element.iter()
+            for key, value in element.attrib.items() if key in (embed, link)}
+    for rid, relationship in list(slide.part.rels.items()):
+        if relationship.reltype == RT.IMAGE and rid not in used:
+            slide.part.drop_rel(rid)
+
+
 def _fill_text_region(shape, lines, keep_para_format=True):
     """向文本框填充内容：用首个段落的格式作为模板逐条写入，清除多余示例段落。"""
     import copy
@@ -6260,6 +6338,27 @@ def _keep_template_decorations(slide, sw: int, sh: int):
             top_marks.append(bottom)
         elif bottom > .94 and top > .55:
             bottom_marks.append(top)
+    # Layout/master artwork is inherited and cannot be removed from the slide.
+    # Its header rule may sit below the logo (for example at 16% page height),
+    # so it must also constrain the safe text area.
+    ancestors = [slide.slide_layout]
+    try:
+        ancestors.append(slide.slide_layout.slide_master)
+    except AttributeError:
+        pass
+    for ancestor in ancestors:
+        for shape in ancestor.shapes:
+            if getattr(shape, "is_placeholder", False):
+                continue
+            try:
+                top = shape.top / sh
+                bottom = (shape.top + shape.height) / sh
+            except (AttributeError, TypeError):
+                continue
+            if top < .22 and bottom < .35:
+                top_marks.append(bottom)
+            elif bottom > .86 and top > .55:
+                bottom_marks.append(top)
     top_limit = max([.12] + [value + .015 for value in top_marks])
     bottom_limit = min([.89] + [value - .015 for value in bottom_marks])
     if bottom_limit - top_limit < .35:
@@ -6267,11 +6366,290 @@ def _keep_template_decorations(slide, sw: int, sh: int):
     return top_limit, bottom_limit
 
 
+def _draw_model_visuals_on_template(slide, proposed: object, elements: list,
+                                    colors: Dict, sw: int, sh: int,
+                                    body_top: float, body_bottom: float) -> None:
+    """Compile validated, text-free model primitives into editable PPT shapes."""
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+    from pptx.oxml.ns import qn
+    from pptx.util import Pt
+    from app.application.ppt.visual_primitives import model_visuals
+
+    visuals = model_visuals(proposed, elements)
+    if not visuals:
+        return
+    palette = {key: colors.get(key, fallback) for key, fallback in {
+        "primary": "C00000", "accent": "C00000", "light": "F7F2ED",
+        "dark": "262626", "white": "FFFFFF", "line": "D0D0D0",
+    }.items()}
+
+    def rgb(key: str) -> RGBColor:
+        value = str(palette[key]).lstrip("#")
+        return RGBColor.from_string(value if re.fullmatch(r"[0-9A-Fa-f]{6}", value)
+                                    else "262626")
+
+    def mapped_y(value: float) -> int:
+        return int((body_top + (value - .025) *
+                    (body_bottom - body_top) / .865) * sh)
+
+    def mapped_h(value: float) -> int:
+        return int(value * (body_bottom - body_top) / .865 * sh)
+
+    for visual in visuals:
+        kind = visual["kind"]
+        if kind == "line":
+            shape = slide.shapes.add_connector(
+                MSO_CONNECTOR.STRAIGHT,
+                int(visual["x1"] * sw), mapped_y(visual["y1"]),
+                int(visual["x2"] * sw), mapped_y(visual["y2"]))
+            shape.line.color.rgb = rgb(visual["stroke"])
+            shape.line.width = Pt(visual["width"])
+            continue
+        preset = {"rect": MSO_SHAPE.ROUNDED_RECTANGLE if visual.get("radius")
+                  else MSO_SHAPE.RECTANGLE,
+                  "gradient": MSO_SHAPE.RECTANGLE,
+                  "oval": MSO_SHAPE.OVAL,
+                  "chevron": MSO_SHAPE.CHEVRON,
+                  "donut": MSO_SHAPE.DONUT,
+                  "trapezoid": MSO_SHAPE.TRAPEZOID,
+                  "down_arrow": MSO_SHAPE.DOWN_ARROW}[kind]
+        shape = slide.shapes.add_shape(
+            preset, int(visual["x"] * sw), mapped_y(visual["y"]),
+            int(visual["w"] * sw), mapped_h(visual["h"]))
+        fill_key = visual.get("fill", visual.get("from", "light"))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = rgb(fill_key)
+        shape.shadow.inherit = False
+        # 模板的 light 通常是接近纯白的值（蓝版是 F7F9FC），白底页上一块无边框
+        # 的浅色卡片等于没画：模型规划的三张卡在成稿里只剩三条色带，读者看到
+        # 的是「几根来历不明的横线」。浅色填充一律描一条 0.75pt 细边。
+        if kind != "gradient" and fill_key in ("light", "white"):
+            shape.line.color.rgb = rgb("line")
+            shape.line.width = Pt(0.75)
+        else:
+            shape.line.fill.background()
+        if kind == "gradient":
+            sppr = shape._element.spPr
+            solid = sppr.find(qn("a:solidFill"))
+            if solid is not None:
+                sppr.remove(solid)
+            grad = sppr.makeelement(qn("a:gradFill"), {})
+            stops = grad.makeelement(qn("a:gsLst"), {})
+            for position, color in ((0, visual["from"]), (100000, visual["to"])):
+                stop = stops.makeelement(qn("a:gs"), {"pos": str(position)})
+                shade = stop.makeelement(qn("a:srgbClr"), {"val": str(rgb(color))})
+                stop.append(shade)
+                stops.append(stop)
+            grad.append(stops)
+            grad.append(grad.makeelement(qn("a:lin"), {"ang": "0", "scaled": "1"}))
+            geometry = sppr.find(qn("a:prstGeom"))
+            if geometry is None:
+                geometry = sppr.find(qn("a:custGeom"))
+            index = list(sppr).index(geometry) + 1 if geometry is not None else 0
+            sppr.insert(index, grad)
+        elif visual.get("alpha") is not None:
+            fill = shape._element.spPr.find(qn("a:solidFill"))
+            shade = fill.find(qn("a:srgbClr")) if fill is not None else None
+            if shade is not None:
+                shade.append(shade.makeelement(qn("a:alpha"), {
+                    "val": str(int(visual["alpha"] * 1000))}))
+
+
+def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
+                                    font: str, sw: int, sh: int,
+                                    body_top: float, body_bottom: float,
+                                    template_style: Optional[Dict] = None,
+                                    reason_out: Optional[List[str]] = None) -> bool:
+    """Render a validated model composition on the source template's canvas."""
+    from copy import deepcopy
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import MSO_ANCHOR
+    from pptx.util import Pt
+    from app.application.ppt.page_scene import (explain, intent_issue, clamp_regions,
+                                                compact_regions, references)
+
+    def _skip(reason: str) -> bool:
+        # 编译期还会拒绝一部分已经通过 author_pages 的构图（映射进模板正文区
+        # 之后越界、图片区域但没图）。这些拒绝以前完全静默，「构图接受率」
+        # 就永远测不出来——诊断信息必须沿着这一层一起带出去。
+        if reason_out is not None:
+            reason_out.append(reason)
+        return False
+
+    if sdata.get("type") not in {"content", "case", "summary"}:
+        return _skip(f"页型 {sdata.get('type')} 不走模型构图")
+    if sdata.get("blocks"):
+        return _skip("该页是结构化块（表格/关系图），不用模型构图")
+    design = sdata.get("design") or {}
+    proposed = design.get("regions")
+    if not isinstance(proposed, list) or not proposed:
+        return _skip("没有 regions")
+    elements = clamp_regions(deepcopy(proposed))
+    image_path = (sdata.get("_image") or {}).get("file_path")
+    image_ok = bool(image_path and os.path.isfile(image_path))
+    if not image_ok:
+        # 图片可能在构图之后失效（被下架、文件被删），regions 里还留着 image 区，
+        # 数量校验过不去就把整页退回通用版式——文字排版也跟着白丢。剔掉这个区，
+        # 其余构图照用。
+        elements = [item for item in elements if item.get("ref") != "image"]
+    issue = explain(elements, sdata) or intent_issue(elements, sdata)
+    if issue:
+        return _skip("原始坐标未通过：" + issue)
+    # 模型只管构图，不管字排完占多高：一句十四字的话分到 46% 页高的框里，
+    # 成稿就是「卡片顶上挂一行、底下空一大片」（样稿两张半页空的卡）。按文字
+    # 实际行数收紧，并把模型的卡片/色带一起搬过去；收完越界就退回原构图。
+    visuals = design.get("visuals")
+    compacted, adjusted, changed = (
+        (elements, visuals, False) if design.get("image_overlay") == "dark"
+        else compact_regions(elements, sdata, visuals))
+    if changed and not (explain(compacted, sdata) or intent_issue(compacted, sdata)):
+        elements, visuals = compacted, adjusted
+    # The model plans on a clean page; keep its relative composition while
+    # fitting it between this template's real top and bottom decoration.
+    span = body_bottom - body_top
+    mapped = []
+    for element in elements:
+        item = dict(element)
+        item["y"] = body_top + (element["y"] - .025) * span / .865
+        item["h"] = element["h"] * span / .865
+        mapped.append(item)
+    mapped_issue = explain(mapped, sdata)
+    if mapped_issue:
+        return _skip("映射进模板正文区后未通过：" + mapped_issue)
+    if any(item["ref"] == "image" for item in mapped) and not image_ok:
+        return _skip("构图里放了图片区域，但这页实际没有可用图片")
+    from app.application.ppt import svg_layer
+    svg_png = None
+    if design.get("svg"):
+        try:
+            svg_png = svg_layer.to_png(design["svg"], width=sw, height=sh)
+        except ValueError as exc:
+            return _skip(str(exc))
+        except Exception:
+            return _skip("SVG 视觉层不合法或无法渲染")
+        if svg_layer.fixed_decoration_overlap(svg_png, slide, sw, sh):
+            return _skip("SVG 视觉层覆盖了模板固定装饰")
+
+    # Text in the source deck is already gone, but its colored cards and frames
+    # can remain. Clear only objects underneath the model's new regions; keep
+    # page backgrounds and decorations elsewhere.
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    for shape in list(slide.shapes):
+        try:
+            sx, sy = shape.left / sw, shape.top / sh
+            swidth, sheight = shape.width / sw, shape.height / sh
+        except (AttributeError, TypeError, ZeroDivisionError):
+            continue
+        if swidth * sheight > .55:
+            continue
+        # 模板里给原稿段落配节奏的小箭头/引线（宽几个百分点、高 0）不含任何
+        # 内容，内容一换就悬在空白处，成一小截孤零零的红线（用户反复指出）。
+        # 线条无法承载信息，只要落进正文区就清掉，不必等它和区域重叠。
+        if shape.shape_type == MSO_SHAPE_TYPE.LINE and body_top <= sy <= body_bottom:
+            _delete_shape(shape)
+            continue
+        if any(min(sx + swidth, item["x"] + item["w"]) - max(sx, item["x"]) > .005
+               and min(sy + sheight, item["y"] + item["h"]) - max(sy, item["y"]) > .005
+               for item in mapped):
+            _delete_shape(shape)
+
+    if svg_png:
+        slide.shapes.add_picture(io.BytesIO(svg_png), 0, 0, sw, sh)
+    _draw_model_visuals_on_template(slide, visuals, elements,
+                                    colors, sw, sh, body_top, body_bottom)
+    values = references(sdata)
+    template_style = template_style or {}
+    overlay = design.get("image_overlay") == "dark"
+    image_box = next((item for item in mapped if item["ref"] == "image"), None)
+    if overlay and image_box:
+        from pptx.enum.shapes import MSO_SHAPE
+        from pptx.oxml.ns import qn
+        ix, iy, iw, ih = (int(image_box[key] * size) for key, size in
+                          (("x", sw), ("y", sh), ("w", sw), ("h", sh)))
+        _add_picture_fill(slide, image_path, ix, iy, iw, ih)
+        shade = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, ix, iy, iw, ih)
+        shade.fill.solid()
+        shade.fill.fore_color.rgb = RGBColor(15, 20, 25)
+        shade.line.fill.background()
+        solid = shade._element.spPr.find(qn("a:solidFill"))
+        color = solid.find(qn("a:srgbClr")) if solid is not None else None
+        if color is not None:
+            color.append(color.makeelement(qn("a:alpha"), {"val": "58000"}))
+    for item in mapped:
+        x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
+        left, top, width, height = (int(x * sw), int(y * sh),
+                                    int(w * sw), int(h * sh))
+        if item["ref"] == "image":
+            if overlay:
+                continue
+            if design.get("image_fit") == "contain":
+                from PIL import Image
+                with Image.open(image_path) as source:
+                    ratio = source.width / max(source.height, 1)
+                scale = min(width / ratio, height)
+                picture_w, picture_h = max(1, int(scale * ratio)), max(1, int(scale))
+                from app.application.ppt.image_media import prepared_picture
+                source, _, _ = prepared_picture(image_path, picture_w, picture_h)
+                slide.shapes.add_picture(source,
+                    left + (width - picture_w) // 2,
+                    top + (height - picture_h) // 2, picture_w, picture_h)
+            else:
+                _add_picture_fill(slide, image_path, left, top, width, height)
+            continue
+        # 内置版式（r_scene）一直按 2% 内缩排字，模型构图这条路却是零边距：
+        # 文字直接压在卡片边框和顶盖色带上（样稿第一页就是这样）。口径统一，
+        # 并且垂直居中——收紧后的卡片刚好容纳文字，居中和顶对齐差别不大，
+        # 但模型给的大框（收不下来的情况）居中也比贴着上沿好看。
+        inset = 0 if item["ref"] == "title" else .02
+        left, top = int((x + inset) * sw), int((y + inset) * sh)
+        width = max(1, int((w - 2 * inset) * sw))
+        height = max(1, int((h - 2 * inset) * sh))
+        shape = slide.shapes.add_textbox(left, top, width, height)
+        shape.text_frame.word_wrap = True
+        shape.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+        shape.text_frame.margin_left = shape.text_frame.margin_right = 0
+        shape.text_frame.margin_top = shape.text_frame.margin_bottom = 0
+        run = shape.text_frame.paragraphs[0].add_run()
+        run.text = values[item["ref"]]
+        apply_cjk_font(run, font)
+        preferred = template_style.get(
+            "title_font_pt" if item["ref"] == "title" else "body_font_pt")
+        size = (max(18 if item["ref"] == "title" else 14,
+                    min(item["font_pt"], preferred))
+                if type(preferred) in (int, float) else item["font_pt"])
+        run.font.size = Pt(size)
+        run.font.bold = item["ref"] == "title"
+        text_on_image = (overlay and item["ref"] != "title" and image_box
+                         and x >= image_box["x"] and y >= image_box["y"]
+                         and x+w <= image_box["x"]+image_box["w"]
+                         and y+h <= image_box["y"]+image_box["h"])
+        color_hex = ("FFFFFF" if text_on_image else colors.get(
+            "primary" if item["ref"] == "title" else "dark", "262626"))
+        if _hex_luminance(color_hex) > .70:
+            color_hex = "262626"
+        run.font.color.rgb = RGBColor.from_string(color_hex)
+    return True
+
+
 def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                                  font: str, sw: int, sh: int,
                                  warnings: Optional[List[str]] = None,
-                                 variant: int = 0) -> None:
-    """Keep the source deck's master/background, but give dense text safe geometry."""
+                                 variant: int = 0,
+                                 template_style: Optional[Dict] = None,
+                                 diag: Optional[Dict] = None,
+                                 fallback: str = "readable",
+                                 learned: Optional[tuple] = None,
+                                 skip_model: bool = False) -> None:
+    """Keep the source deck's master/background, but give dense text safe geometry.
+
+    ``fallback`` decides what happens when the model composition is rejected:
+
+    * ``readable`` (default) — the engine skeleton below, the long-standing path.
+    * ``learned`` — try the template's own slot layout first, then readable.
+    * ``none`` — leave the page bare and report it, instead of silently
+      substituting a different design than the one that was asked for.
+    """
     from pptx.dml.color import RGBColor
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.enum.text import PP_ALIGN
@@ -6279,6 +6657,63 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     from app.application.ppt.adaptive_design import point_rows
 
     body_top, body_bottom = _keep_template_decorations(slide, sw, sh)
+    skip: List[str] = []
+    if not skip_model and _fill_model_regions_on_template(
+            slide, sdata, colors, font, sw, sh, body_top, body_bottom,
+            template_style, reason_out=skip):
+        if diag is not None:
+            diag["composition"] = "model"
+            diag["composition_skip"] = ""
+        _fix_text_contrast(slide, sw, sh)
+        return
+    if skip_model:
+        skip = ["演示保底：已跳过模型构图"]
+    if diag is not None:
+        diag["composition"] = "readable"
+        diag["composition_skip"] = "；".join(skip)
+    title = sdata.get("title") or "本页"
+    # 演示保底优先于 none：勾了保底就一定出昨天那套，不能反而留空页。
+    if fallback == "none" and not skip_model:
+        # 明确留空：调用方要求「不接受替代方案」。空页本身是可见信号，
+        # 日志和警告里同时给出具体拒因，避免又变成静默降级。
+        if diag is not None:
+            diag["composition"] = "none"
+            diag["composition_skip"] = "；".join(skip) or "模型未给出可用构图"
+        if warnings is not None:
+            warnings.append(f"「{title}」模型构图未通过且已关闭兜底排版"
+                            f"（{diag.get('composition_skip') if diag else ''}）")
+        return
+    if fallback == "learned" and not skip_model and not learned:
+        # 模板里没有能装正文的版式（只有封面/目录这类），这一档会静默退化成
+        # 可读版式。用户选了「先试原版式」却看不到原版式，必须说出来。
+        if warnings is not None:
+            warnings.append(f"「{title}」模板没有可容纳正文的原版式，已直接改用可读版式")
+    if fallback == "learned" and not skip_model and learned:
+        lay, prs = learned
+        local_warnings = warnings if warnings is not None else []
+        before = {id(shape._element) for shape in slide.shapes}
+        try:
+            unfit = _fill_learned_slide(slide, lay, sdata, colors, font,
+                                        sw, sh, prs, local_warnings)
+            issue = _filled_page_issue(slide, sdata, sw, sh)
+            if not issue and not unfit:
+                if diag is not None:
+                    diag["composition"] = "learned"
+                return
+            if warnings is not None:
+                warnings.append(f"「{title}」原版式放不下本页正文，已改用可读版式")
+        except Exception as exc:
+            logger.warning("[PPT] 原版式兜底失败：%s", type(exc).__name__)
+        # 原版式也装不下时，只清掉它新加的形状；模板自带的底色和装饰必须留下，
+        # 否则退可读版式时会连带把页脚、logo 一起删成白页。
+        for shape in [item for item in slide.shapes
+                      if id(item._element) not in before]:
+            _delete_shape(shape)
+        if diag is not None:
+            diag["composition"] = "readable"
+    if warnings is not None and skip and any("SVG" in reason for reason in skip):
+        warnings.append(f"「{sdata.get('title') or '本页'}」SVG 装饰未采用："
+                        + "；".join(skip))
     def readable_color(value: str) -> RGBColor:
         channels = [int(value[index:index + 2], 16) for index in (0, 2, 4)]
         # Source themes sometimes use pale gray for decorative labels. On a
@@ -6501,7 +6936,9 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
             if (sdata.get("design") or {}).get("image_fit") == "contain":
                 scale = min(target_w / image_w, target_h / image_h)
                 pic_w, pic_h = max(1, int(image_w * scale)), max(1, int(image_h * scale))
-                picture = slide.shapes.add_picture(selected_image,
+                from app.application.ppt.image_media import prepared_picture
+                source, _, _ = prepared_picture(selected_image, pic_w, pic_h)
+                picture = slide.shapes.add_picture(source,
                     target_x + (target_w - pic_w) // 2,
                     target_y + (target_h - pic_h) // 2, pic_w, pic_h)
             else:
@@ -6708,11 +7145,11 @@ def _add_picture_fill(slide, path: str, left: int, top: int,
     直接 add_picture(path, ..., w, h) 会把竖图压成横条（人脸/文字全变形），
     这是「选了图但看着不对」的常见来源。这里保持原始比例、裁掉溢出部分。
     """
-    picture = slide.shapes.add_picture(path, left, top, width, height)
+    from app.application.ppt.image_media import prepared_picture
+    source, image_width, image_height = prepared_picture(path, width, height)
+    picture = slide.shapes.add_picture(source, left, top, width, height)
     try:
-        from PIL import Image as _PILImage
-        with _PILImage.open(path) as image:
-            ratio = image.width / image.height if image.height else 0
+        ratio = image_width / image_height if image_height else 0
         box_ratio = (width / height) if height else 0
         if ratio and box_ratio:
             if ratio > box_ratio:            # 原图更宽：裁左右
@@ -7046,11 +7483,24 @@ def _layout_matches_theme(layout: Dict, primary: str) -> bool:
 
 
 def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
-                       layout_library: list, warnings: Optional[List[str]] = None) -> bytes:
+                       layout_library: list, warnings: Optional[List[str]] = None,
+                       diagnostics: Optional[List[Dict]] = None) -> bytes:
     """模板学习渲染：克隆模板页 → 清除示例内容 → 填充新内容。
     模板没有的页型自动降级到已有版式，不套用 DEFAULT_LAYOUTS。"""
     from pptx import Presentation
+    from app.application.ppt.template_style import summarize_template_style
     warnings = warnings if warnings is not None else []
+    template_style = summarize_template_style(template)
+    # 模型构图被拒时退到哪条链路。默认沿用历史行为（可读版式骨架），
+    # 另外两档是给「不接受替代方案」和「先试原版式」的场合用的。
+    fallback_mode = str((outline or {}).get("fallback_mode") or "readable")
+    if fallback_mode not in {"readable", "learned", "none"}:
+        logger.warning("[PPT] 未知兜底模式 %r，按 readable 处理", fallback_mode)
+        fallback_mode = "readable"
+    # 演示保底：勾上后完全不调用模型构图，逐页直接走昨天那套模板化版式。
+    # 与「构图失败后自动兜底」的区别是：这里连「能通过校验但不好看」的构图
+    # 也不会被采纳，成稿与未接入 designed 时逐字节一致。
+    force_template_layout = bool((outline or {}).get("force_template_layout"))
     layout_library = [layout for layout in layout_library
                       if (layout.get("qualification") or {}).get("status") != "rejected"
                       and _layout_matches_theme(
@@ -7110,16 +7560,34 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
             pass
     sw, sh = prs.slide_width, prs.slide_height
     hybrid_index = 0
-    for ns, lay, s in new_slides:
+    for page_no, (ns, lay, s) in enumerate(new_slides, 1):
         try:
             # 正文页统一走「模板皮 + 引擎骨架」：保留模板的底色、页脚装饰、配色
             # 与字体，正文由自适应排版重排。原因是模板的正文槽位是给原稿那几句
             # 话设计的，条数/字数一变就出现空框、半边空白、配图无处安放（用户
             # 2026-11-10 连拍三处）；封面/目录/章节/结尾槽位简单，仍用原版式。
             if s.get("type") in {"content", "case", "summary", "chart", "data"}:
+                diag: Dict = {}
                 _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings,
-                                             variant=hybrid_index)
+                                             variant=hybrid_index,
+                                             template_style=template_style,
+                                             diag=diag,
+                                             fallback=fallback_mode,
+                                             learned=(lay, prs) if lay else None,
+                                             skip_model=force_template_layout)
                 hybrid_index += 1
+                if diagnostics is not None:
+                    diagnostics.append({"page": page_no, "type": s.get("type"),
+                                        "title": s.get("title"), **diag})
+                # 编译期拒绝以前只写进 diagnostics，而 diagnostics 只有探针会传，
+                # 生产日志里完全看不到「模型构图为什么没生效」。designed 模式
+                # 必须留下这条，否则真机上接受率永远无法排查。
+                skip_reason = (diag or {}).get("composition_skip")
+                if skip_reason:
+                    emit = (logger.warning
+                            if (outline or {}).get("template_mode") == "designed"
+                            else logger.debug)
+                    emit("[PPT] 第 %d 页未采用模型构图：%s", page_no, skip_reason)
                 continue
             if lay is None:
                 _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings)
@@ -7157,15 +7625,52 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
             logger.warning("页面填充失败: %s", e)
             warnings.append(f"「{s.get('title') or '本页'}」模板内容区不足，已为该页使用可读版式")
             _fill_readable_template_page(ns, s, colors, font, sw, sh, warnings)
+    for output_slide in prs.slides:
+        _drop_orphaned_slide_images(output_slide)
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
 
 
+def export_media_warnings(data: bytes) -> List[str]:
+    """Report large output media without blocking a usable presentation."""
+    from pptx import Presentation
+
+    messages = []
+    if len(data) > 25_000_000:
+        messages.append("演示文稿超过 25 MB，传输或打开可能较慢")
+    try:
+        presentation = Presentation(io.BytesIO(data))
+    except Exception:
+        return messages
+    for page, slide in enumerate(presentation.slides, 1):
+        media = {}
+        for shape, _rect, _depth in _iter_shapes(slide.shapes):
+            blob = _embedded_image_blob(slide, shape)
+            if blob:
+                media[hashlib.sha1(blob).digest()] = len(blob)
+        total = sum(media.values())
+        if total > 2_000_000:
+            messages.append(f"第{page}页图片资源约 {total / 1_000_000:.1f} MB，超过建议的 2 MB")
+        if media and max(media.values()) > 8_000_000:
+            messages.append(f"第{page}页有单张图片超过 8 MB，建议更换或压缩")
+    return messages
+
+
 def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
                 warnings: Optional[List[str]] = None,
-                adaptive: bool = False) -> bytes:
-    """渲染总入口：有版式库+底版 → 模板学习渲染；否则 → 精修渲染（fallback）。"""
+                adaptive: bool = False,
+                diagnostics: Optional[List[Dict]] = None) -> bytes:
+    """渲染总入口：有版式库+底版 → 模板学习渲染；否则 → 精修渲染（fallback）。
+
+    diagnostics 非空时，逐页记录正文页最终走了模型构图还是可读兜底、以及
+    被跳过的具体原因。它只用于测量（内网探针、日志统计），不影响渲染结果。
+    """
+    def finish(data: bytes) -> bytes:
+        if warnings is not None:
+            warnings.extend(export_media_warnings(data))
+        return data
+
     library = template.get("layout_library") or []
     reviewed = any("qualification" in layout for layout in library)
     usable_content = any(
@@ -7174,10 +7679,12 @@ def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         for layout in library)
     if base_pptx and library and not adaptive and (not reviewed or usable_content):
         try:
-            return build_pptx_learned(outline, template, base_pptx, library, warnings=warnings)
+            return finish(build_pptx_learned(
+                outline, template, base_pptx, library,
+                warnings=warnings, diagnostics=diagnostics))
         except Exception as e:
             logger.warning("模板学习渲染失败，回退默认渲染: %s", e)
             if warnings is not None:
                 warnings.append("模板版式无法完整容纳本次内容，已改用保留全部内容的基础排版")
-    return build_pptx(outline, template, base_pptx=base_pptx,
-                      warnings=warnings, adaptive=adaptive)
+    return finish(build_pptx(outline, template, base_pptx=base_pptx,
+                             warnings=warnings, adaptive=adaptive))

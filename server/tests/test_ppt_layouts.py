@@ -1176,6 +1176,36 @@ class TestSceneImageMatching:
             "points": ["局党组书记到联系支部讲授专题纪律党课，分章节深度解读。"]}])
         assert slides[0]["_image"]["id"] == "m2"
 
+    def test_auto_image_rejects_a_lecture_on_another_visible_topic(self):
+        page = {"type": "content", "title": "党纪学习专题培训",
+                "points": ["分章节学习《中国共产党纪律处分条例》。"]}
+        unrelated = {"id": "other", "name": "培训讲座现场", "category": "会议",
+                     "caption": "培训讲座，屏幕显示《跨境电商法律风险的预防与解决》",
+                     "tags": ["培训", "讲座"]}
+        matching = {"id": "matching", "name": "党纪培训现场", "category": "会议",
+                    "caption": "培训讲座，屏幕显示《中国共产党纪律处分条例》",
+                    "tags": ["培训", "讲座"]}
+        outline = {"slides": [dict(page)]}
+        E.resolve_slide_images(outline, [unrelated])
+        assert outline["slides"][0]["_image"] is None
+        outline = {"slides": [dict(page)]}
+        E.resolve_slide_images(outline, [unrelated, matching])
+        assert outline["slides"][0]["_image"]["id"] == "matching"
+        outline = {"slides": [{**page, "image_id": "other"}]}
+        E.resolve_slide_images(outline, [unrelated, matching])
+        assert outline["slides"][0]["_image"]["id"] == "other"
+
+    def test_auto_image_rejects_visible_topic_written_on_a_banner(self):
+        """「背景板上印着…」和「屏幕显示…」是同一件事，只认一种写法会漏。"""
+        page = {"type": "content", "title": "党纪学习教育专题培训",
+                "points": ["分章节学习《中国共产党纪律处分条例》。"]}
+        banner = {"id": "banner", "name": "培训讲座现场", "category": "会议",
+                  "caption": "培训讲座，会场背景板上印着「乡村振兴工作推进会」",
+                  "tags": ["培训", "讲座"]}
+        outline = {"slides": [dict(page)]}
+        E.resolve_slide_images(outline, [banner])
+        assert outline["slides"][0]["_image"] is None
+
     def test_promoted_data_page_gets_no_photo(self):
         """成图优先于配图：数据页先 promote 成 chart，配图只落 content/case。"""
         outline = {"slides": [{

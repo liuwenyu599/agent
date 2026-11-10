@@ -39,6 +39,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.application.ppt import ppt_engine
 from app.application.ppt.service import PPTService
 from app.infrastructure.ppt.ppt_agent_client import (
     PPTAgentClient, PPTAgentOutcome, build_outline_markdown, looks_like_pptx,
@@ -220,6 +221,10 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             return False, "文档不存在"
         if not doc.outline:
             return False, "本地渲染缺少大纲"
+        if doc.template_id and svc._designed_template_mode(doc.outline):
+            from app.infrastructure.ai import get_llm_gateway
+            from app.application.shared.writing_assistant import WritingAssistant
+            svc.assistant = WritingAssistant(get_llm_gateway())
         if doc.template_id and svc._strict_template_mode(doc.outline):
             data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
             adjusted_outline = doc.outline
@@ -227,6 +232,21 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             data, adjusted_outline = svc.render_adaptive_pptx(
                 doc, doc.outline, doc.user_id,
                 vision_review=False, model_rewrite=False)
+        if doc.template_id and svc._designed_template_mode(doc.outline):
+            review = svc.review_pptx_visuals(data)
+            hard = [issue for issue in review.get("issues") or []
+                    if issue.get("severity") == "error"]
+            if hard:
+                logger.warning("[PPT] 模型模板成稿存在 %d 项排版错误，改用安全版式",
+                               len(hard))
+                safe_template, _ = svc._resolve_render_style(
+                    doc.template_id, doc.theme_id or "", adjusted_outline)
+                data = ppt_engine.render_pptx(
+                    adjusted_outline, {**safe_template, "layout_library": []},
+                    adaptive=True)
+                if any(issue.get("severity") == "error" for issue in
+                       svc.review_pptx_visuals(data).get("issues") or []):
+                    return False, "页面仍有文字重叠或越界，请调整内容后重试"
         ok, why = looks_like_pptx(data)
         if not ok:
             return False, f"本地渲染产物非法：{why}"

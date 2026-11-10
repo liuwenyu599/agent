@@ -29,7 +29,8 @@ SVG_PALETTE = {
 }
 
 RELATIONSHIPS = ("none", "comparison", "parallel", "grouped", "takeaway")
-MODEL_KINDS = frozenset({"rect", "oval", "chevron", "gradient", "line"})
+MODEL_KINDS = frozenset({"rect", "oval", "chevron", "gradient", "line",
+                         "donut", "trapezoid", "down_arrow"})
 MODEL_COLORS = frozenset(SVG_PALETTE)
 
 
@@ -408,6 +409,27 @@ def svg_decoration(item: dict, palette: dict | None = None) -> str:
         pts = (f'{x:.1f},{y:.1f} {x + w - tip:.1f},{y:.1f} '
                f'{x + w:.1f},{y + h / 2:.1f} {x + w - tip:.1f},{y + h:.1f} '
                f'{x:.1f},{y + h:.1f} {x + tip:.1f},{y + h / 2:.1f}')
+        return f'<polygon points="{pts}" fill="{col(item.get("fill"))}"{opacity()}/>'
+    if kind == "donut":
+        cx, cy = x + w / 2, y + h / 2
+        outer = min(w, h) / 2
+        inner = outer * .53
+        return (f'<path d="M {cx-outer:.1f} {cy:.1f} a {outer:.1f} {outer:.1f} 0 1 0 '
+                f'{outer*2:.1f} 0 a {outer:.1f} {outer:.1f} 0 1 0 {-outer*2:.1f} 0 '
+                f'M {cx-inner:.1f} {cy:.1f} a {inner:.1f} {inner:.1f} 0 1 1 '
+                f'{inner*2:.1f} 0 a {inner:.1f} {inner:.1f} 0 1 1 {-inner*2:.1f} 0" '
+                f'fill="{col(item.get("fill"))}" fill-rule="evenodd"{opacity()}/>')
+    if kind == "trapezoid":
+        inset = w * .13
+        pts = (f'{x+inset:.1f},{y:.1f} {x+w-inset:.1f},{y:.1f} '
+               f'{x+w:.1f},{y+h:.1f} {x:.1f},{y+h:.1f}')
+        return f'<polygon points="{pts}" fill="{col(item.get("fill"))}"{opacity()}/>'
+    if kind == "down_arrow":
+        shoulder = y + h * .57
+        pts = (f'{x+w*.33:.1f},{y:.1f} {x+w*.67:.1f},{y:.1f} '
+               f'{x+w*.67:.1f},{shoulder:.1f} {x+w:.1f},{shoulder:.1f} '
+               f'{x+w*.5:.1f},{y+h:.1f} {x:.1f},{shoulder:.1f} '
+               f'{x+w*.33:.1f},{shoulder:.1f}')
         return f'<polygon points="{pts}" fill="{col(item.get("fill"))}"{opacity()}/>'
     if kind == "badge":
         label = str(item.get("label") or "").replace("&", "&amp;").replace("<", "&lt;")
