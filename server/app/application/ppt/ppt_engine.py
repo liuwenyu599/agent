@@ -4990,7 +4990,43 @@ def _clone_slide(prs, src_slide):
             except Exception:
                 continue
         blip.set(_qn("r:embed"), rid_map[old_rid])
+    # 模板版式可能自带「示例图示 / SmartArt 残片」：有几何路径但无文字、名字被
+    # 编码污染成乱码的空壳节点。克隆时一并剔除，避免它们以乱码空框进成品。
+    _drop_broken_template_shapes(new_slide)
     return new_slide
+
+
+def _drop_broken_template_shapes(slide) -> None:
+    """Remove template leftover shapes that carry geometry but no text.
+
+    Some source templates ship example diagrams / SmartArt whose nodes were
+    cloned with empty labels (and garbled shape names). They render as silent
+    blank boxes and must not reach the final deck. Only ``p:sp`` shapes with a
+    custom geometry and zero text are removed — content produced by the engine
+    uses preset geometries or carries text, so it is never touched. The walk is
+    recursive so nodes nested inside ``p:grpSp`` groups (the usual SmartArt
+    container) are caught too.
+    """
+    from pptx.oxml.ns import qn
+    sp_tag = qn("p:sp")
+    cust = qn("a:custGeom")
+    t_tag = qn("a:t")
+    spTree = slide.shapes._spTree
+    # 1) 删除所有「带自定义几何但无文字」的形状（含组内的图示残片）。
+    for el in list(spTree.iter(sp_tag)):
+        spPr = el.find(qn("p:spPr"))
+        if spPr is None or spPr.find(cust) is None:
+            continue
+        if not any((node.text or "").strip() for node in el.iter(t_tag)):
+            parent = el.getparent()
+            if parent is not None:
+                parent.remove(el)
+    # 2) 连带删掉已经变空的组（空组不可见但无必要保留）。
+    for grp in list(spTree.iter(qn("p:grpSp"))):
+        if next(grp.iter(sp_tag), None) is None:
+            parent = grp.getparent()
+            if parent is not None:
+                parent.remove(grp)
 
 
 def _drop_orphaned_slide_images(slide) -> None:
@@ -6571,6 +6607,15 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
                                     colors, sw, sh, body_top, body_bottom)
     values = references(sdata)
     template_style = template_style or {}
+    # 预检：模型构图引用的正文/标题区域必须有对应文字，否则会造出「有框无字」的
+    # 半成品空页——这比直接退回可读版式更糟（用户成稿里出现过整页空框）。命中即
+    # 退回可读兜底（可读版式从 outline 的 points 回填真实文字）。
+    _empty_refs = [item["ref"] for item in mapped
+                   if item["ref"].startswith(("point:", "title", "metric:"))
+                   and not str(values.get(item["ref"], "")).strip()]
+    if _empty_refs:
+        return _skip("模型构图正文区域无对应文字：" + "、".join(_empty_refs[:6])
+                    + ("…" if len(_empty_refs) > 6 else ""))
     overlay = design.get("image_overlay") == "dark"
     image_box = next((item for item in mapped if item["ref"] == "image"), None)
     if overlay and image_box:
@@ -6684,6 +6729,21 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
     return True
 
 
+def _slide_has_text(slide) -> bool:
+    """True if the slide carries at least one non-empty text run.
+
+    Used as a safety net after model composition: a ``content``/``case``/
+    ``summary`` page that comes back without any text (only empty boxes) is a
+    failed composition that must fall back instead of shipping as a silent
+    blank page.
+    """
+    from pptx.oxml.ns import qn
+    for node in slide._element.iter(qn("a:t")):
+        if node.text and node.text.strip():
+            return True
+    return False
+
+
 def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                                  font: str, sw: int, sh: int,
                                  warnings: Optional[List[str]] = None,
@@ -6711,14 +6771,29 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
 
     body_top, body_bottom = _keep_template_decorations(slide, sw, sh)
     skip: List[str] = []
-    if not skip_model and _fill_model_regions_on_template(
-            slide, sdata, colors, font, sw, sh, body_top, body_bottom,
-            template_style, reason_out=skip, layered=layered):
-        if diag is not None:
-            diag["composition"] = "model"
-            diag["composition_skip"] = ""
-        _fix_text_contrast(slide, sw, sh)
-        return
+    # 模型构图会改动 slide（删重叠占位符、加文本框/图片/视觉层），先快照；
+    # 若构图「成功」却没产出任何文字，撤掉模型新增形状、退回可读兜底。
+    _before_ids = {id(sh._element) for sh in slide.shapes}
+    composed = (not skip_model) and _fill_model_regions_on_template(
+        slide, sdata, colors, font, sw, sh, body_top, body_bottom,
+        template_style, reason_out=skip, layered=layered)
+    if composed:
+        # 安全网：模型构图可能留下「有框无字」的半成品（正文区域引用了空内容、
+        # 或文字在填充环节丢失）。正文类页面必须保证有字，否则把模型新加的形状
+        # 撤掉、退回可读版式（从 outline 的 points 回填），不允许静默空页进成品。
+        _page_type = sdata.get("type")
+        if _page_type in {"content", "case", "summary"} and not _slide_has_text(slide):
+            for sh in [s for s in slide.shapes if id(sh._element) not in _before_ids]:
+                _delete_shape(sh)
+            composed = False
+            if skip is not None:
+                skip.append("模型构图未产出实际文字，退回可读版式")
+        if composed:
+            if diag is not None:
+                diag["composition"] = "model"
+                diag["composition_skip"] = ""
+            _fix_text_contrast(slide, sw, sh)
+            return
     if skip_model:
         skip = ["演示保底：已跳过模型构图"]
     if diag is not None:

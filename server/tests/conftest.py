@@ -73,6 +73,7 @@ _SEED_USERNAMES = {
     "test_ppt_page_scene": "scenedev",
     "test_ppt_native_edit": "nativedev",
     "test_ppt_template_budget": "budgetdev",
+    "test_ppt_empty_body_guard": "emptyguarddev",
     "test_references_contract": "developer",
     "test_templates_contract": "developer",
     "test_timezone": "tzadmin",

@@ -110,6 +110,9 @@ chk "A5 标点衔接规整"                    server/app/application/writing/po
 chk "B1 落款兜底接线"                    server/app/application/writing/task_service.py '_default_authority()'
 chk "B1 日期兜底接线"                    server/app/application/writing/task_service.py '_today_doc_date()'
 chk "B6 本地渲染兜底仍存在（治本需修 B1/B7）" server/app/application/ppt/agent_job.py '_fallback_local'
+# ---------------------------------------------------------------- 本期 PPT 渲染修复标记
+chk "PPT-B1 空正文页预检接线（有框无字防护）" server/app/application/ppt/ppt_engine.py '模型构图正文区域无对应文字'
+chk "PPT-B2 克隆时清无字自绘图形（乱码残片防护）" server/app/application/ppt/ppt_engine.py '_drop_broken_template_shapes'
 
 [[ $MISSING -eq 0 ]] || die "有修复未进入源码，中止部署。当前模式：$MODE。在可出网机加 --pull 可自动核对 SHA；离线部署请确认上传的包就是目标版本（Windows 端 git log --oneline -1）"
 ok "全部修复标记命中"
