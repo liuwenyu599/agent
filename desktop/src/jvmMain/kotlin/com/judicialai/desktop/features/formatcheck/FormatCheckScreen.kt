@@ -346,11 +346,12 @@ private fun FcLine(raw: String, index: Int, baseSp: Float,
         "right" -> TextAlign.Right
         "justify" -> TextAlign.Justify
         "left" -> TextAlign.Start
-        else -> if (index == 0) TextAlign.Center else TextAlign.Start
+        else -> if (index == 0 && !FcHeading1Regex.matches(s) &&
+            !FcHeading2Regex.matches(s)) TextAlign.Center else TextAlign.Start
     }
     when {
         s.isBlank() -> Spacer(Modifier.height((baseSp * 0.4f).dp))
-        index == 0 -> Text(
+        index == 0 && !FcHeading1Regex.matches(s) && !FcHeading2Regex.matches(s) -> Text(
             shown, fontSize = (override.fontSizePt ?: baseSp * 1.3f).sp,
             fontFamily = font, fontWeight = if (override.bold == false) FontWeight.Normal else FontWeight.Bold,
             color = Ink, lineHeight = (baseSp * 1.9f).sp,
@@ -369,7 +370,8 @@ private fun FcLine(raw: String, index: Int, baseSp: Float,
                 fontSize = size, fontFamily = font,
                 fontWeight = if (override.bold == true) FontWeight.Bold else FontWeight.Normal,
                 color = Ink, lineHeight = maxOf(baseSp * 1.6f, size.value * 1.25f).sp,
-                textIndent = TextIndent(firstLine = (baseSp * 2).sp, restLine = 0.sp),
+                textIndent = TextIndent(firstLine =
+                    (size.value * (override.indentChars ?: 2f)).sp, restLine = 0.sp),
             ),
             textAlign = alignment,
         )
@@ -899,6 +901,21 @@ private val RULE_SEVERITIES = listOf("error" to "严重", "warning" to "警告",
 @Composable
 private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) {
     var pendingDeleteRule by remember { mutableStateOf<JsonObject?>(null) }
+    var search by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf("全部") }
+    val visibleRules = vm.rules.filter { rule ->
+        val keyword = search.trim()
+        val targetName = RULE_TARGETS.firstOrNull { it.first == rule["target"].str() }?.second.orEmpty()
+        val matchesSearch = keyword.isEmpty() || listOf(
+            rule["name"].str(), rule["description"].str(), targetName,
+        ).any { it.contains(keyword, ignoreCase = true) }
+        val matchesStatus = when (statusFilter) {
+            "启用" -> rule["is_active"].bool(true)
+            "停用" -> !rule["is_active"].bool(true)
+            else -> true
+        }
+        matchesSearch && matchesStatus
+    }
     val form = vm.editingRule
     if (form != null) {
         RuleEditor(vm, form, modifier)
@@ -919,6 +936,18 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
         vm.status?.let {
             NoticeBar(it, Ok, OkSoft, Modifier.fillMaxWidth())
         }
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(search, { search = it },
+                label = { Text("搜索规则名称、对象或描述") },
+                modifier = Modifier.weight(1f), singleLine = true)
+            listOf("全部", "启用", "停用").forEach { status ->
+                FilterChip(status, selected = statusFilter == status,
+                    onClick = { statusFilter = status })
+            }
+        }
+        Text("显示 ${visibleRules.size} / ${vm.rules.size} 条规则",
+            fontSize = 11.sp, color = TextSecondary)
         Card(shape = RoundedCornerShape(8.dp), elevation = 0.dp,
             modifier = Modifier.weight(1f).fillMaxWidth()) {
             Column {
@@ -932,14 +961,15 @@ private fun RulesPanel(vm: FormatCheckViewModel, modifier: Modifier = Modifier) 
                     Text("操作", Modifier.width(190.dp), fontSize = 12.sp, color = TextSecondary)
                 }
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    if (vm.rules.isEmpty()) {
+                    if (visibleRules.isEmpty()) {
                         Box(Modifier.fillMaxWidth().padding(40.dp),
                             contentAlignment = Alignment.Center) {
-                            Text("尚未配置自定义排版规则；系统仍会执行内容规则、AI 审校和知识库一致性检查",
+                            Text(if (vm.rules.isEmpty())
+                                "尚未配置规则，请新建规则" else "没有符合条件的规则，请调整搜索或筛选",
                                 color = TextSecondary, fontSize = 13.sp)
                         }
                     }
-                    vm.rules.forEach { rule ->
+                    visibleRules.forEach { rule ->
                         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(rule["name"].str(), Modifier.weight(1.4f), fontSize = 13.sp,

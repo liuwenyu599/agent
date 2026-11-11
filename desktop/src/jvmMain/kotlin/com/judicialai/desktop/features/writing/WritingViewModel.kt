@@ -42,6 +42,7 @@ data class WritingTextStyle(
     val fontSizePt: Float? = null,
     val bold: Boolean? = null,
     val alignment: String? = null,
+    val indentChars: Float? = null,
 ) {
     fun toRequest(): Map<String, Any> = buildMap {
         fontName?.let { put("font_name", it) }

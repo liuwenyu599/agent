@@ -149,7 +149,8 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
             val bold = paragraph["bold"]?.let { it.bool() }
             val alignment = paragraph["align"].str().takeIf {
                 it in setOf("left", "center", "right", "justify") }
-            index to WritingTextStyle(font, size, bold, alignment)
+            val indent = paragraph["indent_chars"].str().toFloatOrNull()
+            index to WritingTextStyle(font, size, bold, alignment, indent)
         }.toMap()
         paragraphFormatting = emptyMap()
         editorDirty = false

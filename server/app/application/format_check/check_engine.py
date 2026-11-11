@@ -194,13 +194,33 @@ def _first_line_indent_chars(p) -> Optional[float]:
                     return round(int(raw) / 100.0, 2)
                 except (TypeError, ValueError):
                     pass
-    pf = p.paragraph_format
-    if pf.first_line_indent is None:
+    if p.paragraph_format.first_line_indent is not None:
+        return round(p.paragraph_format.first_line_indent.pt / _paragraph_font_pt(p), 2)
+    # Word may store character-based indentation on a paragraph style rather
+    # than on the paragraph itself. Preserve the native character count before
+    # falling back to a point-to-character approximation.
+    style = p.style
+    for _ in range(10):
+        if style is None:
+            break
+        style_ppr = style._element.pPr
+        if style_ppr is not None:
+            style_ind = style_ppr.find(qn('w:ind'))
+            if style_ind is not None:
+                raw = style_ind.get(qn('w:firstLineChars'))
+                if raw is not None:
+                    try:
+                        return round(int(raw) / 100.0, 2)
+                    except (TypeError, ValueError):
+                        pass
+        style = style.base_style
+    indent = _paragraph_property(p, 'first_line_indent')
+    if indent is None:
         return None
     font_pt = _paragraph_font_pt(p)
     if not font_pt:
         return None
-    return round(pf.first_line_indent.pt / font_pt, 2)
+    return round(indent.pt / font_pt, 2)
 
 
 def _right_indent_chars(p) -> float:
@@ -314,8 +334,13 @@ class FormatCheckEngine:
         for rule in rule_map.get("page", []):
             issues.extend(self._check_page(doc, rule))
 
-        # ---- 标题（第一个非空段落视为标题） ----
+        # A document that begins with a numbered heading has no standalone
+        # title. Treating that heading as a title both misses its heading rule
+        # and reports a misleading title-format violation.
         title_para = nonempty[0] if nonempty else None
+        if title_para is not None and (_RE_H1.match(title_para.text.strip()) or
+                                       _RE_H2.match(title_para.text.strip())):
+            title_para = None
         for rule in rule_map.get("title", []):
             if title_para is not None:
                 idx = paragraphs.index(title_para)
@@ -343,6 +368,23 @@ class FormatCheckEngine:
             else:
                 for rule in body_rules:
                     issues.extend(self._check_paragraph(p, idx, rule, label))
+
+        # Table text is part of the document body, but python-docx omits it
+        # from doc.paragraphs. It has no top-level paragraph index, so report
+        # its exact cell location without offering an incorrect auto-fix.
+        seen_table_cells = set()
+        for table_index, table in enumerate(doc.tables, 1):
+            for row_index, row in enumerate(table.rows, 1):
+                for cell_index, cell in enumerate(row.cells, 1):
+                    if cell._tc in seen_table_cells:
+                        continue  # merged cells appear more than once in row.cells
+                    seen_table_cells.add(cell._tc)
+                    for p in cell.paragraphs:
+                        if not p.text.strip():
+                            continue
+                        location = f"表{table_index}第{row_index}行第{cell_index}列"
+                        for rule in body_rules:
+                            issues.extend(self._check_paragraph(p, None, rule, location))
 
         # ---- 落款 / 日期（文末段落） ----
         sig_rules = rule_map.get("signature", [])
@@ -389,39 +431,43 @@ class FormatCheckEngine:
     def _check_page(self, doc, rule: Dict) -> List[Dict]:
         issues = []
         checks = rule.get("checks", {})
-        section = doc.sections[0]
-        current = {
-            "top_margin_cm": section.top_margin.cm if section.top_margin else None,
-            "bottom_margin_cm": section.bottom_margin.cm if section.bottom_margin else None,
-            "left_margin_cm": section.left_margin.cm if section.left_margin else None,
-            "right_margin_cm": section.right_margin.cm if section.right_margin else None,
-            "page_width_cm": section.page_width.cm if section.page_width else None,
-            "page_height_cm": section.page_height.cm if section.page_height else None,
-        }
         names = {
             "top_margin_cm": "上边距", "bottom_margin_cm": "下边距",
             "left_margin_cm": "左边距", "right_margin_cm": "右边距",
             "page_width_cm": "页面宽度", "page_height_cm": "页面高度",
         }
-        for key, expected in checks.items():
-            if key not in current or expected is None:
-                continue
-            cur = current[key]
-            if cur is None or abs(cur - float(expected)) > 0.05:
-                issues.append({
-                    "location": "页面设置",
-                    "element": names.get(key, key),
-                    "current": _fmt_value(key, cur),
-                    "expected": _fmt_value(key, float(expected)),
-                    "suggestion": f"请在页面设置中将{names.get(key, key)}调整为{_fmt_value(key, float(expected))}。",
-                    "source": "rule", "severity": rule.get("severity", "error"),
-                    "paragraph_index": None,
-                    "fix_hint": {"type": "page", "field": key, "value": float(expected)},
-                })
+        for section_index, section in enumerate(doc.sections):
+            current = {
+                "top_margin_cm": section.top_margin.cm if section.top_margin else None,
+                "bottom_margin_cm": section.bottom_margin.cm if section.bottom_margin else None,
+                "left_margin_cm": section.left_margin.cm if section.left_margin else None,
+                "right_margin_cm": section.right_margin.cm if section.right_margin else None,
+                "page_width_cm": section.page_width.cm if section.page_width else None,
+                "page_height_cm": section.page_height.cm if section.page_height else None,
+            }
+            for key, expected in checks.items():
+                if key not in current or expected is None:
+                    continue
+                cur = current[key]
+                # GB/T 9704 page margins allow a 1 mm tolerance. A 0.5 mm
+                # threshold flags compliant documents as errors.
+                tolerance = 0.10 if key.endswith("margin_cm") else 0.05
+                if cur is None or abs(cur - float(expected)) > tolerance + 1e-6:
+                    issues.append({
+                        "location": "页面设置" if len(doc.sections) == 1 else f"第{section_index + 1}节页面设置",
+                        "element": names.get(key, key),
+                        "current": _fmt_value(key, cur),
+                        "expected": _fmt_value(key, float(expected)),
+                        "suggestion": f"请在页面设置中将{names.get(key, key)}调整为{_fmt_value(key, float(expected))}。",
+                        "source": "rule", "severity": rule.get("severity", "error"),
+                        "paragraph_index": None,
+                        "fix_hint": {"type": "page", "field": key, "value": float(expected),
+                                     "section_index": section_index},
+                    })
         return issues
 
     # ---- 段落 ----
-    def _check_paragraph(self, p, idx: int, rule: Dict, location: str) -> List[Dict]:
+    def _check_paragraph(self, p, idx: Optional[int], rule: Dict, location: str) -> List[Dict]:
         issues = []
         checks = rule.get("checks", {})
         # Word 同一段可含多个文字块，逐块检查，避免首块合规掩盖后续混排。
@@ -436,7 +482,8 @@ class FormatCheckEngine:
                 "suggestion": suggestion,
                 "source": "rule", "severity": rule.get("severity", "error"),
                 "paragraph_index": idx,
-                "fix_hint": {"type": "paragraph", "field": kind, "value": expected},
+                "fix_hint": ({"type": "paragraph", "field": kind, "value": expected}
+                             if idx is not None else None),
             })
 
         if "font_name" in checks and runs:
@@ -779,7 +826,8 @@ paragraph_index 使用 0 开始的段落下标；无法定位时填 null：
             p_idx = issue.get("paragraph_index")
             try:
                 if htype == "page":
-                    self._apply_page_fix(doc, hint.get("field"), hint.get("value"))
+                    self._apply_page_fix(doc, hint.get("field"), hint.get("value"),
+                                         hint.get("section_index"))
                 elif htype == "paragraph":
                     if p_idx is None or p_idx >= len(doc.paragraphs):
                         continue
@@ -897,12 +945,13 @@ paragraph_index 使用 0 开始的段落下标；无法定位时填 null：
             pf.space_after = Pt(float(value))
 
     @staticmethod
-    def _apply_page_fix(doc, field, value):
+    def _apply_page_fix(doc, field, value, section_index=None):
         """页面级修正：页边距/页面尺寸（*_cm 字段，单位厘米）。"""
         attr = re.sub(r'_cm$', '', str(field or ''))
         if not attr:
             return
-        for sec in doc.sections:
+        sections = (doc.sections[section_index],) if section_index is not None else doc.sections
+        for sec in sections:
             try:
                 if hasattr(sec, attr):
                     setattr(sec, attr, Cm(float(value)))
