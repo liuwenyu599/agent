@@ -12,6 +12,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -163,7 +164,10 @@ def _prompt(outline: dict, template: dict, pages: list[dict],
         "image_role=evidence 且有图时，照片应足够大以辨认现场细节。"
         "visuals 最多 6 个，只允许无文字的 rect、oval、chevron、gradient、line、"
         "donut（环形）、trapezoid（梯形）、down_arrow（向下箭头）；"
-        "颜色只能用 primary/accent/light/dark/white/line。"
+        "颜色只能用 primary/accent/light/dark/white/line，禁止 #RRGGBB。"
+        "字段名必须是 kind（不是 type）；rect 等用 x/y/w/h + fill，"
+        "line 用 x1/y1/x2/y2 + stroke，不要输出 strokeWidth。"
+        '示例：{"kind":"rect","x":0.06,"y":0.25,"w":0.42,"h":0.55,"fill":"light"}。'
         "用浅色卡片衬托正文时，卡片尺寸要贴近该区域文字的实际占用（按字数估行数），"
         "不要比文字高出一大截——卡片下半截空着比不铺卡更难看；深色大块不能盖住文字。"
         "不要输出模板槽位编号、PPTX 代码或额外说明。"
@@ -225,6 +229,53 @@ def _proposals(raw: str) -> dict[int, dict]:
     return result
 
 
+def _hex_role(value: str) -> str:
+    """把模型常用的 #RRGGBB 归到 SYSTEM 色板角色，避免整页构图被颜色写 rejected。"""
+    try:
+        red, green, blue = (int(value[index:index + 2], 16) for index in (1, 3, 5))
+    except (ValueError, IndexError):
+        return "light"
+    luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
+    return "light" if luminance > .8 else ("dark" if luminance < .2 else "primary")
+
+
+def _normalize_visuals(proposed: object) -> list[dict]:
+    """真实模型自然输出 SVG 风格（type / #RRGGBB / strokeWidth），这里收敛到契约。
+
+    35B 首次实测给出的是 ``{"type":"rect","fill":"#F0F5FA","strokeWidth":0.005}``
+    与 ``{"type":"line","x1":...}``。不归一化时 line 没有 x/y/w/h，
+    分层校验会判「装饰层坐标无效」，连累合法的 regions 整页退回可读版式。
+    """
+    if not isinstance(proposed, list):
+        return []
+    out: list[dict] = []
+    for raw in proposed[:6]:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if "kind" not in item and isinstance(item.get("type"), str):
+            item["kind"] = item.pop("type")
+        for key in ("fill", "stroke", "from", "to"):
+            value = item.get(key)
+            if (isinstance(value, str) and value.startswith("#")
+                    and len(value) == 7):
+                item[key] = _hex_role(value)
+        # strokeWidth 是 SVG 线宽（页比例），不是 pt；丢弃后走默认 width，
+        # 否则 0.005 会因 <0.5 被拒。
+        item.pop("strokeWidth", None)
+        item.pop("stroke-width", None)
+        # 坐标不是有限数值的装饰直接丢掉，别留给分层校验判「装饰层坐标无效」
+        # 而把已经合法的 regions 一起赔进去。
+        kind = item.get("kind")
+        keys = ("x1", "y1", "x2", "y2") if kind == "line" else ("x", "y", "w", "h")
+        coords = [item.get(key) for key in keys]
+        if any(type(value) not in (int, float) or not math.isfinite(value)
+               for value in coords):
+            continue
+        out.append(item)
+    return out
+
+
 def _accept(slide: dict, template: dict, proposal: dict) -> tuple[bool, str]:
     regions = proposal.get("regions")
     if not isinstance(regions, list):
@@ -233,9 +284,7 @@ def _accept(slide: dict, template: dict, proposal: dict) -> tuple[bool, str]:
     overlay = proposal.get("image_overlay", "none")
     if overlay not in ("none", "dark"):
         return False, "image_overlay 只允许 none 或 dark"
-    visuals = proposal.get("visuals", [])
-    if visuals is None:
-        visuals = []
+    visuals = _normalize_visuals(proposal.get("visuals"))
     candidate = {**slide, "design": {**(slide.get("design") or {}),
                                      "image_overlay": overlay,
                                      "visuals": visuals}}
@@ -259,7 +308,11 @@ def _accept(slide: dict, template: dict, proposal: dict) -> tuple[bool, str]:
         except Exception:
             return False, "SVG 无法渲染为页面视觉层"
     if model_visuals(visuals, regions) is None:
-        return False, "装饰图形超出范围、使用了不支持的颜色或遮住文字"
+        # 装饰不合格不该连累整页构图：regions 已经通过几何与关系校验，
+        # 丢掉装饰继续用模型排版，比整页退回可读版式更接近用户要的「真跑」。
+        logger.warning("[PPT] 第 %s 页装饰图形不合规，已忽略装饰保留模型区域",
+                       slide.get("title") or "")
+        visuals = []
     design = dict(slide.get("design") or {})
     design.update(regions=regions, visuals=visuals, svg=svg,
                   image_overlay=overlay,

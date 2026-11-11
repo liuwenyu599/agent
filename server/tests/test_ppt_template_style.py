@@ -31,3 +31,31 @@ def test_template_reference_reads_original_preview_and_rejects_path_escape(tmp_p
     assert read_template_reference(template, tmp_path) == b"filled"
     template["layout_library"][0]["preview"] = "../escape.png"
     assert read_template_reference(template, tmp_path) is None
+
+
+def test_read_template_reference_accepts_cards_and_content_image(tmp_path):
+    """采购模板正文版式常叫 cards/content_image，旧白名单会静默跳过整套预览。"""
+    from pathlib import Path
+
+    folder = tmp_path / "tpl_prev" / "tid"
+    folder.mkdir(parents=True)
+    (folder / "L1.png").write_bytes(b"fake-png-content")
+    template = {"layout_library": [
+        {"detected_type": "cover", "preview": "L0.png"},
+        {"detected_type": "content_image", "preview": "L1.png"},
+        {"detected_type": "cards", "preview": "L2.png"},
+    ]}
+    assert read_template_reference(template, folder) == b"fake-png-content"
+
+
+def test_read_template_reference_still_skips_rejected_and_non_body(tmp_path):
+    folder = tmp_path / "tpl_prev" / "tid"
+    folder.mkdir(parents=True)
+    (folder / "L2.png").write_bytes(b"ok")
+    template = {"layout_library": [
+        {"detected_type": "cover", "preview": "L0.png"},
+        {"detected_type": "cards", "preview": "L2.png",
+         "qualification": {"status": "rejected"}},
+        {"detected_type": "closing", "preview": "L3.png"},
+    ]}
+    assert read_template_reference(template, folder) is None

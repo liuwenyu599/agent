@@ -47,10 +47,19 @@ def summarize_template_style(template: dict) -> dict:
     return result
 
 
+_NON_BODY_TYPES = {"cover", "toc", "section", "closing"}
+
+
 def read_template_reference(template: dict, preview_dir: Path) -> bytes | None:
-    """Read one original content-page preview for optional visual grounding."""
+    """Read one original content-page preview for optional visual grounding.
+
+    排除法而不是「只认 content/case/summary」：采购模板的正文版式常被识别成
+    ``cards`` / ``content_image`` / ``two_col`` 等结构名，旧白名单会把整套模板
+    的预览都跳过，模型于是静默退回文字摘要——勾掉保底真跑时，这一步决定
+    「模型是否真的看过模板」。与 deploy/ppt_eval/check_previews.py 的正文判据一致。
+    """
     for layout in template.get("layout_library") or []:
-        if (layout.get("detected_type") not in {"content", "case", "summary"}
+        if (layout.get("detected_type") in _NON_BODY_TYPES
                 or (layout.get("qualification") or {}).get("status") == "rejected"):
             continue
         for name in (layout.get("source_preview"), layout.get("preview")):

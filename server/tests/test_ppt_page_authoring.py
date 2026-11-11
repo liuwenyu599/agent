@@ -565,3 +565,34 @@ def test_model_composition_removes_template_guide_lines_in_the_body():
     lines = [shape for shape in deck.slides[0].shapes
              if shape.shape_type == MSO_SHAPE_TYPE.LINE]
     assert lines == []
+
+
+def test_svg_style_visuals_are_normalized_instead_of_rejecting_regions():
+    """35B 实测输出 type/#RRGGBB/strokeWidth；归一化后 regions 必须仍被接受。"""
+    from app.application.ppt.page_authoring import _normalize_visuals, _accept
+
+    raw = [
+        {"type": "rect", "x": .06, "y": .25, "w": .42, "h": .55,
+         "fill": "#F0F5FA", "stroke": "#317ABB", "strokeWidth": .005},
+        {"type": "line", "x1": .5, "y1": .25, "x2": .5, "y2": .8,
+         "stroke": "#317ABB"},
+        {"type": "rect", "x": "bad", "y": 0, "w": 1, "h": 1},
+    ]
+    normalized = _normalize_visuals(raw)
+    assert len(normalized) == 2
+    assert normalized[0]["kind"] == "rect" and normalized[0]["fill"] == "light"
+    assert "strokeWidth" not in normalized[0]
+    assert normalized[1]["kind"] == "line"
+
+    slide = {"type": "content", "title": "健全学习机制",
+             "points": ["明确责任分工到人。"]}
+    proposal = {
+        "regions": [
+            {"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+            {"ref": "point:0", "x": .06, "y": .28, "w": .86, "h": .22},
+        ],
+        "visuals": raw,
+    }
+    accepted, reason = _accept(slide, {}, proposal)
+    assert accepted, reason
+    assert len(slide["design"]["regions"]) == 2
