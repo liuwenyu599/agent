@@ -244,7 +244,7 @@ def test_batch_failure_reports_one_warning_for_all_pages():
     assert warnings == ["第1、2、3页模型构图未通过检查，已采用可读版式"]
 
 
-def test_gateway_failure_skips_remaining_batched_requests():
+def test_gateway_failure_does_not_retry_every_page():
     outline = {"slides": [
         {"type": "content", "title": f"第{i}页", "points": ["要点一", "要点二"]}
         for i in range(1, 7)
@@ -260,6 +260,7 @@ def test_gateway_failure_skips_remaining_batched_requests():
     assistant = Dead()
     warnings = []
     result = author_pages(outline, {}, assistant, warnings)
+    # 首批失败后跳过剩余批次，仍只调 1 次，不会退化成逐页各等一次超时。
     assert assistant.calls == 1
     assert all(not slide.get("design", {}).get("regions") for slide in result["slides"])
     assert len(warnings) == 1 and "1、2、3、4、5、6" in warnings[0]
@@ -596,3 +597,46 @@ def test_svg_style_visuals_are_normalized_instead_of_rejecting_regions():
     accepted, reason = _accept(slide, {}, proposal)
     assert accepted, reason
     assert len(slide["design"]["regions"]) == 2
+
+
+def test_template_image_only_sent_with_first_batch():
+    """模板图只随第一批发送；后续批次用文字摘要，避免重复视觉编码。"""
+    import io
+    import json
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(buffer, "PNG")
+
+    outline = {"slides": [
+        {"type": "content", "title": f"第{i}页", "points": ["要点一", "要点二"]}
+        for i in range(1, 9)
+    ]}
+
+    class Spy:
+        def __init__(self):
+            self.image_flags = []
+
+        def complete(self, messages, **_kwargs):
+            content = messages[-1]["content"]
+            self.image_flags.append(
+                isinstance(content, list)
+                and any(part.get("type") == "image_url"
+                        for part in content if isinstance(part, dict)))
+            pages = []
+            for page in range(1, 9):
+                shift = .04 if page % 2 else 0
+                pages.append({"page": page, "visuals": [], "regions": [
+                    {"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+                    {"ref": "point:0", "x": .06 + shift, "y": .28, "w": .40, "h": .22},
+                    {"ref": "point:1", "x": .52 + shift, "y": .28, "w": .40, "h": .22},
+                ]})
+            return json.dumps({"pages": pages})
+
+    assistant = Spy()
+    warnings = []
+    result = author_pages(outline, {}, assistant, warnings,
+                          reference_image=buffer.getvalue())
+    assert assistant.image_flags == [True, False]
+    assert not warnings
+    assert all(slide["design"].get("regions") for slide in result["slides"])
