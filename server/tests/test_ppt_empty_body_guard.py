@@ -109,14 +109,14 @@ def _inject_custgeom(shape, *, with_text: bool):
         txbody.append(p)
 
 
-def test_drop_broken_template_shapes_removes_custgeom_without_text():
+def test_drop_broken_template_shapes_only_drops_grouped_custgeom():
     prs = Presentation()
     page = prs.slides.add_slide(prs.slide_layouts[6])
 
-    # 1) 没有文字的自绘图形 → 必须删除（Bug 2 的乱码节点）。
-    junk = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 100, 100)
-    junk.name = "ïśļïḋé"
-    _inject_custgeom(junk, with_text=False)
+    # 1) 顶层无文字的自绘图形（如 BrandLogo）→ 必须保留（合法模板装饰）。
+    logo = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 100, 100)
+    logo.name = "BrandLogo"
+    _inject_custgeom(logo, with_text=False)
 
     # 2) 有文字的自绘图形 → 必须保留（误删会吃掉真实内容）。
     keep = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 100, 100)
@@ -125,7 +125,7 @@ def test_drop_broken_template_shapes_removes_custgeom_without_text():
     # 3) 普通预设图形（无 custGeom）→ 必须保留。
     normal = page.shapes.add_shape(MSO_SHAPE.OVAL, 0, 0, 50, 50)
 
-    # 4) 组里全是空自绘图形 → 组本身也应被删除。
+    # 4) 组里全是空自绘图形（SmartArt/图示残片）→ 组及其子节点应被删除。
     spTree = page.shapes._spTree
     grp = spTree.makeelement(qn("p:grpSp"), {})
     inner = page.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 10, 10)
@@ -136,12 +136,51 @@ def test_drop_broken_template_shapes_removes_custgeom_without_text():
     ppt_engine._drop_broken_template_shapes(page)
 
     remaining_names = {s.name for s in page.shapes}
-    # 无文字的自绘图形（乱码节点）应被删除。
-    assert "ïśļïḋé" not in remaining_names, "无文字的自绘图形应被删除"
+    # 顶层无文字的自绘图形（BrandLogo）应被保留，不能当残片删。
+    assert "BrandLogo" in remaining_names, "顶层无文字自绘装饰应保留"
     # 带字的自绘图形：其 <a:t> 文本仍在。
     remaining_texts = [n.text for n in page._element.iter(qn("a:t"))]
     assert "保留我" in remaining_texts, "带文字的自绘图形不应被删除"
     # 普通预设图形仍在（用元素身份判断，避免 AUTO_SHAPE 类型名干扰）。
     assert normal._element.getparent() is not None, "普通预设图形应保留"
     # 组（及其空自绘子节点）应被移除。
-    assert len(list(page._element.iter(qn("p:grpSp")))) == 0, "空组应被删除"
+    assert len(list(page._element.iter(qn("p:grpSp")))) == 0, "含空自绘的组应被删除"
+
+
+def test_drop_broken_template_shapes_keeps_image_only_group():
+    prs = Presentation()
+    page = prs.slides.add_slide(prs.slide_layouts[6])
+    spTree = page.shapes._spTree
+    # 纯图组：组里只有一个 p:pic，没有 p:sp / graphicFrame。
+    grp = spTree.makeelement(qn("p:grpSp"), {})
+    pic = spTree.makeelement(qn("p:pic"), {})
+    grp.append(pic)
+    spTree.append(grp)
+    ppt_engine._drop_broken_template_shapes(page)
+    # 只含图片的组必须保留，不能误删。
+    assert len(list(page._element.iter(qn("p:grpSp")))) == 1, "纯图组应保留"
+    assert len(list(page._element.iter(qn("p:pic")))) == 1, "组内图片应保留"
+
+
+def test_rejected_composition_keeps_template_decorations():
+    # 空正文预检必须在「删除模板重叠形状」之前：构图被拒时模板装饰不应被提前删掉。
+    points = ["", "这是正文要点二", "这是正文要点三"]  # point:0 为空 → 预检拒
+    sdata = _build_regions_sdata(points)
+    prs = Presentation()
+    page = prs.slides.add_slide(prs.slide_layouts[6])
+    colors = {"primary": "C00000", "accent": "E25858", "dark": "303030"}
+    # 在 point:0 模型区域(约 x=.10,y=.245,w=.80,h=.20)下放一个模板装饰色块。
+    deco = page.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        int(.10 * prs.slide_width), int(.245 * prs.slide_height),
+        int(.79 * prs.slide_width), int(.19 * prs.slide_height))
+    deco.name = "TemplateColorBlock"
+    reason = []
+    ok = ppt_engine._fill_model_regions_on_template(
+        page, sdata, colors, "微软雅黑", prs.slide_width, prs.slide_height,
+        .025, .89, reason_out=reason)
+    assert ok is False
+    assert any("无对应文字" in r for r in reason), reason
+    # 被拒后，模板装饰色块必须仍在（修复前会被提前删除）。
+    remaining = {s.name for s in page.shapes}
+    assert "TemplateColorBlock" in remaining, "构图被拒时模板装饰不应被删除"

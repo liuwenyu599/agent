@@ -5009,21 +5009,32 @@ def _drop_broken_template_shapes(slide) -> None:
     """
     from pptx.oxml.ns import qn
     sp_tag = qn("p:sp")
+    pic_tag = qn("p:pic")
+    gf_tag = qn("p:graphicFrame")
+    grp_tag = qn("p:grpSp")
     cust = qn("a:custGeom")
     t_tag = qn("a:t")
     spTree = slide.shapes._spTree
-    # 1) 删除所有「带自定义几何但无文字」的形状（含组内的图示残片）。
+    # 1) 只删「组内」的「无文字自定义几何」形状。SmartArt / 示例图示残片通常落在
+    #    p:grpSp 组里；顶层的无文字自定义图形（如 BrandLogo）是合法模板装饰，必须
+    #    保留。引擎产出的内容用预设几何或带文字，不会命中这里。
     for el in list(spTree.iter(sp_tag)):
         spPr = el.find(qn("p:spPr"))
         if spPr is None or spPr.find(cust) is None:
             continue
-        if not any((node.text or "").strip() for node in el.iter(t_tag)):
-            parent = el.getparent()
-            if parent is not None:
-                parent.remove(el)
-    # 2) 连带删掉已经变空的组（空组不可见但无必要保留）。
-    for grp in list(spTree.iter(qn("p:grpSp"))):
-        if next(grp.iter(sp_tag), None) is None:
+        if any((node.text or "").strip() for node in el.iter(t_tag)):
+            continue
+        parent = el.getparent()
+        # 仅当直接父节点是组（即形状内嵌在 grpSp 中）才视为残片删除。
+        if parent is None or parent.tag != grp_tag:
+            continue
+        parent.remove(el)
+    # 2) 组被掏空后才删：仅当组内既没有 p:sp、也没有 p:pic（纯图组要保留）、也没有
+    #    p:graphicFrame（图表/表格框）时才移除，避免误删仍含图片或图表的组。
+    for grp in list(spTree.iter(grp_tag)):
+        if (next(grp.iter(sp_tag), None) is None
+                and next(grp.iter(pic_tag), None) is None
+                and next(grp.iter(gf_tag), None) is None):
             parent = grp.getparent()
             if parent is not None:
                 parent.remove(grp)
@@ -6558,6 +6569,15 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
     mapped_issue = check(mapped, sdata)
     if mapped_issue:
         return _skip("映射进模板正文区后未通过：" + mapped_issue)
+    # 空正文预检：必须在任何改动 slide 的操作之前。下面会删除模板重叠形状、加视觉层、
+    # 画文本框——若这里判拒却已先删了模板装饰，调用方回退 readable 时色块无法恢复。
+    values = references(sdata)
+    _empty_refs = [item["ref"] for item in mapped
+                   if item["ref"].startswith(("point:", "title", "metric:"))
+                   and not str(values.get(item["ref"], "")).strip()]
+    if _empty_refs:
+        return _skip("模型构图正文区域无对应文字：" + "、".join(_empty_refs[:6])
+                    + ("…" if len(_empty_refs) > 6 else ""))
     if any(item["ref"] == "image" for item in mapped) and not image_ok:
         return _skip("构图里放了图片区域，但这页实际没有可用图片")
     from app.application.ppt import svg_layer
@@ -6605,17 +6625,7 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
         visual_layer.name = "PPTVisualLayer"
     _draw_model_visuals_on_template(slide, visuals, elements,
                                     colors, sw, sh, body_top, body_bottom)
-    values = references(sdata)
     template_style = template_style or {}
-    # 预检：模型构图引用的正文/标题区域必须有对应文字，否则会造出「有框无字」的
-    # 半成品空页——这比直接退回可读版式更糟（用户成稿里出现过整页空框）。命中即
-    # 退回可读兜底（可读版式从 outline 的 points 回填真实文字）。
-    _empty_refs = [item["ref"] for item in mapped
-                   if item["ref"].startswith(("point:", "title", "metric:"))
-                   and not str(values.get(item["ref"], "")).strip()]
-    if _empty_refs:
-        return _skip("模型构图正文区域无对应文字：" + "、".join(_empty_refs[:6])
-                    + ("…" if len(_empty_refs) > 6 else ""))
     overlay = design.get("image_overlay") == "dark"
     image_box = next((item for item in mapped if item["ref"] == "image"), None)
     if overlay and image_box:
