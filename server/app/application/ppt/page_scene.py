@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import io
 import json
 import math
 import copy
@@ -20,13 +21,172 @@ def signature(slide: dict, layout: str) -> str:
 def references(slide: dict) -> dict:
     values = {"title": str(slide.get("title") or ""),
               **{f"point:{i}": str(value) for i, value in enumerate(slide.get("points") or [])}}
+    blocks = slide.get("blocks") or {}
+    if slide.get("type") in {"data", "chart"}:
+        chart = blocks.get("chart") or {}
+        if valid_chart_spec(chart):
+            values["chart"] = ""
+        elif (blocks.get("table") or {}).get("rows"):
+            values["table"] = ""
+        else:
+            from app.application.ppt.outline_gate import PLACEHOLDER_RE
+            for index, card in enumerate((blocks.get("cards") or [])[:4]):
+                if (isinstance(card, dict)
+                        and str(card.get("value") or "").strip()
+                        and not PLACEHOLDER_RE.search(str(card.get("value")))):
+                    values[f"metric:{index}"] = (f"{card.get('value')} "
+                                                  f"{card.get('label') or ''}").strip()
     if (slide.get("_image") or {}).get("file_path"):
         values["image"] = ""
     return values
 
 
+def valid_chart_spec(chart: object) -> bool:
+    """Only let the model place a chart the native PPTX writer can represent."""
+    if not isinstance(chart, dict):
+        return False
+    categories, series = chart.get("categories"), chart.get("series")
+    if not isinstance(categories, list) or not categories or not isinstance(series, list) or not series:
+        return False
+    for item in series:
+        if not isinstance(item, dict):
+            return False
+        values = item.get("values")
+        if not isinstance(values, list) or len(values) != len(categories):
+            return False
+        if any(type(value) not in (int, float) or not math.isfinite(value)
+               for value in values):
+            return False
+    return True
+
+
 def audit(elements: list, slide: dict) -> bool:
     return explain(elements, slide) == ""
+
+
+def explain_layered(elements: list, slide: dict) -> str:
+    """Validate editable content layers, including the actual photo under white text.
+
+    The dark scrim is a native PPT shape covering the photo. When a text box
+    crosses its edge, a second native scrim covers the whole text box.
+    """
+    issue = explain(elements, slide, layered=True)
+    if issue:
+        return issue
+    layers = {"image": "image", "chart": "chart", "table": "chart"}
+    for item in elements:
+        expected = layers.get(item["ref"], "text")
+        if item.get("layer", expected) != expected:
+            return f"区域 {item['ref']} 的 layer 应为 {expected}"
+    decorations = (slide.get("design") or {}).get("visuals") or []
+    decor_boxes = []
+    for visual in decorations:
+        if not isinstance(visual, dict) or visual.get("kind") == "line":
+            continue
+        box = (visual.get("x"), visual.get("y"), visual.get("w"), visual.get("h"))
+        if any(type(value) not in (int, float) or not math.isfinite(value)
+               for value in box):
+            return "装饰层坐标无效"
+        if any(_intersection_area(box, other) > .001 for other in decor_boxes):
+            return "同层装饰图形重叠，请拆分或移开其中一个"
+        decor_boxes.append(box)
+    image = next((item for item in elements if item["ref"] == "image"), None)
+    if image is None:
+        return ""
+    image_box = (image["x"], image["y"], image["w"], image["h"])
+    overlapping = []
+    for item in elements:
+        if item["ref"] == "image":
+            continue
+        area = _intersection_area(image_box, (item["x"], item["y"],
+                                              item["w"], item["h"]))
+        if area <= .0001:
+            continue
+        if not item["ref"].startswith("point:"):
+            return f"区域 {item['ref']} 不可压在照片上"
+        overlapping.append(item)
+        if (slide.get("design") or {}).get("image_overlay") != "dark":
+            return f"区域 {item['ref']} 压在照片上但没有深色蒙版"
+        coverage = area / (item["w"] * item["h"])
+        if coverage < .70:
+            return f"区域 {item['ref']} 的蒙版只覆盖 {coverage:.0%}，至少需要 70%"
+    if not overlapping:
+        return ""
+    path = (slide.get("_image") or {}).get("file_path")
+    if not path:
+        return "图片缺失，无法实测叠字对比度"
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as source:
+            photo = ImageOps.fit(source.convert("RGB"), (256, 256),
+                                 method=Image.Resampling.LANCZOS)
+        for item in overlapping:
+            area = _intersection_area(image_box, (item["x"], item["y"],
+                                                  item["w"], item["h"]))
+            left = max(0, int((item["x"] - image["x"]) / image["w"] * 256))
+            top = max(0, int((item["y"] - image["y"]) / image["h"] * 256))
+            right = min(256, int(math.ceil((item["x"] + item["w"] - image["x"])
+                                           / image["w"] * 256)))
+            bottom = min(256, int(math.ceil((item["y"] + item["h"] - image["y"])
+                                            / image["h"] * 256)))
+            raw = photo.crop((left, top, right, bottom)).tobytes()
+            pixels = list(zip(raw[0::3], raw[1::3], raw[2::3]))
+            if area < item["w"] * item["h"] * .999:
+                # The supplemental native scrim also covers the part outside
+                # the photograph. White is the worst possible backdrop.
+                pixels.append((255, 255, 255))
+            # Native scrim: RGB(15,20,25), 62% opacity, white text above it.
+            worst = min((_wcag_contrast_white(tuple(round(c * .38 + shade * .62)
+                                                     for c, shade in zip(pixel, (15, 20, 25))))
+                         for pixel in pixels), default=0.0)
+            threshold = 3.0 if item.get("font_pt", 0) >= 24 else 4.5
+            if worst < threshold:
+                return (f"区域 {item['ref']} 的实测文字对比度 {worst:.2f}:1，"
+                        f"需达到 {threshold:.1f}:1")
+    except (OSError, ValueError):
+        return "图片无法读取，不能验证叠字对比度"
+    return ""
+
+
+def _intersection_area(a: tuple, b: tuple) -> float:
+    return max(0.0, min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(
+        0.0, min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
+
+
+def _wcag_contrast_white(rgb: tuple[int, int, int]) -> float:
+    def channel(value: int) -> float:
+        value /= 255
+        return value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4
+    luminance = sum(weight * channel(value) for weight, value in
+                    zip((.2126, .7152, .0722), rgb))
+    return 1.05 / (luminance + .05)
+
+
+def svg_text_overlap(png: bytes, elements: list, slide: dict) -> str:
+    """An SVG decoration may not paint behind editable ordinary text."""
+    from PIL import Image
+    with Image.open(io.BytesIO(png)) as source:
+        alpha = source.convert("RGBA").getchannel("A")
+        width, height = alpha.size
+        image = next((item for item in elements if item.get("ref") == "image"), None)
+        for item in elements:
+            ref = item.get("ref", "")
+            if ref == "image":
+                continue
+            if image and ref.startswith("point:") and (
+                    (slide.get("design") or {}).get("image_overlay") == "dark"):
+                covered = _intersection_area(
+                    (image["x"], image["y"], image["w"], image["h"]),
+                    (item["x"], item["y"], item["w"], item["h"]))
+                if covered / (item["w"] * item["h"]) >= .70:
+                    continue  # Native photo and scrim are above the SVG layer.
+            box = (max(0, int(item["x"] * width)),
+                   max(0, int(item["y"] * height)),
+                   min(width, math.ceil((item["x"] + item["w"]) * width)),
+                   min(height, math.ceil((item["y"] + item["h"]) * height)))
+            if alpha.crop(box).getbbox():
+                return f"SVG 装饰覆盖文字区域 {ref}"
+    return ""
 
 
 def intent_issue(elements: list, slide: dict) -> str:
@@ -52,7 +212,7 @@ def intent_issue(elements: list, slide: dict) -> str:
     return ""
 
 
-def explain(elements: list, slide: dict) -> str:
+def explain(elements: list, slide: dict, *, layered: bool = False) -> str:
     """Return why a composition is rejected, or "" when it passes.
 
     audit() used to answer only True/False, so the retry prompt could not tell
@@ -107,7 +267,7 @@ def explain(elements: list, slide: dict) -> str:
         inset = 0 if ref == "title" else .04
         if w <= inset or h <= inset:
             return f"区域 {ref} 太小（{w:.2f}×{h:.2f}），扣除内边距后没有可排字的面积"
-        size = (20 if ref == "image" else fit_font_size(
+        size = (20 if ref in {"image", "chart", "table"} else fit_font_size(
             values[ref], w-inset, h-inset, preferred,
             min_pt=18 if ref == "title" else 14))
         if size is None:
@@ -115,8 +275,12 @@ def explain(elements: list, slide: dict) -> str:
             return (f"区域 {ref} 只有 {w:.2f}×{h:.2f} 页宽页高，"
                     f"装不下 {chars} 个字（连 14pt 都放不进）；请加宽或加高该区域")
         item["font_pt"] = size
-        item["budget_chars"] = (0 if ref == "image" else
+        item["budget_chars"] = (0 if ref in {"image", "chart", "table"} else
                                budget_chars(w-inset, h-inset, size))
+        if ref == "chart" and (w < .36 or h < .30):
+            return "图表区域至少需要页面宽度的 36% 和高度的 30%，否则类别与数值无法辨认"
+        if ref == "table" and (w < .50 or h < .28):
+            return "表格区域太小，至少需要页面宽度的 50% 和高度的 28%"
         for other, bx, by, bw, bh in boxes:
             if min(x+w, bx+bw)-max(x, bx) > .002 and min(y+h, by+bh)-max(y, by) > .002:
                 if overlay and ((ref == "image" and other.startswith("point:"))
@@ -125,7 +289,9 @@ def explain(elements: list, slide: dict) -> str:
                     text_box = (x, y, w, h) if ref.startswith("point:") else (bx, by, bw, bh)
                     ix, iy, iw, ih = image_box
                     tx, ty, tw, th = text_box
-                    if (tx >= ix + .015 and ty >= iy + .015
+                    if layered and _intersection_area(image_box, text_box) / (tw * th) >= .70:
+                        continue
+                    if (not layered and tx >= ix + .015 and ty >= iy + .015
                             and tx + tw <= ix + iw - .015
                             and ty + th <= iy + ih - .015):
                         continue
@@ -150,10 +316,13 @@ def explain(elements: list, slide: dict) -> str:
     if overlay and ("image" not in values or not any(
             item["ref"].startswith("point:") and any(
                 image["ref"] == "image" and
-                item["x"] >= image["x"] + .015 and
-                item["y"] >= image["y"] + .015 and
-                item["x"] + item["w"] <= image["x"] + image["w"] - .015 and
-                item["y"] + item["h"] <= image["y"] + image["h"] - .015
+                ((_intersection_area((image["x"], image["y"], image["w"], image["h"]),
+                                     (item["x"], item["y"], item["w"], item["h"]))
+                  / (item["w"] * item["h"]) >= .70) if layered else (
+                     item["x"] >= image["x"] + .015 and
+                     item["y"] >= image["y"] + .015 and
+                     item["x"] + item["w"] <= image["x"] + image["w"] - .015 and
+                     item["y"] + item["h"] <= image["y"] + image["h"] - .015))
                 for image in elements) for item in elements)):
         return "图文叠加须有图片，并把至少一条正文完整放在图片内侧"
     return ""

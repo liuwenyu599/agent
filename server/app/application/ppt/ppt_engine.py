@@ -1948,7 +1948,7 @@ def normalize_outline(outline: Dict, target_count: Optional[int] = None,
                     "none", "evidence") else "auto",
                 "image_overlay": "dark" if design.get("image_overlay") == "dark" else "none",
                 "svg": str(design.get("svg") or "")[:60000],
-                "regions": design.get("regions")[:8] if isinstance(design.get("regions"), list) else None,
+                "regions": design.get("regions")[:12] if isinstance(design.get("regions"), list) else None,
                 "visuals": design.get("visuals") if (isinstance(design.get("visuals"), list)
                                                     and len(design["visuals"]) <= 6) else None,
                 "plan_signature": str(design.get("plan_signature") or "")[:20],
@@ -2502,9 +2502,12 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         if fit == "contain":
             width, height = ((w, int(w / img_ratio)) if img_ratio > box_ratio
                              else (int(h * img_ratio), h))
-            return slide.shapes.add_picture(
+            picture = slide.shapes.add_picture(
                 source, x + (w - width) // 2, y + (h - height) // 2, width, height)
+            picture.name = "PPTEvidencePhoto"
+            return picture
         pic = slide.shapes.add_picture(source, x, y, w, h)
+        pic.name = "PPTEvidencePhoto"
         if img_ratio > box_ratio:
             crop = (1 - box_ratio / img_ratio) / 2
             pic.crop_left = pic.crop_right = crop
@@ -3607,7 +3610,7 @@ def build_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
         if overlay and image_box:
             x, y, w, h = (image_box[key] for key in ("x", "y", "w", "h"))
             picture_fit(slide, s["_image"]["file_path"], lx(x), ly(y), lx(w), ly(h), "crop")
-            rect(slide, lx(x), ly(y), lx(w), ly(h), DARK, alpha=58)
+            rect(slide, lx(x), ly(y), lx(w), ly(h), DARK, alpha=62)
         for item in s["scene"]["elements"]:
             x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
             if item["ref"] == "image":
@@ -6460,14 +6463,16 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
                                     font: str, sw: int, sh: int,
                                     body_top: float, body_bottom: float,
                                     template_style: Optional[Dict] = None,
-                                    reason_out: Optional[List[str]] = None) -> bool:
+                                    reason_out: Optional[List[str]] = None,
+                                    layered: bool = False) -> bool:
     """Render a validated model composition on the source template's canvas."""
     from copy import deepcopy
     from pptx.dml.color import RGBColor
     from pptx.enum.text import MSO_ANCHOR
     from pptx.util import Pt
-    from app.application.ppt.page_scene import (explain, intent_issue, clamp_regions,
+    from app.application.ppt.page_scene import (explain, explain_layered, intent_issue, clamp_regions,
                                                 compact_regions, references)
+    check = explain_layered if layered else explain
 
     def _skip(reason: str) -> bool:
         # 编译期还会拒绝一部分已经通过 author_pages 的构图（映射进模板正文区
@@ -6477,9 +6482,9 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
             reason_out.append(reason)
         return False
 
-    if sdata.get("type") not in {"content", "case", "summary"}:
+    if sdata.get("type") not in {"content", "case", "summary", "data", "chart"}:
         return _skip(f"页型 {sdata.get('type')} 不走模型构图")
-    if sdata.get("blocks"):
+    if sdata.get("type") in {"content", "case", "summary"} and sdata.get("blocks"):
         return _skip("该页是结构化块（表格/关系图），不用模型构图")
     design = sdata.get("design") or {}
     proposed = design.get("regions")
@@ -6493,7 +6498,7 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
         # 数量校验过不去就把整页退回通用版式——文字排版也跟着白丢。剔掉这个区，
         # 其余构图照用。
         elements = [item for item in elements if item.get("ref") != "image"]
-    issue = explain(elements, sdata) or intent_issue(elements, sdata)
+    issue = check(elements, sdata) or intent_issue(elements, sdata)
     if issue:
         return _skip("原始坐标未通过：" + issue)
     # 模型只管构图，不管字排完占多高：一句十四字的话分到 46% 页高的框里，
@@ -6503,7 +6508,7 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
     compacted, adjusted, changed = (
         (elements, visuals, False) if design.get("image_overlay") == "dark"
         else compact_regions(elements, sdata, visuals))
-    if changed and not (explain(compacted, sdata) or intent_issue(compacted, sdata)):
+    if changed and not (check(compacted, sdata) or intent_issue(compacted, sdata)):
         elements, visuals = compacted, adjusted
     # The model plans on a clean page; keep its relative composition while
     # fitting it between this template's real top and bottom decoration.
@@ -6514,7 +6519,7 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
         item["y"] = body_top + (element["y"] - .025) * span / .865
         item["h"] = element["h"] * span / .865
         mapped.append(item)
-    mapped_issue = explain(mapped, sdata)
+    mapped_issue = check(mapped, sdata)
     if mapped_issue:
         return _skip("映射进模板正文区后未通过：" + mapped_issue)
     if any(item["ref"] == "image" for item in mapped) and not image_ok:
@@ -6530,6 +6535,11 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
             return _skip("SVG 视觉层不合法或无法渲染")
         if svg_layer.fixed_decoration_overlap(svg_png, slide, sw, sh):
             return _skip("SVG 视觉层覆盖了模板固定装饰")
+        if layered:
+            from app.application.ppt.page_scene import svg_text_overlap
+            svg_issue = svg_text_overlap(svg_png, mapped, sdata)
+            if svg_issue:
+                return _skip(svg_issue)
 
     # Text in the source deck is already gone, but its colored cards and frames
     # can remain. Clear only objects underneath the model's new regions; keep
@@ -6555,7 +6565,8 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
             _delete_shape(shape)
 
     if svg_png:
-        slide.shapes.add_picture(io.BytesIO(svg_png), 0, 0, sw, sh)
+        visual_layer = slide.shapes.add_picture(io.BytesIO(svg_png), 0, 0, sw, sh)
+        visual_layer.name = "PPTVisualLayer"
     _draw_model_visuals_on_template(slide, visuals, elements,
                                     colors, sw, sh, body_top, body_bottom)
     values = references(sdata)
@@ -6565,21 +6576,57 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
     if overlay and image_box:
         from pptx.enum.shapes import MSO_SHAPE
         from pptx.oxml.ns import qn
+        def add_scrim(box):
+            left, top, width, height = (int(box[key] * size) for key, size in
+                                        (("x", sw), ("y", sh), ("w", sw), ("h", sh)))
+            shade = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                            left, top, width, height)
+            shade.fill.solid()
+            shade.fill.fore_color.rgb = RGBColor(15, 20, 25)
+            shade.line.fill.background()
+            solid = shade._element.spPr.find(qn("a:solidFill"))
+            color = solid.find(qn("a:srgbClr")) if solid is not None else None
+            if color is not None:
+                color.append(color.makeelement(qn("a:alpha"), {"val": "62000"}))
+
         ix, iy, iw, ih = (int(image_box[key] * size) for key, size in
                           (("x", sw), ("y", sh), ("w", sw), ("h", sh)))
         _add_picture_fill(slide, image_path, ix, iy, iw, ih)
-        shade = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, ix, iy, iw, ih)
-        shade.fill.solid()
-        shade.fill.fore_color.rgb = RGBColor(15, 20, 25)
-        shade.line.fill.background()
-        solid = shade._element.spPr.find(qn("a:solidFill"))
-        color = solid.find(qn("a:srgbClr")) if solid is not None else None
-        if color is not None:
-            color.append(color.makeelement(qn("a:alpha"), {"val": "58000"}))
+        add_scrim(image_box)
+        if layered:
+            from app.application.ppt.page_scene import _intersection_area
+            for item in mapped:
+                if not item["ref"].startswith("point:"):
+                    continue
+                photo_overlap = _intersection_area(
+                    (image_box["x"], image_box["y"], image_box["w"], image_box["h"]),
+                    (item["x"], item["y"], item["w"], item["h"]))
+                if .70 <= photo_overlap / (item["w"] * item["h"]) < .999:
+                    add_scrim(item)
     for item in mapped:
         x, y, w, h = (item[key] for key in ("x", "y", "w", "h"))
         left, top, width, height = (int(x * sw), int(y * sh),
                                     int(w * sw), int(h * sh))
+        if item["ref"] == "chart":
+            chart_spec = (sdata.get("blocks") or {}).get("chart") or {}
+            _add_native_chart(slide, chart_spec, item, colors, font, sw, sh)
+            continue
+        if item["ref"] == "table":
+            table_spec = (sdata.get("blocks") or {}).get("table") or {}
+            headers = list(table_spec.get("headers") or [])
+            rows = list(table_spec.get("rows") or [])
+            cols = max([len(headers)] + [len(row) for row in rows])
+            grid = slide.shapes.add_table(len(rows) + 1, cols,
+                                          left, top, width, height).table
+            for ri, row in enumerate([headers] + rows):
+                for ci in range(cols):
+                    cell = grid.cell(ri, ci)
+                    cell.text = str(row[ci]) if ci < len(row) else ""
+                    for para in cell.text_frame.paragraphs:
+                        for run in para.runs:
+                            apply_cjk_font(run, font)
+                            run.font.size = Pt(12 if ri else 13)
+            continue
         if item["ref"] == "image":
             if overlay:
                 continue
@@ -6591,9 +6638,10 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
                 picture_w, picture_h = max(1, int(scale * ratio)), max(1, int(scale))
                 from app.application.ppt.image_media import prepared_picture
                 source, _, _ = prepared_picture(image_path, picture_w, picture_h)
-                slide.shapes.add_picture(source,
+                picture = slide.shapes.add_picture(source,
                     left + (width - picture_w) // 2,
                     top + (height - picture_h) // 2, picture_w, picture_h)
+                picture.name = "PPTEvidencePhoto"
             else:
                 _add_picture_fill(slide, image_path, left, top, width, height)
             continue
@@ -6620,13 +6668,17 @@ def _fill_model_regions_on_template(slide, sdata: Dict, colors: Dict,
                 if type(preferred) in (int, float) else item["font_pt"])
         run.font.size = Pt(size)
         run.font.bold = item["ref"] == "title"
-        text_on_image = (overlay and item["ref"] != "title" and image_box
-                         and x >= image_box["x"] and y >= image_box["y"]
-                         and x+w <= image_box["x"]+image_box["w"]
-                         and y+h <= image_box["y"]+image_box["h"])
+        text_on_image = (overlay and item["ref"].startswith("point:") and image_box
+                         and ((layered and _intersection_area(
+                             (image_box["x"], image_box["y"], image_box["w"], image_box["h"]),
+                             (x, y, w, h)) / (w * h) >= .70)
+                              or (not layered and x >= image_box["x"]
+                                  and y >= image_box["y"]
+                                  and x+w <= image_box["x"]+image_box["w"]
+                                  and y+h <= image_box["y"]+image_box["h"])))
         color_hex = ("FFFFFF" if text_on_image else colors.get(
             "primary" if item["ref"] == "title" else "dark", "262626"))
-        if _hex_luminance(color_hex) > .70:
+        if not text_on_image and _hex_luminance(color_hex) > .70:
             color_hex = "262626"
         run.font.color.rgb = RGBColor.from_string(color_hex)
     return True
@@ -6640,7 +6692,8 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                                  diag: Optional[Dict] = None,
                                  fallback: str = "readable",
                                  learned: Optional[tuple] = None,
-                                 skip_model: bool = False) -> None:
+                                 skip_model: bool = False,
+                                 layered: bool = False) -> None:
     """Keep the source deck's master/background, but give dense text safe geometry.
 
     ``fallback`` decides what happens when the model composition is rejected:
@@ -6660,7 +6713,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
     skip: List[str] = []
     if not skip_model and _fill_model_regions_on_template(
             slide, sdata, colors, font, sw, sh, body_top, body_bottom,
-            template_style, reason_out=skip):
+            template_style, reason_out=skip, layered=layered):
         if diag is not None:
             diag["composition"] = "model"
             diag["composition_skip"] = ""
@@ -6941,6 +6994,7 @@ def _fill_readable_template_page(slide, sdata: Dict, colors: Dict,
                 picture = slide.shapes.add_picture(source,
                     target_x + (target_w - pic_w) // 2,
                     target_y + (target_h - pic_h) // 2, pic_w, pic_h)
+                picture.name = "PPTEvidencePhoto"
             else:
                 picture = _add_picture_fill(slide, selected_image, target_x, target_y,
                                             target_w, target_h)
@@ -7148,6 +7202,7 @@ def _add_picture_fill(slide, path: str, left: int, top: int,
     from app.application.ppt.image_media import prepared_picture
     source, image_width, image_height = prepared_picture(path, width, height)
     picture = slide.shapes.add_picture(source, left, top, width, height)
+    picture.name = "PPTEvidencePhoto"
     try:
         ratio = image_width / image_height if image_height else 0
         box_ratio = (width / height) if height else 0
@@ -7574,7 +7629,8 @@ def build_pptx_learned(outline: Dict, template: Dict, base_pptx: bytes,
                                              diag=diag,
                                              fallback=fallback_mode,
                                              learned=(lay, prs) if lay else None,
-                                             skip_model=force_template_layout)
+                                             skip_model=force_template_layout,
+                                             layered=(outline or {}).get("template_mode") == "designed")
                 hybrid_index += 1
                 if diagnostics is not None:
                     diagnostics.append({"page": page_no, "type": s.get("type"),
@@ -7671,6 +7727,8 @@ def render_pptx(outline: Dict, template: Dict, base_pptx: bytes = None,
             warnings.extend(export_media_warnings(data))
         return data
 
+    if template.get("layouts") is not None and not isinstance(template["layouts"], dict):
+        raise ValueError("template.layouts 必须是版式名到配置的字典；模板抽取结果请放入 layout_library")
     library = template.get("layout_library") or []
     reviewed = any("qualification" in layout for layout in library)
     usable_content = any(

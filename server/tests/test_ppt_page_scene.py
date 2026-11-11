@@ -1,12 +1,61 @@
 import copy
 import io
+from PIL import Image
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
-from app.application.ppt import page_scene, ppt_engine, visual_primitives as vp
+from app.application.ppt import page_scene, ppt_engine, svg_layer, visual_primitives as vp
 from app.core.fonts import DEFAULT_CJK_FONT, DEFAULT_LATIN_FONT
+
+
+def test_layered_photo_text_requires_scrim_and_pixel_contrast(tmp_path):
+    photo = tmp_path / "bright.png"
+    Image.new("RGB", (200, 120), "white").save(photo)
+    slide = {"type": "content", "title": "现场", "points": ["专题学习现场"],
+             "_image": {"file_path": str(photo)},
+             "design": {"image_overlay": "dark"}}
+    regions = [{"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+               {"ref": "image", "x": .08, "y": .25, "w": .84, "h": .55},
+               {"ref": "point:0", "x": .15, "y": .40, "w": .50, "h": .20}]
+    assert page_scene.explain_layered(copy.deepcopy(regions), slide) == ""
+    no_scrim = copy.deepcopy(slide)
+    no_scrim["design"]["image_overlay"] = "none"
+    assert page_scene.explain_layered(copy.deepcopy(regions), no_scrim)
+    wrong_layer = copy.deepcopy(regions)
+    wrong_layer[2]["layer"] = "image"
+    assert "layer" in page_scene.explain_layered(wrong_layer, slide)
+    partial = copy.deepcopy(regions)
+    partial[1].update(w=.60)
+    partial[2].update(x=.50, w=.24)
+    assert page_scene.explain(copy.deepcopy(partial), slide)
+    assert page_scene.explain_layered(copy.deepcopy(partial), slide) == ""
+    prs = Presentation()
+    page = prs.slides.add_slide(prs.slide_layouts[6])
+    colors = {"primary": "C00000", "accent": "E25858", "dark": "303030"}
+    assert ppt_engine._fill_model_regions_on_template(
+        page, {**slide, "design": {**slide["design"], "regions": partial}},
+        colors, "微软雅黑", prs.slide_width, prs.slide_height,
+        .025, .89, layered=True)
+    # Photo scrim plus a second editable scrim covering the overhanging text.
+    shades = [shape for shape in page.shapes if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE
+              and shape.fill.type is not None]
+    assert len(shades) >= 2
+    overlaid = next(shape for shape in page.shapes if shape.has_text_frame
+                   and shape.text == "专题学习现场")
+    assert str(overlaid.text_frame.paragraphs[0].runs[0].font.color.rgb) == "FFFFFF"
+
+
+def test_svg_decoration_cannot_paint_behind_editable_body_text():
+    slide = {"type": "content", "title": "成果", "points": ["正文"]}
+    regions = [{"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+               {"ref": "point:0", "x": .10, "y": .30, "w": .60, "h": .30}]
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540">'
+           '<rect x="120" y="200" width="200" height="70" fill="#202020"/>'
+           '</svg>')
+    png = svg_layer.to_png(svg, scale=.5)
+    assert page_scene.svg_text_overlap(png, regions, slide) == "SVG 装饰覆盖文字区域 point:0"
 
 
 def test_scene_uses_valid_model_geometry_and_exports_same_positions():

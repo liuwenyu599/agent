@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 from pptx import Presentation
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,6 +39,58 @@ def _outline():
          "design": {"job": "说明两项安排", "relationship": "parallel"}},
         {"type": "closing", "title": "谢谢聆听"},
     ]}
+
+
+def test_chart_page_model_controls_native_chart_and_conclusion_positions():
+    chart = {"chart_type": "bar", "categories": ["一月", "二月"],
+             "series": [{"name": "件数", "values": [12, 18]}]}
+    slide = {"type": "chart", "title": "办理情况", "points": ["二月高于一月"],
+             "blocks": {"chart": chart}}
+    regions = [{"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+               {"ref": "chart", "x": .06, "y": .26, "w": .60, "h": .56},
+               {"ref": "point:0", "x": .70, "y": .35, "w": .24, "h": .30}]
+    assistant = Assistant([{"pages": [{"page": 1, "regions": regions}]}])
+    result = author_pages({"title": "测试", "slides": [slide]}, {}, assistant)
+    assert result["slides"][0]["design"]["regions"] == regions
+    assert result["slides"][0]["blocks"]["chart"] == chart
+    assert "chart 是可编辑原生 PPT 图表" in assistant.prompts[0]
+
+    prs = Presentation()
+    page = prs.slides.add_slide(prs.slide_layouts[6])
+    colors = {"primary": "C00000", "accent": "E25858", "dark": "303030"}
+    assert ppt_engine._fill_model_regions_on_template(
+        page, result["slides"][0], colors, "微软雅黑",
+        prs.slide_width, prs.slide_height, .025, .89, layered=True)
+    native = [shape for shape in page.shapes if shape.has_chart]
+    assert len(native) == 1
+    assert abs(native[0].left / prs.slide_width - .06) < .002
+    assert native[0].chart.series[0].values == (12.0, 18.0)
+    assert any(shape.has_text_frame and shape.text == "二月高于一月"
+               for shape in page.shapes)
+    changed = copy.deepcopy(result)
+    changed["slides"][0]["blocks"]["chart"]["series"][0]["values"][1] = 19
+    second = Assistant([{"pages": [{"page": 1, "regions": regions}]}])
+    author_pages(changed, {}, second)
+    assert len(second.prompts) == 1
+
+
+def test_data_page_metrics_are_repositioned_without_changing_values():
+    slide = {"type": "data", "title": "业务量", "points": ["增幅明显"],
+             "blocks": {"cards": [{"label": "本月", "value": "18件"},
+                                   {"label": "上月", "value": "12件"}]}}
+    regions = [{"ref": "title", "x": .06, "y": .05, "w": .88, "h": .12},
+               {"ref": "metric:0", "x": .06, "y": .29, "w": .26, "h": .42},
+               {"ref": "metric:1", "x": .37, "y": .29, "w": .26, "h": .42},
+               {"ref": "point:0", "x": .68, "y": .39, "w": .26, "h": .20}]
+    assistant = Assistant([{"pages": [{"page": 1, "regions": regions}]}])
+    result = author_pages({"slides": [slide]}, {}, assistant)
+    assert result["slides"][0]["design"]["regions"] == regions
+    assert result["slides"][0]["blocks"] == slide["blocks"]
+
+
+def test_render_pptx_rejects_layout_list_with_actionable_error():
+    with pytest.raises(ValueError, match="layout_library"):
+        ppt_engine.render_pptx({"slides": []}, {"layouts": []})
 
 
 def test_author_pages_accepts_model_geometry_without_rewriting_content():

@@ -37,7 +37,8 @@ def _signature(slide: dict, template: dict) -> str:
     image = slide.get("_image") or {}
     payload = {
         "type": slide.get("type"), "title": slide.get("title"),
-        "points": slide.get("points"), "image_id": slide.get("image_id"),
+        "points": slide.get("points"), "blocks": slide.get("blocks") or {},
+        "image_id": slide.get("image_id"),
         "image_path": image.get("file_path"),
         "colors": template.get("colors"), "font": template.get("font"),
         "template_id": template.get("id"),
@@ -61,7 +62,7 @@ def _region_issue(slide: dict, regions: object) -> str:
     if not isinstance(regions, list) or not regions:
         return "缺少 regions"
     checked = copy.deepcopy(regions)
-    return page_scene.explain(checked, slide) or page_scene.intent_issue(checked, slide)
+    return page_scene.explain_layered(checked, slide) or page_scene.intent_issue(checked, slide)
 
 
 def _valid_regions(slide: dict, regions: object) -> bool:
@@ -89,8 +90,12 @@ def _same_composition(first: object, second: object) -> bool:
 def _page_brief(index: int, slide: dict) -> dict:
     image = slide.get("_image") or {}
     brief = {
-        "page": index, "title": slide.get("title"),
+        "page": index, "type": slide.get("type"), "title": slide.get("title"),
         "points": slide.get("points") or [],
+        "structured_content": {key: value for key, value in
+                               (slide.get("blocks") or {}).items()
+                               if key in {"chart", "table", "cards"}},
+        "required_refs": list(page_scene.references(slide)),
         "job": (slide.get("design") or {}).get("job") or "",
         "relationship": (slide.get("design") or {}).get("relationship") or "none",
         "image": bool(image.get("file_path")),
@@ -145,7 +150,9 @@ def _prompt(outline: dict, template: dict, pages: list[dict],
         "{\"ref\":\"title\",\"x\":0.06,\"y\":0.05,\"w\":0.88,\"h\":0.12},"
         "{\"ref\":\"point:0\",\"x\":0.06,\"y\":0.28,\"w\":0.42,\"h\":0.5}],"
         "\"visuals\":[]}]}。\n"
-        "坐标均为页面宽高的 0~1 比例。每页 title 和每条 point:i 必须各出现一次；"
+        "坐标均为页面宽高的 0~1 比例。每页 required_refs 中的区域必须各出现一次；"
+        "chart 是可编辑原生 PPT 图表，模型只决定其位置和面积，不得改图表数据；"
+        "table 是原生表格，metric:i 是原有指标卡，均不得改写数值。"
         "image=true 时 image 区域也必须出现一次，image=false 时不得出现。"
         "所有区域 x≥0.035、y≥0.025、右侧≤0.965、底部≤0.89；"
         "除下述图文叠加外彼此不重叠；"
@@ -164,7 +171,10 @@ def _prompt(outline: dict, template: dict, pages: list[dict],
         "仅画无文字的纯色路径和形状，fill/stroke 只用 #RRGGBB 或 none，"
         "最多 128 个图形；不得包含渐变、text、image、脚本或外部资源。"
         "有实景照且适合图文叠加时，可设 image_overlay='dark'，让 image 区覆盖正文区，"
-        "至少一个 point 区完整位于图片内并留边；程序会加深色透明遮罩和白字。"
+        "至少一个 point 区完整位于图片内并留边；程序会加深色透明遮罩和白字，"
+        "按照片像素检查正文对比度至少 4.5:1、大字至少 3:1。"
+        "区域可标 layer：title/point/metric 为 text，image 为 image，chart/table 为 chart；"
+        "文字层互不重叠，图文叠加必须有蒙版。"
         + ("附图是来源模板的页面，仅学习底色、层级、装饰和留白；"
            "其中的文字、照片和事实都不得带入本次演示。" if has_template_image else "")
         + ("\n上次方案需要修正：" + issue + "。请修正全部页面。" if issue else "")
@@ -223,8 +233,12 @@ def _accept(slide: dict, template: dict, proposal: dict) -> tuple[bool, str]:
     overlay = proposal.get("image_overlay", "none")
     if overlay not in ("none", "dark"):
         return False, "image_overlay 只允许 none 或 dark"
+    visuals = proposal.get("visuals", [])
+    if visuals is None:
+        visuals = []
     candidate = {**slide, "design": {**(slide.get("design") or {}),
-                                     "image_overlay": overlay}}
+                                     "image_overlay": overlay,
+                                     "visuals": visuals}}
     issue = _region_issue(candidate, regions)
     if issue:
         return False, issue
@@ -235,15 +249,15 @@ def _accept(slide: dict, template: dict, proposal: dict) -> tuple[bool, str]:
         if issue:
             return False, issue
         try:
-            svg_layer.to_png(svg, scale=.5, width=canvas_width,
-                             height=canvas_height)
+            svg_png = svg_layer.to_png(svg, scale=.5, width=canvas_width,
+                                       height=canvas_height)
+            issue = page_scene.svg_text_overlap(svg_png, regions, candidate)
+            if issue:
+                return False, issue
         except ValueError as exc:
             return False, str(exc)
         except Exception:
             return False, "SVG 无法渲染为页面视觉层"
-    visuals = proposal.get("visuals", [])
-    if visuals is None:
-        visuals = []
     if model_visuals(visuals, regions) is None:
         return False, "装饰图形超出范围、使用了不支持的颜色或遮住文字"
     design = dict(slide.get("design") or {})
@@ -274,8 +288,16 @@ def author_pages(outline: dict, template: dict, assistant: Any,
                             "需要场景图片，但图库没有匹配素材；已保留无图版式")
     pending = []
     for index, slide in enumerate(result.get("slides") or [], 1):
-        if (slide.get("type") not in {"content", "case", "summary"}
-                or not slide.get("points") or slide.get("blocks")):
+        page_type = slide.get("type")
+        if page_type not in {"content", "case", "summary", "data", "chart"}:
+            continue
+        if page_type in {"content", "case", "summary"} and (
+                not slide.get("points") or slide.get("blocks")):
+            continue
+        refs = page_scene.references(slide)
+        if page_type in {"data", "chart"} and not any(
+                ref in {"chart", "table"} or ref.startswith("metric:")
+                for ref in refs):
             continue
         design = slide.get("design") or {}
         valid = _valid_regions(slide, design.get("regions"))
@@ -285,10 +307,10 @@ def author_pages(outline: dict, template: dict, assistant: Any,
         if slide.get("layout_locked") and valid:
             continue
         previous = result["slides"][index - 2] if index > 1 else {}
-        repeated = _same_composition(
+        is_repeated = _same_composition(
             (previous.get("design") or {}).get("regions"), design.get("regions"))
         if (valid and design.get("plan_signature") == _signature(slide, template)
-                and not repeated):
+                and not is_repeated):
             continue
         pending.append(index)
     if not pending:

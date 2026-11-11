@@ -27,6 +27,7 @@ def test_large_opaque_gallery_png_is_downsampled_and_embedded_as_jpeg(tmp_path):
     result = Presentation(io.BytesIO(output)).slides[0]
     embedded = [shape.image for shape in result.shapes if shape.shape_type == 13]
     assert embedded
+    assert any(shape.name == "PPTEvidencePhoto" for shape in result.shapes)
     assert embedded[0].ext == "jpg"
     assert len(embedded[0].blob) < photo.stat().st_size / 5
     assert max(embedded[0].size) < 2400
