@@ -119,15 +119,16 @@ def test_free_layout_async_job_uses_local_renderer_with_legacy_url(monkeypatch):
     assert agent_job.uses_local_renderer("doc") is False
 
 
-def test_queued_job_bypasses_legacy_queue_for_free_layout(monkeypatch):
+def test_free_layout_uses_bounded_generation_queue(monkeypatch):
     from app.application.ppt import queued_agent_job
 
     monkeypatch.setattr(queued_agent_job._core, "uses_local_renderer", lambda _id: True)
-    monkeypatch.setattr(queued_agent_job._core, "submit_job",
-                        lambda *_args: {"job_id": "doc", "status": "pending"})
+    monkeypatch.setattr(queued_agent_job, "_update_job", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(queued_agent_job._core.LocalRenderJobRunner,
+                        "run", lambda self: None)
     result = queued_agent_job.submit_job("doc", "user")
     assert result["job_id"] == "doc"
-    assert result["queue_position"] is None
+    assert result["queue_position"] == 0
 
 
 def test_visual_feedback_changes_only_problem_page(monkeypatch):

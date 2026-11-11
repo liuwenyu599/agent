@@ -8,6 +8,7 @@ import json as _json
 import os
 import re
 import shutil
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -145,15 +146,26 @@ class PPTService:
         self.materials = SqlAlchemyPPTMaterialRepository(db)
         self.documents = SqlAlchemyPPTDocumentRepository(db)
         # PPT 专用助手（DeepPresenter-9B），惰性初始化；未配置时回退主模型
-        self._ppt_asst: Optional[WritingAssistant] = None
+        self._ppt_asst: Optional[Any] = None
 
-    def _ppt_assistant(self) -> WritingAssistant:
+    def _ppt_assistant(self) -> Any:
         """PPT 专用模型助手（DeepPresenter-9B）。
         未配置 PPT_MODEL_URL 时回退主文本模型，功能保持可用。"""
         if self._ppt_asst is None:
             from app.infrastructure.ai import get_ppt_gateway
+            from app.infrastructure.ai.qwen import model_request_class
             gw = get_ppt_gateway()
-            self._ppt_asst = WritingAssistant(gw) if gw is not None else self.assistant
+            source = WritingAssistant(gw) if gw is not None else self.assistant
+
+            class _PPTAssistant:
+                def complete(self, *args, **kwargs):
+                    with model_request_class("background"):
+                        return source.complete(*args, **kwargs)
+
+                def __getattr__(self, name):
+                    return getattr(source, name)
+
+            self._ppt_asst = _PPTAssistant() if source is not None else None
         return self._ppt_asst
 
     @staticmethod
@@ -2184,6 +2196,8 @@ class PPTService:
           {"type":"stage","text":...} / {"type":"done","data":{"doc_id,outline"}}
           / {"type":"error","message":...}
         """
+        started = time.monotonic()
+
         def _sse(obj) -> str:
             return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
 
@@ -2219,6 +2233,8 @@ class PPTService:
                 enforce_exact_count=explicit_count, free_structure=True,
                 template_budget=(self._template_budget(body.template_id, user)
                                  if mode == "strict" else []))
+            logger.info("[PPT 任务耗时] 大纲模型=%.1fs 页数=%d",
+                        time.monotonic() - started, len(outline.get("slides") or []))
             yield _sse({"type": "stage", "text": "正在自动检查页面结构与内容密度…"})
             self._backfill_metrics(outline, content, user, kb_ids)
             outline = self._audit_and_repair_outline(
@@ -2268,6 +2284,8 @@ class PPTService:
             outline=outline, status="draft", slide_count=len(outline.get("slides") or [])))
         logger.info("[PPT] 流式权威大纲已创建：doc_id=%s pages=%d",
                     d.id, len(outline.get("slides") or []))
+        logger.info("[PPT 任务耗时] 大纲总计=%.1fs doc=%s",
+                    time.monotonic() - started, d.id)
         yield _sse({"type": "done", "data": {"doc_id": d.id, "outline": outline}})
 
     async def outline_from_doc(self, file, topic: str, audience: str, scene: str,

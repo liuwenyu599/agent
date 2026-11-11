@@ -1,8 +1,8 @@
-"""Single-process admission queue for PPTAgent jobs.
+"""Single-process admission queue for local and PPTAgent generation jobs.
 
 The core :mod:`agent_job` module owns one long-running generation. This wrapper adds
-server-side admission control without changing that runner: at most two generations
-run at once, overflow is FIFO, and one user may own at most one active/queued job.
+server-side admission control: at most two generations run at once, overflow is FIFO,
+and one user may own at most one active/queued job.
 
 This queue is intentionally process-local. Cross-process coordination belongs to the
 multi-instance deployment layer; pretending an in-memory semaphore is distributed
@@ -11,8 +11,9 @@ would be incorrect.
 from __future__ import annotations
 
 import threading
+import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 from app.application.ppt import agent_job as _core
@@ -22,8 +23,8 @@ from app.core.timeutil import now_local
 logger = _core.logger
 settings = _core.settings
 
-# Item 7 acceptance contract: one application process may drive at most two expensive
-# PPTAgent generations concurrently. Extra jobs stay in a strict FIFO queue.
+# One application process may drive at most two expensive PPT generations concurrently.
+# Extra jobs stay in a strict FIFO queue, including local designed rendering.
 _MAX_CONCURRENT_JOBS = 2
 _SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_JOBS)
 _QUEUE_LOCK = threading.RLock()
@@ -35,6 +36,8 @@ class _QueuedJob:
     user_id: str
     message: str
     history: Optional[List[Any]]
+    local: bool = False
+    enqueued_at: float = field(default_factory=time.monotonic)
 
 
 _QUEUE: Deque[_QueuedJob] = deque()
@@ -66,6 +69,8 @@ def _queue_position_locked(doc_id: str) -> Optional[int]:
 
 def _start_locked(item: _QueuedJob) -> None:
     """Start one job after a semaphore slot has already been acquired."""
+    logger.info("[PPT 任务耗时] 排队=%.1fs job=%s 本地=%s",
+                time.monotonic() - item.enqueued_at, item.doc_id, item.local)
     _ACTIVE_DOCS.add(item.doc_id)
     _update_job(
         item.doc_id,
@@ -80,12 +85,12 @@ def _start_locked(item: _QueuedJob) -> None:
         job_progress_at=now_local(),
         job_finished_at=None,
     )
-    runner = PPTAgentJobRunner(
-        item.doc_id, item.user_id, item.message, history=item.history
-    )
+    runner = (LocalRenderJobRunner(item.doc_id, item.user_id) if item.local else
+              PPTAgentJobRunner(item.doc_id, item.user_id, item.message,
+                                history=item.history))
     thread = threading.Thread(
         target=runner.run,
-        name=f"ppt-job-{item.doc_id[:8]}",
+        name=f"ppt-{'local' if item.local else 'job'}-{item.doc_id[:8]}",
         daemon=True,
     )
     with _RUNNING_LOCK:
@@ -145,6 +150,20 @@ class PPTAgentJobRunner(_core.PPTAgentJobRunner):
             _on_runner_finished(self.doc_id, self.user_id)
 
 
+class LocalRenderJobRunner(_core.LocalRenderJobRunner):
+    """Local designed rendering shares the same bounded admission queue."""
+
+    def __init__(self, doc_id: str, user_id: str) -> None:
+        super().__init__(doc_id)
+        self.user_id = user_id
+
+    def run(self) -> None:
+        try:
+            super().run()
+        finally:
+            _on_runner_finished(self.doc_id, self.user_id)
+
+
 def submit_job(
     doc_id: str,
     user_id: str,
@@ -152,12 +171,6 @@ def submit_job(
     history: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Admit immediately when capacity exists; otherwise enqueue in FIFO order."""
-    # 自由排版或未启用旧服务时，交给本地任务执行，不占旧服务的排队名额。
-    if _core.uses_local_renderer(doc_id):
-        result = _core.submit_job(doc_id, user_id, message, history)
-        result.setdefault("queue_position", None)
-        return result
-
     with _QUEUE_LOCK:
         position = _queue_position_locked(doc_id)
         if position is not None:
@@ -177,7 +190,8 @@ def submit_job(
                 f"请等待任务 {existing} 完成或取消后再提交。"
             )
 
-        item = _QueuedJob(doc_id, user_id, message or "", history)
+        item = _QueuedJob(doc_id, user_id, message or "", history,
+                          local=_core.uses_local_renderer(doc_id))
         _USER_JOBS[user_id] = doc_id
 
         # Reset stale state before either starting or queueing this document.

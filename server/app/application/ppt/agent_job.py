@@ -213,6 +213,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
     Returns:
         ``(True, "")`` 成功；``(False, 失败说明)`` 失败（调用方决定怎么对外表达）。
     """
+    started = time.monotonic()
     db: Session = _db.SessionLocal()
     try:
         svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
@@ -229,9 +230,11 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
             adjusted_outline = doc.outline
         else:
-            data, adjusted_outline = svc.render_adaptive_pptx(
-                doc, doc.outline, doc.user_id,
-                vision_review=False, model_rewrite=False)
+            from app.infrastructure.ai.qwen import model_request_class
+            with model_request_class("background"):
+                data, adjusted_outline = svc.render_adaptive_pptx(
+                    doc, doc.outline, doc.user_id,
+                    vision_review=False, model_rewrite=False)
         if doc.template_id and svc._designed_template_mode(doc.outline):
             review = svc.review_pptx_visuals(data)
             hard = [issue for issue in review.get("issues") or []
@@ -250,6 +253,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         ok, why = looks_like_pptx(data)
         if not ok:
             return False, f"本地渲染产物非法：{why}"
+        render_seconds = time.monotonic() - started
         fname = f"{uuid.uuid4().hex}.pptx"
         path = settings.ppt_dir / "generated" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +273,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             _update_job(doc_id, job_current_page=done, job_progress_at=now_local())
 
         pages = _render_local_previews(path, doc_id, on_progress=_on_page)
+        logger.info("[PPT 任务耗时] job=%s 排版=%.1fs 页图=%.1fs",
+                    doc_id, render_seconds, time.monotonic() - started - render_seconds)
         if pages < slides:
             logger.warning("PPT 本地渲染完成但页图不全：job_id=%s 页图 %d/%d"
                            "（PPTX 可正常下载，预览缺失见前端降级文案）",

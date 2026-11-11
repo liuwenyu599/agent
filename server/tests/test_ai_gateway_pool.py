@@ -1,10 +1,13 @@
 """Multi-endpoint async QwenGateway acceptance tests (items 6, 8 and 11)."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
+import time
 
 import httpx
 
-from app.infrastructure.ai.qwen import QwenGateway
+from app.infrastructure.ai.qwen import QwenGateway, model_request_class
 
 
 def _response(status_code=200, *, tool=False):
@@ -164,6 +167,23 @@ def test_5xx_switches_but_4xx_does_not(monkeypatch):
     assert len(calls) == 2
 
 
+def test_rate_limit_retries_without_switching_model_endpoint(monkeypatch):
+    from app.infrastructure.ai import qwen
+
+    calls = []
+
+    async def post(url, **kwargs):
+        calls.append(url)
+        return _response(429 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(qwen, "_RETRY_BACKOFF", 0)
+    _install_client(monkeypatch, post=post)
+    gateway = _gateway()
+    assert asyncio.run(gateway.acomplete(
+        [{"role": "user", "content": "hello"}], max_tokens=32)) == "ok"
+    assert calls == ["http://model-a/v1/chat/completions"] * 2
+
+
 def test_health_probes_every_endpoint(monkeypatch):
     calls = []
 
@@ -237,6 +257,79 @@ def test_async_concurrency_cap_waits_without_exceeding_limit(monkeypatch):
 
     asyncio.run(run())
     assert peak == 2
+
+
+def test_concurrency_cap_is_shared_across_threads_and_gateway_instances(monkeypatch):
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    async def post(url, **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        await asyncio.sleep(0.04)
+        with lock:
+            active -= 1
+        return _response()
+
+    _install_client(monkeypatch, post=post)
+    gateways = [_gateway(max_concurrency=2), _gateway(max_concurrency=2)]
+    with ThreadPoolExecutor(max_workers=6) as workers:
+        results = list(workers.map(
+            lambda i: gateways[i % 2].complete(
+                [{"role": "user", "content": str(i)}], max_tokens=32),
+            range(6),
+        ))
+    assert results == ["ok"] * 6
+    assert peak == 2
+
+
+def test_background_calls_leave_capacity_for_interactive_requests(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    active_background = 0
+    peak_background = 0
+
+    async def post(url, **kwargs):
+        nonlocal active_background, peak_background
+        content = kwargs["json"]["messages"][-1]["content"]
+        if content == "background":
+            with lock:
+                active_background += 1
+                peak_background = max(peak_background, active_background)
+                entered.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+            with lock:
+                active_background -= 1
+        return _response()
+
+    _install_client(monkeypatch, post=post)
+    gateway = _gateway(max_concurrency=2)
+
+    def background_call():
+        with model_request_class("background"):
+            return gateway.complete([{"role": "user", "content": "background"}], max_tokens=32)
+
+    with ThreadPoolExecutor(max_workers=3) as workers:
+        first = workers.submit(background_call)
+        assert entered.wait(1)
+        second = workers.submit(background_call)
+        try:
+            interactive = workers.submit(
+                gateway.complete, [{"role": "user", "content": "interactive"}],
+                max_tokens=32,
+            )
+            assert interactive.result(timeout=1) == "ok"
+            time.sleep(0.05)
+            assert peak_background == 1
+        finally:
+            release.set()
+        assert first.result(timeout=1) == "ok"
+        assert second.result(timeout=1) == "ok"
 
 
 def test_sync_bridge_refuses_to_block_running_event_loop():

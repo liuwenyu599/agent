@@ -36,6 +36,7 @@ def _isolated_queue(monkeypatch):
 
     monkeypatch.setattr(agent_job, "_update_job", record)
     monkeypatch.setattr(agent_job._core.PPTAgentJobRunner, "run", block_core_runner)
+    monkeypatch.setattr(agent_job._core.LocalRenderJobRunner, "run", block_core_runner)
     yield {"updates": updates, "events": events}
 
     stop.set()
@@ -84,6 +85,18 @@ def test_two_run_and_overflow_is_fifo(_isolated_queue):
     assert agent_job._ACTIVE_DOCS == {"doc-b", "doc-c"}
     assert [item.doc_id for item in agent_job._QUEUE] == ["doc-d"]
     assert agent_job._queue_position_locked("doc-d") == 1
+
+
+def test_local_designed_jobs_share_queue_and_preserve_writing_capacity(
+        _isolated_queue, monkeypatch):
+    monkeypatch.setattr(agent_job._core, "uses_local_renderer", lambda _id: True)
+    first = agent_job.submit_job("local-a", "user-a")
+    second = agent_job.submit_job("local-b", "user-b")
+    third = agent_job.submit_job("local-c", "user-c")
+    assert first["queue_position"] == second["queue_position"] == 0
+    assert third["phase"] == "queued"
+    assert third["queue_position"] == 1
+    assert len(agent_job._ACTIVE_DOCS) == 2
 
 
 def test_same_user_may_own_only_one_active_or_queued_job():

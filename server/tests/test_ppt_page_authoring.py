@@ -124,6 +124,25 @@ def test_author_pages_retries_overlap_then_accepts_repair():
     assert len(assistant.prompts) == 2
 
 
+def test_invalid_pages_in_one_batch_share_one_repair_call():
+    bad = _regions()
+    bad[2]["x"] = .40
+    slides = []
+    for index in range(4):
+        slides.append({"type": "content", "title": f"第{index + 1}项",
+                       "points": ["要点一", "要点二"]})
+        slides.append({"type": "closing", "title": "分隔页"})
+    indices = [1, 3, 5, 7]
+    assistant = Assistant([
+        {"pages": [{"page": index, "regions": bad} for index in indices]},
+        {"pages": [{"page": index, "regions": _regions()} for index in indices]},
+    ])
+    result = author_pages({"slides": slides}, {}, assistant)
+    assert len(assistant.prompts) == 2
+    assert all(result["slides"][index - 1]["design"]["regions"] == _regions()
+               for index in indices)
+
+
 def test_author_pages_falls_back_per_page_after_invalid_repair():
     bad = _regions()
     bad[2]["x"] = .40
@@ -152,6 +171,48 @@ def test_author_pages_does_not_retry_every_page_when_model_is_unavailable():
     assert assistant.calls == 1
     assert result["slides"][0]["points"] == _outline()["slides"][0]["points"]
     assert warnings == ["第1页模型构图未通过检查，已采用可读版式"]
+
+
+def test_unparseable_batch_retries_once_instead_of_each_page():
+    outline = {"slides": [
+        {"type": "content", "title": f"第{i}页", "points": ["要点一", "要点二"]}
+        for i in range(1, 5)
+    ]}
+
+    class Invalid:
+        calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "模型没有返回页面 JSON"
+
+    assistant = Invalid()
+    warnings = []
+    result = author_pages(outline, {}, assistant, warnings)
+    assert assistant.calls == 2
+    assert all("regions" not in slide.get("design", {}) for slide in result["slides"])
+    assert warnings == ["第1、2、3、4页模型构图未通过检查，已采用可读版式"]
+
+
+def test_ppt_assistant_marks_outline_calls_as_background(monkeypatch):
+    from app.application.ppt.service import PPTService
+    from app.infrastructure import ai
+    from app.infrastructure.ai.qwen import _request_class
+
+    observed = []
+
+    class FakeAssistant:
+        def complete(self, *_args, **_kwargs):
+            observed.append(_request_class.get())
+            return "ok"
+
+    monkeypatch.setattr(ai, "get_ppt_gateway", lambda: None)
+    svc = PPTService.__new__(PPTService)
+    svc.assistant = FakeAssistant()
+    svc._ppt_asst = None
+    assert svc._ppt_assistant().complete([]) == "ok"
+    assert observed == ["background"]
+    assert _request_class.get() == "interactive"
 
 
 def test_author_pages_replans_stale_auto_design():

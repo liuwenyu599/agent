@@ -115,6 +115,7 @@ def test_submit_without_agent_url_returns_pending_not_failed(client, token):
     assert body["job_id"] == doc_id
     assert body["status"] in ("pending", "running", "succeeded"), body
     assert elapsed < 5, f"提交耗时 {elapsed:.1f}s，疑似退化成同步渲染"
+    assert _wait_terminal(client, token, doc_id)["status"] == "succeeded"
 
 
 def test_local_job_succeeds_and_exports_real_pptx(client, token):
@@ -184,7 +185,7 @@ def test_queued_wrapper_delegates_to_local_render(client, token):
     result = queued_agent_job.submit_job(doc_id, "developer", "")
     assert result["job_id"] == doc_id
     assert result["status"] in ("pending", "running", "succeeded"), result
-    assert result.get("queue_position") is None, result
+    assert result.get("queue_position") == 0, result
 
     final = _wait_terminal(client, token, doc_id)
     assert final["status"] == "succeeded", final

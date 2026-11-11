@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
@@ -391,12 +392,31 @@ def author_pages(outline: dict, template: dict, assistant: Any,
         pages = [_page_brief(index, result["slides"][index - 1]) for index in batch]
         with_image = bool(reference_url) and batch_index == 0
         image = reference_url if with_image else None
+        started = time.monotonic()
         try:
             raw = assistant.complete(
                 _messages(_prompt(result, template, pages,
                                   has_template_image=with_image), image),
                 temperature=0.35, max_tokens=budget)
-            return _proposals(raw), False, False
+            proposals = _proposals(raw)
+            logger.info("[PPT 构图耗时] 批次=%d 页=%s 图=%s 用时=%.1fs 有效提案=%d",
+                        batch_index + 1, batch, with_image,
+                        time.monotonic() - started, len(proposals))
+            if proposals:
+                return proposals, False, False
+            # 整批无法解析时只重试整批一次，避免四页逐页请求都注定失败。
+            try:
+                raw = assistant.complete(
+                    _messages(_prompt(result, template, pages), None),
+                    temperature=0.2, max_tokens=budget)
+                proposals = _proposals(raw)
+            except Exception as retry_exc:
+                logger.warning("[PPT] 页面构图空提案重试失败：%s",
+                               type(retry_exc).__name__)
+                return {}, True, True
+            logger.info("[PPT 构图耗时] 批次=%d 空提案整批重试 用时=%.1fs 有效提案=%d",
+                        batch_index + 1, time.monotonic() - started, len(proposals))
+            return proposals, not bool(proposals), True
         except Exception as exc:  # model outage only affects this batch
             if with_image and str(exc) == "模型调用失败":
                 logger.warning("[PPT] 页面模型拒绝模板图，退回文字视觉摘要")
@@ -409,6 +429,8 @@ def author_pages(outline: dict, template: dict, assistant: Any,
                     logger.warning("[PPT] 页面构图请求失败：%s", type(retry_exc).__name__)
                     return {}, True, True
             logger.warning("[PPT] 页面构图请求失败：%s", type(exc).__name__)
+            logger.info("[PPT 构图耗时] 批次=%d 失败 用时=%.1fs",
+                        batch_index + 1, time.monotonic() - started)
             return {}, True, False
 
     # 带图批给足预算，后续纯文字批按页数收紧，避免模型漫无边际地输出。
@@ -416,31 +438,50 @@ def author_pages(outline: dict, template: dict, assistant: Any,
                else max(1400, 700 * len(batch))
                for i, batch in enumerate(batches)]
     responses = []
+    authored_at = time.monotonic()
     for i, batch in enumerate(batches):
         if responses and responses[-1][1]:
             # 网关整体不可用时不再为剩余批次各等一次超时，直接走可读版式。
             responses.append(({}, True, False))
             continue
         responses.append(request_batch(i, batch, budgets[i]))
-    # --- 阶段 B：按页顺序串行验收 / 重试 / 跨页去重 ---
-    # 重试与「和上一页构图相同」的判断依赖前页已写回的 design，必须串行。
-    # 单页修复是点名几何错误，文字反馈足够，不再附带模板图（省一次视觉编码）。
+    # --- 阶段 B：每批合并修复请求，再按页顺序验收 / 跨页去重 ---
+    # 同批错误一次点名，避免 4 页各等一次模型；去重仍按页顺序执行。
     for batch_index, batch in enumerate(batches):
         proposed, request_failed = responses[batch_index][:2]
+        first_pass = {
+            index: _accept(result["slides"][index - 1], template,
+                           proposed.get(index) or {})
+            for index in batch
+        }
+        repair_indices = [index for index in batch
+                          if not first_pass[index][0] and not request_failed]
+        repaired = {}
+        if repair_indices:
+            repair_at = time.monotonic()
+            details = "；".join(f"第{index}页：{first_pass[index][1]}"
+                               for index in repair_indices)
+            try:
+                raw = assistant.complete(
+                    _messages(_prompt(
+                        result, template,
+                        [_page_brief(index, result["slides"][index - 1])
+                         for index in repair_indices], details), None),
+                    temperature=0.15,
+                    max_tokens=max(1400, 700 * len(repair_indices)))
+                repaired = _proposals(raw)
+            except Exception as exc:
+                logger.warning("[PPT] 第 %s 页构图批量修复失败：%s",
+                               repair_indices, type(exc).__name__)
+            logger.info("[PPT 构图耗时] 批次=%d 修复页=%s 用时=%.1fs",
+                        batch_index + 1, repair_indices,
+                        time.monotonic() - repair_at)
         for index in batch:
             slide = result["slides"][index - 1]
-            accepted, reason = _accept(slide, template, proposed.get(index) or {})
-            if not accepted and not request_failed:
-                try:
-                    raw = assistant.complete(
-                        _messages(_prompt(result, template,
-                                          [_page_brief(index, slide)], reason),
-                                  None),
-                        temperature=0.15, max_tokens=1400)
-                    accepted, reason = _accept(
-                        slide, template, _proposals(raw).get(index) or {})
-                except Exception as exc:
-                    logger.warning("[PPT] 第 %d 页构图修复失败：%s", index, type(exc).__name__)
+            accepted, reason = first_pass[index]
+            if index in repair_indices:
+                accepted, reason = _accept(
+                    slide, template, repaired.get(index) or {})
             if accepted:
                 previous = result["slides"][index - 2] if index > 1 else {}
                 prior_regions = (previous.get("design") or {}).get("regions")
@@ -478,6 +519,8 @@ def author_pages(outline: dict, template: dict, assistant: Any,
                 slide["design"] = design
                 logger.warning("[PPT] 第 %d 页模型构图未采用：%s", index, reason)
                 failed.append(index)
+    logger.info("[PPT 构图耗时] 合计页=%d 批=%d 修复失败页=%d 用时=%.1fs",
+                len(pending), len(batches), len(failed), time.monotonic() - authored_at)
     if failed and warnings is not None:
         # 一次批量请求失败会拖累整批 4 页，逐页追加会把提示区刷成 4 条同样的话。
         warnings.append(f"第{'、'.join(str(page) for page in failed)}页"

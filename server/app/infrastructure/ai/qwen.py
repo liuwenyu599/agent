@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import threading
 import time
-import weakref
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple
 
 import httpx
@@ -25,6 +26,53 @@ logger = get_logger(__name__)
 _IMAGE_TOKEN_ALLOWANCE = 1200
 _DEFAULT_REPETITION_PENALTY = 1.08
 _DEFAULT_MAX_CONCURRENCY = 4
+
+# 限频（429）是瞬时的，不代表端点故障。遇到 429 退避重试若干次，避免单页构图
+# 因一次限频被直接判失败。5xx 仍视为端点故障走熔断/切节点。
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = 1.0
+
+_request_class = contextvars.ContextVar("model_request_class", default="interactive")
+_capacity_lock = threading.Lock()
+_capacities: Dict[tuple, "_ModelCapacity"] = {}
+
+
+@contextmanager
+def model_request_class(value: str):
+    """Mark long-running background work so it leaves one model slot for interactive calls."""
+    token = _request_class.set(value)
+    try:
+        yield
+    finally:
+        _request_class.reset(token)
+
+
+class _ModelCapacity:
+    """Thread-safe capacity shared by event loops using the same model endpoint pool."""
+
+    def __init__(self, limit: int) -> None:
+        self.total = threading.BoundedSemaphore(limit)
+        self.background = threading.BoundedSemaphore(max(1, limit - 1))
+
+    @staticmethod
+    async def _acquire(semaphore: threading.BoundedSemaphore) -> None:
+        while not semaphore.acquire(blocking=False):
+            await asyncio.sleep(0.025)
+
+    @asynccontextmanager
+    async def slot(self):
+        background = _request_class.get() == "background"
+        if background:
+            await self._acquire(self.background)
+        try:
+            await self._acquire(self.total)
+            try:
+                yield
+            finally:
+                self.total.release()
+        finally:
+            if background:
+                self.background.release()
 
 
 class QwenGateway:
@@ -77,11 +125,11 @@ class QwenGateway:
         self._inflight = {url: 0 for url in self.api_urls}
         self._unhealthy_until = {url: 0.0 for url in self.api_urls}
         self._rr_cursor = 0
-        # AsyncClient 与 asyncio.Semaphore 都不应跨 event loop 复用。网关是进程级单例，
-        # 测试和脚本可能反复 asyncio.run，因此按 loop 懒建 limiter。
-        self._loop_limiters: "weakref.WeakKeyDictionary[Any, asyncio.Semaphore]" = (
-            weakref.WeakKeyDictionary()
-        )
+        # 共享同一模型池的多个网关（正文/视觉/PPT）必须共用进程级容量。
+        # 生产 API 只启一个 worker；多进程部署需要在模型服务端再做全局限流。
+        key = (tuple(sorted(self.api_urls)), self.max_concurrency)
+        with _capacity_lock:
+            self._capacity = _capacities.setdefault(key, _ModelCapacity(self.max_concurrency))
 
     @property
     def model_name(self) -> str:
@@ -91,14 +139,8 @@ class QwenGateway:
     def endpoint_count(self) -> int:
         return len(self.api_urls)
 
-    def _limiter(self) -> asyncio.Semaphore:
-        loop = asyncio.get_running_loop()
-        with self._pool_lock:
-            limiter = self._loop_limiters.get(loop)
-            if limiter is None:
-                limiter = asyncio.Semaphore(self.max_concurrency)
-                self._loop_limiters[loop] = limiter
-            return limiter
+    def _limiter(self) -> _ModelCapacity:
+        return self._capacity
 
     @staticmethod
     def _run_sync(coro):
@@ -223,28 +265,45 @@ class QwenGateway:
         failures: List[str] = []
         timeout = httpx.Timeout(self.timeout)
         queued_at = time.monotonic()
-        async with self._limiter():
+        async with self._limiter().slot():
             logger.info("[模型耗时] 并发等待 %.3fs", time.monotonic() - queued_at)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 for url in self._endpoint_order():
                     self._acquire(url)
                     try:
-                        request_at = time.monotonic()
-                        response = await client.post(
-                            f"{url}/chat/completions",
-                            headers=self._headers(),
-                            json=payload,
-                        )
-                        if response.status_code == 429 or response.status_code >= 500:
-                            detail = response.text[:200]
-                            self._mark_failed(url, f"HTTP {response.status_code}")
-                            failures.append(f"{url}: HTTP {response.status_code} {detail}")
-                            continue
-                        response.raise_for_status()
-                        logger.info("[模型耗时] 非流式响应 %.3fs", time.monotonic() - request_at)
-                        if url != self.api_url:
-                            logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
-                        return response
+                        # 限频（429）瞬时不代表端点故障：退避重试，避免一页被直接废掉。
+                        # 5xx 视为端点故障，熔断后切下一节点；其余 4xx 立即报错。
+                        for attempt in range(_MAX_RETRIES + 1):
+                            request_at = time.monotonic()
+                            response = await client.post(
+                                f"{url}/chat/completions",
+                                headers=self._headers(),
+                                json=payload,
+                            )
+                            if response.status_code == 429:
+                                detail = response.text[:200]
+                                if attempt < _MAX_RETRIES:
+                                    wait = _RETRY_BACKOFF * (2 ** attempt)
+                                    logger.warning(
+                                        "[AI网关] 端点限频 429，%.1fs 后重试(%d/%d): %s",
+                                        wait, attempt + 1, _MAX_RETRIES, url)
+                                    await asyncio.sleep(wait)
+                                    continue
+                                self._mark_failed(url, "HTTP 429")
+                                failures.append(f"{url}: HTTP 429 {detail}")
+                                break
+                            if response.status_code >= 500:
+                                detail = response.text[:200]
+                                self._mark_failed(url, f"HTTP {response.status_code}")
+                                failures.append(
+                                    f"{url}: HTTP {response.status_code} {detail}")
+                                break
+                            response.raise_for_status()
+                            logger.info("[模型耗时] 非流式响应 %.3fs",
+                                        time.monotonic() - request_at)
+                            if url != self.api_url:
+                                logger.info("[AI网关] 请求由备用 endpoint 完成: %s", url)
+                            return response
                     except (httpx.ConnectError, httpx.TimeoutException) as exc:
                         self._mark_failed(url, type(exc).__name__)
                         failures.append(f"{url}: {type(exc).__name__}")
@@ -326,7 +385,7 @@ class QwenGateway:
         failures: List[str] = []
         timeout = httpx.Timeout(self.timeout)
         queued_at = time.monotonic()
-        async with self._limiter():
+        async with self._limiter().slot():
             logger.info("[模型耗时] 流式并发等待 %.3fs", time.monotonic() - queued_at)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 for url in self._endpoint_order():
