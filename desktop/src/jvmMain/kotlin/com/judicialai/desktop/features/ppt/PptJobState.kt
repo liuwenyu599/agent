@@ -690,6 +690,10 @@ fun pptRendererNote(renderer: String?): String? {
         "pptagent", "pptagent_retry" -> null
         "local_fallback" ->
             "⚠️ AI 智能设计未能成功返回成品，已自动采用本地模板渲染。排版与内容为兜底结果，请核对后再使用。"
+        "local_design_fallback" ->
+            "⚠️ 部分页面的模型构图未通过检查，已按所选兜底策略排版；请逐页核对后使用。"
+        "local_safe_fallback" ->
+            "⚠️ 模板成稿未通过文字重叠或越界检查，已改用通用可读版式；这不是所选模板的设计效果。"
         else ->
             "本次由本地政务模板排版生成；文字仍由大模型按大纲撰写，建议核对后再使用。"
     }

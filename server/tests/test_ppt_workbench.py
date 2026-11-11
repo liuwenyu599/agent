@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from app.core.exceptions import AppError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("AI_PROVIDER", "mock")
@@ -847,7 +848,8 @@ def test_designed_template_authors_pages_after_images_are_resolved(monkeypatch):
         {"type": "content", "title": "工作安排", "points": ["组织学习"]}]}
     captured = []
     monkeypatch.setattr(service, "_render_native_import", lambda *_: None)
-    monkeypatch.setattr(service, "_resolve_render_style", lambda *_: ({"colors": {}}, "row"))
+    monkeypatch.setattr(service, "_resolve_render_style", lambda *_: (
+        {"colors": {}}, SimpleNamespace(id="tpl", builtin_id=None)))
     monkeypatch.setattr(service, "sanitize_outline", lambda outline, **_: outline)
     monkeypatch.setattr(service, "_user_images", lambda *_a, **_k: [])
     monkeypatch.setattr(service, "_ppt_assistant", lambda: "model")
@@ -868,11 +870,10 @@ def test_designed_template_authors_pages_after_images_are_resolved(monkeypatch):
     assert captured[2]["adaptive"] is False
     captured.clear()
     monkeypatch.setattr(service, "_tpl_base_bytes", lambda _row: None)
-    service.render_adaptive_pptx(
-        SimpleNamespace(template_id="tpl", theme_id=""), original, "user")
-    assert captured[:2] == ["images", "design"]
-    assert captured[2]["base_pptx"] is None
-    assert captured[2]["adaptive"] is True
+    with pytest.raises(AppError, match="模板的源文件缺失"):
+        service.render_adaptive_pptx(
+            SimpleNamespace(template_id="tpl", theme_id=""), original, "user")
+    assert captured == ["images"]
 
 
 def test_designed_template_uses_original_page_preview(tmp_path, monkeypatch):

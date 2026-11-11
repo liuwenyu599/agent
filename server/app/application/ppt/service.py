@@ -2773,11 +2773,13 @@ class PPTService:
         clean = ppt_engine.resolve_slide_images(
             clean, self._user_images(user_id, selected_ids, strict=False))
         designed = bool(d.template_id and self._designed_template_mode(clean))
+        base = self._tpl_base_bytes(trow) if designed else None
+        if designed and trow and not getattr(trow, "builtin_id", None) and not base:
+            raise AppError(422, "所选模板的源文件缺失，请重新导入模板后生成")
         if designed:
             clean = page_authoring.author_pages(
                 clean, template, self._ppt_assistant(), warnings,
                 reference_image=self._design_reference_image(template, trow))
-        base = self._tpl_base_bytes(trow) if designed else None
         if designed and not base:
             # 库里记着 template_id、盘上却没有源文件：会退回干净画布渲染，
             # 模型构图虽然留在 outline 里，最终一页也用不上。
@@ -2848,6 +2850,10 @@ class PPTService:
             self._get_visible_template(selected_template_id, user)
         template, trow = self._resolve_render_style(
             selected_template_id, d.theme_id or "", outline)
+        if (selected_template_id and self._designed_template_mode(outline)
+                and trow and not getattr(trow, "builtin_id", None)
+                and not self._tpl_base_bytes(trow)):
+            raise AppError(422, "所选模板的源文件缺失，请重新导入模板后生成")
         if selected_template_id and self._strict_template_mode(outline):
             outline = self._compact_template_text(outline, template)
         selected_ids = outline.get("material_ids")

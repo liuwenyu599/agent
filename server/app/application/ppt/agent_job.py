@@ -30,6 +30,7 @@ PPTAgent 跑十几分钟，**绝不能开一个跨越全程的数据库事务**�
 客户端仍按 ``/ppt/jobs`` 轮询，接口与终态语义完全一致。
 """
 import os
+import io
 import shutil
 import threading
 import time
@@ -216,6 +217,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
     started = time.monotonic()
     db: Session = _db.SessionLocal()
     try:
+        render_warnings: List[str] = []
+        effective_renderer = renderer
         svc = PPTService(db, None)  # assistant 只被模型链路使用，本地渲染用不到
         doc = svc.documents.get(doc_id)
         if doc is None:
@@ -234,7 +237,13 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             with model_request_class("background"):
                 data, adjusted_outline = svc.render_adaptive_pptx(
                     doc, doc.outline, doc.user_id,
+                    warnings=render_warnings,
                     vision_review=False, model_rewrite=False)
+        if (doc.template_id and svc._designed_template_mode(doc.outline)
+                and any("构图未通过" in item or "原版式" in item
+                        or "可读版式" in item
+                        for item in render_warnings)):
+            effective_renderer = "local_design_fallback"
         if doc.template_id and svc._designed_template_mode(doc.outline):
             review = svc.review_pptx_visuals(data)
             hard = [issue for issue in review.get("issues") or []
@@ -247,12 +256,17 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
                 data = ppt_engine.render_pptx(
                     adjusted_outline, {**safe_template, "layout_library": []},
                     adaptive=True)
+                effective_renderer = "local_safe_fallback"
                 if any(issue.get("severity") == "error" for issue in
                        svc.review_pptx_visuals(data).get("issues") or []):
                     return False, "页面仍有文字重叠或越界，请调整内容后重试"
         ok, why = looks_like_pptx(data)
         if not ok:
             return False, f"本地渲染产物非法：{why}"
+        missing = _empty_content_pages(data, adjusted_outline)
+        if missing:
+            return False, (f"第{'、'.join(map(str, missing))}页只有标题或页码，"
+                           "正文未进入成稿；请检查大纲内容或重新生成")
         render_seconds = time.monotonic() - started
         fname = f"{uuid.uuid4().hex}.pptx"
         path = settings.ppt_dir / "generated" / fname
@@ -282,7 +296,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         _update_job(doc_id, file_path=str(path), outline=adjusted_outline,
                     status="generated",
                     slide_count=slides, job_status="succeeded",
-                    job_phase="succeeded", job_renderer=renderer,
+                    job_phase="succeeded", job_renderer=effective_renderer,
                     job_event_id="", job_error="", job_question="",
                     job_total_pages=slides, job_current_page=pages,
                     job_finished_at=now_local(), job_progress_at=now_local())
@@ -293,6 +307,26 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         return False, f"{type(e).__name__}: {e}"
     finally:
         db.close()
+
+
+def _empty_content_pages(data: bytes, outline: dict) -> List[int]:
+    """Reject silently empty text pages before a job is marked successful."""
+    from pptx import Presentation
+
+    presentation = Presentation(io.BytesIO(data))
+    missing = []
+    for index, (slide, spec) in enumerate(zip(
+            presentation.slides, outline.get("slides") or []), 1):
+        if spec.get("type") not in {"content", "case", "summary"}:
+            continue
+        title = str(spec.get("title") or "").strip()
+        texts = [shape.text.strip() for shape in slide.shapes
+                 if shape.has_text_frame and shape.text.strip()]
+        substantive = [value for value in texts if value != title
+                       and not value.replace("/", "").replace(" ", "").isdigit()]
+        if not substantive and not any(shape.has_chart for shape in slide.shapes):
+            missing.append(index)
+    return missing
 
 
 class LocalRenderJobRunner:

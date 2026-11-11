@@ -202,6 +202,28 @@ def test_render_local_previews_without_tools_is_noop(monkeypatch):
     assert agent_job._render_local_previews(Path("whatever.pptx"), "doc-x") == 0
 
 
+def test_empty_content_page_is_not_a_successful_deck():
+    from io import BytesIO
+    from pptx import Presentation
+    from app.application.ppt.agent_job import _empty_content_pages
+
+    prs = Presentation()
+    page = prs.slides.add_slide(prs.slide_layouts[6])
+    box = page.shapes.add_textbox(0, 0, prs.slide_width, prs.slide_height // 5)
+    box.text = "工作计划"
+    output = BytesIO()
+    prs.save(output)
+    assert _empty_content_pages(output.getvalue(), {"slides": [
+        {"type": "content", "title": "工作计划"}]}) == [1]
+    box2 = page.shapes.add_textbox(0, prs.slide_height // 3,
+                                   prs.slide_width, prs.slide_height // 5)
+    box2.text = "推进法律服务站点建设"
+    output = BytesIO()
+    prs.save(output)
+    assert _empty_content_pages(output.getvalue(), {"slides": [
+        {"type": "content", "title": "工作计划"}]}) == []
+
+
 def test_local_previews_served_by_job_preview_endpoint(client, token, monkeypatch):
     """本地页图按 preview_document 同款目录约定存放后，job 预览接口必须能列出并按页序取图。
 
