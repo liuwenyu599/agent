@@ -2,7 +2,16 @@
 
 输入材料为 `fixed_10p.json`，其文字与数字取自仓库既有的 `deploy/samples/probe_outline_11p.json`。评测时两组使用相同模板、画幅、图片素材、模型参数和页面数；照片须来自已授权的公共图库，不生成或替换事实照片。保存两份 PPTX 和每页 PNG 后，由组织者随机命名为 A/B，记录映射但不交给评审。
 
-在演示环境导入模板后，管理员调用一次 `POST /api/v1/ppt/templates/{template_id}/refresh-preview`。随后在同一环境运行 `python deploy/ppt_eval/check_previews.py <template_id> --db <数据库路径> --ppt-dir /data/justice/ppt`；只有 `ready=true` 才开始模型构图评测。此检查同时核对 `tpl_prev/<模板id>/<版式id>.png` 和数据库正文页的 `preview`/`source_preview`。若演示全程选用强制模板保底，不进行模型构图，可跳过此步骤。
+在演示环境导入模板后，管理员调用一次 `POST /api/v1/ppt/templates/{template_id}/refresh-preview`。随后在 **justice-api 容器内**运行：
+
+```
+python deploy/ppt_eval/check_previews.py <template_id> \
+  --database-url "$DATABASE_URL" --ppt-dir /data/justice/ppt
+```
+
+生产是 PostgreSQL（`justice-db`），必须给 `--database-url`（或设 `PPT_EVAL_DATABASE_URL`）；本地/开发机的 SQLite 用 `--db server/data/judicial_app.db`。脚本同时支持两种后端，并兼容 SQLite 的 TEXT JSON 与 PG 已解析的 json/jsonb。
+
+只有 `ready=true` 才开始模型构图评测。此检查同时核对 `tpl_prev/<模板id>/<版式id>.png` 和数据库正文页的 `preview`/`source_preview`。另看 `vision_reference_ready`：为 `false` 表示正文版式全是 `cards`/`content_image`，文件虽齐但 `read_template_reference()` 仍会静默退回文字摘要，不能据此认为「模型看过模板」。若演示全程选用强制模板保底，不进行模型构图，可跳过此步骤。
 
 两名以上评审独立观看 A/B 的逐页 PNG，先逐页评分，再看整稿。每页五项均按 1–5 分：
 
