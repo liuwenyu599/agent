@@ -224,3 +224,67 @@ def test_delete_instance_also_removes_its_nodes(client, users):
     assert deleted.status_code == 200, deleted.text
     assert client.get(f"{BASE}/workflow/instances/{iid}",
                       headers=_hdr(users["user_a"])).status_code == 404
+
+
+# ------------------------------------------------ 回归：基础信息节点同步到下游生成
+
+def test_generate_node_falls_back_to_basic_info_node_content(client, users):
+    """桌面端编辑「基础信息」节点时只写入节点正文（ni.content），并未同步实例级
+    basic_info（唯一权威数据源）；生成下游节点（会议通知）时应从「基础信息」节点
+    正文回退取数，否则模型拿不到会议核心信息、会输出 ×× 占位。
+
+    复现路径严格模拟桌面端：createInstance 传空 workflow_context，仅通过
+    updateNode 把基础信息写入节点正文。
+    """
+    from fastapi import Depends
+    from app.infrastructure.database.session import get_db
+    from app.application.workflow.service import WorkflowService
+    from app.application.shared.writing_assistant import WritingAssistant
+    from app.interfaces.workflow import get_workflow_service
+
+    captured: dict = {}
+
+    class _RecordingGateway:
+        def complete(self, messages, temperature=None, max_tokens=None):
+            captured["prompt"] = "\n".join(m.get("content", "") for m in messages)
+            return "（回归测试桩）下游正文"
+
+    def _override_svc(db=Depends(get_db)):
+        return WorkflowService(db, WritingAssistant(_RecordingGateway()))
+
+    prev = app.dependency_overrides.get(get_workflow_service)
+    app.dependency_overrides[get_workflow_service] = _override_svc
+    try:
+        created = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                              json={"template_code": "meeting", "title": "回归-会议通知同步"})
+        assert created.status_code == 200, created.text
+        iid = created.json()["id"]
+
+        detail = client.get(f"{BASE}/workflow/instances/{iid}",
+                            headers=_hdr(users["user_a"])).json()
+        nodes = detail.get("nodes") or []
+        basic = next((n for n in nodes if "基础信息" in n["name"]), None)
+        notice = next((n for n in nodes if "会议通知" in n["name"]), None)
+        assert basic and notice, f"缺少节点：{[n['name'] for n in nodes]}"
+
+        # 仅通过 updateNode 写入「基础信息」节点正文（桌面端 saveNode 的真实行为）
+        basic_content = ("一、会议名称：白云区法律顾问业务专题培训班\n"
+                         "二、会议时间：2026年12月1日14:30\n"
+                         "三、会议地点：白云区司法局二楼大会议室")
+        r = client.put(f"{BASE}/workflow/nodes/{basic['id']}", headers=_hdr(users["user_a"]),
+                       json={"content": basic_content})
+        assert r.status_code == 200, r.text
+
+        g = client.post(f"{BASE}/workflow/nodes/{notice['id']}/generate",
+                        headers=_hdr(users["user_a"]),
+                        json={"instruction": "", "save": True})
+        assert g.status_code == 200, g.text
+
+        prompt = captured.get("prompt", "")
+        assert "白云区法律顾问业务专题培训班" in prompt, \
+            "会议通知生成未从「基础信息」节点回退取数，下游会缺失会议核心信息"
+    finally:
+        if prev is None:
+            app.dependency_overrides.pop(get_workflow_service, None)
+        else:
+            app.dependency_overrides[get_workflow_service] = prev

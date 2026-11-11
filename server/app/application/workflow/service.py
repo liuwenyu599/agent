@@ -431,6 +431,14 @@ JSON："""
             raise NotFoundError("数据不完整")
         ctx = self._get_workflow_context(inst)
         ctx_text = self._build_context_text(ctx)
+        # 兜底：桌面端编辑「基础信息」节点时只通过 update_node 把数据写入节点正文
+        # （ni.content），并未同步到实例级 basic_info（唯一权威数据源）。若 basic_info
+        # 为空，则从「基础信息」节点正文回退取数，保证下游节点（会议通知/议程/纪要…
+        # ）生成时能拿到会议核心信息，而不是落到「（未填写）」再让模型补 ×× 占位。
+        if not ctx_text or ctx_text == "（未填写）":
+            fallback = self._get_basic_info_node_content(inst)
+            if fallback:
+                ctx_text = fallback
         upstream_items = self._get_upstream_contents(inst, ni)
         if upstream_items:
             upstream_text = "\n\n".join(
@@ -541,6 +549,22 @@ JSON："""
             if k not in MEETING_STANDARD_FIELDS and v:
                 lines.append(f"{k}：{v}")
         return "\n".join(lines) if lines else "（未填写）"
+
+    def _get_basic_info_node_content(self, inst: WorkflowInstance) -> str:
+        """从「基础信息」类型节点的正文回退取会议核心信息。
+
+        设计上「基础信息」节点应直接编辑实例级 basic_info；但当前桌面端仅通过
+        update_node 把数据写入节点正文，未同步 basic_info。为保证下游生成可用，
+        这里在 basic_info 为空时回退读取该节点正文。
+        """
+        nis = self.node_instances.list_by_instance(inst.id)
+        node_ids = [ni.node_id for ni in nis]
+        node_map = {nd.id: nd for nd in self.nodes.list_by_ids(node_ids)}
+        for ni in nis:
+            nd = node_map.get(ni.node_id)
+            if nd and "基础信息" in nd.name and ni.content and ni.content.strip():
+                return ni.content.strip()
+        return ""
 
     def _get_upstream_contents(self, inst: WorkflowInstance,
                                current_ni: NodeInstance) -> List[Dict[str, str]]:
