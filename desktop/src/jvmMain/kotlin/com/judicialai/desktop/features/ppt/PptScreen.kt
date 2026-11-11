@@ -415,7 +415,7 @@ private fun PptEntryPane(
         Row(verticalAlignment = Alignment.CenterVertically) {
             var themeMenu by remember { mutableStateOf(false) }
             val themeName = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
-                ?.get("name").str().ifBlank {
+                ?.let { themeHex(it) }.orEmpty().ifBlank {
                     if (vm.templateId == null) "按内容自动选择" else "使用模板配色"
                 }
             Box {
@@ -424,13 +424,20 @@ private fun PptEntryPane(
                 }
                 DropdownMenu(themeMenu, onDismissRequest = { themeMenu = false }) {
                     DropdownMenuItem(onClick = { vm.chooseTheme(null); themeMenu = false }) {
-                        Text(if (vm.templateId == null) "按内容自动选择" else "使用模板配色")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(14.dp).clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF9AA4B2)))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (vm.templateId == null) "按内容自动选择" else "使用模板配色")
+                        }
                     }
                     vm.themes.forEach { theme ->
                         DropdownMenuItem(onClick = {
                             vm.chooseTheme(theme["id"].str())
                             themeMenu = false
-                        }) { Text(theme["name"].str()) }
+                        }) {
+                            ThemeColorOption(theme)
+                        }
                     }
                 }
             }
@@ -453,16 +460,12 @@ private fun PptEntryPane(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StyleCardAuto(Modifier.width(190.dp), selected = vm.templateId == null) {
-                vm.templateId = null
-                vm.strictTemplate = false
-                vm.designedTemplate = false
+                vm.switchTemplate(null)
             }
             vm.templates.forEachIndexed { i, t ->
                 StyleCard(t, i, Modifier.width(190.dp),
                     selected = t["id"].str() == vm.templateId) {
-                    vm.templateId = t["id"].str()
-                    vm.strictTemplate = false
-                    vm.designedTemplate = true
+                    vm.switchTemplate(t["id"].str())
                 }
             }
         }
@@ -878,6 +881,32 @@ private fun MetaPanel(vm: PptViewModel) {
         }
         Text("这些信息会作为关键事实带入大纲，AI 不会替你编造。",
             fontSize = 10.5.sp, color = Muted)
+    }
+}
+
+/** 主题主色：从内置主题配色里取 primary，给下拉项画一个真实色块。 */
+internal fun themeHex(t: JsonObject): String = t["colors"]?.obj()?.get("primary")?.str()
+    ?.removePrefix("#")?.takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }
+    ?.let { "#${it.uppercase()}" }.orEmpty()
+
+private fun themeColor(t: JsonObject, key: String): Color? {
+    val hex = t["colors"]?.obj()?.get(key)?.str()
+        ?.removePrefix("#")?.takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }
+        ?: return null
+    val v = hex.toLongOrNull(16) ?: return null
+    return Color((0xFF000000L or v).toInt())
+}
+
+@Composable
+internal fun ThemeColorOption(theme: JsonObject) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        listOf("primary", "accent", "light").forEach { key ->
+            Box(Modifier.size(14.dp).clip(RoundedCornerShape(2.dp))
+                .background(themeColor(theme, key) ?: Color(0xFF9AA4B2)))
+            Spacer(Modifier.width(2.dp))
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(themeHex(theme))
     }
 }
 

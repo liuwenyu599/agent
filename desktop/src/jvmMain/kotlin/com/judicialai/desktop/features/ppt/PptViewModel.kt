@@ -1262,26 +1262,30 @@ class PptViewModel(private val repo: PptRepository) {
         loadLayoutOptions(id)
         val name = templates.firstOrNull { it["id"].str() == id }
             ?.get("name").str().ifBlank { null } ?: "自适应排版"
-        status = "已切换为「$name」，正在重新渲染预览；要更新 PPT 成品请点「AI 生成 PPT」重新生成"
-        refreshPreview()
+        status = if (job?.status == PptJobStatus.DONE)
+            "已选择「$name」，点击「重新生成 PPT」应用到成品"
+        else "已切换为「$name」，正在重新渲染预览；要更新 PPT 成品请重新生成"
+        if (job?.status != PptJobStatus.DONE) refreshPreview()
     }
 
     fun chooseTemplateMode(value: Boolean) {
         if (strictTemplate == value && (value || designedTemplate)) return
         strictTemplate = value
         designedTemplate = !value && templateId != null
-        status = if (value) "已选择严格沿用原模板版式，正在刷新预览"
+        status = if (job?.status == PptJobStatus.DONE) "版式模式已选择，点击「重新生成 PPT」应用"
+            else if (value) "已选择严格沿用原模板版式，正在刷新预览"
             else "已选择模型逐页构图并沿用模板风格，正在刷新预览"
-        if (docId != null) refreshPreview()
+        if (docId != null && job?.status != PptJobStatus.DONE) refreshPreview()
     }
 
     fun chooseTheme(id: String?) {
         if (themeId == id && colorOverride == (id != null)) return
         themeId = id
         colorOverride = id != null
-        status = if (id == null) "已恢复默认配色，正在刷新预览"
+        status = if (job?.status == PptJobStatus.DONE) "主题色已选择，点击「重新生成 PPT」应用"
+            else if (id == null) "已恢复默认配色，正在刷新预览"
             else "已选择主题色，正在刷新预览"
-        if (docId != null) refreshPreview()
+        if (docId != null && job?.status != PptJobStatus.DONE) refreshPreview()
     }
 
     fun selectSlideLayout(layoutId: String) {
@@ -1499,14 +1503,12 @@ class PptViewModel(private val repo: PptRepository) {
     }
 
     /** 取消 / 完成后回到普通编辑工作台（清掉任务句柄，文件已保存则保留提示） */
-    fun dismissJob() {
+    fun dismissJob(refresh: Boolean = true) {
         PptJobEngine.reset()
         loadDocuments()
         status = null
-        // 生成完成后回到编辑工作台：必须重渲染预览。
-        // 否则看到的还是生成前的旧版式预览（甚至空骨架），
-        // 用户会以为"生成的 PPT 长这样"或"换的模板没生效"。
-        refreshPreview()
+        // 返回编辑时刷新预览；直接重新生成时跳过这次无用的预览转换。
+        if (refresh) refreshPreview()
     }
 
     /** FAILED / CANCELLED 后重试：复用提交时需求；本地保存位置可稍后再选。 */

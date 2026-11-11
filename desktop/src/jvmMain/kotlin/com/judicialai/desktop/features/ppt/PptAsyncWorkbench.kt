@@ -246,7 +246,7 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
                     onClick = {
                         // 回到编辑态并按当前模板重新提交生成任务：
                         // startGenerateAsync 内部会先落草稿（带 template_id），服务端按它渲染
-                        vm.dismissJob()
+                        vm.dismissJob(refresh = false)
                         vm.startGenerateAsync()
                     },
                     colors = ButtonDefaults.buttonColors(backgroundColor = Primary),
@@ -255,7 +255,52 @@ private fun JobPreviewPane(vm: PptViewModel, job: PptJobProgress) {
                 Spacer(Modifier.width(8.dp))
             }
             TextButton(onClick = { vm.dismissJob() }) {
-                Text("← 返回编辑", color = Primary, fontSize = 12.5.sp)
+                Text("← 编辑大纲与排版", color = Primary, fontSize = 12.5.sp)
+            }
+        }
+
+        if (job.status == PptJobStatus.DONE) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (vm.templateId != null) {
+                    var modeOpen by remember { mutableStateOf(false) }
+                    Box {
+                        OutlinedButton(onClick = { modeOpen = true }) {
+                            Text(if (vm.strictTemplate) "严格套版 ▾" else "模型逐页构图 ▾",
+                                fontSize = 12.sp)
+                        }
+                        DropdownMenu(modeOpen, { modeOpen = false }) {
+                            DropdownMenuItem(onClick = {
+                                modeOpen = false; vm.chooseTemplateMode(false)
+                            }) { Text("模型逐页构图") }
+                            DropdownMenuItem(onClick = {
+                                modeOpen = false; vm.chooseTemplateMode(true)
+                            }) { Text("严格沿用原版式") }
+                        }
+                    }
+                }
+                if (!vm.strictTemplate) {
+                    var colorOpen by remember { mutableStateOf(false) }
+                    val colorLabel = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
+                        ?.let { themeHex(it) }.orEmpty().ifBlank { "默认配色" }
+                    Box {
+                        OutlinedButton(onClick = { colorOpen = true }) {
+                            Text("主题色 $colorLabel ▾", fontSize = 12.sp)
+                        }
+                        DropdownMenu(colorOpen, { colorOpen = false }) {
+                            DropdownMenuItem(onClick = {
+                                colorOpen = false; vm.chooseTheme(null)
+                            }) { Text("默认配色") }
+                            vm.themes.forEach { theme ->
+                                DropdownMenuItem(onClick = {
+                                    colorOpen = false; vm.chooseTheme(theme["id"].str())
+                                }) { ThemeColorOption(theme) }
+                            }
+                        }
+                    }
+                }
+                Text("修改后点击「重新生成 PPT」应用", fontSize = 11.sp,
+                    color = SecondaryText)
             }
         }
 

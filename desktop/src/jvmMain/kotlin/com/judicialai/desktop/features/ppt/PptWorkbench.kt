@@ -336,7 +336,7 @@ private fun PreviewPane(vm: PptViewModel) {
         if (!vm.strictTemplate) {
             var themeOpen by remember { mutableStateOf(false) }
             val themeName = vm.themes.firstOrNull { it["id"].str() == vm.themeId }
-                ?.get("name").str().ifBlank {
+                ?.let { themeHex(it) }.orEmpty().ifBlank {
                     if (vm.templateId == null) "自动配色" else "模板配色"
                 }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
@@ -355,7 +355,7 @@ private fun PreviewPane(vm: PptViewModel) {
                             DropdownMenuItem(onClick = {
                                 themeOpen = false
                                 vm.chooseTheme(theme["id"].str())
-                            }) { Text(theme["name"].str()) }
+                            }) { ThemeColorOption(theme) }
                         }
                     }
                 }
