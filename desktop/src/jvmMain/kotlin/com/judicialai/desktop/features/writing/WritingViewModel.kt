@@ -133,6 +133,7 @@ class WritingViewModel(
 
     /** 当前正在执行的生成类任务（创建/规划/起草/对话/改写），用于「取消生成」 */
     private var activeJob: Job? = null
+    private var contentCheckJob: Job? = null
     private var writingClickAtNanos: Long = 0
     private var draftPreviousContent: String? = null
     private var currentAgentRunId: String? = null
@@ -272,18 +273,29 @@ class WritingViewModel(
     fun checkContent() {
         val id = task.taskId ?: return
         if (checkingContent || !hasDraft) return
+        val checkedVersion = versionNo
         checkingContent = true
-        scope.launch {
-            when (val result = repo.checkContent(id)) {
-                is ApiResult.Ok -> {
-                    contentIssues = result.data?.get("issues").arr().mapNotNull { it.obj() }
-                    status = if (result.data?.get("ai_used").bool())
-                        "内容校验完成：发现 ${contentIssues.size} 项需核对"
-                        else "语义模型暂不可用；已返回可完成的证据核验结果"
+        contentCheckJob = scope.launch {
+            try {
+                when (val result = repo.checkContent(id)) {
+                    is ApiResult.Ok -> {
+                        if (task.taskId == id && versionNo == checkedVersion) {
+                            contentIssues = result.data?.get("issues").arr().mapNotNull { it.obj() }
+                            status = if (result.data?.get("ai_used").bool())
+                                "内容校验完成：发现 ${contentIssues.size} 项需核对"
+                                else "语义模型暂不可用；已返回可完成的证据核验结果"
+                        }
+                    }
+                    is ApiResult.Err -> if (task.taskId == id && versionNo == checkedVersion)
+                        status = result.message
                 }
-                is ApiResult.Err -> status = result.message
+            } finally {
+                if (task.taskId == id) {
+                    checkingContent = false
+                    contentCheckJob = null
+                    if (versionNo != checkedVersion && hasDraft) checkContent()
+                }
             }
-            checkingContent = false
         }
     }
     var versions by mutableStateOf(listOf<JsonObject>())
@@ -483,6 +495,10 @@ class WritingViewModel(
                             status = if (r.data?.get("content_changed").bool())
                                 "已只替换选中段，其他正文保持不变"
                             else "原文无需修改，已记录采纳"
+                            if (r.data?.get("content_changed").bool()) {
+                                contentIssues = emptyList()
+                                checkContent()
+                            }
                             if (!r.data?.get("content_changed").bool()) refreshParagraphs()
                         } else {
                             status = "建议已在服务器采纳；本地有新编辑，请先处理本地内容再刷新任务"
@@ -1034,6 +1050,10 @@ class WritingViewModel(
                             d["reply"].str().takeIf { it.isNotBlank() }
                                 ?.let { messages = messages + TaskChatMessage(
                                     "assistant", it, d["revision_summary"].str()) }
+                            if (d["content_changed"].bool()) {
+                                contentIssues = emptyList()
+                                checkContent()
+                            }
                         }
                     }
                     is ApiResult.Err -> fail(r.message)
@@ -1068,6 +1088,7 @@ class WritingViewModel(
         AppState.writingGenerating = true
         AppState.writingLastError = null
         status = null
+        contentIssues = emptyList()
         agentProgress = "正在检索可用资料并准备正文…"
         // 服务端语义是「按当前稿继续生成，旧正文自动归档为 v{n+1}」
         // （task_service._finalize_draft: t.current_content = text，随后 _snapshot 旧版），
@@ -1149,6 +1170,7 @@ class WritingViewModel(
             currentAgentRunId = null
             busy = false
             AppState.writingGenerating = false
+            if (saved && !outlineOnly) checkContent()
         }
     }
 
@@ -1174,6 +1196,10 @@ class WritingViewModel(
                     applyResponse(d)
                     d["reply"].str().takeIf { it.isNotBlank() }
                         ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
+                    if (d["content_changed"].bool()) {
+                        contentIssues = emptyList()
+                        checkContent()
+                    }
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -1340,6 +1366,8 @@ class WritingViewModel(
                         is ApiResult.Err -> status += "；格式复检暂不可用：${check.message}"
                     }
                     refreshVersions()
+                    contentIssues = emptyList()
+                    checkContent()
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -1386,6 +1414,8 @@ class WritingViewModel(
                     }
                     versionPreview = null
                     refreshVersions()
+                    contentIssues = emptyList()
+                    checkContent()
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -1492,6 +1522,10 @@ class WritingViewModel(
     }
 
     fun newTask() {
+        contentCheckJob?.cancel()
+        contentCheckJob = null
+        checkingContent = false
+        contentIssues = emptyList()
         entryMaterials = emptyList()
         suggestionOperation++
         suggestionBusy = false

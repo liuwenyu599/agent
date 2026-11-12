@@ -25,6 +25,7 @@ from app.domain.chat.entities import ChatSession
 from app.domain.identity.entities import User
 from app.domain.official_document_format import writing_preview_profile
 from app.infrastructure.ai import get_llm_gateway, get_vision_gateway
+from app.infrastructure.ai.qwen import model_request_class
 from app.infrastructure.database import get_db
 from app.infrastructure.database.models.chat import ChatAttachmentModel
 from app.infrastructure.rag import get_embedder, get_vector_store
@@ -408,18 +409,19 @@ async def check_current_content(task_id: str,
         return {"issues": [], "issue_count": 0, "ai_used": False}
     audit = FormatCheckService(svc.db, assistant=WritingAssistant(get_llm_gateway()),
                                rag=svc.rag)
-    grammar = await asyncio.to_thread(
-        audit.engine._ai_check, text[:settings.FORMAT_CHECK_AI_BUDGET], [])
-    try:
-        conflicts = await asyncio.to_thread(audit._knowledge_conflict_issues, text, user)
-    except Exception as exc:
-        logger.warning("写作正文知识库核验失败: %s", exc)
-        conflicts = []
-    try:
-        laws = await asyncio.to_thread(audit._law_citation_issues, text, user)
-    except Exception as exc:
-        logger.warning("写作正文法条核验失败: %s", exc)
-        laws = []
+    with model_request_class("background"):
+        grammar = await asyncio.to_thread(
+            audit.engine._ai_check, text[:settings.FORMAT_CHECK_AI_BUDGET], [])
+        try:
+            conflicts = await asyncio.to_thread(audit._knowledge_conflict_issues, text, user)
+        except Exception as exc:
+            logger.warning("写作正文知识库核验失败: %s", exc)
+            conflicts = []
+        try:
+            laws = await asyncio.to_thread(audit._law_citation_issues, text, user)
+        except Exception as exc:
+            logger.warning("写作正文法条核验失败: %s", exc)
+            laws = []
     issues = (grammar or []) + conflicts + laws
     for index, issue in enumerate(issues):
         issue["id"] = index
