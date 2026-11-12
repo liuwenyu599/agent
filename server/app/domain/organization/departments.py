@@ -15,8 +15,11 @@ class Department(NamedTuple):
 
 
 DEPARTMENTS: List[Department] = [
+    Department("julingdao", "局领导", "局领导"),
     Department("bangongshi", "办公室", "办公室"),
+    Department("mishuke", "秘书科", "秘书科"),
     Department("fazhi", "法制与律师管理科", "法制科"),
+    Department("zongheke", "综合科", "综合科"),
     Department("zhifa", "行政复议应诉综合科", "执法科"),
     Department("fuyi", "行政复议科", "复议科"),
     Department("gongfa", "公共法律服务管理科", "公法科"),
