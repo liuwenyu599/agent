@@ -47,6 +47,7 @@ class ScopedWritingMemory:
         return {"id": row.id, "scope": row.scope,
                 "document_type": row.document_type, "content": row.content,
                 "enabled": row.enabled, "department_code": row.department_code,
+                "source": getattr(row, "source", "manual"),
                 "can_edit": False}
 
     def list_visible(self, user_id: str) -> list[dict]:
@@ -87,7 +88,8 @@ class ScopedWritingMemory:
             raise HTTPException(409, "此范围的记忆条目已满，请先整理旧条目")
         row = WritingMemoryModel(scope=scope, owner_user_id=owner,
                                  department_code=dept, created_by=user.id,
-                                 document_type=document_type, content=content)
+                                 document_type=document_type, content=content,
+                                 source="manual")
         self.db.add(row)
         self.db.commit()
         self.db.refresh(row)

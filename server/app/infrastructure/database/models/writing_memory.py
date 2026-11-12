@@ -22,3 +22,5 @@ class WritingMemoryModel(Base, IdMixin, TimestampMixin):
     document_type: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     content: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # manual=用户手工创建；auto=风格自学习蒸馏沉淀（style_learning.py）
+    source: Mapped[str] = mapped_column(String(12), nullable=False, default="manual")

@@ -146,6 +146,15 @@ class Settings:
 
         # 智能写作流水线
         self.WRITING_AUTO_QA = os.getenv("WRITING_AUTO_QA", "true").lower() == "true"
+        # 风格自学习：终稿保存后自动蒸馏个人风格画像（style_learning.py）
+        self.WRITING_STYLE_LEARN = _bool(
+            os.getenv("WRITING_STYLE_LEARN"), True)
+        self.WRITING_STYLE_LEARN_MIN_FINALS = max(
+            1, int(os.getenv("WRITING_STYLE_LEARN_MIN_FINALS", "3")))
+        self.WRITING_STYLE_LEARN_SAMPLES = max(
+            1, int(os.getenv("WRITING_STYLE_LEARN_SAMPLES", "6")))
+        self.WRITING_STYLE_LEARN_COOLDOWN_HOURS = max(
+            1, int(os.getenv("WRITING_STYLE_LEARN_COOLDOWN_HOURS", "24")))
         self.DOC_NUMBER_DEFAULT_DAIZI = os.getenv("DOC_NUMBER_DEFAULT_DAIZI", "粤府办")
         self.WRITING_AI_FORMAT_CHECK = os.getenv("WRITING_AI_FORMAT_CHECK", "false").lower() == "true"
         self.WRITING_RETRY_MAX = int(os.getenv("WRITING_RETRY_MAX", "1"))

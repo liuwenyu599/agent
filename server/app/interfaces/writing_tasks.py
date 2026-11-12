@@ -378,6 +378,13 @@ def save_version(task_id: str, req: TaskSaveRequest,
     reset = svc._supersede_pending_suggestions(task_id, user.id)
     result = svc.save_version(task_id, user.id, req.content, req.note, req.formatting)
     result["suggestions_reset"] = reset
+    # 风格自学习：终稿保存成功后，后台蒸馏个人风格画像（不阻塞、不抛错）。
+    try:
+        from app.application.writing.style_learning import schedule_style_distill
+        schedule_style_distill(
+            user.id, str((task.context or {}).get("document_type") or ""))
+    except Exception:  # noqa: BLE001 - 自学习绝不影响保存
+        pass
     return result
 
 
