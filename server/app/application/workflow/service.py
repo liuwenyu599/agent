@@ -435,10 +435,18 @@ JSON："""
         # （ni.content），并未同步到实例级 basic_info（唯一权威数据源）。若 basic_info
         # 为空，则从「基础信息」节点正文回退取数，保证下游节点（会议通知/议程/纪要…
         # ）生成时能拿到会议核心信息，而不是落到「（未填写）」再让模型补 ×× 占位。
-        if not ctx_text or ctx_text == "（未填写）":
+        # 仅当 basic_info 完全为空（_build_context_text 返回「（未填写）」）时才回退；
+        # 部分填写时 basic_info 已有结构化字段，不覆盖（见审查说明边界②-2，属产品决策）。
+        # 注：_build_context_text 至少返回非空串「（未填写）」，故 `not ctx_text` 永不为真，
+        # 此处仅以「（未填写）」为触发条件，避免死分支误导后续维护者。
+        ctx_from_fallback = False
+        if ctx_text == "（未填写）":
             fallback = self._get_basic_info_node_content(inst)
             if fallback:
-                ctx_text = fallback
+                # 与上游正文对齐截断（非必需节点 1500 / 必需节点 2000），避免长粘贴
+                # （如会议方案全文）原样撑大 prompt、挤占 max_tokens=3000 的输出预算。
+                ctx_text = fallback[:2000]
+                ctx_from_fallback = True
         upstream_items = self._get_upstream_contents(inst, ni)
         if upstream_items:
             upstream_text = "\n\n".join(
@@ -456,6 +464,11 @@ JSON："""
 2. 签到表字段顺序固定为：序号、姓名、单位、职务、联系电话、签到（签到列留空）；
 3. 名单优先取基础信息中的参会人员；基础信息未明确姓名时，按参会范围生成相应数量的"××"占位行；
 4. 禁止 markdown 表格符号（|），禁止对话口吻。"""
+        ctx_fallback_note = (
+            "\n（注：以上为「基础信息」节点原文回退，属自由文本而非结构化字段，"
+            "生成时请提炼为规范公文表述，勿照搬提纲或口语）"
+            if ctx_from_fallback else ""
+        )
         dependency_note = ""
         if "主持稿" in node.name:
             dependency_note = "\n【数据依赖】本节点需要结合「会议议程」内容撰写主持串联词。"
@@ -471,7 +484,7 @@ JSON："""
 {dependency_note}
 
 【会议基本信息】（唯一权威数据源）
-{ctx_text}
+{ctx_text}{ctx_fallback_note}
 
 【前序节点已完成内容（按数据依赖关系带入）】
 {upstream_text}

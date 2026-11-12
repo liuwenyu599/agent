@@ -492,6 +492,7 @@ _LAYOUT_AFFINITY: Dict[str, List[Dict[str, Any]]] = {
     "content.symmetric":   [{"kind": "balance", "n_set": [2, 4], "char_cap": 40,
                              "pair_gap_max": 16, "bonus": 1.0, "else": -1.0}],
     "data.kpi":            [{"kind": "cards_range", "min": 3, "max": 4, "bonus": 0.3, "else": -0.6}],
+    # 历史遗留：data.cards 的 else 为 +0.2，是全表唯一"不匹配也加分"的规则（有意保留，非笔误）。
     "data.cards":          [{"kind": "cards_ge", "v": 3, "bonus": 0.6, "else": 0.2}],
     "data.table":          [{"kind": "rows_ge", "v": 3, "bonus": 1.2, "else": -0.5}],
     "chart.split":         [{"kind": "n_ge", "v": 1, "bonus": 0.8, "else": -0.5}],
