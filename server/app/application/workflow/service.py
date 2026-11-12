@@ -416,11 +416,45 @@ JSON："""
             ni.content = content
             if ni.status == "pending":
                 ni.status = "draft"
+            # 根治（对应审查说明边界③-根治项）：桌面端此前仅把基础信息写入节点正文，
+            # 未同步实例级 basic_info（唯一权威数据源）。当目标节点是「基础信息」类型
+            # 节点时，把自由文本解析为结构化 basic_info 写回实例，既修复实例列表/详情
+            # 回显丢失（_instance_to_dict 读 basic_info），也让 generate_node 不再依赖
+            # 节点正文回退。解析不出字段时不覆盖（此时回退仍生效）。
+            node = self.nodes.get(ni.node_id)
+            if node and "基础信息" in node.name:
+                inst = self._get_instance_checked(ni.instance_id, user)
+                parsed = self._parse_basic_info_text(content)
+                if parsed:
+                    inst.basic_info = parsed
+                    self.instances.update(inst)
         if status is not None:
             ni.status = status
         self.node_instances.update(ni)
         self.db.commit()
         return {"ok": True, "status": ni.status}
+
+    @staticmethod
+    def _parse_basic_info_text(text: str) -> Dict[str, Any]:
+        """把「基础信息」节点自由文本解析为结构化字典。
+
+        支持「标签：值」或「标签: 值」行（全角/半角冒号）。仅当解析出至少一个字段
+        时才返回非空字典；否则返回空字典，避免用无意义内容覆盖 basic_info
+        （此时 generate_node 仍可走节点正文回退）。
+        """
+        ctx: Dict[str, Any] = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            for sep in ("：", ":"):
+                if sep in line:
+                    label, _, val = line.partition(sep)
+                    label, val = label.strip(), val.strip()
+                    if label and val:
+                        ctx[label] = val
+                    break
+        return ctx
 
     def generate_node(self, user: User, node_inst_id: str, instruction: str = "",
                       save: bool = True) -> dict:

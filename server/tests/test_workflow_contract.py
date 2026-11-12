@@ -288,3 +288,53 @@ def test_generate_node_falls_back_to_basic_info_node_content(client, users):
             app.dependency_overrides.pop(get_workflow_service, None)
         else:
             app.dependency_overrides[get_workflow_service] = prev
+
+
+# ------------------------------------------------ 回归：编辑基础信息节点同步写 basic_info（根治）
+
+def test_update_node_on_basic_info_node_syncs_basic_info(client, users):
+    """根治项回归：桌面端编辑「基础信息」节点正文时，后端应把自由文本解析为结构化
+    basic_info 写回实例，修复实例列表/详情回显丢失（_instance_to_dict 读 basic_info），
+    并让 generate_node 不再依赖节点正文回退。
+
+    复现路径严格模拟桌面端：createInstance 传空 workflow_context，仅通过 updateNode
+    把基础信息写入节点正文；断言实例详情的 workflow_context/basic_info 被填充。
+    """
+    created = client.post(f"{BASE}/workflow/instances", headers=_hdr(users["user_a"]),
+                          json={"template_code": "meeting", "title": "根治-基础信息同步回显"})
+    assert created.status_code == 200, created.text
+    iid = created.json()["id"]
+
+    detail = client.get(f"{BASE}/workflow/instances/{iid}",
+                        headers=_hdr(users["user_a"])).json()
+    nodes = detail.get("nodes") or []
+    basic = next((n for n in nodes if "基础信息" in n["name"]), None)
+    assert basic, f"缺少基础信息节点：{[n['name'] for n in nodes]}"
+
+    # 编辑「基础信息」节点正文（结构化「标签：值」格式，桌面端 saveNode 的真实行为）
+    content = ("会议名称：白云区司法行政工作会议\n"
+               "会议时间：2026-03-15 09:00\n"
+               "会议地点：白云区司法局二楼大会议室")
+    r = client.put(f"{BASE}/workflow/nodes/{basic['id']}", headers=_hdr(users["user_a"]),
+                   json={"content": content})
+    assert r.status_code == 200, r.text
+
+    # 实例详情应回显结构化 basic_info（不再是空）
+    detail2 = client.get(f"{BASE}/workflow/instances/{iid}",
+                         headers=_hdr(users["user_a"])).json()
+    ctx = detail2.get("workflow_context") or detail2.get("basic_info") or {}
+    assert ctx.get("会议名称") == "白云区司法行政工作会议", ctx
+    assert ctx.get("会议时间") == "2026-03-15 09:00", ctx
+    assert ctx.get("会议地点") == "白云区司法局二楼大会议室", ctx
+
+    # 反例：非基础信息节点不应触发 basic_info 同步
+    notice = next((n for n in nodes if "会议通知" in n["name"]), None)
+    assert notice, "缺少会议通知节点"
+    before = client.get(f"{BASE}/workflow/instances/{iid}",
+                        headers=_hdr(users["user_a"])).json()
+    client.put(f"{BASE}/workflow/nodes/{notice['id']}", headers=_hdr(users["user_a"]),
+               json={"content": "会议通知正文"})
+    after = client.get(f"{BASE}/workflow/instances/{iid}",
+                       headers=_hdr(users["user_a"])).json()
+    assert (before.get("basic_info") or {}) == (after.get("basic_info") or {}), \
+        "非基础信息节点的编辑不应改变实例 basic_info"

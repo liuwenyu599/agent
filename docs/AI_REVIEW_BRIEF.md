@@ -91,9 +91,10 @@
   **无写 `basic_info` 路径** → 服务端 `generate_node` 拿不到「基础信息」，生成内容缺上下文。
 - **修复**：`generate_node` 新增 `_get_basic_info_node_content` 兜底（`service.py:566`），
   `basic_info` 空时从「基础信息」节点正文回退取数注入生成提示。
-- **已知缺口（未根治）**：桌面端仍不写 `basic_info`，仅服务端兜底。根治需在桌面端
-  `WorkflowRepository.kt` 增加写 `basic_info` 的路径（或在后端 `update_node` 内按节点名匹配
-  同步写 `basic_info`——改一处即可，比桌面端改更省）。
+- **已根治（方案 B，后端 `update_node` 同步写，改一处更省）**：编辑「基础信息」类型节点时，
+  `update_node`（`service.py:425-430`）现在把自由文本解析为结构化 `basic_info` 写回实例
+  （新增 `_parse_basic_info_text:438-457`），修复实例列表/详情回显丢失，并让 `generate_node`
+  不再依赖节点正文回退。**桌面端 `WorkflowRepository.kt` 无需改动**即获此修复（basic_info 由后端在 saveNode 时同步）。
 - **已核验（独立读码，见 `docs/WORKFLOW_SYNC_VERIFICATION.md`）**：
   1. `update_node`（`service.py:412`）仅写 `ni.content`，**确认无写 `basic_info` 路径**——缺口属实。
   2. 兜底触发条件 `ctx_text == "（未填写）"`（`generate_node` 内，现 443–449）即 `basic_info` **全空**才回退；
@@ -107,11 +108,15 @@
   - 边界①（中）：兜底基础信息**截断到 2000 字**，与上游对齐，避免长粘贴撑爆 `max_tokens=3000` 预算。
   - 边界④（低）：兜底段在 prompt 内加注「（回退自基础信息节点原文，自由文本，请提炼规范公文表述）」，
     修正「唯一权威数据源」措辞与自由文本实际形态不符的问题。
+  - **桌面端根治（根因修复）**：`update_node` 在「基础信息」节点编辑时把自由文本解析为结构化
+    `basic_info` 写回实例（`service.py:425-430` + `_parse_basic_info_text:438-457`），回显丢失已修。
+    回归见 `test_update_node_on_basic_info_node_syncs_basic_info`（全文 `test_workflow_contract.py` 28 passed）。
 - **仍待决策 / 待根治（未改，标注为产品决策）**：
-  - 边界②（中）：**部分填写时不回退**——当前桌面端根本不写 `basic_info`，故现无影响；
-    但若未来桌面端写部分字段，半空 `basic_info` 会压制更全的节点正文回退。是否放宽触发条件
-    （如「标准字段缺失过半则取并集」）取决于产品预期，**本轮未改**。
-  - 边界③（低）：子串匹配误伤/多节点取首——建议后续用节点 `stage` 或显式类型标识替代名称子串，本轮未改。
+  - 边界②（中）：本根治采用「基础信息节点即权威源、整段覆盖」语义，已规避「半空 basic_info 压制更全正文」问题
+    （节点正文现在直接成为 basic_info，不再有中间态）；仅当未来桌面端改为**结构化字段直传** `workflow_context`
+    并与节点正文并存时，才需重新评估叠加策略。
+  - 边界③（低）：子串匹配误伤/多节点取首——`update_node` 与 `_get_basic_info_node_content` / `_get_upstream_contents`
+    仍共用 `"基础信息" in nd.name`；根治项未改此匹配（保持一致即可工作），建议后续用节点 `stage` 或显式类型标识替代名称子串。
 - **审查要点（已核验）**：服务端兜底回退边界已读码确认并修两处；桌面端漏写须根治（见上）。
 
 ### 2.3 异步化与并发治理
@@ -194,10 +199,10 @@
 1. **选版器**（`ppt_engine.py:478` 起）：✅ **已关闭**。详见 `docs/LAYOUT_SELECTOR_VERIFICATION.md`——
    `_LAYOUT_AFFINITY` 与历史 if 分支逐分一致（旧代码重算 684/684）、新增版式零 if 增长、
    兜底 `weight` 中性。等价性已用父提交 `78fa1b4` 旧代码复算闭环。
-2. **工作流同步**：✅ **已核验 + 部分修复**。详见 §2.2 / `docs/WORKFLOW_SYNC_VERIFICATION.md`——
-   服务端 `update_node` 无写 `basic_info` 路径、兜底触发仅全空、子串匹配、回显丢失等边界已读码确认；
-   已修「兜底未截断」「自由文本未标注」两处，回归测试通过。**仍待决策**：部分填写不回退（产品预期）、
-   桌面端漏写根治（`WorkflowRepository.kt` 或后端 `update_node` 同步）。
+2. **工作流同步**：✅ **已核验 + 已修复（含根治）**。详见 §2.2 / `docs/WORKFLOW_SYNC_VERIFICATION.md`——
+   服务端兜底边界（截断、标注、死分支）已修；**桌面端根治已完成**：`update_node` 在「基础信息」节点编辑时
+   同步解析写回 `basic_info`（`service.py:425-430`），回显丢失已修复，**桌面端 `WorkflowRepository.kt` 无需改动**。
+   回归 `test_workflow_contract.py` 全文 **28 passed**。剩余仅为低优先产品决策（边界③子串匹配健壮性）。
 3. **异步阻塞**：`format_check.py:56`、`ppt.py:247` 的 `asyncio.run` 在 async 路由内是否应改 `await`。
 4. **并发与资源**：50 人场景下 35B 单端点是否瓶颈；临时文档清理与孤儿附件级联删。
 5. **未证实项（不可凭历史记录断言）**：designed 模式耗时是否降到 10 分钟以内、
