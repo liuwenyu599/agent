@@ -1,0 +1,3422 @@
+[
+{
+"sid": "cover.band",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "cover.band",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "cover.side",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "cover.minimal",
+"slide": "empty",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "one_short",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "one_long",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "two_balanced",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "two_gap",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "three",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "four_short",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "four_long",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "five",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "image_two",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "quote_match",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "quote_no",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "cards3",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "cards2",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "table3",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "timeline4",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "process5",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "sym2_ok",
+"score": 0.9
+},
+{
+"sid": "cover.minimal",
+"slide": "sym2_bad",
+"score": 0.9
+},
+{
+"sid": "toc.list",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "toc.list",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "toc.cards",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "toc.grid",
+"slide": "empty",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "one_short",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "one_long",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "two_balanced",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "two_gap",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "three",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "four_short",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "four_long",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "five",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "image_two",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "quote_match",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "quote_no",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "cards3",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "cards2",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "table3",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "timeline4",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "process5",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "sym2_ok",
+"score": 1.1
+},
+{
+"sid": "toc.grid",
+"slide": "sym2_bad",
+"score": 1.1
+},
+{
+"sid": "section.number",
+"slide": "empty",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "one_short",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "one_long",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "two_balanced",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "two_gap",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "three",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "four_short",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "four_long",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "five",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "image_two",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "quote_match",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "quote_no",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "cards3",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "cards2",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "table3",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "timeline4",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "process5",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "sym2_ok",
+"score": 1.3
+},
+{
+"sid": "section.number",
+"slide": "sym2_bad",
+"score": 1.3
+},
+{
+"sid": "section.center",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "section.center",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "section.side",
+"slide": "empty",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "one_short",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "one_long",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "two_balanced",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "two_gap",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "three",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "four_short",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "four_long",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "five",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "image_two",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "quote_match",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "quote_no",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "cards3",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "cards2",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "table3",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "timeline4",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "process5",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "sym2_ok",
+"score": 0.85
+},
+{
+"sid": "section.side",
+"slide": "sym2_bad",
+"score": 0.85
+},
+{
+"sid": "content.bullets",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "two_balanced",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "two_gap",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "three",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "four_short",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "four_long",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "five",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "image_two",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "quote_match",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "quote_no",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "content.bullets",
+"slide": "sym2_ok",
+"score": 1.6
+},
+{
+"sid": "content.bullets",
+"slide": "sym2_bad",
+"score": 1.6
+},
+{
+"sid": "content.image_right",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "image_two",
+"score": 3.0
+},
+{
+"sid": "content.image_right",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "content.image_right",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "image_two",
+"score": 3.0
+},
+{
+"sid": "content.image_left",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "content.image_left",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "content.two_col",
+"slide": "empty",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "one_short",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "one_long",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "two_balanced",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "two_gap",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "three",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "four_short",
+"score": 1.8
+},
+{
+"sid": "content.two_col",
+"slide": "four_long",
+"score": 1.8
+},
+{
+"sid": "content.two_col",
+"slide": "five",
+"score": 1.8
+},
+{
+"sid": "content.two_col",
+"slide": "image_two",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "quote_match",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "quote_no",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "cards3",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "cards2",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "table3",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "timeline4",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "process5",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "sym2_ok",
+"score": -0.1
+},
+{
+"sid": "content.two_col",
+"slide": "sym2_bad",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "empty",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "one_short",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "one_long",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "two_balanced",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "two_gap",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "three",
+"score": 1.9
+},
+{
+"sid": "content.three_cards",
+"slide": "four_short",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "four_long",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "five",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "image_two",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "quote_match",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "quote_no",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "cards3",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "cards2",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "table3",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "timeline4",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "process5",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "sym2_ok",
+"score": -0.1
+},
+{
+"sid": "content.three_cards",
+"slide": "sym2_bad",
+"score": -0.1
+},
+{
+"sid": "content.compare",
+"slide": "empty",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "one_short",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "one_long",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "two_balanced",
+"score": 2.0
+},
+{
+"sid": "content.compare",
+"slide": "two_gap",
+"score": 1.1
+},
+{
+"sid": "content.compare",
+"slide": "three",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "four_short",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "four_long",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "five",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "image_two",
+"score": 2.0
+},
+{
+"sid": "content.compare",
+"slide": "quote_match",
+"score": 2.0
+},
+{
+"sid": "content.compare",
+"slide": "quote_no",
+"score": 2.0
+},
+{
+"sid": "content.compare",
+"slide": "cards3",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "cards2",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "table3",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "timeline4",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "process5",
+"score": -0.2
+},
+{
+"sid": "content.compare",
+"slide": "sym2_ok",
+"score": 2.0
+},
+{
+"sid": "content.compare",
+"slide": "sym2_bad",
+"score": 1.1
+},
+{
+"sid": "content.icon_grid",
+"slide": "empty",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "one_short",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "one_long",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "two_balanced",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "two_gap",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "three",
+"score": 1.5
+},
+{
+"sid": "content.icon_grid",
+"slide": "four_short",
+"score": 1.5
+},
+{
+"sid": "content.icon_grid",
+"slide": "four_long",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "five",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "image_two",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "quote_match",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "quote_no",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "cards3",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "cards2",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "table3",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "timeline4",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "process5",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "sym2_ok",
+"score": 0.0
+},
+{
+"sid": "content.icon_grid",
+"slide": "sym2_bad",
+"score": 0.0
+},
+{
+"sid": "content.center",
+"slide": "empty",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "one_short",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "one_long",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "two_balanced",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "two_gap",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "three",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "four_short",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "four_long",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "five",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "image_two",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "quote_match",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "quote_no",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "cards3",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "cards2",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "table3",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "timeline4",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "process5",
+"score": -0.35
+},
+{
+"sid": "content.center",
+"slide": "sym2_ok",
+"score": 1.95
+},
+{
+"sid": "content.center",
+"slide": "sym2_bad",
+"score": 1.95
+},
+{
+"sid": "content.symmetric",
+"slide": "empty",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "one_short",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "one_long",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "two_balanced",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "two_gap",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "three",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "four_short",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "four_long",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "five",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "image_two",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "quote_match",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "quote_no",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "cards3",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "cards2",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "table3",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "timeline4",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "process5",
+"score": -0.15
+},
+{
+"sid": "content.symmetric",
+"slide": "sym2_ok",
+"score": 1.85
+},
+{
+"sid": "content.symmetric",
+"slide": "sym2_bad",
+"score": -0.15
+},
+{
+"sid": "content.statement",
+"slide": "empty",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "one_short",
+"score": 2.3
+},
+{
+"sid": "content.statement",
+"slide": "one_long",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "two_balanced",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "two_gap",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "three",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "four_short",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "four_long",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "five",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "image_two",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "quote_match",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "quote_no",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "cards3",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "cards2",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "table3",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "timeline4",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "process5",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "sym2_ok",
+"score": -0.8
+},
+{
+"sid": "content.statement",
+"slide": "sym2_bad",
+"score": -0.8
+},
+{
+"sid": "content.quote",
+"slide": "empty",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "one_short",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "one_long",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "two_balanced",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "two_gap",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "three",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "four_short",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "four_long",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "five",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "image_two",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "quote_match",
+"score": 1.8
+},
+{
+"sid": "content.quote",
+"slide": "quote_no",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "cards3",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "cards2",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "table3",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "timeline4",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "process5",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "sym2_ok",
+"score": -0.6
+},
+{
+"sid": "content.quote",
+"slide": "sym2_bad",
+"score": -0.6
+},
+{
+"sid": "data.cards",
+"slide": "empty",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "one_short",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "one_long",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "two_balanced",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "two_gap",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "three",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "four_short",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "four_long",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "five",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "image_two",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "quote_match",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "quote_no",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "cards3",
+"score": 1.6
+},
+{
+"sid": "data.cards",
+"slide": "cards2",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "table3",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "timeline4",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "process5",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "sym2_ok",
+"score": 1.2
+},
+{
+"sid": "data.cards",
+"slide": "sym2_bad",
+"score": 1.2
+},
+{
+"sid": "data.kpi",
+"slide": "empty",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "one_short",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "one_long",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "two_balanced",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "two_gap",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "three",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "four_short",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "four_long",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "five",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "image_two",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "quote_match",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "quote_no",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "cards3",
+"score": 1.2
+},
+{
+"sid": "data.kpi",
+"slide": "cards2",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "table3",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "timeline4",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "process5",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "sym2_ok",
+"score": 0.3
+},
+{
+"sid": "data.kpi",
+"slide": "sym2_bad",
+"score": 0.3
+},
+{
+"sid": "data.table",
+"slide": "empty",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "one_short",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "one_long",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "two_balanced",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "two_gap",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "three",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "four_short",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "four_long",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "five",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "image_two",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "quote_match",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "quote_no",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "cards3",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "cards2",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "table3",
+"score": 2.3
+},
+{
+"sid": "data.table",
+"slide": "timeline4",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "process5",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "sym2_ok",
+"score": 0.6
+},
+{
+"sid": "data.table",
+"slide": "sym2_bad",
+"score": 0.6
+},
+{
+"sid": "chart.full",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "chart.full",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "chart.split",
+"slide": "empty",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "one_short",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "one_long",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "two_balanced",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "two_gap",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "three",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "four_short",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "four_long",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "five",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "image_two",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "quote_match",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "quote_no",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "cards3",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "cards2",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "table3",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "timeline4",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "process5",
+"score": 0.5
+},
+{
+"sid": "chart.split",
+"slide": "sym2_ok",
+"score": 1.8
+},
+{
+"sid": "chart.split",
+"slide": "sym2_bad",
+"score": 1.8
+},
+{
+"sid": "case.block",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "case.block",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "case.split",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "timeline.horizontal",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "timeline.vertical",
+"slide": "empty",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "one_short",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "one_long",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "two_balanced",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "two_gap",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "three",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "four_short",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "four_long",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "five",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "image_two",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "quote_match",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "quote_no",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "cards3",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "cards2",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "table3",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "timeline4",
+"score": 1.9
+},
+{
+"sid": "timeline.vertical",
+"slide": "process5",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "sym2_ok",
+"score": 0.6
+},
+{
+"sid": "timeline.vertical",
+"slide": "sym2_bad",
+"score": 0.6
+},
+{
+"sid": "process.chevron",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "process.chevron",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "process.vertical",
+"slide": "empty",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "one_short",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "one_long",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "two_balanced",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "two_gap",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "three",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "four_short",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "four_long",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "five",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "image_two",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "quote_match",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "quote_no",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "cards3",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "cards2",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "table3",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "timeline4",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "process5",
+"score": 1.9
+},
+{
+"sid": "process.vertical",
+"slide": "sym2_ok",
+"score": 0.6
+},
+{
+"sid": "process.vertical",
+"slide": "sym2_bad",
+"score": 0.6
+},
+{
+"sid": "summary.cards",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "summary.cards",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "summary.list",
+"slide": "empty",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "one_short",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "one_long",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "two_balanced",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "two_gap",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "three",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "four_short",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "four_long",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "five",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "image_two",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "quote_match",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "quote_no",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "cards3",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "cards2",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "table3",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "timeline4",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "process5",
+"score": 0.5
+},
+{
+"sid": "summary.list",
+"slide": "sym2_ok",
+"score": 1.7
+},
+{
+"sid": "summary.list",
+"slide": "sym2_bad",
+"score": 1.7
+},
+{
+"sid": "summary.statement",
+"slide": "empty",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "one_short",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "one_long",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "two_balanced",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "two_gap",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "three",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "four_short",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "four_long",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "five",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "image_two",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "quote_match",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "quote_no",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "cards3",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "cards2",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "table3",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "timeline4",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "process5",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "sym2_ok",
+"score": 0.75
+},
+{
+"sid": "summary.statement",
+"slide": "sym2_bad",
+"score": 0.75
+},
+{
+"sid": "closing.center",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "closing.center",
+"slide": "sym2_bad",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "empty",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "one_short",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "one_long",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "two_balanced",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "two_gap",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "three",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "four_short",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "four_long",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "five",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "image_two",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "quote_match",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "quote_no",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "cards3",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "cards2",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "table3",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "timeline4",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "process5",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "sym2_ok",
+"score": 1.0
+},
+{
+"sid": "closing.band",
+"slide": "sym2_bad",
+"score": 1.0
+}
+]

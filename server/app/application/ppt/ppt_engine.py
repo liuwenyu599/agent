@@ -472,62 +472,109 @@ def _layout_usable(spec: Dict, slide: Dict) -> bool:
     return True
 
 
+# 声明式"版式亲和度"注册表：把每个版式的打分条件从 ``_layout_score`` 的
+# if/elif 链里抽出来。新增版式只在此加一条数据，选版器不再增长 if。
+# 取值与历史 if 分支逐分对齐（见 test_layout_score_characterization）。
+_LAYOUT_AFFINITY: Dict[str, List[Dict[str, Any]]] = {
+    "content.image_right": [{"kind": "image_bonus", "v": 2.0}],
+    "content.image_left":  [{"kind": "image_bonus", "v": 2.0}],
+    "content.statement":   [{"kind": "statement", "char_total_max": 40, "bonus": 1.6, "else": -1.5}],
+    "content.compare":     [{"kind": "pair", "gap_max": 12, "bonus_match": 1.2,
+                             "bonus_close": 0.3, "else": -1.0}],
+    "content.three_cards": [{"kind": "n_eq", "v": 3, "bonus": 1.0, "else": -1.0}],
+    "content.two_col":     [{"kind": "n_ge", "v": 4, "bonus": 0.9, "else": -1.0}],
+    "content.icon_grid":   [{"kind": "n_range", "min": 3, "max": 4, "char_cap": 26,
+                             "bonus": 0.7, "else": -0.8}],
+    "content.quote":       [{"kind": "quoted", "bonus": 1.2, "else": -1.2}],
+    "content.bullets":     [{"kind": "n_ge", "v": 2, "bonus": 0.6, "else": 0.0}],
+    "content.center":      [{"kind": "point_len_le_all", "n_min": 2, "n_max": 4, "max": 46,
+                             "bonus": 1.1, "else": -1.2}],
+    "content.symmetric":   [{"kind": "balance", "n_set": [2, 4], "char_cap": 40,
+                             "pair_gap_max": 16, "bonus": 1.0, "else": -1.0}],
+    "data.kpi":            [{"kind": "cards_range", "min": 3, "max": 4, "bonus": 0.3, "else": -0.6}],
+    "data.cards":          [{"kind": "cards_ge", "v": 3, "bonus": 0.6, "else": 0.2}],
+    "data.table":          [{"kind": "rows_ge", "v": 3, "bonus": 1.2, "else": -0.5}],
+    "chart.split":         [{"kind": "n_ge", "v": 1, "bonus": 0.8, "else": -0.5}],
+    "timeline.vertical":   [{"kind": "timeline_ge", "v": 4, "bonus": 0.9, "else": -0.4}],
+    "process.vertical":    [{"kind": "process_ge", "v": 5, "bonus": 0.9, "else": -0.4}],
+    "summary.list":        [{"kind": "n_ge", "v": 2, "bonus": 0.7, "else": -0.5}],
+}
+
+_QUOTE_CHARS = "“\"「"
+
+
+def _eval_affinity_rule(r: Dict[str, Any], n: int, total_chars: int, has_image: bool,
+                        points: List[str], n_cards: int, n_rows: int,
+                        n_timeline: int, n_process: int) -> float:
+    """解释单条亲和度声明，返回该规则贡献的加分/扣分（与历史 if 分支逐分一致）。"""
+    kind = r["kind"]
+    if kind == "image_bonus":
+        return float(r["v"]) if has_image else 0.0
+    if kind == "statement":
+        ok = n == 1 and total_chars <= r["char_total_max"]
+        return float(r["bonus"]) if ok else float(r["else"])
+    if kind == "pair":
+        if n == 2 and len(points) == 2:
+            gap = abs(len(points[0]) - len(points[1]))
+            return float(r["bonus_match"]) if gap <= r["gap_max"] else float(r["bonus_close"])
+        return float(r["else"])
+    if kind == "n_eq":
+        return float(r["bonus"]) if n == r["v"] else float(r["else"])
+    if kind == "n_ge":
+        return float(r["bonus"]) if n >= r["v"] else float(r["else"])
+    if kind == "n_range":
+        ok = r["min"] <= n <= r["max"]
+        if ok and r.get("char_cap") is not None:
+            ok = all(len(p) <= r["char_cap"] for p in points)
+        return float(r["bonus"]) if ok else float(r["else"])
+    if kind == "quoted":
+        quoted = any(p[:1] in _QUOTE_CHARS for p in points)
+        return float(r["bonus"]) if quoted else float(r["else"])
+    if kind == "cards_range":
+        return float(r["bonus"]) if r["min"] <= n_cards <= r["max"] else float(r["else"])
+    if kind == "cards_ge":
+        return float(r["bonus"]) if n_cards >= r["v"] else float(r["else"])
+    if kind == "rows_ge":
+        return float(r["bonus"]) if n_rows >= r["v"] else float(r["else"])
+    if kind == "timeline_ge":
+        return float(r["bonus"]) if n_timeline >= r["v"] else float(r["else"])
+    if kind == "process_ge":
+        return float(r["bonus"]) if n_process >= r["v"] else float(r["else"])
+    if kind == "point_len_le_all":
+        ok = (r["n_min"] <= n <= r["n_max"]) and all(len(p) <= r["max"] for p in points)
+        return float(r["bonus"]) if ok else float(r["else"])
+    if kind == "balance":
+        balanced = n in r["n_set"] and all(len(p) <= r["char_cap"] for p in points)
+        if n == 2 and len(points) == 2:
+            balanced = balanced and abs(len(points[0]) - len(points[1])) <= r["pair_gap_max"]
+        return float(r["bonus"]) if balanced else float(r["else"])
+    return 0.0
+
+
 def _layout_score(spec: Dict, slide: Dict, recent: List[str], used: Dict[str, int]) -> float:
-    """无明确偏好时的结构打分：内容形态越贴合得分越高，整篇重复出现要扣分。"""
+    """无明确偏好时的结构打分：内容形态越贴合得分越高，整篇重复出现要扣分。
+
+    打分规则已从 if/elif 链改为读取 ``_LAYOUT_AFFINITY`` 声明（见模块常量）。
+    未在其中声明的版式（封面/目录/章节/结束等原无专属分支者）直接以基础
+    ``weight`` 计分——这是**兜底**：保证新增/未知版式永不崩溃、且不低于
+    中性基线。
+    """
     sid = spec["id"]
     points = [str(p) for p in (slide.get("points") or [])]
     n = len(points)
     total_chars = sum(len(p) for p in points)
+    has_image = _slide_has_image(slide)
+    blocks = slide.get("blocks") or {}
+    n_cards = len(blocks.get("cards") or [])
+    n_rows = len((blocks.get("table") or {}).get("rows") or [])
+    n_timeline = len(blocks.get("timeline") or [])
+    n_process = len(blocks.get("process") or blocks.get("diagram_labels")
+                    or blocks.get("diagram_nodes") or [])
     score = float(spec.get("weight", 1.0))
 
-    if _slide_has_image(slide) and sid in {"content.image_right", "content.image_left"}:
-        score += 2.0                     # 有图不用图等于白配
-    if sid == "content.statement":
-        score += 1.6 if (n == 1 and total_chars <= 40) else -1.5
-    elif sid == "content.compare":
-        if n == 2:
-            gap = abs(len(points[0]) - len(points[1]))
-            score += 1.2 if gap <= 12 else 0.3
-        else:
-            score -= 1.0
-    elif sid == "content.three_cards":
-        score += 1.0 if n == 3 else -1.0
-    elif sid == "content.two_col":
-        score += 0.9 if n >= 4 else -1.0
-    elif sid == "content.icon_grid":
-        score += 0.7 if 3 <= n <= 4 and all(len(p) <= 26 for p in points) else -0.8
-    elif sid == "content.quote":
-        quoted = any(p[:1] in "“\"「" for p in points)
-        score += 1.2 if quoted else -1.2
-    elif sid == "content.bullets":
-        score += 0.6 if n >= 2 else 0.0
-    elif sid == "content.center":
-        # 短要点居中才好看；长段落居中会变成大段文字块，反而更难读。
-        score += 1.1 if 2 <= n <= 4 and all(len(p) <= 46 for p in points) else -1.2
-    elif sid == "content.symmetric":
-        balanced = n in (2, 4) and all(len(p) <= 40 for p in points)
-        if n == 2:
-            balanced = balanced and abs(len(points[0]) - len(points[1])) <= 16
-        score += 1.0 if balanced else -1.0
-    elif sid == "data.kpi":
-        cards = (slide.get("blocks") or {}).get("cards") or []
-        score += 0.3 if 3 <= len(cards) <= 4 else -0.6
-    elif sid == "data.cards":
-        cards = (slide.get("blocks") or {}).get("cards") or []
-        score += 0.6 if len(cards) >= 3 else 0.2
-    elif sid == "data.table":
-        rows = ((slide.get("blocks") or {}).get("table") or {}).get("rows") or []
-        score += 1.2 if len(rows) >= 3 else -0.5
-    elif sid == "chart.split":
-        score += 0.8 if n >= 1 else -0.5
-    elif sid == "timeline.vertical":
-        items = (slide.get("blocks") or {}).get("timeline") or []
-        score += 0.9 if len(items) >= 4 else -0.4
-    elif sid == "process.vertical":
-        steps = (slide.get("blocks") or {}).get("process") or []
-        score += 0.9 if len(steps) >= 5 else -0.4
-    elif sid in ("summary.list",):
-        score += 0.7 if n >= 2 else -0.5
+    for r in _LAYOUT_AFFINITY.get(sid, []):
+        score += _eval_affinity_rule(r, n, total_chars, has_image, points,
+                                     n_cards, n_rows, n_timeline, n_process)
 
     if sid in recent:
         score -= 1.3                     # 相邻页同版式最容易显“模板感”
