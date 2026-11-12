@@ -30,6 +30,22 @@ _SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_JOBS)
 _QUEUE_LOCK = threading.RLock()
 
 
+def _queue_limit() -> int:
+    """排队深度上限：50 人同时提交时不让 FIFO 无限堆积。"""
+    return max(1, int(getattr(settings, "PPT_QUEUE_MAX", 50)))
+
+
+def _queue_timeout() -> float:
+    """排队最长等待秒数；0 表示不限制。"""
+    return max(0, int(getattr(settings, "PPT_QUEUE_TIMEOUT", 1800)))
+
+
+# 作业实际耗时（从被准入到释放槽位）的滑动窗口，用于给排队用户估算等待。
+_STARTED_AT: Dict[str, float] = {}
+_DURATIONS: Deque[float] = deque(maxlen=20)
+_REAPER_STARTED = False
+
+
 @dataclass
 class _QueuedJob:
     doc_id: str
@@ -72,6 +88,7 @@ def _start_locked(item: _QueuedJob) -> None:
     logger.info("[PPT 任务耗时] 排队=%.1fs job=%s 本地=%s",
                 time.monotonic() - item.enqueued_at, item.doc_id, item.local)
     _ACTIVE_DOCS.add(item.doc_id)
+    _STARTED_AT[item.doc_id] = time.monotonic()
     _update_job(
         item.doc_id,
         job_status="pending",
@@ -128,22 +145,102 @@ def _dispatch_locked() -> None:
             continue
 
 
+def _expire_queued_locked() -> list[_QueuedJob]:
+    """摘掉等待过久的排队任务（调用方必须持有 _QUEUE_LOCK）。"""
+    timeout = _queue_timeout()
+    if timeout <= 0:
+        return []
+    now = time.monotonic()
+    expired = [item for item in _QUEUE if now - item.enqueued_at >= timeout]
+    for item in expired:
+        _QUEUE.remove(item)
+        if _USER_JOBS.get(item.user_id) == item.doc_id:
+            _USER_JOBS.pop(item.user_id, None)
+    return expired
+
+
+def _reap_loop() -> None:
+    while True:
+        time.sleep(5)
+        try:
+            with _QUEUE_LOCK:
+                expired = _expire_queued_locked()
+            for item in expired:
+                waited = time.monotonic() - item.enqueued_at
+                _update_job(
+                    item.doc_id,
+                    job_cancel_requested=True,
+                    job_status="cancelled",
+                    job_phase="cancelled",
+                    job_error="排队等待超时，请稍后重试",
+                    job_finished_at=now_local(),
+                    job_progress_at=now_local(),
+                )
+                logger.warning("[PPT 任务耗时] 排队超时取消 job=%s 等待=%.1fs",
+                               item.doc_id, waited)
+        except Exception:
+            logger.exception("PPT 排队超时清理失败")
+
+
+def _ensure_reaper() -> None:
+    """懒启动守护线程；pytest 不提交任务时不会产生额外活动。"""
+    global _REAPER_STARTED
+    if _REAPER_STARTED:
+        return
+    with _QUEUE_LOCK:
+        if _REAPER_STARTED:
+            return
+        _REAPER_STARTED = True
+    threading.Thread(target=_reap_loop, name="ppt-queue-reaper",
+                     daemon=True).start()
+
+
+def queue_stats() -> Dict[str, Any]:
+    """健康检查 / 排障用快照。"""
+    with _QUEUE_LOCK:
+        durations = list(_DURATIONS)
+        return {
+            "max_concurrent_jobs": _MAX_CONCURRENT_JOBS,
+            "active_jobs": len(_ACTIVE_DOCS),
+            "queued_jobs": len(_QUEUE),
+            "queue_limit": _queue_limit(),
+            "queue_timeout_seconds": _queue_timeout(),
+            "avg_job_seconds": (round(sum(durations) / len(durations), 1)
+                                if durations else None),
+        }
+
+
 def _on_runner_finished(doc_id: str, user_id: str) -> None:
     """Release capacity/user ownership and immediately admit the next FIFO job."""
     with _QUEUE_LOCK:
         if doc_id not in _ACTIVE_DOCS:
             return
         _ACTIVE_DOCS.discard(doc_id)
+        started = _STARTED_AT.pop(doc_id, None)
+        if started is not None:
+            _DURATIONS.append(time.monotonic() - started)
         if _USER_JOBS.get(user_id) == doc_id:
             _USER_JOBS.pop(user_id, None)
         _SLOTS.release()
         _dispatch_locked()
 
 
+def _bind_model_user(user_id: str) -> None:
+    """把认证用户带进后台线程的模型准入上下文。
+
+    ContextVar 不会跨线程传播；不绑定的话每个 PPT 模型请求都会被
+    _ModelCapacity 当成不同的 unscoped 用户，per-user 限流和轮询公平
+    对后台 PPT 完全失效，一个作业就能占满全部 background 名额。
+    """
+    from app.infrastructure.ai.qwen import set_model_request_user
+    set_model_request_user(user_id)
+
+
 class PPTAgentJobRunner(_core.PPTAgentJobRunner):
     """Core runner plus queue-slot release/dispatch in a guaranteed finally block."""
 
     def run(self) -> None:
+        _bind_model_user(self.user_id)
         try:
             super().run()
         finally:
@@ -158,6 +255,7 @@ class LocalRenderJobRunner(_core.LocalRenderJobRunner):
         self.user_id = user_id
 
     def run(self) -> None:
+        _bind_model_user(self.user_id)
         try:
             super().run()
         finally:
@@ -189,6 +287,15 @@ def submit_job(
                 "同一用户同时只能有 1 个 PPT 生成任务（含排队任务），"
                 f"请等待任务 {existing} 完成或取消后再提交。"
             )
+        limit = _queue_limit()
+        if len(_QUEUE) >= limit:
+            # 50 人同时提交时，与其让第 51 个人静默等两小时，不如立即
+            # 明确拒绝；位置与预计等待由 job_status / queue_stats 暴露。
+            raise ConflictError(
+                f"当前已有 {len(_QUEUE)} 个生成任务在排队（上限 {limit}），"
+                "请稍后再试"
+            )
+        _ensure_reaper()
 
         item = _QueuedJob(doc_id, user_id, message or "", history,
                           local=_core.uses_local_renderer(doc_id))
@@ -291,8 +398,21 @@ def job_status(doc) -> Dict[str, Any]:
     """Core persisted status plus current process-local FIFO position."""
     with _QUEUE_LOCK:
         position = _queue_position_locked(doc.id)
+        queue_depth = len(_QUEUE)
+        active_jobs = len(_ACTIVE_DOCS)
+        durations = list(_DURATIONS)
     result = _core.job_status(doc)
     result["queue_position"] = position
+    result["queue_depth"] = queue_depth
+    result["active_jobs"] = active_jobs
+    # 队列按 _MAX_CONCURRENT_JOBS 个一批放行；每批耗时用最近完成作业的
+    # 实测均值。没有历史样本时只暴露位置与人数，不编造等待时间。
+    avg = sum(durations) / len(durations) if durations else None
+    if position and position > 0 and avg is not None:
+        waves = (position - 1) // _MAX_CONCURRENT_JOBS + 1
+        result["estimated_wait_seconds"] = round(waves * avg, 1)
+    else:
+        result["estimated_wait_seconds"] = None
     if position is not None and position > 0:
         # A queued job has not started, so the core stall timer must not age it out.
         result["status"] = "pending"

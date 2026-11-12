@@ -72,6 +72,18 @@ def _init_facilities() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # AnyIO 默认只有 40 个工作线程。50 人同时提交 PPT、在模型准入闸门上
+    # 排队时会把线程池占满，连交互式写作与状态轮询都排不进来。这里按配置
+    # 放宽配额；等待本身仍由 ppt_admission / FIFO 队列限流，不会打爆模型。
+    try:
+        import anyio.to_thread
+        from app.core.config import settings as _settings
+        anyio.to_thread.current_default_thread_limiter().total_tokens = max(
+            40, int(getattr(_settings, "WEB_THREADPOOL_TOKENS", 120)))
+        logger.info("FastAPI 工作线程池配额=%d",
+                    anyio.to_thread.current_default_thread_limiter().total_tokens)
+    except Exception as exc:
+        logger.warning("工作线程池配额调整跳过: %s", exc)
     _ensure_directories()
     _init_database()
     _init_facilities()

@@ -56,6 +56,27 @@ class Settings:
         self.PPT_MODEL_NAME = os.getenv("PPT_MODEL_NAME", self.MODEL_NAME)
         self.PPT_MODEL_API_KEY = os.getenv("PPT_MODEL_API_KEY", "")
         self.PPT_MODEL_TIMEOUT = int(os.getenv("PPT_MODEL_TIMEOUT", "300"))
+        # PPT 长模型请求准入。生产实测（2026-11-12, 35B 单端点 8010）：
+        # 2 条 PPT 长构图 + 4 条交互式写作短请求时，短请求 TTFT 从 2.47s
+        # 劣化到 9.39s。限制同时在途的 PPT 专用模型调用数，且始终小于
+        # MODEL_MAX_CONCURRENCY，为交互式写作至少留 1 个模型名额。
+        self.PPT_MODEL_MAX_CONCURRENCY = max(
+            1, int(os.getenv("PPT_MODEL_MAX_CONCURRENCY", "2")))
+        # 首轮构图批次并行度。默认 1 = 保持串行；实测单端点下并行 2 条构图
+        # 几乎无收益（52.1s vs 串行 55.6s），并行 4 条虽省 47s 却会拖慢写作。
+        # 只有在给 PPT 起了独立模型副本后才建议灰度调到 2。
+        self.PPT_COMPOSITION_PARALLEL = max(
+            1, int(os.getenv("PPT_COMPOSITION_PARALLEL", "1")))
+        # FIFO 队列上限与排队超时（秒）：50 人同时提交时不无限堆积、不无限等待。
+        self.PPT_QUEUE_MAX = max(1, int(os.getenv("PPT_QUEUE_MAX", "50")))
+        self.PPT_QUEUE_TIMEOUT = max(0, int(os.getenv("PPT_QUEUE_TIMEOUT", "1800")))
+        # 等闸门的最长时间（秒）。防止 50 人同时请求时 HTTP 线程被无限期挂住。
+        self.PPT_MODEL_SLOT_TIMEOUT = max(
+            1, int(os.getenv("PPT_MODEL_SLOT_TIMEOUT", "300")))
+        # FastAPI/AnyIO 默认只有 40 个工作线程；50 人同时等在 PPT 闸门上会
+        # 把线程池占满，连交互式写作都排不进来。启动期把配额调大。
+        self.WEB_THREADPOOL_TOKENS = max(
+            40, int(os.getenv("WEB_THREADPOOL_TOKENS", "120")))
         # PPTAgent 已退出生产链路。只有显式打开兼容开关才读取其地址；默认使用
         # 本地原生 PPTX 渲染器，生成的文本框、形状和表格均可继续编辑。
         self.PPT_AGENT_ENABLED = _bool(os.getenv("PPT_AGENT_ENABLED"), False)

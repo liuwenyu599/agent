@@ -437,14 +437,54 @@ def author_pages(outline: dict, template: dict, assistant: Any,
     budgets = [max(2400, 800 * len(batch)) if i == 0
                else max(1400, 700 * len(batch))
                for i, batch in enumerate(batches)]
-    responses = []
+    responses: list = [None] * len(batches)
     authored_at = time.monotonic()
-    for i, batch in enumerate(batches):
-        if responses and responses[-1][1]:
-            # 网关整体不可用时不再为剩余批次各等一次超时，直接走可读版式。
-            responses.append(({}, True, False))
-            continue
-        responses.append(request_batch(i, batch, budgets[i]))
+    # 默认串行；仅在显式配置且 PPT 模型闸门有余量时按组并行。
+    # 生产实测（35B 单端点，2026-11-12）：并行 2 条长构图几乎无收益
+    # (52.1s vs 串行 55.6s)，并行 4 条虽省 47s，却把交互式写作短请求
+    # TTFT 从 2.47s 拉到 9.39s。所以默认 PPT_COMPOSITION_PARALLEL=1，
+    # 只有给 PPT 起了独立模型副本后才建议调大。并行请求仍要过
+    # ppt_admission 全局闸门，总量不会突破给写作预留名额后的上限。
+    from app.application.ppt.ppt_admission import composition_parallel
+    parallel = (min(composition_parallel(), max(1, len(batches) - 1))
+                if len(batches) > 1 else 1)
+    # 带模板图的第一批最重（实测 59s），先单独跑：模型若拒绝图片，后续
+    # 批次仍按无图 prompt 走，不与视觉编码抢推理资源。
+    if batches:
+        responses[0] = request_batch(0, batches[0], budgets[0])
+    rest = list(range(1, len(batches)))
+    if parallel > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        for start in range(0, len(rest), parallel):
+            group = rest[start:start + parallel]
+            prior = responses[group[0] - 1]
+            if prior and prior[1]:
+                # 前一组整批失败说明网关整体不可用，不再各等一次超时。
+                for i in rest[start:]:
+                    responses[i] = ({}, True, False)
+                break
+            with ThreadPoolExecutor(max_workers=len(group)) as pool:
+                futures = {
+                    pool.submit(request_batch, i, batches[i], budgets[i]): i
+                    for i in group
+                }
+                for future, i in futures.items():
+                    try:
+                        responses[i] = future.result()
+                    except Exception as exc:
+                        logger.warning("[PPT] 第 %d 批并行构图异常：%s",
+                                       i + 1, type(exc).__name__)
+                        responses[i] = ({}, True, False)
+        logger.info("[PPT 构图耗时] 首轮 并行度=%d 批数=%d 用时=%.1fs",
+                    parallel, len(batches), time.monotonic() - authored_at)
+    else:
+        for i in rest:
+            prior = responses[i - 1]
+            if prior and prior[1]:
+                # 网关整体不可用时不再为剩余批次各等一次超时，直接走可读版式。
+                responses[i] = ({}, True, False)
+                continue
+            responses[i] = request_batch(i, batches[i], budgets[i])
     # --- 阶段 B：每批合并修复请求，再按页顺序验收 / 跨页去重 ---
     # 同批错误一次点名，避免 4 页各等一次模型；去重仍按页顺序执行。
     for batch_index, batch in enumerate(batches):

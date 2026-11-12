@@ -127,7 +127,7 @@ BUILTIN_TEMPLATES = [
      "layouts": {"cover": "cover.band", "toc": "toc.list", "section": "section.number",
                  "content": "content.bullets", "data": "data.cards", "chart": "chart.full",
                  "case": "case.block", "timeline": "timeline.horizontal", "process": "process.chevron",
-                 "summary": "summary.cards", "closing": "closing.center"}},
+                 "summary": "summary.list", "closing": "closing.center"}},
     {"id": "master_warm_gold", "name": "暖金简约母版（米棕）", "category": "总结汇报", "is_official": True,
      "description": "暖金米棕真母版：左对齐封面+卡片抓手版式，克隆填充",
      "source_pptx": "templates/gov/master_warm_gold.pptx",
@@ -151,7 +151,7 @@ BUILTIN_TEMPLATES = [
      "layouts": {"cover": "cover.side", "toc": "toc.list", "section": "section.number",
                  "content": "content.bullets", "data": "data.cards", "chart": "chart.full",
                  "case": "case.block", "timeline": "timeline.horizontal", "process": "process.chevron",
-                 "summary": "summary.cards", "closing": "closing.center"}},
+                 "summary": "summary.list", "closing": "closing.center"}},
 ]
 
 DEFAULT_LAYOUTS = BUILTIN_TEMPLATES[0]["layouts"]

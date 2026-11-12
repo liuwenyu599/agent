@@ -159,7 +159,14 @@ class PPTService:
 
             class _PPTAssistant:
                 def complete(self, *args, **kwargs):
-                    with model_request_class("background"):
+                    # 两道闸：background 让模型池把交互式写作排在前面；
+                    # ppt_model_slot 限制同时在途的 PPT 长请求总量，避免
+                    # 「做 PPT 时写作变慢」（实测短请求 TTFT 劣化 3.8 倍）。
+                    from app.application.ppt.ppt_admission import ppt_model_slot
+                    from app.core.config import settings as _settings
+                    timeout = max(1, int(getattr(
+                        _settings, "PPT_MODEL_SLOT_TIMEOUT", 300)))
+                    with model_request_class("background"), ppt_model_slot(timeout=timeout):
                         return source.complete(*args, **kwargs)
 
                 def __getattr__(self, name):
