@@ -647,10 +647,25 @@ class PPTService:
         return {"items": self.templates.list_categories()}
 
     def seed_builtin_templates(self) -> dict:
-        """初始化内置官方模板（upsert 模式，可重复调用刷新）。"""
+        """初始化内置官方模板（upsert 模式，可重复调用刷新）。
+
+        含 ``source_pptx`` 的 spec 为真母版：读取母版字节、分析版式、落盘到
+        ``tpl_src/<id>.pptx`` 并写入 ``layout_library``，使生成时走克隆填充
+        （视觉/结构来自母版），而不是换色骨架。
+        """
         created = 0
+        ppt_dir_parent = Path(__file__).resolve().parent  # app/application/ppt
         for spec in BUILTIN_TEMPLATES:
             existing = self.templates.get_by_builtin_id(spec["id"])
+            src = spec.get("source_pptx")
+            data = None
+            if src:
+                p = ppt_dir_parent / src
+                if p.exists():
+                    try:
+                        data = p.read_bytes()
+                    except Exception as e:
+                        logger.warning("读取母版 %s 失败：%s", spec["id"], e)
             if existing:
                 existing.name = spec["name"]
                 existing.sharing_status = "published"
@@ -658,8 +673,37 @@ class PPTService:
                 existing.description = spec.get("description")
                 existing.colors = spec["colors"]
                 existing.layouts = spec["layouts"]
+                if data is not None:
+                    try:
+                        learned = ppt_engine.analyze_template(data)
+                        ppt_engine.validate_learned_template(learned, require_content=False)
+                        self._save_tpl_source(existing.id, data)
+                        existing.layout_library = learned.get("layouts") or []
+                        existing.colors = learned["colors"]
+                        existing.font = learned.get("font") or existing.font
+                        existing.source_file = f"{spec['id']}.pptx"
+                    except Exception as e:
+                        logger.warning("母版 %s 分析失败，仅刷新元数据：%s", spec["id"], e)
                 self.templates.update(existing)
             else:
+                if data is not None:
+                    try:
+                        learned = ppt_engine.analyze_template(data)
+                        ppt_engine.validate_learned_template(learned, require_content=False)
+                        t = self.templates.add(PPTTemplate(
+                            builtin_id=spec["id"], name=spec["name"], category=spec["category"],
+                            description=spec.get("description"), is_official=True,
+                            sharing_status="published",
+                            colors=learned["colors"], font=learned.get("font"),
+                            layouts=DEFAULT_LAYOUTS.copy(),
+                            source_file=f"{spec['id']}.pptx"))
+                        self._save_tpl_source(t.id, data)
+                        t.layout_library = learned.get("layouts") or []
+                        self.templates.update(t)
+                        created += 1
+                        continue
+                    except Exception as e:
+                        logger.warning("母版 %s 分析失败，退化为换色模板：%s", spec["id"], e)
                 self.templates.add(PPTTemplate(
                     builtin_id=spec["id"], name=spec["name"], category=spec["category"],
                     description=spec.get("description"), is_official=True,

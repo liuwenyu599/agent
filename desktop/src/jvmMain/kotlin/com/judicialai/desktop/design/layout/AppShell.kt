@@ -147,12 +147,12 @@ private fun ComplianceBanner() {
         ) {
             Icon(
                 Icons.Default.Campaign, contentDescription = null,
-                tint = Color(0xFFB7791F), modifier = Modifier.size(15.dp),
+                tint = Color(0xFFB7791F), modifier = Modifier.size(24.dp),
             )
             Spacer(Modifier.width(Dimens.space2))
             Text(
                 "非涉密信息处理平台，严禁处理、传输涉密和敏感信息",
-                fontSize = 12.sp, color = amberDark,
+                fontSize = 19.2.sp, color = amberDark,
                 fontWeight = FontWeight.Medium, letterSpacing = 0.5.sp,
             )
         }

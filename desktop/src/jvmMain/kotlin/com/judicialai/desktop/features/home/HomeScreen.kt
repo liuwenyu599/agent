@@ -68,9 +68,6 @@ private val HOME_BG = Color(0xFFE9EBEE)
 /** 姓名强调金（参考设计里的低饱和金） */
 private val NAME_GOLD = Color(0xFF8C6F3F)
 
-/** 卡片 hover 底部描边金 */
-private val ACCENT_GOLD = Color(0xFFC29A4A)
-
 /**
  * 四大功能卡底色（低饱和深色调，庄重不刺眼，参考设计配色）：
  * 写作=黛蓝（深夜蓝，略浅）、模板=墨绿、PPT=紫檀、校验=赭金。
@@ -81,6 +78,9 @@ private val MODULE_BG = mapOf(
     AppScreen.PPT to Color(0xFF46295E),
     AppScreen.FORMAT_CHECK to Color(0xFF6B4423),
 )
+
+/** 卡片 hover 底部描边金 */
+private val ACCENT_GOLD = Color(0xFFC29A4A)
 
 /** 四大功能卡英文 eyebrow（参考设计） */
 private val MODULE_EN = mapOf(
@@ -108,7 +108,10 @@ fun HomeScreen(vm: HomeViewModel = remember { HomeViewModel() }) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(Modifier.widthIn(max = HOME_CONTENT_MAX_WIDTH)) {
-                Column(verticalArrangement = Arrangement.spacedBy(Dimens.space6)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Dimens.space6),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     WelcomeBand(vm)
                     FeatureGrid()
                 }
@@ -126,7 +129,10 @@ private fun WelcomeBand(vm: HomeViewModel) {
     val dateText = today.format(DateTimeFormatter.ofPattern("yyyy年M月d日")) +
         "  " + WEEKDAYS[(today.dayOfWeek.value + 6) % 7]
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         // 问候语 + 姓名（姓名用低饱和金，呼应机构色，参考设计）
         Row(verticalAlignment = Alignment.Bottom) {
             Text(vm.greeting + "，", fontSize = 34.sp, fontWeight = FontWeight.Bold,
@@ -183,6 +189,7 @@ private fun FeatureGrid() {
     ) {
         items.chunked(2).forEach { row ->
             Row(
+                Modifier.align(Alignment.CenterHorizontally),
                 horizontalArrangement = Arrangement.spacedBy(Dimens.space5),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -220,7 +227,7 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
             .clickable(interactionSource = interaction, indication = null) {
                 AppState.navigate(item.screen, item.adminTab)
             }
-            .padding(Dimens.space4),
+            .padding(Dimens.space5),
     ) {
         Column(
             Modifier.fillMaxSize(),
@@ -264,8 +271,8 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
     }
 }
 
-/** 首页 2×2 卡片尺寸：正方形，边长略大于原高度（150），庄重紧凑 */
-private val HOME_FEATURE_CARD_SIZE = 172.dp
+/** 首页 2×2 卡片尺寸：正方形，连续缩小 10% 后留白更舒展（不铺满，四周留白） */
+private val HOME_FEATURE_CARD_SIZE = 226.8.dp
 
 /** 首页四卡对应功能色（供其他页面复用） */
 fun softColorOf(screen: AppScreen): Color = when (screen) {
