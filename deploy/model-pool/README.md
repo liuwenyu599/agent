@@ -95,7 +95,8 @@ curl -s http://127.0.0.1:8003/v1/models
 #    MODEL_SERVICE_URL(S)=http://10.128.85.133:8003/v1
 #    MODEL_NAME=Qwen2.5-14B-Instruct
 #    VISION_* 按需恢复 VL-7B（如仍有该裸进程）；LONG_FORM_MODEL_URLS 清空
-# 3) 重建 justice-api
+# 3) 重建后端容器（服务名 api，--no-deps 避免连带重跑 Alembic 迁移）
+cd /opt/justice-office/deploy && docker compose up -d --no-deps api
 ```
 
 停 35B：`docker compose down`（只停模型服务，不动数据库和后端）。
@@ -179,24 +180,30 @@ URL35B=http://127.0.0.1:8011/v1 MODEL35B=Qwen3.8-27B \
 
 ### 10.2 卡位账本（8×310P3，单卡 43GB HBM）
 
-| 卡 | 现状 | 说明 |
-|---|---|---|
-| 0,1 | `qwen35b-main` :8010 | 主 35B，TP=2，**保留给写作/长文** |
-| 2,3 | 27B 试用 :8011 | TP=2，试用实例；可停以腾卡（需人工确认） |
-| 4 | bge-m3 :8001（裸进程） | 1 卡，向量服务必须保留；实际卡位待 root 核实 |
-| 5,6 | 空闲 | 原 DeepPresenter-9B / pptagent 栈已停 |
-| 7 | 空闲 | 原 14B 回滚实例已停 |
+2026-11-12 root 回传 `npu-smi info` 实测（**以此表为准，勿再用「卡不够」的旧判断**）：
+
+| 卡 | 现状 | HBM | 说明 |
+|---|---|---|---|
+| 0,1 | `qwen35b-main` :8010 | 38191 / 38089 MB | 主 35B，TP=2，进程 3399288 / 3399313；**保留给写作/长文** |
+| 2 | bge-m3 :8001 | 3290 MB | 进程 1936806 VLLMEngineCore；向量服务必须保留 |
+| 3 | 无进程 | 1603 MB | 空闲（仅驱动级占用） |
+| 4,5 | `No running processes found in NPU 4` | 1384 / 1570 MB | 空闲，整张物理卡可用 |
+| 6,7 | `No running processes found in NPU 5` | 1783 / 1174 MB | 空闲，整张物理卡可用 |
+
+⚠ 27B 试用实例（:8011）已退出（此前 `ps` 看到它刚启动 1 分 41 秒且带 defunct
+worker），不再占 2,3。**空闲共 5 张卡，起 2 个 TP=2 副本不需要停任何服务。**
 
 每套 35B TP=2 必须**独占 2 张卡**：W8A8 权重约 35GB → 约 17.5GB/卡，
 `0.90 × 43GB ≈ 38.7GB` 可用，余约 21GB/卡给 KV cache，无法与第二实例共享。
 因此：
 
-- **阶段 1（推荐先做，零停服）**：用 5,6 起 **1 个** 35B 副本（:8020），
+- **阶段 1（推荐先做，零停服）**：用 `4,5` 起 **1 个** 35B 副本（:8020），
   `PPT_MODEL_URL` + `VISION_MODEL_URL` 指向它，主 8010 专供写作/长文。
   这一步就能消除写作 TTFT 劣化。
-- **阶段 2（可选）**：确认卡位后停掉 27B 试用腾出 2,3，再起第 2 个副本
-  （:8021），`PPT_MODEL_URLS` 填两个地址，网关按「最少在途 + 轮询」分流。
-  **「再起 2 个副本」在当前卡位下大概率差 1 张卡，必须先核实再动手。**
+- **阶段 2（卡位已确认够用）**：用 `6,7` 再起第 2 个副本（:8021），
+  `PPT_MODEL_URLS` 填两个地址，网关按「最少在途 + 轮询」分流。
+  device 3 留作扩容余量。按物理卡成对分配（4,5 / 6,7），不要跨卡拆 TP。
+  :8020 / :8021 端口已确认空闲。**无需停 27B（已退出）或任何在跑的服务。**
 
 ### 10.3 资源影响（实测 + 估算）
 
@@ -218,45 +225,163 @@ URL35B=http://127.0.0.1:8011/v1 MODEL35B=Qwen3.8-27B \
 npu-smi info                                  # 确认 davinci0~7 实际占用
 ps -eo pid,user,rss,etime,args | grep -E 'vllm serve' | grep -v grep
 ss -ltnp | grep -E ':802[01]'                 # 确认示例端口未被占用
+# 用 -F 固定字符串，方括号在 -E 正则里会被吃掉导致漏匹配（2026-11-12 实测踩过）
 docker logs --since 24h justice-api 2>&1 \
-  | grep -E '\[PPT 任务耗时\]|\[PPT 构图耗时\]|排队=' | tail -120
+  | grep -F -e 'PPT 任务耗时' -e 'PPT 构图耗时' -e '排队=' | tail -120
 ```
 
-### 10.5 启动与切换命令模板（均为高危操作，仅打印，由人工确认执行）
+2026-11-12 回传结果：`npu-smi` 见 10.2 实测表；`:802[01]` 无监听（端口空闲）；
+日志 grep 无输出（方括号被写成 `$$` 导致正则未命中，且近 24h 可能未跑 PPT），
+需先生成一份 PPT 再用上面的 `-F` 命令取分段耗时。
+
+### 10.5 启动新 35B 实例（均为高危操作，仅打印，由 root 人工确认执行）
+
+**先厘清形态**：线上 35B 是 **Docker 容器**，不是裸进程、也不归
+`justice-api` 那个 compose 管。`ps` 看到的 `vllm serve ...` 父进程是
+`containerd-shim-runc-v2`（容器 `2a2916f4b5c…`），模型权重以
+`/data/models:/models:ro` 挂进容器。它由本目录 `docker-compose.yml` 的
+`qwen35b-main` 定义，线上实际进程比文件多
+`--enable-auto-tool-choice --tool-call-parser hermes`（历史漂移，副本已对齐）。
+`/models` 在宿主机视角不存在，是因为那是**容器内**路径，别按裸进程去找。
+
+新增 `docker-compose.replicas.yml` 定义两个副本，**独立 compose 工程 +
+`profiles: replicas` 双保险**，不修改也不重启主实例：
+
+| 服务 | 物理卡 | `ASCEND_RT_VISIBLE_DEVICES` | 宿主端口 | 容器内端口 |
+|---|---|---|---|---|
+| `qwen35b-ppt-a` | 4,5 | `4,5` | 8020 | 8010 |
+| `qwen35b-ppt-b` | 6,7 | `6,7` | 8021 | 8010 |
+
+#### 步骤 0：把新文件送到服务器（生产禁出网，用 scp 或整体解包）
 
 ```bash
-# 1) 单个副本：复制现有 35B 服务定义，只改容器名 / 端口 / 可见卡
-#    ASCEND_RT_VISIBLE_DEVICES=5,6 ；端口 8020；其余 flag 与 qwen35b-main 完全一致
-#    （--tensor-parallel-size 2 --quantization ascend --max-num-seqs 8
-#      --gpu-memory-utilization 0.90 --max-model-len 16384 ...）
-cd /opt/justice-office/deploy
-docker compose up -d <新副本服务名>
-curl -s http://127.0.0.1:8020/v1/models       # 探活，确认模型名一致
-
-# 2) 改后端 .env（600 root），按用途隔离，勿动 MODEL_SERVICE_URLS
-#    PPT_MODEL_URL=http://10.128.85.133:8020/v1
-#    PPT_MODEL_NAME=Qwen3.6-35B-A3B-W8A8
-#    VISION_MODEL_URL=http://10.128.85.133:8020/v1
-#    PPT_MODEL_MAX_CONCURRENCY=4
-#    PPT_COMPOSITION_PARALLEL=2
-# 3) 让 .env 生效（重建后端容器，非目录挂载）
-docker compose up -d justice-api
-
-# 4) 验收：隔离前后用同一把尺子，先看写作 TTFT 倍率是否回落到 ~1.0
-#    隔离前（基线，长短请求都打 8010）
-python3 deploy/probe_ppt_concurrency.py
-#    隔离后：PPT 长请求打副本，交互式写作打主端点
-PPT_PROBE_BASE=http://10.128.85.133:8010 \
-PPT_PROBE_PPT_BASE=http://10.128.85.133:8020 \
-    python3 deploy/probe_ppt_concurrency.py
+# 开发机（可出网），两个文件都要送
+scp -i C:/GitSSH/sfj_deploy_ed25519 \
+  deploy/model-pool/docker-compose.replicas.yml \
+  sfj@10.128.85.133:/tmp/docker-compose.replicas.yml
+scp -i C:/GitSSH/sfj_deploy_ed25519 \
+  deploy/patch_production_compose_env.py \
+  sfj@10.128.85.133:/tmp/patch_production_compose_env.py
+# 服务器 root（model-pool 目录 775 root:root，sfj 无写权限，必须由 root 落位）
+cp /tmp/docker-compose.replicas.yml /opt/judicial_app/deploy/model-pool/
+cp /tmp/patch_production_compose_env.py /opt/judicial_app/deploy/
+python3 -m py_compile /opt/judicial_app/deploy/patch_production_compose_env.py
+# 若已整体解包最新 release 包（含这两个文件），此步可跳过
+npu-smi info | head -30                 # 再次确认 4,5,6,7 无进程
+ss -ltnp | grep -E ':802[01]'            # 端口应无监听
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E '8010|8020|8021'
 ```
 
-脚本会分别采样两个端点的 `vllm:num_requests_running/waiting` 峰值，
-并在结尾打印「混合场景写作 TTFT / 纯写作基线」倍率：隔离成功应接近 1.0，
-仍 >2 说明流量没真正分开（检查 `.env` 是否还指向主端点）。
+#### 步骤 1：起副本 A（先只起 1 个，串行加载）
+
+```bash
+cd /opt/judicial_app/deploy/model-pool
+export DC='docker compose -p justice-model-replicas --profile replicas -f docker-compose.replicas.yml'
+$DC config >/dev/null && echo COMPOSE_OK     # 先校验语法
+$DC up -d qwen35b-ppt-a
+$DC logs -f qwen35b-ppt-a                   # 看权重加载 / CANN 图编译，约 5~15 分钟
+# 另开一个终端探活，出现 Qwen3.6-35B-A3B-W8A8 才算就绪
+curl -s http://127.0.0.1:8020/v1/models
+curl -s http://10.128.85.133:8020/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3.6-35B-A3B-W8A8","messages":[{"role":"user","content":"回复收到"}],"max_tokens":16}'
+npu-smi info                               # 确认 4,5 各涨到 ~38GB，0,1 不受影响
+```
+
+⚠ 镜像 `m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p` 已在服务器本地
+（主容器在用），内网不会去拉镜像；`--served-model-name` 保持与主实例一致，
+后端无需改模型名。**别改 `--max-num-seqs 8`**：后端 `MODEL_MAX_CONCURRENCY=4`、
+PPT 闸门 2 都没跑满 8，且 `cudagraph_capture_sizes [1,8]` 只捕获了 batch 1/8。
+
+#### 步骤 2：先补环境变量透传，再按用途隔离切流量
+
+⚠ **这一步不做的话，前面所有并发改造在生产都不会生效。**
+线上 `/opt/justice-office/deploy/docker-compose.yml` 的 `api` 服务用
+`environment:` **显式白名单**（没有 `env_file`），只有写进白名单的键才会进容器。
+2026-11-12 核查发现它仍是旧版：`PPT_MODEL_URL` / `VISION_MODEL_URL` 有，但
+`PPT_MODEL_URLS` / `PPT_MODEL_MAX_CONCURRENCY` / `PPT_COMPOSITION_PARALLEL` /
+`PPT_QUEUE_MAX` / `WEB_THREADPOOL_TOKENS` 等 **19 个键全缺**——`.env` 里配了
+也进不了容器，代码静默用默认值（闸门 2、构图串行、线程池 40），灰度「没反应」。
+仓库 `deploy/production.docker-compose.yml` 已补齐；服务器旧文件用幂等补丁：
+
+```bash
+cd /opt/judicial_app
+python3 deploy/patch_production_compose_env.py /opt/justice-office/deploy/docker-compose.yml
+# 脚本自动备份 .bak-env-<时间戳>，只插入缺失键，可重复跑
+docker compose -f /opt/justice-office/deploy/docker-compose.yml config >/dev/null && echo COMPOSE_OK
+```
+
+后端 `.env` 在 `/opt/justice-office/deploy/.env`（600 root）：
+
+```bash
+cd /opt/justice-office/deploy
+cp .env .env.bak.$(date +%F-%H%M)           # 先备份
+# 只加/改这几行，保持 MODEL_SERVICE_URL(S) 指向 8010 专供写作与长文：
+#   PPT_MODEL_URL=http://10.128.85.133:8020/v1      ← 必须宿主 LAN IP，
+#   VISION_MODEL_URL=http://10.128.85.133:8020/v1     写 127.0.0.1 会掉进容器 loopback
+#   PPT_MODEL_NAME=Qwen3.6-35B-A3B-W8A8
+#   PPT_MODEL_MAX_CONCURRENCY=4
+#   WEB_THREADPOOL_TOKENS=120
+# ⚠ 严禁把 8020 加进 MODEL_SERVICE_URLS：长短请求会重新混进同一池，隔离失效
+# 服务名是 api（container_name 才是 justice-api）；--no-deps 避免 depends_on:
+# migrate(service_completed_successfully) 被连带触发重跑 Alembic 迁移
+docker compose up -d --no-deps api           # 环境变量变化会重建容器（镜像非目录挂载）
+docker logs --since 10m justice-api 2>&1 | tail -40
+# 确认变量真的进了容器（不是只改了 .env）
+docker exec justice-api printenv | grep -E 'PPT_MODEL_URL|PPT_MODEL_MAX_CONCURRENCY|WEB_THREADPOOL_TOKENS'
+```
 
 后端会自动识别 `PPT_MODEL_URL(S)` 与主端点不重叠
 （`server/app/application/ppt/ppt_admission.py::dedicated_ppt_pool`），
 准入闸门不再套「给写作留 1 个主池名额」的约束，副本算力才用得满。
-**灰度顺序**：先只切 `PPT_MODEL_URL`（不动并行度）→ 压测 →
-再开 `PPT_COMPOSITION_PARALLEL=2` → 再压测。任一步写作 TTFT 明显劣化即回退。
+
+#### 步骤 3：同一把尺子验收
+
+```bash
+# 隔离前基线（长短请求都打 8010）—— 应在步骤 2 之前跑
+python3 deploy/probe_ppt_concurrency.py
+# 隔离后：PPT 长请求打副本，交互式写作打主端点
+PPT_PROBE_BASE=http://10.128.85.133:8010 \
+PPT_PROBE_PPT_BASE=http://10.128.85.133:8020 \
+    python3 deploy/probe_ppt_concurrency.py
+# 分段耗时（方括号用 -F 固定字符串，正则会漏匹配）
+docker logs --since 24h justice-api 2>&1 \
+  | grep -F -e 'PPT 任务耗时' -e 'PPT 构图耗时' -e '排队=' | tail -120
+```
+
+脚本分别采样两个端点的 `vllm:num_requests_running/waiting` 峰值，结尾打印
+「混合场景写作 TTFT / 纯写作基线」倍率：**接近 1.0 才算隔离成功**，仍 >2
+说明流量没真正分开（查 `.env` 是否还指向 8010、justice-api 是否真重建）。
+
+#### 步骤 4：确认收益后再起副本 B、再开并行度
+
+```bash
+$DC up -d qwen35b-ppt-b                     # 6,7 → :8021，同样先探活
+# .env 改成多副本（逗号分隔，网关按「最少在途 + 轮询」分流并自带熔断）：
+#   PPT_MODEL_URLS=http://10.128.85.133:8020/v1,http://10.128.85.133:8021/v1
+#   PPT_COMPOSITION_PARALLEL=2               ← 最后才灰度，且必须再压测一次
+# 这两个键正是步骤 2 补丁新补的，补丁没跑就等于没配
+docker compose up -d --no-deps api
+docker exec justice-api printenv | grep -E 'PPT_MODEL_URLS|PPT_COMPOSITION_PARALLEL'
+```
+
+**灰度顺序**：先只切 `PPT_MODEL_URL`（不动并行度）→ 压测 → 再开
+`PPT_MODEL_MAX_CONCURRENCY=3~4` → 压测 → 最后 `PPT_COMPOSITION_PARALLEL=2`
+→ 再压测。任一步写作 TTFT 明显劣化即回退。
+
+#### 回滚 / 常见坑
+
+```bash
+$DC stop qwen35b-ppt-a                      # 或 $DC down（会删两个副本容器）
+# 把 /opt/justice-office/deploy/.env 从 .bak 还原，再 docker compose up -d --no-deps api
+```
+
+- 换卡必须**同时**改 `ASCEND_RT_VISIBLE_DEVICES` 和 `devices:` 列表，两处一一对应。
+- 两个副本建议**串行启动**：并行会争抢 CPU/磁盘/图编译，实测常更慢。
+- `privileged: true` 下容器能看到全部 `/dev/davinci*`，真正限制可见卡的是
+  `ASCEND_RT_VISIBLE_DEVICES`；别以为只改 devices 就够了。
+- 27B 试用实例（:8011，配置卡 2,3）在 2026-11-12 反复启动后退出，而卡 2 被
+  bge-m3 占用，疑似卡冲突。副本用 4,5 / 6,7 与它无交集，但起副本前仍建议
+  `npu-smi info` 复核，别让它抢占空闲卡。
+- 主机 RAM 无压力（253Gi / 61Gi used），**别看 `free -h` 判断能不能起**，
+  硬约束是 NPU HBM：每个 TP=2 实例独占 2 卡约 38GB/卡。

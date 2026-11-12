@@ -1,0 +1,135 @@
+# =============================================================================
+# 35B 独立副本：按用途隔离 PPT / VISION 的长请求，主 :8010 专供交互式写作
+# -----------------------------------------------------------------------------
+# 与 docker-compose.yml 的 qwen35b-main 并存，不修改、不重启主实例。
+# 卡位依据 2026-11-12 root 回传的 npu-smi：
+#   0,1 = 主 35B :8010   2 = bge-m3   3,4,5,6,7 = 空闲
+#   → 副本 A 用 4,5 (:8020)，副本 B 用 6,7 (:8021)，device 3 留作余量。
+#
+# ⚠ 本文件是「独立 compose 工程」，必须显式 -f 指定，别和主 compose 合并后
+#   无参数 up -d；服务带 profile=replicas，防止误起占用 NPU。
+#
+# 用法（root，人工确认后执行；AI 不代执行高危操作）：
+#   cd /opt/judicial_app/deploy/model-pool
+#   export DC='docker compose -p justice-model-replicas --profile replicas -f docker-compose.replicas.yml'
+#   $DC up -d qwen35b-ppt-a          # 先只起 1 个；权重加载 + 图编译约 5~15 分钟
+#   $DC logs -f qwen35b-ppt-a
+#   curl -s http://127.0.0.1:8020/v1/models    # 出现 Qwen3.6-35B-A3B-W8A8 才算就绪
+#   # 确认阶段 1 压测通过后再起第二个（建议串行，别并行抢 CPU/磁盘/编译）
+#   $DC up -d qwen35b-ppt-b
+#
+# 停止 / 回滚：$DC stop qwen35b-ppt-a   （或 $DC down，注意 down 会删两个副本）
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 副本 A：davinci4,5 → 宿主 :8020
+  # ---------------------------------------------------------------------------
+  qwen35b-ppt-a:
+    profiles: ["replicas"]
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen35b-ppt-a
+    privileged: true
+    restart: unless-stopped
+    shm_size: 16g
+    ports:
+      - "${PPT_REPLICA_A_PORT:-8020}:8010"   # 容器内固定 8010，只改宿主端口
+    environment:
+      # ⚠ 换卡必须同步改下面 devices 列表，两处一一对应
+      - ASCEND_RT_VISIBLE_DEVICES=${PPT_REPLICA_A_DEVICES:-4,5}
+      - VLLM_USE_MODELSCOPE=False
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      # 权重只读复用同一份 /data/models，无需复制 35GB
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      - /dev/davinci4
+      - /dev/davinci5
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    # 与线上 3399047 实际命令行逐项对齐（含 --enable-auto-tool-choice /
+    # --tool-call-parser hermes；主 compose 文件里漏了这两个，属历史漂移）。
+    command: >
+      vllm serve
+      ${QWEN35B_MODEL_PATH:-/models/qwen35b-a3b-w8a8/models/Eco-Tech--Qwen3.6-35B-A3B-w8a8/snapshots/master}
+      --host 0.0.0.0
+      --port 8010
+      --served-model-name Qwen3.6-35B-A3B-W8A8
+      --tensor-parallel-size 2
+      --dtype float16
+      --quantization ascend
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.90
+      --additional-config '{"ascend_compilation_config": {"enable_npugraph_ex":false}}'
+      --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1,8]}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
+      --trust-remote-code
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # 副本 B：davinci6,7 → 宿主 :8021（阶段 2 才起）
+  # ---------------------------------------------------------------------------
+  qwen35b-ppt-b:
+    profiles: ["replicas"]
+    image: ${VLLM_IMAGE:-m.daocloud.io/quay.io/ascend/vllm-ascend:v0.23.0-310p}
+    container_name: justice-qwen35b-ppt-b
+    privileged: true
+    restart: unless-stopped
+    shm_size: 16g
+    ports:
+      - "${PPT_REPLICA_B_PORT:-8021}:8010"
+    environment:
+      - ASCEND_RT_VISIBLE_DEVICES=${PPT_REPLICA_B_DEVICES:-6,7}
+      - VLLM_USE_MODELSCOPE=False
+      - PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ${HOST_MODEL_DIR:-/data/models}:/models:ro
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+    devices:
+      - /dev/davinci6
+      - /dev/davinci7
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    entrypoint: []
+    command: >
+      vllm serve
+      ${QWEN35B_MODEL_PATH:-/models/qwen35b-a3b-w8a8/models/Eco-Tech--Qwen3.6-35B-A3B-w8a8/snapshots/master}
+      --host 0.0.0.0
+      --port 8010
+      --served-model-name Qwen3.6-35B-A3B-W8A8
+      --tensor-parallel-size 2
+      --dtype float16
+      --quantization ascend
+      --max-model-len 16384
+      --max-num-seqs 8
+      --gpu-memory-utilization 0.90
+      --additional-config '{"ascend_compilation_config": {"enable_npugraph_ex":false}}'
+      --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "cudagraph_capture_sizes": [1,8]}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
+      --trust-remote-code
+    logging:
+      driver: json-file
+      options:
+        max-size: "200m"
+        max-file: "3"

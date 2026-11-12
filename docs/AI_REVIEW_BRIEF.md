@@ -175,15 +175,32 @@
 35B 副本后重做混合压测。当前单端点下 50 人应理解为「有序排队 + 明确等待时间」，
 不是「50 路同时生成」。
 
-**多副本可行性实测账本（2026-11-12，只读）**：主机 253Gi RAM / 61Gi used /
-155Gi available，单个 35B 实例进程组 RSS ≈ 21GB，再加 2 个副本约 +42GB，
-**主机 RAM 不会飙升**；硬约束是 8 张 310P3（单卡 43GB HBM），每套 35B TP=2
-必须独占 2 卡。当前 0,1=主 35B、2,3=27B 试用、bge 占 1 卡、5,6,7 已释放 →
-确定空闲仅 3 卡，**「再起 2 个副本」大概率差 1 张卡**，须停 27B 试用或先由 root
-用 `npu-smi info` 核实。加载时间按单实例 5~15 分钟估，两副本串行约 10~30 分钟，
+**多副本可行性实测账本（2026-11-12，root 回传 `npu-smi info` 修正版）**：主机
+253Gi RAM / 61Gi used / 155Gi available，单个 35B 实例进程组 RSS ≈ 21GB，再加 2 个
+副本约 +42GB，**主机 RAM 不会飙升**；硬约束是 8 张 310P3（单卡 43GB HBM），每套
+35B TP=2 必须独占 2 卡。实测 device 0,1=主 35B（各约 38GB）、2=bge-m3（3.3GB），
+**3,4,5,6,7 共 5 张空闲**（27B 试用已退出）→ **再起 2 个 TP=2 副本完全够用，
+无需停任何服务**：副本 A 用 4,5（:8020）、副本 B 用 6,7（:8021），端口已确认空闲。
+加载时间按单实例 5~15 分钟估，两副本串行约 10~30 分钟，
 属一次性启动成本。⚠ 不要放开 `--max-num-seqs 8`（端点本就没跑满，且
 `cudagraph_capture_sizes [1,8]` 之外的 batch 走非图路径更慢），也不要把新副本
 塞进 `MODEL_SERVICE_URLS` 做全局混流（长短请求重新合批，隔离失效）。
+
+⚠ **2026-11-12 部署链路关键缺口（本轮修复）**：线上
+`/opt/justice-office/deploy/docker-compose.yml` 的 `api` 服务使用
+`environment:` **显式白名单且无 `env_file`**，只有列出的键才进容器。核查发现
+`PPT_MODEL_URLS` / `PPT_MODEL_MAX_CONCURRENCY` / `PPT_MODEL_SLOT_TIMEOUT` /
+`PPT_COMPOSITION_PARALLEL` / `PPT_QUEUE_MAX` / `PPT_QUEUE_TIMEOUT` /
+`WEB_THREADPOOL_TOKENS` 等 **19 个键全部缺失**——即 `a099ffc`、`98b110f` 的
+并发治理配置在生产一直取代码默认值（闸门 2 / 构图串行 / 线程池 40），
+改 `.env` 不会生效，容易被误判为「代码没效果」。已在
+`deploy/production.docker-compose.yml` 补齐，并提供幂等补丁
+`deploy/patch_production_compose_env.py`（自动备份、只插缺失键、可重复跑，
+用服务器真实 compose 验证过 `docker compose config` 通过）。
+另：服务名是 **`api`**（`justice-api` 只是 container_name），且
+`api.depends_on: migrate(service_completed_successfully)`，重建后端须用
+`docker compose up -d --no-deps api`，否则可能连带重跑 Alembic 迁移。
+验证变量是否真进容器：`docker exec justice-api printenv | grep PPT_`。
 
 ### 2.4 公文格式校验（`b13ddbd` / `366f71d` / `1c42ed7`）
 
