@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -176,10 +177,18 @@ private fun MetaPill(text: String) {
 @Composable
 private fun FeatureGrid() {
     val items = AppNav.coreItems
-    Column(verticalArrangement = Arrangement.spacedBy(Dimens.space5)) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(Dimens.space5),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         items.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(Dimens.space5)) {
-                row.forEach { item -> FeatureCard(item, Modifier.weight(1f)) }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Dimens.space5),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                row.forEach { item ->
+                    FeatureCard(item, Modifier.width(HOME_FEATURE_CARD_SIZE))
+                }
             }
         }
     }
@@ -202,7 +211,7 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(Dimens.radiusLg)
 
     Box(
-        modifier = modifier.height(HOME_FEATURE_CARD_HEIGHT).offset(y = lift)
+        modifier = modifier.height(HOME_FEATURE_CARD_SIZE).offset(y = lift)
             // 同色投影：阴影带卡片主色，浮起时更明显
             .shadow(elevation, shape, ambientColor = Color.Black, spotColor = base)
             .clip(shape)
@@ -213,11 +222,14 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
             }
             .padding(Dimens.space4),
     ) {
-        Column(Modifier.fillMaxSize()) {
-            // 顶部：序号 + 英文 eyebrow
+        Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // 顶部：序号 + 英文 eyebrow（居中一行）
             Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(Dimens.space3),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(no, fontFamily = SERIF, fontSize = 13.sp, letterSpacing = 2.sp,
                     color = Color.White.copy(alpha = 0.62f))
@@ -225,34 +237,35 @@ private fun FeatureCard(item: NavItem, modifier: Modifier = Modifier) {
                     color = Color.White.copy(alpha = 0.5f))
             }
             Spacer(Modifier.weight(1f))
-            // 底部：标题 + 说明
-            Column {
-                Text(item.label, fontFamily = SERIF, fontSize = 26.sp,
+            // 中部：标题 + 说明（居中，字号放大）
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(item.label, fontFamily = SERIF, fontSize = 30.sp,
                     fontWeight = FontWeight.Bold, color = Color.White,
                     letterSpacing = 3.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(Dimens.space2))
-                Text(item.desc, fontSize = 12.5.sp,
+                Text(item.desc, fontSize = 13.sp,
                     color = Color.White.copy(alpha = 0.72f),
-                    letterSpacing = 1.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    letterSpacing = 1.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center)
             }
-            Spacer(Modifier.height(Dimens.space4))
+            Spacer(Modifier.weight(1f))
             Text("→", fontSize = 22.sp, color = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.offset(x = arrowX))
         }
-        // 底部金色短线：唯一装饰线（hover 提亮），不再画通栏白线
+        // 底部金色短线：唯一装饰线（居中，hover 提亮）
         val lineAlpha by androidx.compose.animation.core.animateFloatAsState(
             if (hovered) 1f else 0.65f)
         Box(
-            Modifier.align(Alignment.BottomStart)
-                .padding(start = Dimens.space4, bottom = Dimens.space3)
+            Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = Dimens.space3)
                 .width(48.dp).height(2.dp)
                 .background(ACCENT_GOLD.copy(alpha = lineAlpha)),
         )
     }
 }
 
-/** 首页 2×2 卡片高度：紧凑，适合一屏内完整呈现 */
-private val HOME_FEATURE_CARD_HEIGHT = 150.dp
+/** 首页 2×2 卡片尺寸：正方形，边长略大于原高度（150），庄重紧凑 */
+private val HOME_FEATURE_CARD_SIZE = 172.dp
 
 /** 首页四卡对应功能色（供其他页面复用） */
 fun softColorOf(screen: AppScreen): Color = when (screen) {
