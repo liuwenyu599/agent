@@ -21,6 +21,7 @@ import json
 import math
 import os
 import re
+import random
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -884,6 +885,15 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
 - summary 总结页：title、points（2~4 条结论/展望）
 - closing 结束页（{closing_rule}）：title（如"谢谢聆听，请批评指正"）
 
+【叙事结构骨架】不同主题的演示文稿应使用不同的叙事结构，不要每次都用「目录+章节页+正文」的中规中矩套路。请从以下骨架中选择最贴合主题的一种，并让结构随主题明显变化（相邻两次生成若主题不同，结构应明显不同）：
+- 总—分—总：封面 → 总体态势/成效（data/chart 页）→ 重点任务分项（content/case×N）→ 问题与短板（content/grouped）→ 下一步（content/process）
+- 问题—原因—对策：封面 → 突出矛盾/现状（content/statement）→ 成因剖析（content/grouped）→ 对策举措（process/case×N）→ 时限与保障（timeline）
+- 背景—做法—成效—启示：封面 → 工作背景与要求（content）→ 主要做法（content/process×N）→ 成效数据（data/chart）→ 经验启示（summary/takeaway）
+- 目标—路径—保障：封面 → 目标意义（statement/takeaway）→ 实施路径（process/timeline）→ 重点任务（content×N）→ 组织保障（content/grouped）
+- 是什么—为什么—怎么办：封面 → 政策/概念解读（content）→ 必要性紧迫性（compare/grouped）→ 落实举措（case/process×N）→ 案例佐证（case）
+- 模块化培训：封面 → 培训目标（statement）→ 知识模块一/二/三（content/case×N）→ 随堂练习/互动（content）→ 要点回顾（summary）
+要求：目录页只在内容分组确实有助于阅读时添加（不要每次都加）；章节过渡页仅在其后至少 2 页实质内容时使用；同一份稿里 content 页应混合 3 种以上版式，并穿插 data/chart/case/timeline/process 等结构页，避免连续多页都是「标题+3 条要点」的同构页。
+
 【版式选择】每页可加 "layout" 字段指定版式；不写则系统按内容自动选。系统会做可行性校验，
 点数不符或数据缺失时自动降级，所以只在有把握时指定：
 - content：bullets 编号要点（默认）；two_col 双栏并列（4 条以上）；three_cards 三卡（正好 3 条）；
@@ -941,6 +951,16 @@ _OUTLINE_PROMPT = """你是司法行政机关的资深 PPT 策划专家。请根
     也可用 oval/chevron，渐变用 from/to，线条用 x1/y1/x2/y2/stroke/width。
     坐标均为 0~1 的相对位置。正文背后只能用浅色或透明度不高于 20 的深色；
     图形不能盖住标题或正文，不能添加未经提供的文字。不确定时省略 visuals。"""
+
+
+# 叙事结构骨架的随机倾向：每次生成随机强调一种，避免 35B 总套同一种
+# 「目录+章节+正文」套路，使不同主题/不同次生成的结构明显分化。
+_STRUCTURE_EMPHASIS = [
+    "本次生成请优先采用「问题—原因—对策」或「背景—做法—成效—启示」类叙事结构。",
+    "本次生成请优先采用「目标—路径—保障」或「总—分—总」类叙事结构。",
+    "本次生成请优先采用「是什么—为什么—怎么办」或「模块化培训」类叙事结构。",
+    "本次生成请跳出常规「目录+章节+正文」套路，依据主题选择最贴合的叙事弧。",
+]
 
 
 def template_content_budget(library: list) -> list:
@@ -1020,6 +1040,7 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             "\n\n【来源标注】本次未提供材料名清单。每页 slide 仍须包含 \"sources\" 字段"
             "（无依据时写空数组）。没有可核对依据时，不得写具体数值、日期、办结天数、"
             "案例过程与结果，只写定性表述；宁可少写数字，也不要把占位值当成成果。")
+    prompt += "\n\n【本次结构倾向】" + random.choice(_STRUCTURE_EMPHASIS)
     raw = _call_outline_model(assistant, prompt, temperature=0.5)
     # 验收可观测：以前只有「解析失败」才截断打印模型原文，正常生成时无从判断
     # 35B 到底给了什么。这里留一份截断原文（内网日志，便于 grep OUTLINE_RAW）。
