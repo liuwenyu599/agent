@@ -60,6 +60,7 @@ import com.judicialai.desktop.design.components.AppButtonKind
 import com.judicialai.desktop.design.components.AppSearchField
 import com.judicialai.desktop.design.components.GlobalNavDrawer
 import com.judicialai.desktop.design.components.PersonalCenterDrawer
+import com.judicialai.desktop.app.NotificationBell
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Danger
 import com.judicialai.desktop.design.theme.Dimens
@@ -255,6 +256,13 @@ private fun AppHeader(
             )
 
             Spacer(Modifier.width(Dimens.space4))
+            Box(Modifier.width(1.dp).height(24.dp).background(Color.White.copy(alpha = 0.16f)))
+            Spacer(Modifier.width(Dimens.space3))
+
+            // ---- 通知中心（右上角喇叭 + 完成弹窗入口）----
+            NotificationBell()
+
+            Spacer(Modifier.width(Dimens.space3))
             Box(Modifier.width(1.dp).height(24.dp).background(Color.White.copy(alpha = 0.16f)))
             Spacer(Modifier.width(Dimens.space4))
 

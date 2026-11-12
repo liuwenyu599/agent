@@ -3,7 +3,9 @@ package com.judicialai.desktop.features.ppt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.app.NotificationCenter
 import com.judicialai.desktop.core.logging.ClientLog
 import com.judicialai.desktop.core.network.ApiResult
 import kotlinx.coroutines.CancellationException
@@ -467,6 +469,15 @@ object PptJobEngine {
                 // pendingPptJobId 先留着——落盘是在 autoExport 里异步做的，
                 // 万一落盘失败还要靠这个句柄回到页面补一次导出；落盘成功后才清。
                 AppState.pptJobActive = false
+                // 完成后不自动切页：推通知 + 完成弹窗，用户点「查看」才跳到 PPT 工作台。
+                NotificationCenter.push(
+                    kind = "ppt",
+                    title = "PPT 已生成完成",
+                    body = "共 ${p.totalPages.coerceAtLeast(p.pages.size).coerceAtLeast(1)} 页，点击查看或下载",
+                    screen = AppScreen.PPT,
+                    pendingTarget = p.docId?.let { "pendingPptDocId" to it },
+                    popup = true,
+                )
                 autoExport(p)
             }
             PptJobStatus.FAILED -> {

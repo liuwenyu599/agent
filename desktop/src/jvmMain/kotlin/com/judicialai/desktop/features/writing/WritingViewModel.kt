@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.judicialai.desktop.app.AppScreen
 import com.judicialai.desktop.app.AppState
+import com.judicialai.desktop.app.NotificationCenter
 import com.judicialai.desktop.app.PendingTemplateWrite
 import com.judicialai.desktop.core.network.ApiResult
 import com.judicialai.desktop.core.utils.arr
@@ -1164,6 +1165,10 @@ class WritingViewModel(
             } else {
                 writingTimeline.info("task=$id draft_done_ms=${(System.nanoTime() - draftStartedAt) / 1_000_000}")
                 status = null
+                notifyWritingDone(
+                    "文稿已生成完成",
+                    "《${task.title.ifBlank { "正文" }}》已就绪，可继续编辑或导出",
+                )
             }
             agentProgress = null
             draftPreviousContent = null
@@ -1200,6 +1205,10 @@ class WritingViewModel(
                         contentIssues = emptyList()
                         checkContent()
                     }
+                    notifyWritingDone(
+                        "修改已完成",
+                        "《${task.title.ifBlank { "正文" }}》已按你的要求更新",
+                    )
                 }
                 is ApiResult.Err -> fail(r.message)
             }
@@ -1509,12 +1518,15 @@ class WritingViewModel(
                 formatIssues = checkResult.data?.get("issues").arr().mapNotNull { it.obj() }
             } else formatIssues = emptyList()
             when (val r = repo.export(id, redHeader, target)) {
-                is ApiResult.Ok -> status = "已导出：${target.name}" +
-                    (if (exportWarnings.isEmpty()) "" else
-                        "；格式预设：${exportWarnings.take(3).joinToString("、")}") +
-                    (if (formatIssues.isEmpty()) "" else
-                        "；格式复检发现 ${formatIssues.size} 项问题，请核对") +
-                    (if (checkResult is ApiResult.Err) "；格式复检暂不可用" else "")
+                is ApiResult.Ok -> {
+                    status = "已导出：${target.name}" +
+                        (if (exportWarnings.isEmpty()) "" else
+                            "；格式预设：${exportWarnings.take(3).joinToString("、")}") +
+                        (if (formatIssues.isEmpty()) "" else
+                            "；格式复检发现 ${formatIssues.size} 项问题，请核对") +
+                        (if (checkResult is ApiResult.Err) "；格式复检暂不可用" else "")
+                    notifyWritingDone("已导出 Word", "已保存到 ${target.name}")
+                }
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
@@ -1565,6 +1577,22 @@ class WritingViewModel(
         imageResults = emptyList()
         recognizingImages = false
         closeDocument()
+    }
+
+    /**
+     * 任务完成统一收口：推一条「写作」类通知 + 完成弹窗。
+     * 关键：只通知、**不**自动切页——用户点通知/弹窗的「查看」才跳到工作台。
+     */
+    private fun notifyWritingDone(title: String, body: String) {
+        val id = task.taskId ?: return
+        NotificationCenter.push(
+            kind = "writing",
+            title = title,
+            body = body,
+            screen = AppScreen.WRITING,
+            pendingTarget = "pendingWritingTaskId" to id,
+            popup = true,
+        )
     }
 
     companion object {

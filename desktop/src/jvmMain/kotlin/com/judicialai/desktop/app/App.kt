@@ -28,6 +28,7 @@ import com.judicialai.desktop.features.settings.SettingsScreen
 import com.judicialai.desktop.features.templates.TemplatesScreen
 import com.judicialai.desktop.features.workflow.WorkflowScreen
 import com.judicialai.desktop.features.writing.WritingScreen
+import com.judicialai.desktop.app.CompletionPopupHost
 
 val LocalToastState = staticCompositionLocalOf<ToastState> { ToastState() }
 
@@ -83,6 +84,7 @@ fun App() {
                         session.toastState,
                         Modifier.align(Alignment.TopEnd).padding(16.dp).widthIn(max = 420.dp),
                     )
+                    CompletionPopupHost()
             }
         }
     }

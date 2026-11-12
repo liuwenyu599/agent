@@ -25,6 +25,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import java.io.File
+import com.judicialai.desktop.app.AppScreen
+import com.judicialai.desktop.app.NotificationCenter
 
 /** 文档版本：修改前（源文档） / 当前版本（已应用修改后） */
 enum class DocVersion(val label: String, val query: String) {
@@ -260,6 +262,17 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                         status = "校验完成"
                         loadRecords()
                         openRecord(recordIdOf(o))
+                        // 完成后不自动切页：推通知 + 弹窗，用户点「查看」才跳转。
+                        // 默认已进可编辑视图（见 openRecord），所以这里明确告知「可改段落」。
+                        val filename = o["filename"].str().ifBlank { "文档" }
+                        val count = o["issue_count"].int()
+                        NotificationCenter.push(
+                            kind = "format",
+                            title = "格式校验完成",
+                            body = "《$filename》${if (count > 0) "发现 $count 项问题，" else ""}点击查看结果并修改段落",
+                            screen = AppScreen.FORMAT_CHECK,
+                            popup = true,
+                        )
                     }
                 }
                 is ApiResult.Err -> {
@@ -319,9 +332,12 @@ class FormatCheckViewModel(private val repo: FormatCheckRepository) {
                 is ApiResult.Ok -> paragraphsCurrent = pc.data
                 is ApiResult.Err -> fail("读取「当前版本」段落失败", pc.message)
             }
-            // 段落就绪后加载编辑器（默认「修改前」视图）
-            version = DocVersion.ORIGINAL
-            loadEditor(paragraphsOriginal)
+            // 段落就绪后加载编辑器。
+            // 默认进「当前版本」（可编辑）视图：校验刚完成时用户第一件事就是改段落，
+            // 之前默认「修改前」只读，表现为「校验完了半天点不动段落」。
+            // 「修改前」仍是工具栏里的一键切换，不丢参考基线。
+            version = DocVersion.CURRENT
+            loadEditor(paragraphsCurrent)
             busy = false
         }
     }
