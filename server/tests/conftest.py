@@ -61,6 +61,7 @@ _SEED_USERNAMES = {
     "test_department_permissions": "developer",
     "test_knowledge_isolation_contract": "developer",
     "test_knowledge_route_order": "kbroutedev",
+    "test_email_login": "maildev",
     "test_password_policy": "pwddev",
     "test_ppt_agent_jobs": "jobdev",
     "test_ppt_job_lifecycle_contract": "developer",

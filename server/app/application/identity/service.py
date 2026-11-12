@@ -70,7 +70,12 @@ class AuthService:
 
     # ---- 认证 ----
     def login(self, username: str, password: str) -> Tuple[str, User]:
-        user = self.users.get_by_username(username)
+        # 支持用户名或邮箱登录：含 @ 视为邮箱（email 列唯一），否则按用户名。
+        identifier = (username or "").strip()
+        if "@" in identifier:
+            user = self.users.get_by_email(identifier.lower())
+        else:
+            user = self.users.get_by_username(identifier)
         if not user or not verify_password(password, user.hashed_password):
             raise AppError(401, "用户名或密码错误")
         if not user.is_active:

@@ -166,7 +166,7 @@ private fun LoginServerSettingsDialog(
 private fun LoginForm(vm: AuthViewModel) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    Field(username, { username = it }, "用户名")
+    Field(username, { username = it }, "用户名或邮箱")
     Spacer(Modifier.height(12.dp))
     Field(password, { password = it }, "密码", isPassword = true)
     Spacer(Modifier.height(20.dp))
