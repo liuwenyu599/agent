@@ -36,7 +36,8 @@ private fun requestDigest(text: String): String = MessageDigest.getInstance("SHA
 
 /** 工作台对话消息 */
 data class TaskChatMessage(val role: String, val content: String, val revisionSummary: String = "")
-data class WritingReference(val title: String, val documentId: String)
+data class WritingReference(val title: String, val documentId: String,
+                            val attachmentId: String = "", val matchText: String = "")
 data class WritingTextStyle(
     val fontName: String? = null,
     val fontSizePt: Float? = null,
@@ -222,7 +223,13 @@ class WritingViewModel(
     var chatInput by mutableStateOf("")
     var materials by mutableStateOf(listOf<ChatAttachment>())
         private set
+    var entryMaterials by mutableStateOf(listOf<File>())
+        private set
     var references by mutableStateOf(listOf<String>())
+        private set
+    var contentIssues by mutableStateOf(listOf<JsonObject>())
+        private set
+    var checkingContent by mutableStateOf(false)
         private set
     var referenceItems by mutableStateOf(listOf<WritingReference>())
         private set
@@ -238,11 +245,15 @@ class WritingViewModel(
     fun openReference(reference: WritingReference) {
         openedReference = reference
         openedReferenceDocument = null
-        referenceError = if (reference.documentId.isBlank()) "本条资料暂无可查看的原文" else null
-        if (reference.documentId.isBlank()) return
+        referenceError = if (reference.documentId.isBlank() && reference.attachmentId.isBlank())
+            "本条资料暂无可查看的原文" else null
+        if (referenceError != null) return
         referenceLoading = true
         scope.launch {
-            when (val result = knowledgeRepo?.getDocument(reference.documentId)) {
+            val result = if (reference.attachmentId.isNotBlank())
+                repo.getAttachment(reference.attachmentId)
+            else knowledgeRepo?.getDocument(reference.documentId)
+            when (result) {
                 is ApiResult.Ok -> openedReferenceDocument = result.data
                 is ApiResult.Err -> referenceError = result.message
                 null -> referenceError = "知识库暂不可用"
@@ -256,6 +267,24 @@ class WritingViewModel(
         openedReferenceDocument = null
         referenceError = null
         referenceLoading = false
+    }
+
+    fun checkContent() {
+        val id = task.taskId ?: return
+        if (checkingContent || !hasDraft) return
+        checkingContent = true
+        scope.launch {
+            when (val result = repo.checkContent(id)) {
+                is ApiResult.Ok -> {
+                    contentIssues = result.data?.get("issues").arr().mapNotNull { it.obj() }
+                    status = if (result.data?.get("ai_used").bool())
+                        "内容校验完成：发现 ${contentIssues.size} 项需核对"
+                        else "语义模型暂不可用；已返回可完成的证据核验结果"
+                }
+                is ApiResult.Err -> status = result.message
+            }
+            checkingContent = false
+        }
     }
     var versions by mutableStateOf(listOf<JsonObject>())
         private set
@@ -563,7 +592,8 @@ class WritingViewModel(
         referenceItems = d["reference_items"].arr().mapNotNull { element ->
             val item = element.obj() ?: return@mapNotNull null
             item["title"].str().takeIf { it.isNotBlank() }?.let {
-                title -> WritingReference(title, item["doc_id"].str())
+                title -> WritingReference(title, item["doc_id"].str(),
+                    item["attachment_id"].str(), item["match_text"].str())
             }
         }
         if (d["content_changed"].bool()) refreshVersions()
@@ -803,6 +833,37 @@ class WritingViewModel(
                     }
                     applyResponse(task)
                     entryInput = ""
+                    val pending = entryMaterials
+                    if (pending.isNotEmpty()) {
+                        agentProgress = "正在读取上传材料并识别图片…"
+                        when (val uploaded = repo.uploadTaskMaterials(this@WritingViewModel.task.taskId!!, pending)) {
+                            is ApiResult.Ok -> {
+                                materials = materials + uploaded.data.map {
+                                    ChatAttachment(it["id"].str(), it["filename"].str(),
+                                        it["kind"].str().ifBlank { "doc" },
+                                        it["parse_status"].str() == "failed")
+                                }
+                                entryMaterials = emptyList()
+                                val failedCount = uploaded.data.count {
+                                    it["parse_status"].str() == "failed" || it["text"].str().isBlank()
+                                }
+                                if (failedCount == uploaded.data.size) {
+                                    fail("材料均未识别出可用文字；请检查图片清晰度或 OCR 配置后重传")
+                                    busy = false
+                                    AppState.writingGenerating = false
+                                    return@launch
+                                }
+                                if (failedCount > 0) messages = messages + TaskChatMessage(
+                                    "assistant", "$failedCount 份材料未识别出文字，其余已加入写作上下文")
+                            }
+                            is ApiResult.Err -> {
+                                fail("材料上传失败：${uploaded.message}；任务已创建，请重试上传后再起草")
+                                busy = false
+                                AppState.writingGenerating = false
+                                return@launch
+                            }
+                        }
+                    }
                     busy = false
                     AppState.writingGenerating = false
                     if (hasTask) draft()
@@ -963,19 +1024,29 @@ class WritingViewModel(
         messages = messages + TaskChatMessage("user", text)
         chatInput = ""
         activeJob = scope.launch {
-            when (val r = repo.chat(id, text)) {
-                is ApiResult.Ok -> {
-                    r.data?.let { d ->
-                        applyResponse(d)
-                        d["reply"].str().takeIf { it.isNotBlank() }
-                            ?.let { messages = messages + TaskChatMessage("assistant", it, d["revision_summary"].str()) }
+            try {
+                when (val r = repo.chatStream(id, text) { progress ->
+                    agentProgress = progress
+                }) {
+                    is ApiResult.Ok -> {
+                        r.data?.let { d ->
+                            applyResponse(d)
+                            d["reply"].str().takeIf { it.isNotBlank() }
+                                ?.let { messages = messages + TaskChatMessage(
+                                    "assistant", it, d["revision_summary"].str()) }
+                        }
                     }
+                    is ApiResult.Err -> fail(r.message)
                 }
-                is ApiResult.Err -> fail(r.message)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail("对话失败：${e.message ?: "请稍后重试"}")
+            } finally {
+                busy = false
+                agentProgress = null
+                AppState.writingGenerating = false
             }
-            busy = false
-            agentProgress = null
-            AppState.writingGenerating = false
         }
     }
 
@@ -1144,18 +1215,48 @@ class WritingViewModel(
 
     fun uploadMaterials(files: List<File>) {
         if (files.isEmpty() || busy) return
+        val id = task.taskId
+        if (id == null) {
+            val selected = (entryMaterials + files).distinctBy { it.absolutePath }
+            if (selected.size > 5) {
+                status = "一次最多添加 5 个材料文件，请分批上传"
+                return
+            }
+            entryMaterials = selected
+            status = "已选择 ${entryMaterials.size} 份材料，开始写作后会自动识别并加入上下文"
+            return
+        }
         busy = true
         status = "上传材料中…"
         scope.launch {
-            when (val r = repo.uploadMaterials(files)) {
+            when (val r = repo.uploadTaskMaterials(id, files)) {
                 is ApiResult.Ok -> {
-                    materials = materials + r.data
-                    status = "已上传 ${r.data.size} 份材料，将随下次起草/修改提供给 AI"
+                    materials = materials + r.data.map {
+                        ChatAttachment(it["id"].str(), it["filename"].str(),
+                            it["kind"].str().ifBlank { "doc" },
+                            it["parse_status"].str() == "failed")
+                    }
+                    imageResults = imageResults + r.data.filter {
+                        it["parse_note"].str().contains("识别")
+                    }.map {
+                        RecognizedImage(it["filename"].str(), it["text"].str(),
+                            it["parse_note"].str(), it["parse_status"].str() != "failed")
+                    }
+                    val failedCount = r.data.count {
+                        it["parse_status"].str() == "failed" || it["text"].str().isBlank()
+                    }
+                    status = "已上传 ${r.data.size} 份材料" +
+                        (if (failedCount > 0) "；$failedCount 份未识别出可用文字" else
+                            "，识别文本已加入写作上下文")
                 }
                 is ApiResult.Err -> fail(r.message)
             }
             busy = false
         }
+    }
+
+    fun removeEntryMaterial(file: File) {
+        entryMaterials = entryMaterials.filterNot { it.absolutePath == file.absolutePath }
     }
 
     // ---------------- 图片识别（视觉模型） ----------------
@@ -1391,6 +1492,7 @@ class WritingViewModel(
     }
 
     fun newTask() {
+        entryMaterials = emptyList()
         suggestionOperation++
         suggestionBusy = false
         // 用户明确放弃当前任务：清掉跨页面恢复标记与上次失败原因，切回页面不应再恢复它

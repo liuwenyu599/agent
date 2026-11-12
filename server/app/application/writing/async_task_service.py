@@ -712,7 +712,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
 
         revised = self._splice_local(current, start, end, replacement, operation)
         finalized = finalize_text(
-            self, revised, ctx, sources, keep_previous_references=True)
+            self, revised, ctx, sources, keep_previous_references=True,
+            session_id=task.session_id)
         revised = finalized.text
         version, suggestions_reset = persist_revision(
             self, task, ctx, revised, user_id,
@@ -795,7 +796,8 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                     "content_changed": False, "context_changes": []}
 
         finalized = finalize_text(
-            self, revised, ctx, sources, keep_previous_references=True)
+            self, revised, ctx, sources, keep_previous_references=True,
+            session_id=task.session_id)
         revised = finalized.text
         if max_chars and len(re.sub(r"\s+", "", revised)) > max_chars:
             raise HTTPException(status_code=422, detail=f"最终正文超过 {max_chars} 字，未保存新版本")

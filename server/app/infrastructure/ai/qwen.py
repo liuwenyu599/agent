@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from collections import OrderedDict, deque
+from concurrent.futures import Future
 import json
 import os
 import threading
@@ -33,6 +35,7 @@ _MAX_RETRIES = 3
 _RETRY_BACKOFF = 1.0
 
 _request_class = contextvars.ContextVar("model_request_class", default="interactive")
+_request_user = contextvars.ContextVar("model_request_user", default=None)
 _capacity_lock = threading.Lock()
 _capacities: Dict[tuple, "_ModelCapacity"] = {}
 
@@ -47,32 +50,91 @@ def model_request_class(value: str):
         _request_class.reset(token)
 
 
+def set_model_request_user(user_id: str) -> None:
+    """Bind the authenticated user to this request's model-admission context."""
+    _request_user.set(user_id)
+
+
 class _ModelCapacity:
-    """Thread-safe capacity shared by event loops using the same model endpoint pool."""
+    """Priority admission with round-robin users, shared across event loops."""
 
     def __init__(self, limit: int) -> None:
-        self.total = threading.BoundedSemaphore(limit)
-        self.background = threading.BoundedSemaphore(max(1, limit - 1))
+        self.limit = limit
+        self.user_limit = max(1, int(getattr(settings, "MODEL_USER_MAX_CONCURRENCY", 2)))
+        self.max_pending = max(1, int(getattr(settings, "MODEL_USER_MAX_PENDING", 8)))
+        self.lock = threading.Lock()
+        self.active = 0
+        self.background_active = 0
+        self.per_user: Dict[str, int] = {}
+        self.waiting = {
+            "interactive": OrderedDict(),
+            "background": OrderedDict(),
+        }
+        self.last_served = {"interactive": None, "background": None}
 
-    @staticmethod
-    async def _acquire(semaphore: threading.BoundedSemaphore) -> None:
-        while not semaphore.acquire(blocking=False):
-            await asyncio.sleep(0.025)
+    def _dispatch_locked(self) -> None:
+        while self.active < self.limit:
+            selected = None
+            for priority in ("interactive", "background"):
+                if priority == "background" and self.background_active >= max(1, self.limit - 1):
+                    continue
+                users = self.waiting[priority]
+                if (len(users) > 1 and next(iter(users)) == self.last_served[priority]):
+                    users.move_to_end(self.last_served[priority])
+                for user in list(users):
+                    if self.per_user.get(user, 0) >= self.user_limit:
+                        continue
+                    queue = users[user]
+                    selected = (priority, user, queue.popleft())
+                    if queue:
+                        users.move_to_end(user)
+                    else:
+                        del users[user]
+                    break
+                if selected:
+                    break
+            if selected is None:
+                return
+            priority, user, waiter = selected
+            if waiter.cancelled():
+                continue
+            self.last_served[priority] = user
+            self.active += 1
+            self.per_user[user] = self.per_user.get(user, 0) + 1
+            if priority == "background":
+                self.background_active += 1
+            waiter.set_result(None)
 
     @asynccontextmanager
     async def slot(self):
-        background = _request_class.get() == "background"
-        if background:
-            await self._acquire(self.background)
+        priority = "background" if _request_class.get() == "background" else "interactive"
+        user = _request_user.get() or f"unscoped:{id(asyncio.current_task())}"
+        waiter = Future()
+        with self.lock:
+            queue = self.waiting[priority].setdefault(user, deque())
+            if len(queue) >= self.max_pending:
+                raise AIServiceError("该用户等待模型的任务过多，请稍后重试")
+            queue.append(waiter)
+            self._dispatch_locked()
         try:
-            await self._acquire(self.total)
-            try:
-                yield
-            finally:
-                self.total.release()
+            await asyncio.wrap_future(waiter)
+            yield
         finally:
-            if background:
-                self.background.release()
+            with self.lock:
+                if waiter.done() and not waiter.cancelled():
+                    self.active -= 1
+                    self.per_user[user] -= 1
+                    if self.per_user[user] == 0:
+                        del self.per_user[user]
+                    if priority == "background":
+                        self.background_active -= 1
+                else:
+                    queue = self.waiting[priority].get(user)
+                    if queue and waiter in queue:
+                        queue.remove(waiter)
+                        if not queue:
+                            del self.waiting[priority][user]
+                self._dispatch_locked()
 
 
 class QwenGateway:

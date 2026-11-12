@@ -104,11 +104,16 @@ fun KnowledgeScreen() {
         KnowledgeDocDialog(
             title = vm.docDialogTitle,
             docType = vm.docDialogDocType,
+            authoritative = vm.docDialogAuthoritative,
+            authoritySource = vm.docDialogAuthoritySource,
+            authorityEditable = true,
             content = vm.docDialogContent,
             busy = vm.docDialogBusy,
             editable = vm.currentKb?.let(::canWriteKb) ?: false,
             onTitleChange = { vm.docDialogTitle = it },
             onDocTypeChange = { vm.docDialogDocType = it },
+            onAuthoritySourceChange = { vm.docDialogAuthoritySource = it },
+            onMarkAuthority = vm::markLawAuthority,
             onContentChange = { vm.docDialogContent = it },
             onSave = { vm.saveDocument() },
             onClose = { vm.closeDocument() },
@@ -129,11 +134,16 @@ fun KnowledgeScreen() {
 fun KnowledgeDocDialog(
     title: String,
     docType: String,
+    authoritative: Boolean = false,
+    authoritySource: String = "",
+    authorityEditable: Boolean = false,
     content: String,
     busy: Boolean,
     editable: Boolean = true,
     onTitleChange: (String) -> Unit,
     onDocTypeChange: (String) -> Unit,
+    onAuthoritySourceChange: (String) -> Unit = {},
+    onMarkAuthority: (Boolean) -> Unit = {},
     onContentChange: (String) -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
@@ -168,6 +178,16 @@ fun KnowledgeDocDialog(
             shape = RoundedCornerShape(Dimens.radiusControl),
             colors = docFieldColors(),
         )
+        if (authorityEditable && AppState.isAdmin && docType == "法规") {
+            OutlinedTextField(
+                value = authoritySource, onValueChange = onAuthoritySourceChange,
+                label = { Text("权威发布来源（如发布机关、正式文件或官网）") },
+                enabled = !busy, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            )
+            AppButton(if (authoritative) "取消权威法条标记" else "标记为权威法条",
+                onClick = { onMarkAuthority(!authoritative) },
+                kind = AppButtonKind.SECONDARY, enabled = !busy)
+        }
         // 有编辑权限时也要能「看」：编辑器里是裸文本，段落层级全靠脑补。
         // 默认落预览页——打开文档的第一诉求是阅读，改是少数情况。
         var preview by remember { mutableStateOf(true) }

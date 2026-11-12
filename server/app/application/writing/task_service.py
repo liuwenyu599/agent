@@ -274,14 +274,18 @@ class WritingTaskService:
     def _reference_items(cls, sources: List[Dict]) -> List[Dict[str, str]]:
         """保留检索命中的真实文档 ID，客户端可经鉴权接口查看原文。"""
         labels = cls._reference_labels(sources)
-        grouped: Dict[str, str] = {}
+        grouped: Dict[str, Dict[str, str]] = {}
         for source in sources or []:
             title = cls._CHUNK_SUFFIX_RE.sub("", str(source.get("source") or "")).strip()
             doc_id = str(source.get("doc_id") or "")
             if title and doc_id and title not in grouped:
-                grouped[title] = doc_id
-        return [{"title": label, "doc_id": grouped.get(
-            re.sub(r"（命中 \d+ 段）$", "", label), "")} for label in labels]
+                raw = str(source.get("chunk_content") or source.get("content") or "")
+                phrase = next((part.strip() for part in re.split(r"[。！？；\n]+", raw)
+                               if 12 <= len(part.strip()) <= 160), "")
+                grouped[title] = {"doc_id": doc_id, "match_text": phrase,
+                                  "chunk_index": str(source.get("chunk_index") or "")}
+        return [{"title": label, **grouped.get(
+            re.sub(r"（命中 \d+ 段）$", "", label), {"doc_id": ""})} for label in labels]
 
     def _plan_materials(self, ctx: Dict[str, Any], user_id: str,
                         org_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -586,7 +590,7 @@ class WritingTaskService:
     def _finalize_draft(self, t, ctx: Dict[str, Any], text: str,
                         sources: List[Dict], user_id: str) -> Dict[str, Any]:
         """起草收尾（draft 与 draft_stream 共用）：收尾 → 落库 → 版本快照。"""
-        finalized = finalize_text(self, text, ctx, sources)
+        finalized = finalize_text(self, text, ctx, sources, session_id=t.session_id)
         version, _ = persist_revision(
             self, t, ctx, finalized.text, user_id,
             note="V1 AI 初稿" if t.version_no == 0 else f"V{t.version_no + 1} 继续生成",

@@ -12,6 +12,7 @@
 2. 工作台中栏的人工正文修改经 ``update_record_content`` 显式保存后直接写回
    ``{id}.docx``（人工修改成为新基线），同时重置 applied/resolved 状态。
 """
+import asyncio
 import re
 import uuid
 from pathlib import Path
@@ -384,9 +385,10 @@ class FormatCheckService:
         rule_dicts = [_rule_to_dict(r) for r in rules]
 
         tmp_path = self.check_dir / f"{uuid.uuid4().hex}_{filename}"
-        tmp_path.write_bytes(data)
+        await asyncio.to_thread(tmp_path.write_bytes, data)
         try:
-            result = self.engine.check_file(tmp_path, filename, rule_dicts, use_ai=use_ai)
+            result = await asyncio.to_thread(
+                self.engine.check_file, tmp_path, filename, rule_dicts, use_ai)
         except ValueError as e:
             tmp_path.unlink(missing_ok=True)
             raise AppError(400, str(e))
@@ -399,12 +401,21 @@ class FormatCheckService:
         # ---- 与知识库冲突检查：必须有真实检索证据，AI 不得凭空判冲突 ----
         if result["file_type"] == "docx" and self.rag is not None and self.engine.assistant is not None:
             try:
-                doc = DocxDocument(str(tmp_path))
-                full_text = "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
-                issues.extend(self._knowledge_conflict_issues(full_text, user))
+                def read_text():
+                    doc = DocxDocument(str(tmp_path))
+                    return "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+
+                full_text = await asyncio.to_thread(read_text)
             except Exception as e:
-                # 知识库冲突检查是增强项，失败不阻断基础格式/内容校验。
-                logger.warning("知识库冲突检查失败，已跳过: %s", e)
+                logger.warning("内容读取失败，已跳过证据核验: %s", e)
+                full_text = ""
+            if full_text:
+                for check, label in ((self._knowledge_conflict_issues, "知识库冲突"),
+                                     (self._law_citation_issues, "法条引文")):
+                    try:
+                        issues.extend(await asyncio.to_thread(check, full_text, user))
+                    except Exception as e:
+                        logger.warning("%s校验失败，已跳过: %s", label, e)
 
         # 注入稳定整数 id（= 下标）。不用 uuid：复检后必须能与老条目对齐。
         for idx, issue in enumerate(issues):
@@ -556,6 +567,84 @@ class FormatCheckService:
                 },
             })
         return result
+
+    def _law_citation_issues(self, text: str, user: User) -> List[dict]:
+        """Check explicit article citations against curated authoritative law chunks.
+
+        No retrieved authoritative article means no legal conclusion. The model
+        may only identify a conflict between the supplied draft sentence and a
+        verbatim span of the matched article.
+        """
+        if not text.strip() or self.rag is None or self.engine.assistant is None:
+            return []
+        pattern = re.compile(
+            r"《(?P<title>[^》\n]{2,50})》\s*第(?P<article>[一二三四五六七八九十百千零〇\d]+)条")
+        evidence = []
+        for match in list(pattern.finditer(text))[:6]:
+            title, article = match.group("title"), match.group("article")
+            try:
+                hits = self.rag.search(query=f"{title} 第{article}条", user_id=user.id, top_k=8)
+            except Exception as exc:
+                logger.warning("法条检索失败: %s", exc)
+                continue
+            hit = next((h for h in hits
+                        if h.get("authoritative") and h.get("doc_type") == "法规"
+                        and title in str(h.get("doc_title") or "")
+                        and f"第{article}条" in str(h.get("chunk_content") or "")), None)
+            if hit is None:
+                continue
+            line = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            sentence = text[line:end if end >= 0 else len(text)].strip()[:300]
+            evidence.append((sentence, hit, text[:line].count("\n")))
+        if not evidence:
+            return []
+        brief = "\n".join(
+            f"[{i}] 待审={sentence}\n权威法条={hit.get('chunk_content') or ''}"
+            for i, (sentence, hit, _) in enumerate(evidence, 1))
+        prompt = (
+            "逐项核对待审句子引用的法条编号与内容。只能依据给出的权威法条，"
+            "不要凭记忆补充法规；无法确定则不报。只输出 JSON 数组。"
+            "每项包含 evidence_index、current（待审句中原文）、"
+            "expected（权威法条中连续的原文片段）、reason。无问题输出 []。\n" + brief)
+        try:
+            raw = self.engine.assistant.complete(
+                [{"role": "system", "content": "你是严谨的法条引文核对员，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.0, max_tokens=1000)
+            items = loads_lenient(raw or "[]")
+        except Exception as exc:
+            logger.warning("法条一致性判定失败: %s", exc)
+            return []
+        if not isinstance(items, list):
+            return []
+        issues = []
+        for item in items[:8]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("evidence_index")) - 1
+            except (TypeError, ValueError):
+                continue
+            if index < 0 or index >= len(evidence):
+                continue
+            sentence, hit, paragraph_index = evidence[index]
+            current = str(item.get("current") or "").strip()
+            expected = str(item.get("expected") or "").strip()
+            original = str(hit.get("chunk_content") or "")
+            if not current or current not in sentence or not expected or expected not in original:
+                continue
+            issues.append({
+                "location": f"第{paragraph_index + 1}段", "element": "法条引文不一致",
+                "current": current, "expected": expected,
+                "suggestion": str(item.get("reason") or "请依据权威法条核对并修改。"),
+                "source": "law", "severity": "error", "paragraph_index": paragraph_index,
+                "fix_hint": None,
+                "evidence": {"kb_id": hit.get("kb_id"), "doc_id": hit.get("doc_id"),
+                             "doc_title": hit.get("doc_title"), "chunk_id": hit.get("chunk_id"),
+                             "chunk_index": hit.get("chunk_index"), "excerpt": original},
+            })
+        return issues
 
     # ================= 记录 =================
     def list_records(self, user: User, page: int, page_size: int) -> dict:

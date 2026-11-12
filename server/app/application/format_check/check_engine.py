@@ -743,6 +743,7 @@ class FormatCheckEngine:
 6. 标题、主送、落款、成文日期、文号及层级结构是否存在明显问题；
 7. 同一文档内部是否存在事实、数字、时间、主体或结论自相矛盾；
 8. 重复段落、残留占位符（如“××”“XXX”“待补充”）以及其他明显内容质量问题。
+9. 病句、主谓搭配错误、指代不明、语序不当及语义不通；只报能引用原句说明的问题。
 不要重复报告程序规则已经明确发现的纯排版问题。"""
         prompt = f"""你是公文格式审核助手。以下是一份公文的纯文本内容（排版属性已另行检查，无需关注字体字号）。
 {scope}
@@ -771,21 +772,30 @@ paragraph_index 使用 0 开始的段落下标；无法定位时填 null：
                 return []
             if not isinstance(items, list):
                 return []
+            indexed_lines = [
+                (int(number) - 1, line)
+                for number, line in re.findall(r"^\[第(\d+)段\]\s*(.*)$", numbered_text, re.M)
+            ]
             result = []
             for it in items[:20]:
+                if not isinstance(it, dict):
+                    continue
+                current = str(it.get("current", "")).strip()
+                if not current or current not in text:
+                    continue  # reject invented or unlocatable model findings
+                located = next((index for index, line in indexed_lines if current in line), None)
+                if indexed_lines and located is None:
+                    continue
                 result.append({
-                    "location": str(it.get("location", "全文")),
+                    "location": f"第{located + 1}段" if located is not None
+                                else str(it.get("location", "全文")),
                     "element": str(it.get("element", "格式问题")),
-                    "current": str(it.get("current", "")),
+                    "current": current,
                     "expected": str(it.get("expected", "")),
                     "suggestion": str(it.get("suggestion", "")),
                     "source": "ai",
                     "severity": "warning",
-                    "paragraph_index": (
-                        int(it.get("paragraph_index"))
-                        if str(it.get("paragraph_index", "")).strip().isdigit()
-                        else None
-                    ),
+                    "paragraph_index": located,
                     "fix_hint": None,
                 })
             return result

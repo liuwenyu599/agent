@@ -84,6 +84,10 @@ class KnowledgeRepository(private val api: ApiClient) {
             if (docType != null) put("doc_type", docType)
         })
 
+    suspend fun markLawAuthority(docId: String, enabled: Boolean, source: String) =
+        api.post(Endpoints.Knowledge.document(docId) + "/law-authority",
+            mapOf("authoritative" to enabled, "source_reference" to source))
+
     suspend fun upload(kbId: String, files: List<File>) =
         if (files.size == 1)
             api.upload(Endpoints.Knowledge.UPLOAD, "file", files, mapOf("kb_id" to kbId))

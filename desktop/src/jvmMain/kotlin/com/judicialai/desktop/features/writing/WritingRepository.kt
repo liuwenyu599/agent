@@ -120,6 +120,25 @@ class WritingRepository(private val api: ApiClient) {
             is ApiResult.Err -> r
         }
 
+    suspend fun chatStream(id: String, message: String,
+                           onProgress: (String) -> Unit): ApiResult<JsonObject?> {
+        var done: JsonObject? = null
+        var error: String? = null
+        val result = api.postStream(Endpoints.WritingTasks.chatStream(id),
+            mapOf("message" to message)) { event ->
+            when (event["type"].str()) {
+                "stage" -> onProgress(event["label"].str())
+                "done" -> done = event["data"].obj()
+                "error" -> error = event["message"].str()
+            }
+        }
+        done?.let { return ApiResult.Ok(it) }
+        error?.let { return ApiResult.Err(null, it) }
+        if (result is ApiResult.Err && result.status == 404) return chat(id, message)
+        return if (result is ApiResult.Err) result
+            else ApiResult.Err(null, "对话中断，请重试")
+    }
+
     /** POST /writing/tasks/{id}/draft 生成初稿（非流式，流式接口不可用时的回退） */
     suspend fun draft(id: String, outlineOnly: Boolean = false): ApiResult<JsonObject?> =
         when (val r = api.post(Endpoints.WritingTasks.draft(id),
@@ -276,6 +295,27 @@ class WritingRepository(private val api: ApiClient) {
                     it["kind"].str().ifBlank { "doc" },
                     it["parse_status"].str() == "failed")
             })
+            is ApiResult.Err -> r
+        }
+
+    /** Mixed document and image batch, bound to the writing task. */
+    suspend fun uploadTaskMaterials(id: String, files: List<File>): ApiResult<List<JsonObject>> =
+        when (val r = api.upload(Endpoints.WritingTasks.materials(id), "files", files,
+            timeoutMs = 600_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj()?.get("items")?.arr()
+                ?.mapNotNull { it.obj() } ?: emptyList())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun getAttachment(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.Chat.attachmentDelete(id))) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
+            is ApiResult.Err -> r
+        }
+
+    suspend fun checkContent(id: String): ApiResult<JsonObject?> =
+        when (val r = api.get(Endpoints.WritingTasks.contentCheck(id), timeoutMs = 300_000)) {
+            is ApiResult.Ok -> ApiResult.Ok(r.data.obj())
             is ApiResult.Err -> r
         }
 }

@@ -1942,8 +1942,9 @@ class PPTService:
             data = await f.read()
             if not data:
                 continue
-            text = self._extract_any(f.filename or "unnamed", data)
-            analysis = self._summarize_material(assistant, f.filename or "材料", text)
+            text = await asyncio.to_thread(self._extract_any, f.filename or "unnamed", data)
+            analysis = await asyncio.to_thread(
+                self._summarize_material, assistant, f.filename or "材料", text)
             items.append({
                 "filename": f.filename, "chars": len(text),
                 "summary": analysis.get("summary", ""),

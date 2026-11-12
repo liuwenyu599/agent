@@ -19,6 +19,7 @@ def test_writing_model_routes_are_native_async():
     assert inspect.iscoroutinefunction(writing_routes.task_draft_stream)
     assert inspect.iscoroutinefunction(writing_routes.task_revise)
     assert inspect.iscoroutinefunction(writing_routes.upload_task_images)
+    assert inspect.iscoroutinefunction(writing_routes.upload_task_materials)
 
 
 def test_qwen_transport_is_httpx_async_not_requests():
@@ -26,10 +27,10 @@ def test_qwen_transport_is_httpx_async_not_requests():
     assert "httpx.AsyncClient" in source
     assert "requests.post" not in source
     assert "import requests" not in source
-    assert "asyncio.Semaphore" in source
+    assert "asyncio.wrap_future" in source
 
 
-def test_writing_image_route_does_not_offload_model_to_worker_thread():
-    source = inspect.getsource(writing_routes.upload_task_images)
+def test_writing_image_route_prefers_async_model_transport():
+    source = inspect.getsource(writing_routes._store_task_materials)
     assert "run_in_threadpool" not in source
     assert "acomplete" in source

@@ -64,6 +64,7 @@ object Endpoints {
         const val PLAN = "/writing/tasks/plan"
         fun item(id: String) = "/writing/tasks/$id"
         fun chat(id: String) = "/writing/tasks/$id/chat"
+        fun chatStream(id: String) = "/writing/tasks/$id/chat/stream"
         fun draft(id: String) = "/writing/tasks/$id/draft"
         /** 流式起草（SSE）：正文边生成边推，最后推 done 携带权威结果 */
         fun draftStream(id: String) = "/writing/tasks/$id/draft/stream"
@@ -83,8 +84,10 @@ object Endpoints {
             "/writing/tasks/$id/suggestions/$suggestionId/reject"
         /** 上传图片并由视觉模型（Qwen2.5-VL 等）识别为文本，绑定到任务会话 */
         fun images(id: String) = "/writing/tasks/$id/images"
+        fun materials(id: String) = "/writing/tasks/$id/materials"
         fun versions(id: String) = "/writing/tasks/$id/versions"
         fun formatCheck(id: String) = "/writing/tasks/$id/format-check"
+        fun contentCheck(id: String) = "/writing/tasks/$id/content-check"
         fun version(id: String, no: Int) = "/writing/tasks/$id/versions/$no"
         /** 回退到指定历史版本（回退前当前内容自动保存为新版本） */
         fun versionRestore(id: String, no: Int) = "/writing/tasks/$id/versions/$no/restore"

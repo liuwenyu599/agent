@@ -251,6 +251,8 @@ class RagService:
                 "chunk_index": chunk.chunk_index,
                 "doc_id": doc_id,
                 "doc_title": chunk.document.title if chunk.document else "",
+                "doc_type": chunk.document.doc_type if chunk.document else "",
+                "authoritative": bool(meta.get("authoritative") or meta.get("is_authoritative")),
                 "kb_id": kb.id if kb else "",
                 "kb_name": kb.name if kb else "",
                 "kb_type": kb.kb_type if kb else "",

@@ -6,6 +6,7 @@
 
 references 模块复用本类的 extract() 做同样的文件解析。
 """
+import asyncio
 import re
 import uuid
 from pathlib import Path
@@ -52,9 +53,9 @@ class AttachmentService:
         user_dir = settings.uploads_dir / "chat" / user_id
         user_dir.mkdir(parents=True, exist_ok=True)
         file_path = user_dir / f"{att_id}{suffix}"
-        file_path.write_bytes(data)
+        await asyncio.to_thread(file_path.write_bytes, data)
 
-        text, status, note = self.extract(file_path, suffix, kind)
+        text, status, note = await asyncio.to_thread(self.extract, file_path, suffix, kind)
 
         att = ChatAttachment(
             id=att_id, user_id=user_id, filename=filename, kind=kind,

@@ -8,6 +8,7 @@ from app.core.security import decode_token
 from app.domain.identity.authorization import is_privileged, is_system_admin
 from app.domain.identity.entities import User
 from app.infrastructure.database import get_db
+from app.infrastructure.ai.qwen import set_model_request_user
 from app.infrastructure.repositories.identity import SqlAlchemyUserRepository
 
 security = HTTPBearer(auto_error=False)
@@ -34,10 +35,11 @@ def get_current_user_unchecked(
     return user
 
 
-def get_current_user(user: User = Depends(get_current_user_unchecked)) -> User:
+async def get_current_user(user: User = Depends(get_current_user_unchecked)) -> User:
     """业务端点统一依赖：管理员重置过密码的账号必须先改密才能继续操作。"""
     if getattr(user, "must_change_password", False):
         raise AppError(403, "请先修改初始密码后再使用系统功能")
+    set_model_request_user(user.id)
     return user
 
 

@@ -74,6 +74,7 @@ import com.judicialai.desktop.app.AppState
 import com.judicialai.desktop.core.platform.pickFiles
 import com.judicialai.desktop.core.platform.pickSaveFile
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import com.judicialai.desktop.data.Repositories
 import com.judicialai.desktop.design.components.AiActionChip
@@ -102,6 +103,8 @@ import com.judicialai.desktop.design.theme.AiSoft
 import com.judicialai.desktop.design.theme.AiSoftStrong
 import com.judicialai.desktop.design.theme.AppBg
 import com.judicialai.desktop.design.theme.Dimens
+import com.judicialai.desktop.design.theme.Danger
+import com.judicialai.desktop.design.theme.DangerSoft
 import com.judicialai.desktop.design.theme.EmeraldInk
 import com.judicialai.desktop.design.theme.EmeraldSoft
 import com.judicialai.desktop.design.theme.Ink
@@ -845,6 +848,18 @@ private fun TaskEntryScreen(vm: WritingViewModel) {
                     ),
                 )
                 Spacer(Modifier.height(Dimens.space3))
+                AppButton("添加材料（文档和图片，可多选）", onClick = {
+                    vm.uploadMaterials(pickFiles("选择文档和图片", multi = true))
+                }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile,
+                    enabled = !vm.busy)
+                vm.entryMaterials.forEach { file ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(file.name, modifier = Modifier.weight(1f), fontSize = 11.sp,
+                            color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        AppLinkButton("移除", onClick = { vm.removeEntryMaterial(file) })
+                    }
+                }
+                Spacer(Modifier.height(Dimens.space3))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.AutoAwesome, null, tint = AiIndigo,
@@ -1120,11 +1135,9 @@ private fun SpecPanel(vm: WritingViewModel, modifier: Modifier) {
         }
 
         Spacer(Modifier.height(Dimens.space4))
-        AppButton("上传材料", onClick = {
-            vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
+        AppButton("添加材料（文档和图片，可多选）", onClick = {
+            vm.uploadMaterials(pickFiles("选择文档和图片", multi = true))
         }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
-        Spacer(Modifier.height(Dimens.space2))
-        UploadImageRecognizeButton(vm)
         if (vm.materials.isNotEmpty()) {
             Spacer(Modifier.height(Dimens.space2))
             vm.materials.forEach { a ->
@@ -1241,11 +1254,9 @@ private fun TaskPanel(vm: WritingViewModel, modifier: Modifier) {
         }
 
         Spacer(Modifier.height(Dimens.space3))
-        AppButton("上传材料", onClick = {
-            vm.uploadMaterials(pickFiles("选择写作材料", multi = true))
+        AppButton("添加材料（文档和图片，可多选）", onClick = {
+            vm.uploadMaterials(pickFiles("选择文档和图片", multi = true))
         }, kind = AppButtonKind.SECONDARY, icon = Icons.Default.UploadFile, fill = true)
-        Spacer(Modifier.height(Dimens.space2))
-        UploadImageRecognizeButton(vm)
         if (vm.materials.isEmpty()) {
             Spacer(Modifier.height(Dimens.space1))
             Text("未上传材料（可先起草，随时补充）", fontSize = 11.5.sp, color = Muted)
@@ -1759,7 +1770,29 @@ private fun AssistantPanel(
                     Modifier.weight(1f).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(Dimens.space3),
                 ) {
-                    if (vm.references.isEmpty()) {
+                    if (vm.hasDraft) {
+                        AppButton(if (vm.checkingContent) "正在校验正文…" else "用 35B 校验正文",
+                            onClick = vm::checkContent, kind = AppButtonKind.SECONDARY,
+                            enabled = !vm.checkingContent, fill = true)
+                    }
+                    vm.contentIssues.forEach { issue ->
+                        Column(Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(Dimens.radiusSm))
+                            .background(DangerSoft).padding(Dimens.space3)) {
+                            Text(issue["element"].str(), fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Danger)
+                            Text(issue["current"].str(), fontSize = 12.sp, color = Ink)
+                            Text(issue["suggestion"].str(), fontSize = 11.sp, color = Ink2)
+                            val evidence = issue["evidence"].obj()
+                            val docId = evidence?.get("doc_id").str()
+                            if (docId.isNotBlank()) AppLinkButton("查看依据原文", onClick = {
+                                vm.openReference(WritingReference(
+                                    evidence?.get("doc_title").str().ifBlank { "知识库原文" },
+                                    docId, matchText = evidence?.get("excerpt").str().take(80)))
+                            })
+                        }
+                    }
+                    if (vm.references.isEmpty() && vm.contentIssues.isEmpty()) {
                         EmptyState("本次写作暂无引用记录",
                             hint = "生成或改写正文后，这里会列出助手实际参考的资料",
                             icon = Icons.Default.Description)
@@ -1844,23 +1877,43 @@ private fun AssistantPanel(
         WritingStatusLine(vm.status)
     }
     vm.openedReference?.let { reference ->
+        var showFullReference by remember(reference) { mutableStateOf(false) }
         AppDialog(
             onDismissRequest = vm::closeReference,
             title = reference.title,
-            subtitle = "知识库原文 · 按当前账号权限读取",
+            subtitle = if (reference.attachmentId.isNotBlank())
+                "上传材料原文 · 命中内容已高亮" else "知识库原文 · 按当前账号权限读取",
             width = 820.dp,
             actions = { AppButton("关闭", onClick = vm::closeReference,
                 kind = AppButtonKind.SECONDARY) },
         ) {
-            Text(
-                when {
+            val raw = when {
                     vm.referenceLoading -> "正在读取原文…"
                     vm.referenceError != null -> vm.referenceError.orEmpty()
+                    reference.attachmentId.isNotBlank() ->
+                        vm.openedReferenceDocument?.get("text_content").str()
+                            .ifBlank { "暂无可展示的原文" }
                     else -> vm.openedReferenceDocument?.get("content").str()
                         .ifBlank { "暂无可展示的原文" }
-                },
-                fontSize = 13.sp, color = Ink, lineHeight = 21.sp,
-            )
+                }
+            val hit = reference.matchText.takeIf { it.isNotBlank() && raw.contains(it) }
+            val hitAt = hit?.let(raw::indexOf) ?: -1
+            val displayed = if (!showFullReference && hitAt > 350)
+                raw.substring((hitAt - 250).coerceAtLeast(0),
+                    (hitAt + (hit?.length ?: 0) + 1300).coerceAtMost(raw.length))
+                else raw
+            if (displayed != raw) AppLinkButton("查看完整原文", onClick = {
+                showFullReference = true
+            })
+            val highlighted = if (hit == null) buildAnnotatedString { append(displayed) }
+                else buildAnnotatedString {
+                    val start = displayed.indexOf(hit)
+                    append(displayed.substring(0, start))
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold,
+                        background = Color(0xFFFFE38A))) { append(hit) }
+                    append(displayed.substring(start + hit.length))
+                }
+            Text(highlighted, fontSize = 13.sp, color = Ink, lineHeight = 21.sp)
         }
     }
 }

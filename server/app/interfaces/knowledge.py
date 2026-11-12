@@ -10,6 +10,7 @@ from app.application.chat.service import ChatService
 from app.application.knowledge.hardened_document_service import HardenedDocumentService
 from app.application.knowledge.dto import (
     DocUpdateRequest,
+    LawAuthorityRequest,
     KBCreateRequest,
     KBUpdateRequest,
     KnowledgeAskRequest,
@@ -115,6 +116,8 @@ def get_document(doc_id: str, user: User = Depends(get_current_user),
     if meta.get("indexing_error"):
         result["indexing_error"] = meta["indexing_error"]
     result["indexed_chunks"] = int(meta.get("indexed_chunks") or 0)
+    result["authoritative"] = bool(meta.get("authoritative"))
+    result["authority_source"] = str(meta.get("authority_source") or "")
     return result
 
 
@@ -129,7 +132,39 @@ def update_document(doc_id: str, req: DocUpdateRequest,
     if req.content is not None:
         result = {**result,
                   **get_document_service().update_content(db, doc_id, req.content)}
+    if any(value is not None for value in (req.title, req.doc_type, req.status, req.content)):
+        doc = svc.docs.get_model(doc_id)
+        if doc and (doc.doc_metadata or {}).get("authoritative"):
+            meta = dict(doc.doc_metadata or {})
+            meta["authoritative"] = False
+            meta["authority_source"] = ""
+            doc.doc_metadata = meta
+            db.commit()
+            result["authority_revoked"] = True
     return result
+
+
+@router.post("/documents/{doc_id}/law-authority")
+def mark_law_authority(doc_id: str, req: LawAuthorityRequest,
+                       user: User = Depends(require_developer),
+                       db: Session = Depends(get_db),
+                       svc: KnowledgeService = Depends(get_knowledge_service)):
+    """System admin attests a published public-law source before legal checks use it."""
+    doc = svc.docs.get_model(doc_id)
+    if not doc:
+        raise AppError(404, "文档不存在")
+    kb = doc.knowledge_base
+    if doc.doc_type != "法规" or doc.status != "published" or not kb or kb.kb_type != "public":
+        raise AppError(400, "仅已发布的公共知识库法规文档可标记为权威法条")
+    if req.authoritative and not req.source_reference.strip():
+        raise AppError(400, "请填写法条来源或权威发布依据")
+    meta = dict(doc.doc_metadata or {})
+    meta["authoritative"] = req.authoritative
+    meta["authority_source"] = req.source_reference.strip() if req.authoritative else ""
+    doc.doc_metadata = meta
+    db.commit()
+    return {"doc_id": doc_id, "authoritative": req.authoritative,
+            "source_reference": meta["authority_source"]}
 
 
 @router.delete("/documents/{doc_id}")

@@ -4,6 +4,8 @@
 与普通 /chat/send 分离，所有接口强制登录且按 user_id 隔离。
 起草支持 SSE 流式（/draft/stream）：正文边生成边推给前端。
 """
+import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -182,6 +184,35 @@ async def task_chat(task_id: str, req: TaskChatRequest,
     return await svc.chat_async(task_id, user.id, req.message)
 
 
+@router.post("/{task_id}/chat/stream")
+async def task_chat_stream(task_id: str, req: TaskChatRequest,
+                           user: User = Depends(get_current_user),
+                           svc: ProductionWritingTaskService = Depends(get_task_service)):
+    """Keep the dialog responsive while intent routing or revision is running."""
+    async def events():
+        job = asyncio.create_task(svc.chat_async(task_id, user.id, req.message))
+        try:
+            yield "data: " + json.dumps({"type": "stage", "label": "正在理解并处理要求"}, ensure_ascii=False) + "\n\n"
+            while not job.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(job), timeout=3)
+                except asyncio.TimeoutError:
+                    yield "data: " + json.dumps({"type": "stage", "label": "正在处理文稿"}, ensure_ascii=False) + "\n\n"
+                except Exception:
+                    break  # report the job failure through the terminal error event
+            try:
+                result = await job
+                yield "data: " + json.dumps({"type": "done", "data": result}, ensure_ascii=False) + "\n\n"
+            except Exception:
+                logger.exception("写作对话流失败")
+                yield "data: " + json.dumps({"type": "error", "message": "对话处理失败，请稍后重试"}, ensure_ascii=False) + "\n\n"
+        finally:
+            if not job.done():
+                job.cancel()
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.post("/{task_id}/draft")
 async def task_draft(task_id: str, req: TaskDraftRequest,
                      user: User = Depends(get_current_user),
@@ -255,17 +286,38 @@ async def upload_task_images(task_id: str,
                              user: User = Depends(get_current_user),
                              svc: ProductionWritingTaskService = Depends(get_task_service),
                              db: Session = Depends(get_db)):
+    return await _store_task_materials(task_id, files, user, svc, db, image_only=True)
+
+
+@router.post("/{task_id}/materials")
+async def upload_task_materials(task_id: str,
+                                files: List[UploadFile] = File(...),
+                                user: User = Depends(get_current_user),
+                                svc: ProductionWritingTaskService = Depends(get_task_service),
+                                db: Session = Depends(get_db)):
+    """One batch may contain documents and pictures; both become task context."""
+    return await _store_task_materials(task_id, files, user, svc, db, image_only=False)
+
+
+async def _store_task_materials(task_id, files, user, svc, db, *, image_only):
     task = svc._get_owned(task_id, user.id)
     if not files:
-        raise AppError(400, "未选择图片")
-    if len(files) > settings.VISION_MAX_IMAGES:
-        raise AppError(400, f"单次最多识别 {settings.VISION_MAX_IMAGES} 张图片")
+        raise AppError(400, "未选择材料")
+    limit = settings.VISION_MAX_IMAGES if image_only else settings.CHAT_MAX_ATTACHMENTS
+    if len(files) > limit:
+        raise AppError(400, f"单次最多上传 {limit} 个文件")
 
     for f in files:
         name = f.filename or ""
         suffix = "." + name.lower().rsplit(".", 1)[-1] if "." in name else ""
-        if suffix not in settings.CHAT_IMAGE_TYPES:
-            raise AppError(400, f"{name or '(未命名文件)'} 不是图片，支持：{'、'.join(settings.CHAT_IMAGE_TYPES)}")
+        accepted = settings.CHAT_IMAGE_TYPES if image_only else settings.CHAT_SUPPORTED_TYPES
+        if suffix not in accepted:
+            raise AppError(400, f"{name or '(未命名文件)'} 类型不支持，支持：{'、'.join(accepted)}")
+    image_count = sum(
+        ("." + (f.filename or "").lower().rsplit(".", 1)[-1]) in settings.CHAT_IMAGE_TYPES
+        for f in files)
+    if image_count > settings.VISION_MAX_IMAGES:
+        raise AppError(400, f"单次最多识别 {settings.VISION_MAX_IMAGES} 张图片")
 
     if not task.session_id:
         session = SqlAlchemyChatSessionRepository(db).add(
@@ -282,7 +334,7 @@ async def upload_task_images(task_id: str,
         except ValueError as e:
             raise AppError(400, f"{f.filename}: {e}")
 
-        if vision is not None and att.file_path:
+        if att.kind == "image" and vision is not None and att.file_path:
             try:
                 part = WritingAssistant._image_part(att.file_path)
                 if part:
@@ -291,7 +343,7 @@ async def upload_task_images(task_id: str,
                     async_complete = getattr(vision, "acomplete", None)
                     text = (await async_complete(messages, 0.1, 2048)
                             if callable(async_complete)
-                            else vision.complete(messages, 0.1, 2048))
+                            else await asyncio.to_thread(vision.complete, messages, 0.1, 2048))
                     if text and text.strip():
                         att.text_content = text.strip()
                         att.parse_status = "ok"
@@ -306,7 +358,7 @@ async def upload_task_images(task_id: str,
                 logger.warning("[写作台] 图片视觉识别失败 %s: %s", att.filename, e)
 
         items.append({
-            "id": att.id, "filename": att.filename,
+            "id": att.id, "filename": att.filename, "kind": att.kind,
             "text": att.text_content or "", "parse_status": att.parse_status,
             "parse_note": att.parse_note or "",
         })
@@ -340,6 +392,38 @@ def check_current_format(task_id: str,
                          user: User = Depends(get_current_user),
                          svc: ProductionWritingTaskService = Depends(get_task_service)):
     return svc.check_current_format(task_id, user.id)
+
+
+@router.get("/{task_id}/content-check")
+async def check_current_content(task_id: str,
+                                user: User = Depends(get_current_user),
+                                svc: ProductionWritingTaskService = Depends(get_task_service)):
+    """Semantic audit of the saved text draft with evidence-backed law/KB checks."""
+    from app.application.format_check.check_engine import FormatCheckEngine
+    from app.application.format_check.service import FormatCheckService
+
+    task = svc._get_owned(task_id, user.id)
+    text = (task.current_content or "").strip()
+    if not text:
+        return {"issues": [], "issue_count": 0, "ai_used": False}
+    audit = FormatCheckService(svc.db, assistant=WritingAssistant(get_llm_gateway()),
+                               rag=svc.rag)
+    grammar = await asyncio.to_thread(
+        audit.engine._ai_check, text[:settings.FORMAT_CHECK_AI_BUDGET], [])
+    try:
+        conflicts = await asyncio.to_thread(audit._knowledge_conflict_issues, text, user)
+    except Exception as exc:
+        logger.warning("写作正文知识库核验失败: %s", exc)
+        conflicts = []
+    try:
+        laws = await asyncio.to_thread(audit._law_citation_issues, text, user)
+    except Exception as exc:
+        logger.warning("写作正文法条核验失败: %s", exc)
+        laws = []
+    issues = (grammar or []) + conflicts + laws
+    for index, issue in enumerate(issues):
+        issue["id"] = index
+    return {"issues": issues, "issue_count": len(issues), "ai_used": grammar is not None}
 
 
 @router.get("/{task_id}/versions/{version_no}")

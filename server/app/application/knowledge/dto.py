@@ -33,6 +33,11 @@ class DocUpdateRequest(BaseModel):
     content: Optional[str] = None
 
 
+class LawAuthorityRequest(BaseModel):
+    authoritative: bool
+    source_reference: str = Field(default="", max_length=500)
+
+
 class UrlImportRequest(BaseModel):
     kb_id: str
     urls: List[str]

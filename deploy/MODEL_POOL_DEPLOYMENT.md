@@ -105,6 +105,14 @@ MODEL_MAX_CONCURRENCY=4
 
 `MODEL_MAX_CONCURRENCY` 是单 API 进程发向模型池的总并发上限，不是每个 endpoint 的独立上限。
 
+当前 API 使用一个 worker。网关按登录用户轮转发放模型位，交互请求优先于后台任务；
+后台任务最多占 `max(1, MODEL_MAX_CONCURRENCY-1)` 个位。
+`MODEL_USER_MAX_CONCURRENCY` 限制同一用户的在途请求（默认 2），
+`MODEL_USER_MAX_PENDING` 限制同一用户在队列中的请求（默认 8）。
+这些是**进程内**额度；增加 API worker 前必须在模型服务或共享调度层增加跨进程总限流。
+实际承载量还受模型实例的 token/s、提示词长度和生成长度限制；上线时用并发人数、
+首 token 延迟、排队时长和 429 比例压测确定 `MODEL_MAX_CONCURRENCY`，不能仅按用户数估算。
+
 ## 6. 部署后验收
 
 先运行标准 postcheck：

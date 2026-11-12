@@ -16,11 +16,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.application.writing.content_check import ContentChecker
 from app.application.writing.quality_policy import assert_acceptable, quality_result
+from app.core.logging import get_logger
 from app.core.timeutil import now_local
+
+logger = get_logger(__name__)
+
+
+def append_matched_attachments(reference_items: List[Dict], references: List[str],
+                               uploaded: List[Any], text: str) -> None:
+    """Expose an uploaded source only when its extracted text occurs in the draft."""
+    for att in uploaded or []:
+        pieces = re.split(r"[。！？；\n]+", att.text_content or "")
+        match = next((piece.strip() for piece in pieces
+                      if 12 <= len(piece.strip()) <= 160 and piece.strip() in text), "")
+        if match and not any(item.get("attachment_id") == att.id for item in reference_items):
+            reference_items.append({"title": att.filename, "attachment_id": att.id,
+                                    "match_text": match, "source_kind": "attachment"})
+            references.append(f"上传材料：{att.filename}")
 
 
 @dataclass
@@ -38,7 +55,8 @@ class Finalized:
 
 
 def finalize_text(service, text: str, ctx: Dict[str, Any], sources: List[Dict],
-                  *, keep_previous_references: bool = False) -> Finalized:
+                  *, keep_previous_references: bool = False,
+                  session_id: Optional[str] = None) -> Finalized:
     """确定性收尾：结构化字段、外部文号、质检、引用清单。
 
     ``keep_previous_references``：改写/局部修改时，若本轮检索没有命中，保留上一版
@@ -77,6 +95,16 @@ def finalize_text(service, text: str, ctx: Dict[str, Any], sources: List[Dict],
     if keep_previous_references:
         references = references or list(ctx.get("references") or [])
         reference_items = reference_items or list(ctx.get("reference_items") or [])
+    # Only claim an uploaded material as cited when a substantive sentence from
+    # its extracted text appears verbatim in the finished draft. The attachment
+    # id lets the client reopen the original OCR/document text under user auth.
+    if session_id and service.attachments:
+        try:
+            uploaded = service.attachments.get_session_attachments(session_id, service.db)
+        except Exception as exc:
+            logger.warning("上传材料依据读取失败: %s", exc)
+            uploaded = []
+        append_matched_attachments(reference_items, references, uploaded, text)
     ctx["references"] = references
     ctx["reference_items"] = reference_items
 

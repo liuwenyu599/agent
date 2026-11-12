@@ -1,5 +1,7 @@
 package com.judicialai.desktop.features.knowledge
 
+import com.judicialai.desktop.core.utils.bool
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -62,6 +64,8 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     var docDialogId by mutableStateOf<String?>(null)
         private set
     var docDialogTitle by mutableStateOf("")
+    var docDialogAuthoritative by mutableStateOf(false)
+    var docDialogAuthoritySource by mutableStateOf("")
     var docDialogDocType by mutableStateOf("")
     var docDialogContent by mutableStateOf("")
     var docDialogBusy by mutableStateOf(false)
@@ -275,6 +279,8 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
                     if (d != null) {
                         docDialogId = docId
                         docDialogTitle = d["title"].str()
+                        docDialogAuthoritative = d["authoritative"].bool()
+                        docDialogAuthoritySource = d["authority_source"].str()
                         docDialogDocType = d["doc_type"].str().ifBlank { "公文" }
                         docDialogContent = d["content"].str()
                     } else {
@@ -290,6 +296,8 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
     fun closeDocument() {
         docDialogId = null
         docDialogTitle = ""
+        docDialogAuthoritative = false
+        docDialogAuthoritySource = ""
         docDialogDocType = ""
         docDialogContent = ""
     }
@@ -307,11 +315,34 @@ class KnowledgeViewModel(private val repo: KnowledgeRepository) {
             when (val r = repo.updateDocument(id, docDialogTitle, docDialogContent,
                     docDialogDocType.trim())) {
                 is ApiResult.Ok -> {
-                    status = "已保存，检索内容已同步更新"
+                    status = if (r.data.obj()?.get("authority_revoked").bool())
+                        "已保存并重建索引；法条原文已变化，请重新核定权威来源"
+                        else "已保存，检索内容已同步更新"
                     closeDocument()
                     loadDocs()
                 }
                 is ApiResult.Err -> status = r.message
+            }
+            docDialogBusy = false
+        }
+    }
+
+    fun markLawAuthority(enabled: Boolean) {
+        val id = docDialogId ?: return
+        if (docDialogBusy) return
+        if (enabled && docDialogAuthoritySource.isBlank()) {
+            status = "请先填写权威发布来源"
+            return
+        }
+        docDialogBusy = true
+        scope.launch {
+            when (val result = repo.markLawAuthority(id, enabled,
+                    docDialogAuthoritySource.trim())) {
+                is ApiResult.Ok -> {
+                    docDialogAuthoritative = enabled
+                    status = if (enabled) "已标记为权威法条，可用于引文核验" else "已取消权威法条标记"
+                }
+                is ApiResult.Err -> status = result.message
             }
             docDialogBusy = false
         }

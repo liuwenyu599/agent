@@ -7,7 +7,60 @@ import time
 
 import httpx
 
-from app.infrastructure.ai.qwen import QwenGateway, model_request_class
+from app.infrastructure.ai.qwen import (QwenGateway, _ModelCapacity,
+                                        model_request_class, set_model_request_user)
+
+
+def test_model_admission_round_robins_users_and_limits_per_user():
+    async def run():
+        pool = _ModelCapacity(1)
+        order = []
+        release = asyncio.Event()
+
+        async def job(user, label, hold=False):
+            set_model_request_user(user)
+            async with pool.slot():
+                order.append(label)
+                if hold:
+                    await release.wait()
+
+        first = asyncio.create_task(job("a", "a1", True))
+        await asyncio.sleep(0.01)
+        second = asyncio.create_task(job("a", "a2"))
+        await asyncio.sleep(0.01)
+        other = asyncio.create_task(job("b", "b1"))
+        await asyncio.sleep(0.01)
+        release.set()
+        await asyncio.gather(first, second, other)
+        assert order == ["a1", "b1", "a2"]
+
+    asyncio.run(run())
+
+
+def test_model_admission_enforces_user_inflight_quota():
+    async def run():
+        pool = _ModelCapacity(3)
+        pool.user_limit = 1
+        release = asyncio.Event()
+        active = []
+
+        async def job(user):
+            set_model_request_user(user)
+            async with pool.slot():
+                active.append(user)
+                await release.wait()
+
+        first = asyncio.create_task(job("a"))
+        second = asyncio.create_task(job("a"))
+        other = asyncio.create_task(job("b"))
+        await asyncio.sleep(0.03)
+        assert active.count("a") == 1
+        assert active.count("b") == 1
+        release.set()
+        await asyncio.gather(first, second, other)
+        assert active.count("a") == 2
+
+    asyncio.run(run())
 
 
 def _response(status_code=200, *, tool=False):
