@@ -71,11 +71,16 @@ class _ModelCapacity:
             "background": OrderedDict(),
         }
         self.last_served = {"interactive": None, "background": None}
+        self.last_background_dispatch = time.monotonic()
 
     def _dispatch_locked(self) -> None:
         while self.active < self.limit:
             selected = None
-            for priority in ("interactive", "background"):
+            background_waiting = bool(self.waiting["background"])
+            priorities = (("background", "interactive") if background_waiting and
+                          time.monotonic() - self.last_background_dispatch >= 30
+                          else ("interactive", "background"))
+            for priority in priorities:
                 if priority == "background" and self.background_active >= max(1, self.limit - 1):
                     continue
                 users = self.waiting[priority]
@@ -103,6 +108,7 @@ class _ModelCapacity:
             self.per_user[user] = self.per_user.get(user, 0) + 1
             if priority == "background":
                 self.background_active += 1
+                self.last_background_dispatch = time.monotonic()
             waiter.set_result(None)
 
     @asynccontextmanager
@@ -111,9 +117,10 @@ class _ModelCapacity:
         user = _request_user.get() or f"unscoped:{id(asyncio.current_task())}"
         waiter = Future()
         with self.lock:
-            queue = self.waiting[priority].setdefault(user, deque())
-            if len(queue) >= self.max_pending:
+            pending = sum(len(users.get(user, ())) for users in self.waiting.values())
+            if pending >= self.max_pending:
                 raise AIServiceError("该用户等待模型的任务过多，请稍后重试")
+            queue = self.waiting[priority].setdefault(user, deque())
             queue.append(waiter)
             self._dispatch_locked()
         try:

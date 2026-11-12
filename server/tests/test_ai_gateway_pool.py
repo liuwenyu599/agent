@@ -6,7 +6,9 @@ import threading
 import time
 
 import httpx
+import pytest
 
+from app.core.exceptions import AIServiceError
 from app.infrastructure.ai.qwen import (QwenGateway, _ModelCapacity,
                                         model_request_class, set_model_request_user)
 
@@ -59,6 +61,72 @@ def test_model_admission_enforces_user_inflight_quota():
         release.set()
         await asyncio.gather(first, second, other)
         assert active.count("a") == 2
+
+    asyncio.run(run())
+
+
+def test_background_waiter_eventually_gets_priority():
+    async def run():
+        pool = _ModelCapacity(1)
+        order = []
+        release = asyncio.Event()
+
+        async def first():
+            set_model_request_user("first")
+            async with pool.slot():
+                await release.wait()
+
+        async def interactive():
+            set_model_request_user("reader")
+            async with pool.slot():
+                order.append("interactive")
+
+        async def background():
+            set_model_request_user("ppt")
+            with model_request_class("background"):
+                async with pool.slot():
+                    order.append("background")
+
+        running = asyncio.create_task(first())
+        await asyncio.sleep(0.01)
+        reader = asyncio.create_task(interactive())
+        ppt = asyncio.create_task(background())
+        await asyncio.sleep(0.01)
+        pool.last_background_dispatch -= 31
+        release.set()
+        await asyncio.gather(running, reader, ppt)
+        assert order == ["background", "interactive"]
+
+    asyncio.run(run())
+
+
+def test_pending_quota_covers_both_priority_classes():
+    async def run():
+        pool = _ModelCapacity(1)
+        pool.max_pending = 1
+        release = asyncio.Event()
+
+        async def hold_slot():
+            set_model_request_user("owner")
+            async with pool.slot():
+                await release.wait()
+
+        async def wait_interactive():
+            set_model_request_user("same")
+            async with pool.slot():
+                pass
+
+        holder = asyncio.create_task(hold_slot())
+        await asyncio.sleep(0.01)
+        pending = asyncio.create_task(wait_interactive())
+        await asyncio.sleep(0.01)
+        set_model_request_user("same")
+        with model_request_class("background"):
+            with pytest.raises(AIServiceError):
+                async with pool.slot():
+                    pass
+        release.set()
+        await asyncio.gather(holder, pending)
 
     asyncio.run(run())
 
