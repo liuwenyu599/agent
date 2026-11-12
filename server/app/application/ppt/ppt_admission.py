@@ -20,25 +20,55 @@
 都必须过闸，限制同时在途的 PPT 长请求数；剩余模型池名额留给交互式写作。
 构图批次并行只在闸门内按配置灰度开启，不会突破总量上限。
 
+根治办法是给 PPT / VISION 起独立 35B 副本，按业务用途隔离 vLLM 调度队列。
+此时 PPT 端点与文本主端点不重叠，QwenGateway 本就按 URL 列表划分独立容量池，
+闸门不再套「给写作留 1 个主池名额」的约束（见 dedicated_ppt_pool），
+副本算力才用得满；此时才建议灰度 PPT_COMPOSITION_PARALLEL=2。
+
 本模块只依赖 settings 与异常类型，不引入 ppt_engine / service，避免循环导入。
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.core.config import settings
 from app.core.exceptions import AIServiceError
 
-__all__ = ["ppt_model_slot", "composition_parallel", "configure", "stats"]
+__all__ = ["ppt_model_slot", "composition_parallel", "configure",
+           "dedicated_ppt_pool", "stats"]
+
+
+def _urls(raw: str) -> List[str]:
+    return [v.strip().rstrip("/") for v in (raw or "").split(",") if v.strip()]
+
+
+def dedicated_ppt_pool() -> bool:
+    """PPT 是否指向与交互式文本主模型完全不重叠的独立端点。
+
+    共享同一端点时，PPT 长请求必须与写作抢同一个 vLLM 调度队列，闸门上限
+    必须小于主模型池总量。若已给 PPT 起了独立 35B 副本（PPT_MODEL_URL(S)
+    与 MODEL_SERVICE_URL(S) 无交集），QwenGateway 本就按 URL 列表划分独立
+    容量池，此时再套主池的「留 1 个名额」约束只会白白浪费副本算力。
+    """
+    main = set(_urls(getattr(settings, "MODEL_SERVICE_URL", "")))
+    main.update(_urls(os.getenv("MODEL_SERVICE_URLS", "")))
+    ppt = set(_urls(getattr(settings, "PPT_MODEL_URL", "")))
+    ppt.update(_urls(os.getenv("PPT_MODEL_URLS", "")))
+    return bool(ppt) and not (ppt & main)
 
 
 def _configured_limit() -> int:
-    """PPT 并发上限恒小于模型池总量，至少留 1 个名额给交互式写作。"""
-    model_limit = max(1, int(getattr(settings, "MODEL_MAX_CONCURRENCY", 4)))
+    """共享端点时给写作留名额；独立副本时按副本容量放开。"""
     configured = max(1, int(getattr(settings, "PPT_MODEL_MAX_CONCURRENCY", 2)))
+    if dedicated_ppt_pool():
+        # PPT 网关自身的 QwenGateway 容量池仍按 MODEL_MAX_CONCURRENCY 收口，
+        # 这里不会无限放大；副本数与每副本并发由部署侧统一规划。
+        return configured
+    model_limit = max(1, int(getattr(settings, "MODEL_MAX_CONCURRENCY", 4)))
     return min(configured, max(1, model_limit - 1))
 
 
@@ -69,8 +99,11 @@ def configure(limit: Optional[int] = None) -> int:
 
 
 def _configured_limit_from(value: int) -> int:
+    requested = max(1, int(value))
+    if dedicated_ppt_pool():
+        return requested
     model_limit = max(1, int(getattr(settings, "MODEL_MAX_CONCURRENCY", 4)))
-    return min(max(1, int(value)), max(1, model_limit - 1))
+    return min(requested, max(1, model_limit - 1))
 
 
 @contextmanager

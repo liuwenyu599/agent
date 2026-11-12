@@ -4,13 +4,19 @@
 
 用法（开发机或服务器均可，需能访问模型端点）::
 
+    # 隔离前：所有请求打同一个端点
     python deploy/probe_ppt_concurrency.py
+
+    # 隔离后：PPT 长请求打副本，交互式写作打主端点（同一把尺子做前后对比）
     PPT_PROBE_BASE=http://10.128.85.133:8010 \
-    PPT_PROBE_MODEL=Qwen3.6-35B-A3B-W8A8 \
+    PPT_PROBE_PPT_BASE=http://10.128.85.133:8020 \
         python deploy/probe_ppt_concurrency.py
 
+    PPT_PROBE_MODEL=Qwen3.6-35B-A3B-W8A8   # 两个端点须是同一个模型
+
 2026-11-12 生产 35B 单端点实测（本脚本）作为并发整改依据，见
-``docs/AI_REVIEW_BRIEF.md`` §2.3。压测只发推理请求，不影响业务数据。
+``docs/AI_REVIEW_BRIEF.md`` §2.3；多副本隔离方案见
+``deploy/model-pool/README.md`` 第 10 节。压测只发推理请求，不影响业务数据。
 """
 from __future__ import annotations
 
@@ -24,8 +30,13 @@ import time
 import urllib.request
 
 _BASE = os.getenv("PPT_PROBE_BASE", "http://10.128.85.133:8010").rstrip("/")
-URL = f"{_BASE}/v1/chat/completions"
-METRICS = f"{_BASE}/metrics"
+_PPT_BASE = os.getenv("PPT_PROBE_PPT_BASE", _BASE).rstrip("/")
+MAIN_URL = f"{_BASE}/v1/chat/completions"
+PPT_URL = f"{_PPT_BASE}/v1/chat/completions"
+METRICS = {"main": f"{_BASE}/metrics"}
+ISOLATED = _PPT_BASE != _BASE
+if ISOLATED:
+    METRICS["ppt"] = f"{_PPT_BASE}/metrics"
 MODEL = os.getenv("PPT_PROBE_MODEL", "Qwen3.6-35B-A3B-W8A8")
 
 PARA = (
@@ -51,6 +62,7 @@ def make_prompt(page: int, long: bool) -> str:
 def one(kind: str, idx: int, max_tokens: int, timeout: int = 180):
     long = kind == "ppt"
     prompt = make_prompt(idx, long)
+    url = PPT_URL if long else MAIN_URL
     payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -59,7 +71,7 @@ def one(kind: str, idx: int, max_tokens: int, timeout: int = 180):
         "stream": True,
     }
     req = urllib.request.Request(
-        URL, data=json.dumps(payload).encode("utf-8"),
+        url, data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     started = time.monotonic()
     ttft = None
@@ -99,30 +111,33 @@ def one(kind: str, idx: int, max_tokens: int, timeout: int = 180):
 
 
 class Watcher(threading.Thread):
-    """采样 vLLM running / waiting 峰值。"""
+    """采样各 vLLM 端点 running / waiting 峰值；隔离后按端点分别统计。"""
 
     def __init__(self):
         super().__init__(daemon=True)
         self.stop = threading.Event()
-        self.peak_running = 0
-        self.peak_waiting = 0
+        self.peaks = {label: {"running": 0.0, "waiting": 0.0}
+                      for label in METRICS}
         self.samples = 0
 
     def run(self):
         pat_r = re.compile(r'^vllm:num_requests_running\{[^}]*\}\s+([\d.]+)', re.M)
         pat_w = re.compile(r'^vllm:num_requests_waiting\{[^}]*\}\s+([\d.]+)', re.M)
         while not self.stop.is_set():
-            try:
-                with urllib.request.urlopen(METRICS, timeout=3) as r:
-                    text = r.read().decode("utf-8", "ignore")
-                mr, mw = pat_r.search(text), pat_w.search(text)
-                if mr:
-                    self.peak_running = max(self.peak_running, float(mr.group(1)))
-                if mw:
-                    self.peak_waiting = max(self.peak_waiting, float(mw.group(1)))
-                self.samples += 1
-            except Exception:
-                pass
+            for label, url in METRICS.items():
+                try:
+                    with urllib.request.urlopen(url, timeout=3) as r:
+                        text = r.read().decode("utf-8", "ignore")
+                    mr, mw = pat_r.search(text), pat_w.search(text)
+                    if mr:
+                        self.peaks[label]["running"] = max(
+                            self.peaks[label]["running"], float(mr.group(1)))
+                    if mw:
+                        self.peaks[label]["waiting"] = max(
+                            self.peaks[label]["waiting"], float(mw.group(1)))
+                    self.samples += 1
+                except Exception:
+                    pass
             self.stop.wait(0.5)
 
 
@@ -149,9 +164,11 @@ def run_case(name, jobs):
     wall = time.monotonic() - started
     watcher.stop.set()
     watcher.join(timeout=2)
+    peaks = " ".join(
+        f"{label}:running={v['running']:.0f}/waiting={v['waiting']:.0f}"
+        for label, v in watcher.peaks.items())
     print(f"\n=== {name} 墙钟={wall:.2f}s {fmt(rs)} "
-          f"vLLM峰值 running={watcher.peak_running:.0f} "
-          f"waiting={watcher.peak_waiting:.0f} 采样={watcher.samples}", flush=True)
+          f"vLLM峰值 {peaks} 采样={watcher.samples}", flush=True)
     for r in sorted(rs, key=lambda x: (x["kind"], x["idx"])):
         print(f"  {r['kind']:<5}#{r['idx']} ok={r['ok']} "
               f"ttft={r['ttft'] and round(r['ttft'], 2)} "
@@ -161,7 +178,8 @@ def run_case(name, jobs):
 
 
 if __name__ == "__main__":
-    print("目标:", URL, "模型:", MODEL, flush=True)
+    print("写作端点:", MAIN_URL, "| PPT端点:", PPT_URL, "| 模型:", MODEL, flush=True)
+    print("模式:", "按用途隔离（多副本）" if ISOLATED else "单端点混批", flush=True)
     print("说明: ppt=长上下文构图请求(~3k token输入/800输出), "
           "chat=交互式写作短请求(64输出)", flush=True)
 
@@ -175,9 +193,28 @@ if __name__ == "__main__":
     run_case("构图并行=4", [("ppt", 4 + i, 800) for i in range(4)])
 
     # 4) 混合：2 条 PPT 长请求 + 4 条交互式短请求，看写作是否被拖慢
-    run_case("混合 2×PPT + 4×写作",
-             [("ppt", 8, 800), ("ppt", 9, 800)] +
-             [("chat", 10 + i, 64) for i in range(4)])
+    mixed = run_case("混合 2×PPT + 4×写作",
+                     [("ppt", 8, 800), ("ppt", 9, 800)] +
+                     [("chat", 10 + i, 64) for i in range(4)])
 
     # 5) 纯写作短请求基线（用于和混合场景对比）
-    run_case("基线 写作短请求×4", [("chat", 20 + i, 64) for i in range(4)])
+    baseline = run_case("基线 写作短请求×4",
+                        [("chat", 20 + i, 64) for i in range(4)])
+
+    def _median_ttft(rows):
+        values = [r["ttft"] for r in rows
+                  if r["ok"] and r["kind"] == "chat" and r["ttft"] is not None]
+        return statistics.median(values) if values else None
+
+    mixed_ttft, base_ttft = _median_ttft(mixed), _median_ttft(baseline)
+    if mixed_ttft and base_ttft:
+        print(f"\n判定: 混合场景写作 TTFT={mixed_ttft:.2f}s / "
+              f"纯写作基线={base_ttft:.2f}s = {mixed_ttft / base_ttft:.2f}x",
+              flush=True)
+        if ISOLATED:
+            print("隔离验收: 倍率应接近 1.0；仍 >2 说明流量没真正分开，"
+                  "检查后端 .env 的 PPT_MODEL_URL / VISION_MODEL_URL 是否仍指向主端点",
+                  flush=True)
+        else:
+            print("单端点基线: 倍率显著 >1 即证明长短请求被 vLLM 合批；"
+                  "起独立副本后应回落到接近 1.0", flush=True)

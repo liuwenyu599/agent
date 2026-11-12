@@ -148,3 +148,115 @@ URL35B=http://127.0.0.1:8011/v1 MODEL35B=Qwen3.8-27B \
   MCP 直接画图表型 PPT 页，作为渲染通道的备选/补充。属架构级改动，
   需先做技术验证（MCP 客户端接在哪、drawio 文件如何转 pptx/pdf），
   验证通过再排期，勿影响现有 PPTAgent 链路。
+
+## 10. 多 35B 副本：按用途隔离（2026-11-12 生产实测后新增）
+
+### 10.1 为什么要副本，而不是「加大并发」
+
+在单端点 `10.128.85.133:8010`（35B，TP=2，`--max-num-seqs 8`，
+`--gpu-memory-utilization 0.90`）上实测：
+
+| 场景 | 墙钟 | 交互式写作短请求 TTFT |
+|---|---|---|
+| 单条 PPT 长构图 | 27.8s | — |
+| 2 条构图并行 | 52.1s（串行约 55.6s，几乎无收益） | — |
+| 4 条构图并行 | 64.0s（串行约 111s，省 47s） | — |
+| **2×PPT 长构图 + 4×写作** | 54.2s | **9.39s** |
+| 4×写作基线 | 5.0s | 2.47s |
+
+瓶颈是**单端点 decode 吞吐 + vLLM continuous batching 把长短请求合批**。
+应用层只能约束「发出去几个请求」，管不了端点内部的 batch 调度。
+因此：加应用并发、放开 `--max-num-seqs` 都不解决问题，
+**只有把 PPT/VISION 长请求与写作短请求分到不同端点**才是根治。
+
+⚠ **不要把新副本加进 `MODEL_SERVICE_URLS` 做全局负载均衡**：那会让长短请求
+重新混进同一个池，隔离失效。正确做法是**按业务路由隔离，池内才做负载均衡**。
+
+⚠ **不要放开 `--max-num-seqs 8`**：后端 `MODEL_MAX_CONCURRENCY=4`、PPT 闸门 2，
+端点本来就没跑满 8；且 `--compilation-config cudagraph_capture_sizes [1,8]`
+只捕获了 batch 1/8，超过后走非图路径可能更慢；KV cache 固定水位下更多 seq
+还会挤占长构图的上下文（几千 prompt + 2400 输出）触发重算。
+
+### 10.2 卡位账本（8×310P3，单卡 43GB HBM）
+
+| 卡 | 现状 | 说明 |
+|---|---|---|
+| 0,1 | `qwen35b-main` :8010 | 主 35B，TP=2，**保留给写作/长文** |
+| 2,3 | 27B 试用 :8011 | TP=2，试用实例；可停以腾卡（需人工确认） |
+| 4 | bge-m3 :8001（裸进程） | 1 卡，向量服务必须保留；实际卡位待 root 核实 |
+| 5,6 | 空闲 | 原 DeepPresenter-9B / pptagent 栈已停 |
+| 7 | 空闲 | 原 14B 回滚实例已停 |
+
+每套 35B TP=2 必须**独占 2 张卡**：W8A8 权重约 35GB → 约 17.5GB/卡，
+`0.90 × 43GB ≈ 38.7GB` 可用，余约 21GB/卡给 KV cache，无法与第二实例共享。
+因此：
+
+- **阶段 1（推荐先做，零停服）**：用 5,6 起 **1 个** 35B 副本（:8020），
+  `PPT_MODEL_URL` + `VISION_MODEL_URL` 指向它，主 8010 专供写作/长文。
+  这一步就能消除写作 TTFT 劣化。
+- **阶段 2（可选）**：确认卡位后停掉 27B 试用腾出 2,3，再起第 2 个副本
+  （:8021），`PPT_MODEL_URLS` 填两个地址，网关按「最少在途 + 轮询」分流。
+  **「再起 2 个副本」在当前卡位下大概率差 1 张卡，必须先核实再动手。**
+
+### 10.3 资源影响（实测 + 估算）
+
+- **主机 RAM 不会飙升**：`free -h` = 253Gi total / 61Gi used / 155Gi available
+  （161Gi buff/cache 里已有权重 page cache）。单个 35B 实例进程组 RSS 约
+  21GB（主 4.4 + EngineCore 4.5 + Worker_TP0 5.8 + Worker_TP1 6.2）。
+  加 2 个副本约 +42GB → used 约 103Gi，仍有 >100Gi 可用。
+- **NPU HBM 才是硬约束**，见 10.2；与主机 RAM 无关，别看 `free -h` 就以为能起。
+- **加载时间会明显变长，但属一次性启动成本**：第 2 节已注明单实例权重加载
+  约 5~15 分钟（含 CANN 图编译 `FULL_DECODE_ONLY`）。两个副本建议**串行启动**
+  约 10~30 分钟；并行启动会争抢 CPU/磁盘/编译，常常更慢。
+  期间该副本不可用，须 `/v1/models` 探活就绪后再切流量。
+- **磁盘无压力**：根分区 1.7T / 49% used / 890G 可用；权重只读复用同一路径，
+  无需复制 35GB；图编译缓存每实例几 GB 量级。
+
+### 10.4 root 只读核查命令（AI 不越权，请人工执行并回传输出）
+
+```bash
+npu-smi info                                  # 确认 davinci0~7 实际占用
+ps -eo pid,user,rss,etime,args | grep -E 'vllm serve' | grep -v grep
+ss -ltnp | grep -E ':802[01]'                 # 确认示例端口未被占用
+docker logs --since 24h justice-api 2>&1 \
+  | grep -E '\[PPT 任务耗时\]|\[PPT 构图耗时\]|排队=' | tail -120
+```
+
+### 10.5 启动与切换命令模板（均为高危操作，仅打印，由人工确认执行）
+
+```bash
+# 1) 单个副本：复制现有 35B 服务定义，只改容器名 / 端口 / 可见卡
+#    ASCEND_RT_VISIBLE_DEVICES=5,6 ；端口 8020；其余 flag 与 qwen35b-main 完全一致
+#    （--tensor-parallel-size 2 --quantization ascend --max-num-seqs 8
+#      --gpu-memory-utilization 0.90 --max-model-len 16384 ...）
+cd /opt/justice-office/deploy
+docker compose up -d <新副本服务名>
+curl -s http://127.0.0.1:8020/v1/models       # 探活，确认模型名一致
+
+# 2) 改后端 .env（600 root），按用途隔离，勿动 MODEL_SERVICE_URLS
+#    PPT_MODEL_URL=http://10.128.85.133:8020/v1
+#    PPT_MODEL_NAME=Qwen3.6-35B-A3B-W8A8
+#    VISION_MODEL_URL=http://10.128.85.133:8020/v1
+#    PPT_MODEL_MAX_CONCURRENCY=4
+#    PPT_COMPOSITION_PARALLEL=2
+# 3) 让 .env 生效（重建后端容器，非目录挂载）
+docker compose up -d justice-api
+
+# 4) 验收：隔离前后用同一把尺子，先看写作 TTFT 倍率是否回落到 ~1.0
+#    隔离前（基线，长短请求都打 8010）
+python3 deploy/probe_ppt_concurrency.py
+#    隔离后：PPT 长请求打副本，交互式写作打主端点
+PPT_PROBE_BASE=http://10.128.85.133:8010 \
+PPT_PROBE_PPT_BASE=http://10.128.85.133:8020 \
+    python3 deploy/probe_ppt_concurrency.py
+```
+
+脚本会分别采样两个端点的 `vllm:num_requests_running/waiting` 峰值，
+并在结尾打印「混合场景写作 TTFT / 纯写作基线」倍率：隔离成功应接近 1.0，
+仍 >2 说明流量没真正分开（检查 `.env` 是否还指向主端点）。
+
+后端会自动识别 `PPT_MODEL_URL(S)` 与主端点不重叠
+（`server/app/application/ppt/ppt_admission.py::dedicated_ppt_pool`），
+准入闸门不再套「给写作留 1 个主池名额」的约束，副本算力才用得满。
+**灰度顺序**：先只切 `PPT_MODEL_URL`（不动并行度）→ 压测 →
+再开 `PPT_COMPOSITION_PARALLEL=2` → 再压测。任一步写作 TTFT 明显劣化即回退。

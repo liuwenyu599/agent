@@ -78,6 +78,34 @@ def test_composition_parallel_defaults_to_serial_and_is_capped(_reset_gate, monk
     assert ppt_admission.composition_parallel() == 2
 
 
+def test_dedicated_ppt_replicas_release_the_shared_endpoint_cap(
+        _reset_gate, monkeypatch):
+    """PPT 指向独立 35B 副本时不必再给写作留主池名额，闸门按副本容量放开。"""
+    monkeypatch.delenv("MODEL_SERVICE_URLS", raising=False)
+    monkeypatch.delenv("PPT_MODEL_URLS", raising=False)
+    monkeypatch.setattr(settings, "MODEL_SERVICE_URL", "http://10.128.85.133:8010/v1")
+    monkeypatch.setattr(settings, "PPT_MODEL_URL", "http://10.128.85.133:8020/v1")
+    monkeypatch.setattr(settings, "MODEL_MAX_CONCURRENCY", 3)
+    monkeypatch.setattr(settings, "PPT_MODEL_MAX_CONCURRENCY", 6)
+    assert ppt_admission.dedicated_ppt_pool() is True
+    assert ppt_admission.configure() == 6
+    monkeypatch.setattr(settings, "PPT_COMPOSITION_PARALLEL", 2)
+    assert ppt_admission.composition_parallel() == 2
+
+
+def test_ppt_replicas_overlapping_main_endpoint_keep_writing_reserved(
+        _reset_gate, monkeypatch):
+    """副本地址误填成主端点时仍退回共享池语义，防止又把写作拖慢。"""
+    monkeypatch.delenv("MODEL_SERVICE_URLS", raising=False)
+    monkeypatch.delenv("PPT_MODEL_URLS", raising=False)
+    monkeypatch.setattr(settings, "MODEL_SERVICE_URL", "http://10.128.85.133:8010/v1")
+    monkeypatch.setattr(settings, "PPT_MODEL_URL", "http://10.128.85.133:8010/v1")
+    monkeypatch.setattr(settings, "MODEL_MAX_CONCURRENCY", 3)
+    monkeypatch.setattr(settings, "PPT_MODEL_MAX_CONCURRENCY", 6)
+    assert ppt_admission.dedicated_ppt_pool() is False
+    assert ppt_admission.configure() == 2
+
+
 def test_ppt_model_slot_timeout_raises_clear_error(_reset_gate, monkeypatch):
     monkeypatch.setattr(settings, "PPT_MODEL_MAX_CONCURRENCY", 1)
     ppt_admission.configure(1)
