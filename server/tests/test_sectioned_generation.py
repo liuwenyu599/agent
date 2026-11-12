@@ -585,19 +585,33 @@ def test_sectioned_sse_replaces_provisional_first_section_before_done(monkeypatc
     def decode(raw):
         return json.loads(raw.removeprefix("data: ").strip())
 
-    async def collect():
-        stream = service.draft_stream_async("task-a", "user-a")
-        assert decode(await anext(stream))["type"] == "stage"
-        assert decode(await anext(stream))["type"] == "stage"
-        first_event = decode(await anext(stream))
-        assert first_event == {"type": "delta", "text": "未校验首段"}
-        finish.set()
-        return first_event, [decode(part) async for part in stream]
+    async def next_delta(stream, labels):
+        """跳过 stage 事件（含新增的分节进度文案），返回首个 delta。"""
+        while True:
+            event = decode(await anext(stream))
+            if event["type"] == "stage":
+                labels.append(event.get("label") or "")
+                continue
+            return event
 
-    first_event, rest = asyncio.run(collect())
-    assert [event["type"] for event in rest] == ["replace", "delta", "stage", "done"]
-    assert rest[0]["text"] == "通过校验的首段"
-    assert rest[0]["text"] + rest[1]["text"] == rest[3]["data"]["current_content"]
+    async def collect():
+        labels = []
+        stream = service.draft_stream_async("task-a", "user-a")
+        first_event = await next_delta(stream, labels)
+        assert first_event == {"type": "delta", "text": "未校验首段"}
+        # 分节进度必须点名到「第 i/n 节」，否则长文写作期间用户看不到任何进展
+        assert any("第 1/2 节" in label for label in labels), labels
+        finish.set()
+        rest = [decode(part) async for part in stream]
+        return labels, first_event, rest
+
+    labels, first_event, rest = asyncio.run(collect())
+    # stage 事件只为进度提示服务，正文事件顺序不受影响
+    content_events = [event for event in rest if event["type"] != "stage"]
+    assert [event["type"] for event in content_events] == ["replace", "delta", "done"]
+    assert content_events[0]["text"] == "通过校验的首段"
+    assert (content_events[0]["text"] + content_events[1]["text"]
+            == content_events[2]["data"]["current_content"])
 
 
 def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
@@ -628,14 +642,19 @@ def test_sectioned_sse_shows_second_section_while_third_is_pending(monkeypatch):
     service._finalize_draft = lambda _task, _ctx, content, *_args, **_kwargs: {
         "current_content": content, "reply": "完成"}
 
+    async def next_content(stream):
+        """跳过 stage 进度事件，返回下一个正文事件。"""
+        while True:
+            event = json.loads((await anext(stream))[6:])
+            if event["type"] != "stage":
+                return event
+
     async def exercise():
         stream = service.draft_stream_async("task-a", "user-a")
-        assert json.loads((await anext(stream))[6:])["type"] == "stage"
-        assert json.loads((await anext(stream))[6:])["type"] == "stage"
-        first_event = json.loads((await anext(stream))[6:])
-        second_event = await asyncio.wait_for(anext(stream), 1)
+        first_event = await next_content(stream)
+        second_event = await asyncio.wait_for(next_content(stream), 1)
         assert first_event["text"] == "第一段"
-        assert json.loads(second_event[6:])["text"] == "\n\n第2段"
+        assert second_event["text"] == "\n\n第2段"
         finish_third.set()
         return [json.loads(event[6:]) async for event in stream]
 

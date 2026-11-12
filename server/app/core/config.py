@@ -70,6 +70,13 @@ class Settings:
         # FIFO 队列上限与排队超时（秒）：50 人同时提交时不无限堆积、不无限等待。
         self.PPT_QUEUE_MAX = max(1, int(os.getenv("PPT_QUEUE_MAX", "50")))
         self.PPT_QUEUE_TIMEOUT = max(0, int(os.getenv("PPT_QUEUE_TIMEOUT", "1800")))
+        # 同时真正在跑的 PPT 作业数（进程内 FIFO 队列的槽位数）。
+        # 默认 2 保持历史行为；只有 PPT 已用独立 35B 副本、且
+        # PPT_MAX_CONCURRENT_JOBS × PPT_COMPOSITION_PARALLEL <= PPT 网关容量池
+        # (MODEL_MAX_CONCURRENCY，默认 4) 时才建议调大，否则只是把排队
+        # 从队列层挪到模型闸门层，不会更快。需重启后端生效。
+        self.PPT_MAX_CONCURRENT_JOBS = max(
+            1, int(os.getenv("PPT_MAX_CONCURRENT_JOBS", "2")))
         # 等闸门的最长时间（秒）。防止 50 人同时请求时 HTTP 线程被无限期挂住。
         self.PPT_MODEL_SLOT_TIMEOUT = max(
             1, int(os.getenv("PPT_MODEL_SLOT_TIMEOUT", "300")))

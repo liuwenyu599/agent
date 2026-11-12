@@ -95,6 +95,7 @@ class PPTDocumentModel(Base, IdMixin):
     # ---- 异步生成任务（PPTAgent job，见 migration 011）----
     job_status: Mapped[str] = mapped_column(String(24), default="")
     job_phase: Mapped[str] = mapped_column(String(24), default="")
+    job_stage_detail: Mapped[str] = mapped_column(String(120), default="")
     job_total_pages: Mapped[int] = mapped_column(Integer, default=0)
     job_current_page: Mapped[int] = mapped_column(Integer, default=0)
     job_error: Mapped[Optional[str]] = mapped_column(Text)

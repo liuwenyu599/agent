@@ -359,15 +359,53 @@ docker logs --since 24h justice-api 2>&1 \
 $DC up -d qwen35b-ppt-b                     # 6,7 → :8021，同样先探活
 # .env 改成多副本（逗号分隔，网关按「最少在途 + 轮询」分流并自带熔断）：
 #   PPT_MODEL_URLS=http://10.128.85.133:8020/v1,http://10.128.85.133:8021/v1
-#   PPT_COMPOSITION_PARALLEL=2               ← 最后才灰度，且必须再压测一次
-# 这两个键正是步骤 2 补丁新补的，补丁没跑就等于没配
+#   下面两项二选一灰度（乘积 <= 4），不要同时开到 4 × 2 = 8：
+#   PPT_COMPOSITION_PARALLEL=2               ← 单个 PPT 出得更快
+#   PPT_MAX_CONCURRENT_JOBS=4                ← 同时能跑的 PPT 任务数变多
+# 这些键正是步骤 2 补丁新补的，补丁没跑就等于没配；改后必须重建容器
 docker compose up -d --no-deps api
-docker exec justice-api printenv | grep -E 'PPT_MODEL_URLS|PPT_COMPOSITION_PARALLEL'
+docker exec justice-api printenv | grep -E 'PPT_MODEL_URLS|PPT_COMPOSITION_PARALLEL|PPT_MAX_CONCURRENT_JOBS'
 ```
 
 **灰度顺序**：先只切 `PPT_MODEL_URL`（不动并行度）→ 压测 → 再开
-`PPT_MODEL_MAX_CONCURRENCY=3~4` → 压测 → 最后 `PPT_COMPOSITION_PARALLEL=2`
-→ 再压测。任一步写作 TTFT 明显劣化即回退。
+`PPT_MODEL_MAX_CONCURRENCY=3~4` → 压测 → 最后在 `PPT_COMPOSITION_PARALLEL=2`
+与 `PPT_MAX_CONCURRENT_JOBS=4` **二选一**灰度 → 再压测（两者乘积不要超过 4，
+见 §10.6）。任一步写作 TTFT 明显劣化即回退。
+
+### 10.6 到底能并行几个 PPT 任务
+
+用户感知的「同时几个 PPT 在生成」由**队列槽位**决定，不是副本数，也不是
+`PPT_MODEL_MAX_CONCURRENCY`。2026-11-12 之前 `_MAX_CONCURRENT_JOBS = 2` 是
+硬编码常量，改 `.env` 无效；现已改为 `PPT_MAX_CONCURRENT_JOBS`（默认 2，
+启动期读取，改后必须重建 `api` 容器）。
+
+| 层 | 约束 | 当前线上 | 1 副本 | 2 副本（推荐） |
+|---|---|---|---|---|
+| 每用户 | 1 个（含排队） | 1 | 1 | 1 |
+| **队列槽位** | `PPT_MAX_CONCURRENT_JOBS` | **2** | **2** | **4** |
+| 每作业构图并行 | `PPT_COMPOSITION_PARALLEL` | 1 | 1 | 1 |
+| 模型请求闸门 | `PPT_MODEL_MAX_CONCURRENCY` | 2（共享池被压到 ≤3） | 4 | 4 |
+| PPT 网关容量池 | `MODEL_MAX_CONCURRENCY` | 4（与写作共用主池） | 4（独立池） | 4（独立池，跨 2 端点分流） |
+| 同时在途 PPT 请求 | 上述取最小 | ≤2 | ≤4 | ≤4 |
+| 排队深度 | `PPT_QUEUE_MAX` | 50 | 50 | 50 |
+
+容量公式：
+
+```
+作业数 × 每作业构图并行度 <= PPT_MODEL_MAX_CONCURRENCY <= MODEL_MAX_CONCURRENCY
+```
+
+⚠ `PPT_MODEL_URLS` 填 2 个地址时，**仍是同一个 `QwenGateway` 实例**
+（容量池 key 是 `(URL列表, max_concurrency)`），总并发依旧是 4，只是把 4 个
+请求摊到 2 个 vLLM 端点上、每端点约 2 个。要 8 个请求真正在途，必须同时把
+`MODEL_MAX_CONCURRENCY` 提到 8 —— 但单端点 `--max-num-seqs 8` 与
+`cudagraph_capture_sizes [1,8]` 之外会走非图路径，且会挤占 KV，**不建议**。
+
+⚠ 4 个作业并行 ≠ 快 4 倍：生产实测单端点 2 条长构图并行 52.1s（串行约
+55.6s，几乎无收益），4 条并行 64.0s（串行约 111s，省 47s）。副本的主要收益
+是**把写作的 vLLM 调度队列隔离出去**并分散 decode 压力；作业数从 2 提到 4
+只是让排队从 FIFO 层挪到模型闸门层，是否真更快必须以 §10.5 步骤 3 的混合
+压测与 `[PPT 任务耗时]` 分段日志为准，**不能凭副本数推断**。
 
 #### 回滚 / 常见坑
 

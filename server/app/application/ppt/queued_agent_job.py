@@ -1,8 +1,10 @@
 """Single-process admission queue for local and PPTAgent generation jobs.
 
 The core :mod:`agent_job` module owns one long-running generation. This wrapper adds
-server-side admission control: at most two generations run at once, overflow is FIFO,
-and one user may own at most one active/queued job.
+server-side admission control: at most ``PPT_MAX_CONCURRENT_JOBS`` generations run
+at once (default 2), overflow is FIFO, and one user may own at most one active/queued
+job. The slot count is a startup snapshot shared by ``_SLOTS``, ``queue_stats()`` and
+the ETA calculation, so changing it requires a backend restart.
 
 This queue is intentionally process-local. Cross-process coordination belongs to the
 multi-instance deployment layer; pretending an in-memory semaphore is distributed
@@ -23,9 +25,16 @@ from app.core.timeutil import now_local
 logger = _core.logger
 settings = _core.settings
 
-# One application process may drive at most two expensive PPT generations concurrently.
+# One application process may drive at most N expensive PPT generations concurrently.
 # Extra jobs stay in a strict FIFO queue, including local designed rendering.
-_MAX_CONCURRENT_JOBS = 2
+# 默认 2 保持历史行为；起独立 35B 副本后可经 PPT_MAX_CONCURRENT_JOBS 调到 4。
+# 注意与 PPT_COMPOSITION_PARALLEL 的乘积不要超过 PPT 网关容量池
+# (MODEL_MAX_CONCURRENCY)，否则多出来的请求只是在闸门里排队。
+def _max_concurrent_jobs() -> int:
+    return max(1, int(getattr(settings, "PPT_MAX_CONCURRENT_JOBS", 2)))
+
+
+_MAX_CONCURRENT_JOBS = _max_concurrent_jobs()
 _SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_JOBS)
 _QUEUE_LOCK = threading.RLock()
 
@@ -93,6 +102,7 @@ def _start_locked(item: _QueuedJob) -> None:
         item.doc_id,
         job_status="pending",
         job_phase="submitting",
+        job_stage_detail="排队结束，正在初始化生成环境…",
         job_error="",
         job_question="",
         job_current_page=0,
@@ -306,6 +316,7 @@ def submit_job(
             doc_id,
             job_status="pending",
             job_phase="queued",
+            job_stage_detail="任务已提交…",
             job_error="",
             job_question="",
             job_current_page=0,
@@ -331,6 +342,8 @@ def submit_job(
 
         _QUEUE.append(item)
         position = len(_QUEUE)
+        _update_job(doc_id, job_stage_detail=f"排队中（第 {position} 位）",
+                    job_progress_at=now_local())
         logger.info("PPT job 进入 FIFO 队列：job_id=%s position=%d", doc_id, position)
         return {
             "job_id": doc_id,
@@ -419,6 +432,13 @@ def job_status(doc) -> Dict[str, Any]:
         result["phase"] = "queued"
         result["elapsed_seconds"] = 0.0
         result["estimated_remaining"] = None
+        wait = result.get("estimated_wait_seconds")
+        if wait:
+            minutes = max(1, round(wait / 60))
+            result["stage_detail"] = (f"排队中（第 {position} 位，"
+                                      f"预计等待约 {minutes} 分钟）")
+        else:
+            result["stage_detail"] = f"排队中（第 {position} 位）"
     return result
 
 

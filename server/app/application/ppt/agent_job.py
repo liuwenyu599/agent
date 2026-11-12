@@ -101,6 +101,16 @@ def _update_job(doc_id: str, **fields: Any) -> Optional[PPTDocument]:
         db.close()
 
 
+def _stage_reporter(doc_id: str):
+    """生成绑定到指定 job 的阶段明细回报器（供 job_progress.bind 使用）。
+
+    每次回写同时刷新 job_progress_at 心跳：阶段明细变化本身就是「有进展」。
+    """
+    def _report(detail: str) -> None:
+        _update_job(doc_id, job_stage_detail=detail, job_progress_at=now_local())
+    return _report
+
+
 def _is_active(doc_id: str) -> bool:
     with _RUNNING_LOCK:
         t = _RUNNING.get(doc_id)
@@ -214,6 +224,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
     Returns:
         ``(True, "")`` 成功；``(False, 失败说明)`` 失败（调用方决定怎么对外表达）。
     """
+    from app.application.ppt import job_progress
+
     started = time.monotonic()
     db: Session = _db.SessionLocal()
     try:
@@ -225,11 +237,13 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             return False, "文档不存在"
         if not doc.outline:
             return False, "本地渲染缺少大纲"
+        job_progress.report("正在准备排版环境…")
         if doc.template_id and svc._designed_template_mode(doc.outline):
             from app.infrastructure.ai import get_llm_gateway
             from app.application.shared.writing_assistant import WritingAssistant
             svc.assistant = WritingAssistant(get_llm_gateway())
         if doc.template_id and svc._strict_template_mode(doc.outline):
+            job_progress.report("正在按模板版式渲染页面…")
             data = svc.render_strict_template_pptx(doc, doc.outline, doc.user_id)
             adjusted_outline = doc.outline
         else:
@@ -245,12 +259,14 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
                         for item in render_warnings)):
             effective_renderer = "local_design_fallback"
         if doc.template_id and svc._designed_template_mode(doc.outline):
+            job_progress.report("正在对成稿做排版质量检查…")
             review = svc.review_pptx_visuals(data)
             hard = [issue for issue in review.get("issues") or []
                     if issue.get("severity") == "error"]
             if hard:
                 logger.warning("[PPT] 模型模板成稿存在 %d 项排版错误，改用安全版式",
                                len(hard))
+                job_progress.report("发现排版问题，正在切换安全版式…")
                 safe_template, _ = svc._resolve_render_style(
                     doc.template_id, doc.theme_id or "", adjusted_outline)
                 data = ppt_engine.render_pptx(
@@ -268,6 +284,7 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
             return False, (f"第{'、'.join(map(str, missing))}页只有标题或页码，"
                            "正文未进入成稿；请检查大纲内容或重新生成")
         render_seconds = time.monotonic() - started
+        job_progress.report("正在保存 PPT 文件…")
         fname = f"{uuid.uuid4().hex}.pptx"
         path = settings.ppt_dir / "generated" / fname
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -284,8 +301,11 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         # 每成功一页即把 job_current_page 推进到**磁盘上真实存在**的张数：
         # 前端「正在生成第 N/M 页」与完成后「X/M」都只认真值，绝不虚报。
         def _on_page(done: int) -> None:
-            _update_job(doc_id, job_current_page=done, job_progress_at=now_local())
+            _update_job(doc_id, job_current_page=done,
+                        job_stage_detail=f"正在生成页面预览图 {done}/{slides}",
+                        job_progress_at=now_local())
 
+        job_progress.report("正在生成页面预览图…")
         pages = _render_local_previews(path, doc_id, on_progress=_on_page)
         logger.info("[PPT 任务耗时] job=%s 排版=%.1fs 页图=%.1fs",
                     doc_id, render_seconds, time.monotonic() - started - render_seconds)
@@ -296,7 +316,8 @@ def _render_local_and_store(doc_id: str, renderer: str = "local") -> Tuple[bool,
         _update_job(doc_id, file_path=str(path), outline=adjusted_outline,
                     status="generated",
                     slide_count=slides, job_status="succeeded",
-                    job_phase="succeeded", job_renderer=effective_renderer,
+                    job_phase="succeeded", job_stage_detail="",
+                    job_renderer=effective_renderer,
                     job_event_id="", job_error="", job_question="",
                     job_total_pages=slides, job_current_page=pages,
                     job_finished_at=now_local(), job_progress_at=now_local())
@@ -340,6 +361,9 @@ class LocalRenderJobRunner:
         self.doc_id = doc_id
 
     def run(self) -> None:
+        from app.application.ppt import job_progress
+
+        token = job_progress.bind(_stage_reporter(self.doc_id))
         try:
             doc = _open(self.doc_id)
             if doc is None:
@@ -347,12 +371,13 @@ class LocalRenderJobRunner:
                 return
             if doc.job_cancel_requested:
                 self._set(job_status="cancelled", job_phase="cancelled",
-                          job_finished_at=now_local())
+                          job_stage_detail="", job_finished_at=now_local())
                 return
             # 总页数在渲染开始前就写入：前端「正在生成第 N/M 页」需要 M，
             # 否则整个渲染期只能显示无数字的「正在生成页面…」
             total = len((doc.outline or {}).get("slides") or [])
             self._set(job_status="running", job_phase="designing",
+                      job_stage_detail="正在准备生成…",
                       job_total_pages=total, job_progress_at=now_local())
             ok, why = _render_local_and_store(self.doc_id)
             if not ok:
@@ -361,6 +386,7 @@ class LocalRenderJobRunner:
             logger.exception("PPT 本地渲染任务异常：%s", e)
             self._fail(f"{type(e).__name__}: {e}")
         finally:
+            job_progress.unbind(token)
             with _RUNNING_LOCK:
                 _RUNNING.pop(self.doc_id, None)
 
@@ -369,6 +395,7 @@ class LocalRenderJobRunner:
 
     def _fail(self, reason: str) -> None:
         self._set(status="failed", job_status="failed", job_phase="failed",
+                  job_stage_detail="",
                   job_error=reason[:1000], job_finished_at=now_local())
         logger.error("PPT 本地渲染失败：job_id=%s，原因=%s", self.doc_id, reason)
 
@@ -398,6 +425,7 @@ def submit_job(doc_id: str, user_id: str, message: str = "",
     # 显式模板且启用旧服务时仍保留兼容路由。
     if uses_local_renderer(doc_id):
         _update_job(doc_id, job_status="pending", job_phase="submitting",
+                    job_stage_detail="任务已提交，正在初始化…",
                     job_error="", job_question="", job_current_page=0,
                     job_total_pages=0, job_cancel_requested=False,
                     job_started_at=now_local(), job_progress_at=now_local(),
@@ -413,6 +441,7 @@ def submit_job(doc_id: str, user_id: str, message: str = "",
                 "renderer": "local"}
 
     _update_job(doc_id, job_status="pending", job_phase="submitting",
+                job_stage_detail="任务已提交，正在初始化…",
                 job_error="", job_question="", job_current_page=0,
                 job_total_pages=0, job_cancel_requested=False,
                 job_started_at=now_local(), job_progress_at=now_local(),
@@ -497,6 +526,7 @@ def job_status(doc: PPTDocument) -> Dict[str, Any]:
         "total_pages": doc.job_total_pages,
         "current_page": doc.job_current_page,
         "phase": doc.job_phase,
+        "stage_detail": getattr(doc, "job_stage_detail", "") or "",
         "elapsed_seconds": round(elapsed, 1),
         "estimated_remaining": remaining,
         "error_msg": doc.job_error or "",
@@ -527,9 +557,13 @@ class PPTAgentJobRunner:
     # ---------------- 主流程 ----------------
 
     def run(self) -> None:
+        from app.application.ppt import job_progress
+
         deadline = time.monotonic() + settings.PPT_AGENT_TOTAL_TIMEOUT
+        token = job_progress.bind(_stage_reporter(self.doc_id))
         try:
-            self._set(job_status="running", job_phase="submitting")
+            self._set(job_status="running", job_phase="submitting",
+                      job_stage_detail="正在连接生成服务…")
             client = PPTAgentClient.from_settings()
             doc = self._load_doc()
             if doc is None:
@@ -570,6 +604,7 @@ class PPTAgentJobRunner:
             logger.exception("PPT job 执行异常：%s", e)
             self._fail(f"{type(e).__name__}: {e}")
         finally:
+            job_progress.unbind(token)
             with _RUNNING_LOCK:
                 _RUNNING.pop(self.doc_id, None)
 
@@ -599,7 +634,7 @@ class PPTAgentJobRunner:
             if doc is not None and doc.job_cancel_requested:
                 logger.info("PPT job 收到取消：job_id=%s", self.doc_id)
                 self._set(job_status="cancelled", job_phase="cancelled",
-                          job_finished_at=now_local())
+                          job_stage_detail="", job_finished_at=now_local())
                 return
             scan = client.scan_progress(self.started_at)
             signature = f"{scan['slides']}/{scan['previews']}/{scan['has_pptx']}"
@@ -619,8 +654,15 @@ class PPTAgentJobRunner:
         pages = max(int(scan.get("slides") or 0), int(scan.get("previews") or 0))
         if pages <= 0 and not scan.get("has_pptx"):
             return
+        phase = self._infer_phase(scan, pages)
+        detail = {
+            "finalizing": "正在合成 PPT 文件…",
+            "designing": f"正在设计页面（已生成 {pages} 页）…",
+            "researching": "正在理解需求与准备素材…",
+        }.get(phase, "")
         self._set(job_current_page=pages,
-                  job_phase=self._infer_phase(scan, pages),
+                  job_phase=phase,
+                  job_stage_detail=detail,
                   job_progress_at=now_local())
 
     @staticmethod
@@ -646,6 +688,7 @@ class PPTAgentJobRunner:
             logger.warning("[PPT] 剩余时间不足，跳过自动重试：job_id=%s", self.doc_id)
             return None
         self._set(job_status="running", job_phase="designing",
+                  job_stage_detail="正在自动修正并重新生成…",
                   job_question="", job_progress_at=now_local())
         try:
             return client.generate_deck(
@@ -753,6 +796,7 @@ class PPTAgentJobRunner:
         slides = len((doc.outline or {}).get("slides") or [])
         _update_job(self.doc_id, file_path=str(path), status="generated",
                     slide_count=slides, job_status="succeeded", job_phase="succeeded",
+                    job_stage_detail="",
                     job_renderer=renderer, job_event_id=event_id, job_error="",
                     job_question="", job_finished_at=now_local(),
                     job_progress_at=now_local())
@@ -780,6 +824,7 @@ class PPTAgentJobRunner:
 
     def _fail(self, reason: str) -> None:
         self._set(status="failed", job_status="failed", job_phase="failed",
+                  job_stage_detail="",
                   job_error=reason[:1000], job_finished_at=now_local())
         logger.error("PPT job 失败：job_id=%s，原因=%s", self.doc_id, reason)
 

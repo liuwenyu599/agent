@@ -17,8 +17,8 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.application.ppt import (outline_gate, page_authoring, ppt_engine,
-                                 template_prepare, template_style)
+from app.application.ppt import (job_progress, outline_gate, page_authoring,
+                                 ppt_engine, template_prepare, template_style)
 from app.application.ppt.ppt_engine import BUILTIN_TEMPLATES, DEFAULT_COLORS, DEFAULT_LAYOUTS
 from app.application.shared.writing_assistant import WritingAssistant
 from app.core.config import settings
@@ -2669,7 +2669,11 @@ class PPTService:
                             if issue.get("page", 0) > 0 and
                             issue.get("code") in ("out_of_bounds", "text_overlap",
                                                    "text_overflow_risk")})[:3]
+        if bad_pages:
+            job_progress.report(
+                f"版式自检发现 {len(bad_pages)} 页需要优化，正在调整版式…")
         for page in bad_pages:
+            job_progress.report(f"正在优化第 {page} 页版式…")
             slide = current["slides"][page - 1]
             if slide.get("layout_locked"):
                 continue
@@ -2703,6 +2707,7 @@ class PPTService:
                 if best_score == 0:
                     break
         if vision_review and settings.VISION_MODEL_URL:
+            job_progress.report("正在进行页面视觉复检…")
             rendered = PPTService.review_rendered_pages(data)
             # 视觉模型只提出问题；替代版式由服务端枚举并做几何、视觉双重检查。
             pages = sorted({issue.get("page") for issue in rendered["issues"]
@@ -2755,6 +2760,7 @@ class PPTService:
                     or slide.get("type") not in ("content", "summary")):
                 continue
             attempts += 1
+            job_progress.report(f"正在重写第 {page} 页内容并复检…")
             try:
                 candidate = PPTService._rewrite_scene_page(
                     slide, [issue for issue in problems if issue.get("page") == page], assistant)
@@ -2829,6 +2835,7 @@ class PPTService:
         if designed and trow and not getattr(trow, "builtin_id", None) and not base:
             raise AppError(422, "所选模板的源文件缺失，请重新导入模板后生成")
         if designed:
+            job_progress.report("正在设计页面构图…")
             clean = page_authoring.author_pages(
                 clean, template, self._ppt_assistant(), warnings,
                 reference_image=self._design_reference_image(template, trow))
@@ -2842,6 +2849,7 @@ class PPTService:
         # designed 的承诺是「模型只排版、不改写事实」，而内容重写会把要点精简掉，
         # 二者直接冲突：构图阶段已按字数算过容量，溢出交给版式/可读兜底处理。
         rewrite = model_rewrite and not designed
+        job_progress.report("正在排版渲染页面…")
         return self._render_with_feedback(clean, template, warnings,
                                           vision_review=vision_review,
                                           assistant=(self._ppt_assistant()

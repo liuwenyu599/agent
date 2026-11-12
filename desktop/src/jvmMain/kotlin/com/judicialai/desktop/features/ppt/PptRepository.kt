@@ -7,6 +7,7 @@ import com.judicialai.desktop.core.utils.arr
 import com.judicialai.desktop.core.utils.bool
 import com.judicialai.desktop.core.utils.items
 import com.judicialai.desktop.core.utils.int
+import com.judicialai.desktop.core.utils.intOrNull
 import com.judicialai.desktop.core.utils.obj
 import com.judicialai.desktop.core.utils.str
 import kotlinx.serialization.json.JsonElement
@@ -313,6 +314,13 @@ class PptRepository(private val api: ApiClient) {
                     question = d["question"].str().ifBlank { null },
                     // 产物来源：pptagent（PPTAgent 产物）/ local（已回退本地渲染）
                     renderer = d["renderer"].str().ifBlank { null },
+                    // 服务端细粒度阶段明细，界面优先展示（旧版服务端没有该字段 → null）
+                    stageDetail = d["stage_detail"].str().ifBlank { null },
+                    // 排队位次：0=正在跑，>0=第几位，null=不在队列
+                    queuePosition = d["queue_position"].intOrNull(),
+                    // 预计等待：后端给浮点秒，null=样本不足（不要显示 0）
+                    estimatedWaitSeconds = d["estimated_wait_seconds"].str()
+                        .toDoubleOrNull()?.toInt(),
                 ))
             }
             is ApiResult.Err -> r

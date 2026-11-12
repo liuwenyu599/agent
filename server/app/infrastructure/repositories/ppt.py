@@ -32,7 +32,8 @@ _DOC_FIELDS = ["id", "user_id", "title", "subtitle", "source_content", "template
                "theme_id", "source_type", "status", "is_favorite", "outline",
                "file_path", "slide_count", "created_at", "updated_at",
                # 异步生成任务（PPTAgent job）
-               "job_status", "job_phase", "job_total_pages", "job_current_page",
+               "job_status", "job_phase", "job_stage_detail",
+               "job_total_pages", "job_current_page",
                "job_error", "job_question", "job_renderer", "job_event_id",
                "job_cancel_requested", "job_started_at", "job_finished_at",
                "job_progress_at"]
@@ -255,6 +256,7 @@ class SqlAlchemyPPTDocumentRepository(PPTDocumentRepository):
             is_favorite=doc.is_favorite, outline=doc.outline,
             file_path=doc.file_path, slide_count=doc.slide_count,
             job_status=doc.job_status, job_phase=doc.job_phase,
+            job_stage_detail=doc.job_stage_detail,
             job_total_pages=doc.job_total_pages, job_current_page=doc.job_current_page,
             job_error=doc.job_error, job_question=doc.job_question,
             job_renderer=doc.job_renderer, job_event_id=doc.job_event_id,

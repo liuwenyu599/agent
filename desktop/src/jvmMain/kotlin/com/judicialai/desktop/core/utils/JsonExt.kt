@@ -13,6 +13,8 @@ fun JsonElement?.obj(): JsonObject? = this as? JsonObject
 fun JsonElement?.arr(): List<JsonElement> = (this as? JsonArray)?.toList() ?: emptyList()
 fun JsonElement?.str(): String = (this as? JsonPrimitive)?.contentOrNull ?: ""
 fun JsonElement?.int(): Int = (this as? JsonPrimitive)?.intOrNull ?: 0
+/** 可空整数：字段缺失 / 显式 null 时返回 null（如 queue_position 不在队列时为 null） */
+fun JsonElement?.intOrNull(): Int? = (this as? JsonPrimitive)?.intOrNull
 fun JsonElement?.bool(): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: false
 fun JsonElement?.bool(default: Boolean): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: default
 

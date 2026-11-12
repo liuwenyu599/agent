@@ -267,3 +267,53 @@ def test_gateway_failure_still_short_circuits_remaining_batches(
     page_authoring.author_pages(_twelve_content_pages(), {}, assistant, warnings)
     assert assistant.calls == 1
     assert warnings and "模型构图未通过检查" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# 作业级并行槽位（用户感知的「能并行几个 PPT」）
+# ---------------------------------------------------------------------------
+
+def test_job_slots_default_to_two(monkeypatch):
+    """未配置时保持历史行为：同时只跑 2 个 PPT 作业。"""
+    from app.core.config import Settings
+    monkeypatch.delenv("PPT_MAX_CONCURRENT_JOBS", raising=False)
+    assert Settings().PPT_MAX_CONCURRENT_JOBS == 2
+    assert agent_job._max_concurrent_jobs() >= 1
+
+
+def test_job_slots_can_be_raised_for_dedicated_replicas(monkeypatch):
+    from app.core.config import Settings
+    monkeypatch.setenv("PPT_MAX_CONCURRENT_JOBS", "4")
+    assert Settings().PPT_MAX_CONCURRENT_JOBS == 4
+    monkeypatch.setattr(settings, "PPT_MAX_CONCURRENT_JOBS", 4)
+    assert agent_job._max_concurrent_jobs() == 4
+    # 非法值收敛到 1，不能把 BoundedSemaphore(0) 变成永久死锁
+    for bad in (0, -3):
+        monkeypatch.setattr(settings, "PPT_MAX_CONCURRENT_JOBS", bad)
+        assert agent_job._max_concurrent_jobs() == 1
+
+
+def test_queue_stats_and_eta_follow_configured_slots(_isolated, monkeypatch):
+    monkeypatch.setattr(agent_job, "_MAX_CONCURRENT_JOBS", 4)
+    agent_job.submit_job("doc-a", "user-a")
+    agent_job.submit_job("doc-b", "user-b")
+    agent_job.submit_job("doc-c", "user-c")
+    with agent_job._QUEUE_LOCK:
+        agent_job._DURATIONS.extend([300.0, 300.0])
+    monkeypatch.setattr(agent_job._core, "job_status", lambda doc: {"status": "pending"})
+    assert agent_job.queue_stats()["max_concurrent_jobs"] == 4
+    status = agent_job.job_status(SimpleNamespace(id="doc-c"))
+    # 4 个槽位：位置 3 属于第 1 波，约 1 × 300s（而非 2 个槽位时的 600s）。
+    assert status["estimated_wait_seconds"] == 300.0
+
+
+def test_deploy_templates_expose_job_slot_setting():
+    """生产 compose 是显式白名单，漏一个键就会静默退回默认值。"""
+    from pathlib import Path
+    deploy = Path(__file__).resolve().parents[2] / "deploy"
+    compose = (deploy / "production.docker-compose.yml").read_text(encoding="utf-8")
+    patch = (deploy / "patch_production_compose_env.py").read_text(encoding="utf-8")
+    example = (deploy / ".env.example").read_text(encoding="utf-8")
+    assert "PPT_MAX_CONCURRENT_JOBS: ${PPT_MAX_CONCURRENT_JOBS:-2}" in compose
+    assert '("PPT_MAX_CONCURRENT_JOBS", "${PPT_MAX_CONCURRENT_JOBS:-2}")' in patch
+    assert "PPT_MAX_CONCURRENT_JOBS=2" in example

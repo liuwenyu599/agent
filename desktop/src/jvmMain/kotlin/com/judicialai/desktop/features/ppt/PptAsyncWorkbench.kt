@@ -443,6 +443,11 @@ private fun JobStatusBar(vm: PptViewModel, job: PptJobProgress) {
                 Text("已用时 ${formatJobDuration(job.elapsedSeconds)}" +
                     (job.estimatedRemaining?.let { " · 预计还需 ${formatJobDuration(it)}" } ?: ""),
                     fontSize = 11.5.sp, color = Muted)
+            } else if ((job.queuePosition ?: 0) > 0 && job.estimatedWaitSeconds != null) {
+                // 排队阶段 elapsed 恒为 0：只报预计等待，避免和阶段文案重复「排队中」
+                Spacer(Modifier.width(12.dp))
+                Text("预计等待 ${formatJobDuration(job.estimatedWaitSeconds!!)}",
+                    fontSize = 11.5.sp, color = Muted)
             }
             job.transientError?.let {
                 Spacer(Modifier.width(12.dp))

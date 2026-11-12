@@ -82,6 +82,12 @@ data class PptJobStatusSnapshot(
     val question: String?,
     /** 产物来源：pptagent / local */
     val renderer: String?,
+    /** 服务端细粒度阶段明细（如「正在设计页面构图（第 2/5 批）」），优先于 phase 展示 */
+    val stageDetail: String? = null,
+    /** 排队位次：0=正在跑，>0=第几位，null=不在队列 */
+    val queuePosition: Int? = null,
+    /** 排队预计等待秒数（服务端按最近作业均值估算，null=样本不足） */
+    val estimatedWaitSeconds: Int? = null,
 ) {
     val isTerminal: Boolean get() = status in TERMINAL_JOB_STATUSES
 }
@@ -105,6 +111,12 @@ class PptJobProgress {
     var phase by mutableStateOf(PptJobPhase.UNKNOWN)
     /** 给用户看的当前阶段文案 */
     var stageText by mutableStateOf("正在提交生成任务…")
+    /** 服务端细粒度阶段明细（为空时退回按 phase 生成的文案） */
+    var stageDetail by mutableStateOf<String?>(null)
+    /** 排队位次：0=正在跑，>0=第几位，null=不在队列 */
+    var queuePosition by mutableStateOf<Int?>(null)
+    /** 排队预计等待秒数 */
+    var estimatedWaitSeconds by mutableStateOf<Int?>(null)
 
     var totalPages by mutableStateOf(0)
     var currentPage by mutableStateOf(0)
@@ -371,6 +383,9 @@ object PptJobEngine {
         p.currentPage = s.currentPage
         p.elapsedSeconds = s.elapsedSeconds
         p.estimatedRemaining = s.estimatedRemaining
+        p.stageDetail = s.stageDetail?.takeIf { it.isNotBlank() }
+        p.queuePosition = s.queuePosition
+        p.estimatedWaitSeconds = s.estimatedWaitSeconds
         if (!s.errorMsg.isNullOrBlank()) p.errorMsg = s.errorMsg
         if (!s.renderer.isNullOrBlank()) p.renderer = s.renderer
         p.status = when (s.status) {
@@ -386,22 +401,36 @@ object PptJobEngine {
         p.stageText = stageTextOf(p)
     }
 
-    /** 阶段 → 中文文案；页数只有共享卷可用时才准，为 0 时只说阶段，不出现「第 0/0 页」 */
-    private fun stageTextOf(p: PptJobProgress): String = when (p.phase) {
-        PptJobPhase.SUBMITTING -> "正在提交生成任务…"
-        PptJobPhase.RESEARCHING -> "正在理解需求…"
-        PptJobPhase.OUTLINING -> "正在生成大纲…"
-        PptJobPhase.DESIGNING ->
-            if (p.totalPages > 0) "正在生成第 ${p.currentPage.coerceAtLeast(1)}/${p.totalPages} 页"
-            else "正在生成页面…"
-        PptJobPhase.FINALIZING -> "正在合成 PPT…"
-        PptJobPhase.SUCCEEDED -> "生成完成"
-        PptJobPhase.FAILED -> "生成失败"
-        PptJobPhase.UNKNOWN -> when (p.status) {
-            PptJobStatus.SUBMITTED -> "任务已提交，正在排队…"
-            PptJobStatus.CLARIFYING -> "AI 需要你补充一点信息"
-            PptJobStatus.DONE -> "生成完成"
-            else -> "正在生成…"
+    /**
+     * 阶段 → 中文文案。
+     *
+     * 服务端 `stage_detail` 优先：它带真实子步骤（「正在设计页面构图（第 2/5 批）」
+     * 「正在生成页面预览图 7/12」），比按 phase 猜的粗文案准确得多。
+     * 明细为空（旧版服务端 / 终态）时才退回 phase 文案；页数只有共享卷可用时才准，
+     * 为 0 时只说阶段，不出现「第 0/0 页」。
+     */
+    private fun stageTextOf(p: PptJobProgress): String {
+        val detail = p.stageDetail?.trim().orEmpty()
+        if (detail.isNotEmpty() && p.isActive) return detail
+        return when (p.phase) {
+            PptJobPhase.SUBMITTING -> "正在提交生成任务…"
+            PptJobPhase.RESEARCHING -> "正在理解需求…"
+            PptJobPhase.OUTLINING -> "正在生成大纲…"
+            PptJobPhase.DESIGNING ->
+                if (p.totalPages > 0) "正在生成第 ${p.currentPage.coerceAtLeast(1)}/${p.totalPages} 页"
+                else "正在生成页面…"
+            PptJobPhase.FINALIZING -> "正在合成 PPT…"
+            PptJobPhase.SUCCEEDED -> "生成完成"
+            PptJobPhase.FAILED -> "生成失败"
+            PptJobPhase.UNKNOWN -> when (p.status) {
+                PptJobStatus.SUBMITTED -> {
+                    val pos = p.queuePosition ?: 0
+                    if (pos > 0) "排队中（第 $pos 位）…" else "任务已提交，正在排队…"
+                }
+                PptJobStatus.CLARIFYING -> "AI 需要你补充一点信息"
+                PptJobStatus.DONE -> "生成完成"
+                else -> "正在生成…"
+            }
         }
     }
 

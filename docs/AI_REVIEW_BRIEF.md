@@ -125,7 +125,8 @@
 - **仍同步阻塞（待改）**：`format_check.py:56`（`asyncio.run` 包 `check_upload`）、
   `ppt.py:247`（`analyze_materials`）。⚠ 在 async 路由里调 `asyncio.run` 会新建 event loop、
   **阻塞 worker 线程**，应改为 `await`。
-- **并发模型**（`afc4175`）：本地 PPT 队列 `_MAX_CONCURRENT_JOBS=2`（进程内 FIFO 排队）；
+- **并发模型**（`afc4175`）：本地 PPT 队列槽位默认 2（进程内 FIFO 排队；
+  2026-11-12 起可由 `PPT_MAX_CONCURRENT_JOBS` 在启动期调整，旧版为硬编码 2）；
   同一 `QwenGateway` 模型池跨线程共享并发上限 `MODEL_MAX_CONCURRENCY=4`；
   后台 PPT 给交互式写作**预留 1 个请求名额**（`_rag_heavy_slots=2`），避免做 PPT 时写作饿死。
 - **429 退避重试**（`qwen.py`）：最多 3 次（1/2/4s 指数退避），瞬时限频不再直接判整页失败。
@@ -166,6 +167,12 @@
   闸门不再被主池「留 1 个名额」约束，副本算力可用满；地址误填成主端点时自动退回
   共享池语义。配置见 `deploy/.env.example`，卡位与启动流程见
   `deploy/model-pool/README.md` 第 10 节。
+- **作业级并行槽位可配**（`PPT_MAX_CONCURRENT_JOBS`，默认 2）：用户感知的
+  「能并行几个 PPT」由队列槽位决定，与副本数、模型闸门无关。此前是硬编码 2，
+  起 2 个副本也不会超过 2 个任务；现在可在独立副本到位后调到 4。容量约束
+  `作业数 × PPT_COMPOSITION_PARALLEL <= PPT_MODEL_MAX_CONCURRENCY <= MODEL_MAX_CONCURRENCY`，
+  `PPT_MODEL_URLS` 多地址仍是同一个 `QwenGateway` 容量池（4），只是把请求摊到
+  不同 vLLM 端点。对照表见 `deploy/model-pool/README.md` §10.6。
 - 回归：`-k ppt` = **665 passed / 5 failed**，5 条均为既有基线（4 条记录在案 +
   1 条 `test_status_is_queryable_and_reaches_terminal` 经 HEAD 复跑确认为顺序依赖的
   既有失败），本轮新增 10 条测试全过；独立副本闸门补充 2 条测试后共 12 条全过。

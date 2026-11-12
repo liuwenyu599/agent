@@ -82,6 +82,9 @@ class PPTDocument:
     # 进度阶段：submitting / researching / outlining / designing /
     #           finalizing / succeeded / failed
     job_phase: str = ""
+    # 细粒度阶段明细（中文，如「正在设计页面构图（第 2/5 批）」），
+    # 由 job_progress 回报器在渲染链路深处回写，前端优先于 phase 展示
+    job_stage_detail: str = ""
     job_total_pages: int = 0
     job_current_page: int = 0
     job_error: str = ""

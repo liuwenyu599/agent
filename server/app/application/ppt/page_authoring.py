@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app.application.ppt import job_progress
 from app.application.ppt import page_scene
 from app.application.ppt import svg_layer
 from app.application.ppt.template_style import summarize_template_style
@@ -389,6 +390,9 @@ def author_pages(outline: dict, template: dict, assistant: Any,
     # 折中办法：模板图只随第一批发送，让模型先「看过模板」；后续批次沿用
     # prompt 里的配色、字号层级和形状语法摘要，不再重复做视觉编码。
     def request_batch(batch_index: int, batch: list[int], budget: int):
+        job_progress.report(
+            f"正在设计页面构图（第 {batch_index + 1}/{len(batches)} 批，"
+            f"共 {len(pending)} 页）…")
         pages = [_page_brief(index, result["slides"][index - 1]) for index in batch]
         with_image = bool(reference_url) and batch_index == 0
         image = reference_url if with_image else None
@@ -499,6 +503,8 @@ def author_pages(outline: dict, template: dict, assistant: Any,
         repaired = {}
         if repair_indices:
             repair_at = time.monotonic()
+            job_progress.report(
+                f"正在修复第 {batch_index + 1}/{len(batches)} 批构图…")
             details = "；".join(f"第{index}页：{first_pass[index][1]}"
                                for index in repair_indices)
             try:
@@ -561,6 +567,7 @@ def author_pages(outline: dict, template: dict, assistant: Any,
                 failed.append(index)
     logger.info("[PPT 构图耗时] 合计页=%d 批=%d 修复失败页=%d 用时=%.1fs",
                 len(pending), len(batches), len(failed), time.monotonic() - authored_at)
+    job_progress.report("页面构图完成，正在排版渲染…")
     if failed and warnings is not None:
         # 一次批量请求失败会拖累整批 4 页，逐页追加会把提示区刷成 4 条同样的话。
         warnings.append(f"第{'、'.join(str(page) for page in failed)}页"

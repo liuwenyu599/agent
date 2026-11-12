@@ -915,6 +915,22 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 f"（{decision.source} 决策）。")
         return candidate, ("".join(reasons) if reasons else None)
 
+    @staticmethod
+    def _section_stage_label(index: int, plan: List[Dict[str, Any]]) -> str:
+        """分节写作的阶段文案：「第 i/n 节：章节标题（无标题时用要点）」。
+
+        前端的 stage 标签是用户唯一能看到的后台进度，只说「正在生成正文」
+        会让长文写作几分钟内毫无反馈，必须带上节次与本节主题。
+        """
+        total = len(plan)
+        section = plan[index] if 0 <= index < total else {}
+        title = str(section.get("heading") or "").strip() or str(
+            section.get("focus") or "").strip()
+        title = title[:18]
+        if title:
+            return f"正在生成正文（第 {index + 1}/{total} 节）：{title}"
+        return f"正在生成正文（第 {index + 1}/{total} 节）"
+
     async def _section_plan_async(self, ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not self.assistant:
             return self._fallback_plan(ctx)
@@ -1180,17 +1196,21 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
             ctx = self._effective_draft_context(ctx, template, user_id)
             attachment_ctx = self._attachment_context(task, ctx)
             if self._should_section(ctx, outline_only):
-                yield _sse({"type": "stage", "key": "planner", "label": "正在安排正文结构", "status": "running"})
+                yield _sse({"type": "stage", "key": "planner", "label": "正在规划正文结构…", "status": "running"})
                 plan = await self._section_plan_async(ctx)
                 if not plan:
                     raise HTTPException(status_code=502, detail="未能生成章节规划，请重试")
-                yield _sse({"type": "stage", "key": "writer", "label": "正在生成正文", "status": "running"})
+                yield _sse({"type": "stage", "key": "writer",
+                            "label": f"正在生成正文（共 {len(plan)} 节）", "status": "running"})
                 sections: List[str] = []
                 source_groups: List[List[Dict]] = []
                 stream_count = (len(plan) if settings.WRITING_SECTION_MAX_CONCURRENCY == 1
                                 else 1)
                 for index in range(stream_count):
                     section = plan[index]
+                    yield _sse({"type": "stage", "key": "writer",
+                                "label": self._section_stage_label(index, plan),
+                                "status": "running"})
                     chunks: asyncio.Queue[Optional[str]] = asyncio.Queue()
                     def on_delta(delta: str) -> None:
                         chunks.put_nowait(delta)
@@ -1225,6 +1245,9 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                         yield _sse({"type": "replace", "text":
                                     "\n\n".join(sections)})
                 if stream_count < len(plan):
+                    yield _sse({"type": "stage", "key": "writer",
+                                "label": f"正在生成正文（剩余 {len(plan) - stream_count} 节并行生成）",
+                                "status": "running"})
                     for later, later_sources in await self._generate_sections_async(
                         ctx, plan, user_id, attachment_ctx, template,
                         start_index=stream_count):
@@ -1245,9 +1268,12 @@ class AsyncWritingTaskService(ParagraphSuggestionMixin, SectionedGenerationWriti
                 return
 
             instruction = self._build_draft_instruction(ctx, outline_only, template)
-            yield _sse({"type": "stage", "key": "research", "label": "正在查找参考资料", "status": "running"})
+            yield _sse({"type": "stage", "key": "research", "label": "正在检索参考资料…", "status": "running"})
             sources = await self._retrieve_async(ctx, user_id)
-            yield _sse({"type": "stage", "key": "writer", "label": "正在生成正文", "status": "running"})
+            yield _sse({"type": "stage", "key": "writer",
+                        "label": (f"正在生成正文（已参考 {len(sources)} 条资料）"
+                                  if sources else "正在生成正文…"),
+                        "status": "running"})
             system = await self._draft_prompt_async(
                 instruction, sources, attachment_ctx, user_id, template)
             parts: List[str] = []
