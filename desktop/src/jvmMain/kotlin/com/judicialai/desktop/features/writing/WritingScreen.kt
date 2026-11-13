@@ -1771,7 +1771,7 @@ private fun AssistantPanel(
                     verticalArrangement = Arrangement.spacedBy(Dimens.space3),
                 ) {
                     if (vm.hasDraft) {
-                        AppButton(if (vm.checkingContent) "正在校验正文…" else "用 35B 校验正文",
+                        AppButton(if (vm.checkingContent) "正在校验正文…" else "校验正文",
                             onClick = vm::checkContent, kind = AppButtonKind.SECONDARY,
                             enabled = !vm.checkingContent, fill = true)
                     }

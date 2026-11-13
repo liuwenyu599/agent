@@ -417,17 +417,26 @@ async def check_current_content(task_id: str,
     audit = FormatCheckService(svc.db, assistant=WritingAssistant(get_llm_gateway()),
                                rag=svc.rag)
     with model_request_class("background"):
-        grammar = await asyncio.to_thread(
-            audit.engine._ai_check, text[:settings.FORMAT_CHECK_AI_BUDGET], [])
-        try:
-            conflicts = await asyncio.to_thread(audit._knowledge_conflict_issues, text, user)
-        except Exception as exc:
-            logger.warning("写作正文知识库核验失败: %s", exc)
+        # 三路校验（语义审校 / 知识库冲突 / 法条引文）各自独立，并发执行，
+        # 墙钟时间从「三者之和」降到「三者最大值」，避免串行累加拖慢。
+        results = await asyncio.gather(
+            asyncio.to_thread(
+                audit.engine._ai_check, text[:settings.FORMAT_CHECK_AI_BUDGET], []),
+            asyncio.to_thread(audit._knowledge_conflict_issues, text, user),
+            asyncio.to_thread(audit._law_citation_issues, text, user),
+            return_exceptions=True,
+        )
+        grammar = results[0]
+        if isinstance(grammar, Exception):
+            logger.warning("写作正文语义审校失败: %s", grammar)
+            grammar = None
+        conflicts = results[1]
+        if isinstance(conflicts, Exception):
+            logger.warning("写作正文知识库核验失败: %s", conflicts)
             conflicts = []
-        try:
-            laws = await asyncio.to_thread(audit._law_citation_issues, text, user)
-        except Exception as exc:
-            logger.warning("写作正文法条核验失败: %s", exc)
+        laws = results[2]
+        if isinstance(laws, Exception):
+            logger.warning("写作正文法条核验失败: %s", laws)
             laws = []
     issues = (grammar or []) + conflicts + laws
     for index, issue in enumerate(issues):
