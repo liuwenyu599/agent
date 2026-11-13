@@ -113,10 +113,12 @@ class PptRepository(private val api: ApiClient) {
         templateId: String? = null,
         templateMode: String = "adaptive",
         colorOverride: Boolean = false,
+        structure: String = "auto",
     ): ApiResult<Pair<String?, String>> {
         val body = mutableMapOf<String, Any?>(
             "source_type" to sourceType, "topic" to topic, "content" to content,
             "audience" to audience, "scene" to scene,
+            "structure" to structure,
             "kb_ids" to kbIds,
             "material_names" to materialNames,
             "material_ids" to materialIds,

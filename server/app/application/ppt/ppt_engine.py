@@ -1015,8 +1015,47 @@ _SCENE_STRUCTURE = {
 }
 
 
-def _pick_structure_emphasis(scene: str) -> str:
-    """按场景词选取结构倾向；未匹配时回退纯随机（仍保证多样性）。"""
+# 桌面端「叙事结构」下拉的显式结构 → 强制叙事弧（用户主动指定时优先于场景自动推断）。
+# key 与前端下拉选项一一对应；命中即严格采用该叙事结构，不再交给模型随机发挥。
+_STRUCTURE_EMPHASIS_BY_KEY = {
+    "report": [
+        "本次生成必须严格采用「总—分—总」叙事结构：开篇总体态势/成效概览 → "
+        "重点任务分项展开（content/case×N）→ 下一步工作（content/process）。",
+    ],
+    "analyze": [
+        "本次生成必须严格采用「问题—原因—对策」叙事结构：突出矛盾/现状"
+        "（content/statement）→ 成因剖析（content/grouped）→ 对策举措"
+        "（process/case×N）→ 时限与保障（timeline）。",
+    ],
+    "experience": [
+        "本次生成必须严格采用「背景—做法—成效—启示」叙事结构：工作背景与要求"
+        "（content）→ 主要做法（content/process×N）→ 成效数据（data/chart）→ "
+        "经验启示（summary/takeaway）。",
+    ],
+    "plan": [
+        "本次生成必须严格采用「目标—路径—保障」叙事结构：目标意义"
+        "（statement/takeaway）→ 实施路径（process/timeline）→ 重点任务"
+        "（content×N）→ 组织保障（content/grouped）。",
+    ],
+    "interpret": [
+        "本次生成必须严格采用「是什么—为什么—怎么办」叙事结构：政策/概念解读"
+        "（content）→ 必要性紧迫性（compare/grouped）→ 落实举措"
+        "（case/process×N）→ 案例佐证（case）。",
+    ],
+    "training": [
+        "本次生成必须严格采用「模块化培训」叙事结构：培训目标（statement）→ "
+        "知识模块一/二/三（content/case×N）→ 随堂练习/互动（content）→ "
+        "要点回顾（summary）。",
+    ],
+}
+
+
+def _pick_structure_emphasis(scene: str, structure: str = "auto") -> str:
+    """选「本次结构倾向」：显式指定结构优先；否则按场景词匹配；都未命中则纯随机。"""
+    if structure and structure != "auto":
+        pool = _STRUCTURE_EMPHASIS_BY_KEY.get(structure)
+        if pool:
+            return random.choice(pool)
     if scene:
         for key, pool in _SCENE_STRUCTURE.items():
             if key in scene:
@@ -1049,6 +1088,7 @@ def template_content_budget(library: list) -> list:
 def generate_outline(assistant, source_type: str, topic: str, content: str,
                      images: List[Dict], slide_count: int = 10,
                      audience: str = "", scene: str = "",
+                     structure: str = "auto",
                      material_names: Optional[List[str]] = None,
                      enforce_exact_count: bool = True,
                      free_structure: bool = False,
@@ -1101,7 +1141,7 @@ def generate_outline(assistant, source_type: str, topic: str, content: str,
             "\n\n【来源标注】本次未提供材料名清单。每页 slide 仍须包含 \"sources\" 字段"
             "（无依据时写空数组）。没有可核对依据时，不得写具体数值、日期、办结天数、"
             "案例过程与结果，只写定性表述；宁可少写数字，也不要把占位值当成成果。")
-    prompt += "\n\n【本次结构倾向】" + _pick_structure_emphasis(scene)
+    prompt += "\n\n【本次结构倾向】" + _pick_structure_emphasis(scene, structure)
     raw = _call_outline_model(assistant, prompt, temperature=0.5)
     # 验收可观测：以前只有「解析失败」才截断打印模型原文，正常生成时无从判断
     # 35B 到底给了什么。这里留一份截断原文（内网日志，便于 grep OUTLINE_RAW）。

@@ -377,12 +377,12 @@ def list_kbs(user: User = Depends(get_current_user),
 
 @router.post("/outline-from-kb")
 def outline_from_kb(kb_ids: str = Form(...), topic: str = Form(""), audience: str = Form(""), scene: str = Form(""),
-                    slide_count: int = Form(10),
+                    slide_count: int = Form(10), structure: str = Form(""),
                     user: User = Depends(get_current_user),
                     svc: PPTService = Depends(get_ppt_service)):
     # 前端可能传逗号分隔或多个同名参数；这里按逗号拆
     ids = [i for i in kb_ids.replace(",", " ").split() if i]
-    return svc.outline_from_kb(ids, topic, audience, scene, slide_count, user)
+    return svc.outline_from_kb(ids, topic, audience, scene, slide_count, user, structure=structure)
 
 
 @router.post("/extract-text")
@@ -423,7 +423,7 @@ def outline_stream(body: OutlineIn,
 @router.post("/outline-from-doc")
 def outline_from_doc(file: UploadFile = File(...), topic: str = Form(""),
                      audience: str = Form(""), scene: str = Form(""),
-                     slide_count: int = Form(10),
+                     slide_count: int = Form(10), structure: str = Form(""),
                      user: User = Depends(get_current_user),
                      svc: PPTService = Depends(get_ppt_service)):
     """上传文档并生成大纲。
@@ -432,7 +432,7 @@ def outline_from_doc(file: UploadFile = File(...), topic: str = Form(""),
     自动在线程池执行，避免长模型请求占住主事件循环。
     """
     return asyncio.run(
-        svc.outline_from_doc(file, topic, audience, scene, slide_count, user)
+        svc.outline_from_doc(file, topic, audience, scene, slide_count, user, structure=structure)
     )
 
 

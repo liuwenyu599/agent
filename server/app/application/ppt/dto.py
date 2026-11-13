@@ -52,6 +52,9 @@ class OutlineIn(BaseModel):
     slide_count: int = 10
     audience: str = ""
     scene: str = ""
+    # 叙事结构：auto（按主题/场景自动推断）或 report/analyze/experience/plan/
+    # interpret/training（桌面端「叙事结构」下拉显式指定，强制对应叙事弧）。
+    structure: str = "auto"
     # 本次参与生成的材料文件名清单（材料分析步骤返回），
     # 用于要求模型为每页标注 sources 内容依据（provenance）
     material_names: List[str] = Field(default_factory=list)

@@ -1886,11 +1886,12 @@ class PPTService:
         return content, names
 
     def outline_from_kb(self, kb_ids: List[str], topic: str, audience: str,
-                        scene: str, slide_count: int, user: User) -> dict:
+                        scene: str, slide_count: int, user: User,
+                        structure: str = "auto") -> dict:
         """知识库入口大纲：有主题 → RAG 语义检索相关片段；无主题 → 整库截断拼接
         （合并与判空逻辑统一在 _do_outline / _apply_kb_material）。"""
         return self._do_outline(user, "kb", topic, "", slide_count, audience, scene,
-                                kb_ids=kb_ids)
+                                kb_ids=kb_ids, structure=structure)
 
     async def extract_text(self, file) -> dict:
         """提取单个文档文本（前端多文件时循环调用，自行拼接后走 /outline）。"""
@@ -2152,6 +2153,7 @@ class PPTService:
 
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
+                    structure: str = "auto",
                     material_names: Optional[List[str]] = None,
                     material_ids: Optional[List[str]] = None,
                     auto_images: bool = True,
@@ -2178,7 +2180,7 @@ class PPTService:
         try:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), source_type, topic, content, images,
-                target_count, audience, scene,
+                target_count, audience, scene, structure=structure,
                 material_names=material_names,
                 # 未填页数时仅给建议，由模型按材料决定实际页数。
                 enforce_exact_count=enforce_exact_count, free_structure=True,
@@ -2228,6 +2230,7 @@ class PPTService:
                 else "designed" if body.template_id else "adaptive")
         return self._do_outline(user, body.source_type, body.topic, body.content,
                                 body.slide_count, body.audience, body.scene,
+                                structure=body.structure,
                                 material_names=body.material_names,
                                 material_ids=body.material_ids,
                                 auto_images=body.auto_images,
@@ -2281,6 +2284,7 @@ class PPTService:
             outline = ppt_engine.generate_outline(
                 self._ppt_assistant(), body.source_type, body.topic, content,
                 images, target_count, body.audience, body.scene,
+                structure=body.structure,
                 material_names=material_names,
                 enforce_exact_count=explicit_count, free_structure=True,
                 template_budget=(self._template_budget(body.template_id, user)
@@ -2341,11 +2345,13 @@ class PPTService:
         yield _sse({"type": "done", "data": {"doc_id": d.id, "outline": outline}})
 
     async def outline_from_doc(self, file, topic: str, audience: str, scene: str,
-                               slide_count: int, user: User) -> dict:
+                               slide_count: int, user: User,
+                               structure: str = "auto") -> dict:
         data = await file.read()
         text = self._extract_any(file.filename or "unnamed", data)
         return self._do_outline(user, "document", topic, text, slide_count, audience, scene,
-                                material_names=[file.filename] if file.filename else None)
+                                material_names=[file.filename] if file.filename else None,
+                                structure=structure)
 
     # ================= 已有 PPT 导入续改 =================
     async def import_pptx(self, file, user: User) -> dict:

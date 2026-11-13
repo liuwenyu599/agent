@@ -446,6 +446,9 @@ private fun PptEntryPane(
                     ?.let { vm.uploadLibraryMaterial(it) }
             }) { Text(if (vm.materialLibraryBusy) "正在处理图片…" else "上传图库图片") }
         }
+        // 叙事结构：生成前指定，避免每次都套同一套结构
+        Spacer(Modifier.height(14.dp))
+        NarrativeStructureSelector(vm.structureSelection) { vm.structureSelection = it }
         // 视觉风格
         Spacer(Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.Bottom) {
@@ -1499,6 +1502,43 @@ private fun TemplateSkeletonEditor(vm: PptViewModel, t: JsonObject) {
                 TemplateLayoutSelector("流程页", process, usableLibrary) { process = it }
                 TemplateLayoutSelector("总结页", summary, usableLibrary) { summary = it }
                 TemplateLayoutSelector("结束页", closing, usableLibrary) { closing = it }
+            }
+        }
+    }
+}
+
+/** 叙事结构下拉：键须与后端 ppt_engine._STRUCTURE_EMPHASIS_BY_KEY 一一对应。 */
+@Composable
+private fun NarrativeStructureSelector(
+    selected: String,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf(
+        "auto" to "自动（按主题/场景推断）",
+        "report" to "汇报（总—分—总）",
+        "analyze" to "剖析（问题—原因—对策）",
+        "experience" to "经验（背景—做法—成效—启示）",
+        "plan" to "方案（目标—路径—保障）",
+        "interpret" to "解读（是什么—为什么—怎么办）",
+        "training" to "培训（模块化）",
+    )
+    val label = options.firstOrNull { it.first == selected }?.second ?: options[0].second
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("叙事结构", modifier = Modifier.width(72.dp), style = MaterialTheme.typography.body2)
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(label, maxLines = 1)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    options.forEach { (key, name) ->
+                        DropdownMenuItem(onClick = {
+                            onSelected(key)
+                            expanded = false
+                        }) { Text(name) }
+                    }
+                }
             }
         }
     }

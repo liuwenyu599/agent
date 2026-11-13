@@ -216,6 +216,8 @@ class PptViewModel(private val repo: PptRepository) {
         private set
     var outlineTitle by mutableStateOf("")
     var outlineSubtitle by mutableStateOf("")
+    /** 叙事结构：auto（按主题/场景推断）或 report/analyze/experience/plan/interpret/training */
+    var structureSelection by mutableStateOf("auto")
     val slides = mutableStateListOf<SlideEdit>()
     var selected by mutableStateOf(0)
     var outlineStage by mutableStateOf("")
@@ -715,6 +717,7 @@ class PptViewModel(private val repo: PptRepository) {
             "content" to content,
             "audience" to "",
             "scene" to "",
+            "structure" to structureSelection,
             "material_names" to materials.map { it.filename },
             "material_ids" to if (autoImagesEnabled) emptyList<String>() else selectedMaterialIds.toList(),
             "auto_images" to autoImagesEnabled,
@@ -933,6 +936,7 @@ class PptViewModel(private val repo: PptRepository) {
             val slideCount = body["slide_count"] as? Int
             val audience = body["audience"] as? String ?: ""
             val scene = body["scene"] as? String ?: ""
+            val structure = body["structure"] as? String ?: "auto"
             @Suppress("UNCHECKED_CAST")
             val materialNames = (body["material_names"] as? List<String>) ?: emptyList()
             @Suppress("UNCHECKED_CAST")
@@ -946,7 +950,8 @@ class PptViewModel(private val repo: PptRepository) {
                 themeId = body["theme_id"] as? String,
                 templateId = body["template_id"] as? String,
                 templateMode = body["template_mode"] as? String ?: "adaptive",
-                colorOverride = body["color_override"] as? Boolean ?: false)) {
+                colorOverride = body["color_override"] as? Boolean ?: false,
+                structure = structure)) {
                 is ApiResult.Ok -> {
                     val ol = runCatching {
                         kotlinx.serialization.json.Json.parseToJsonElement(r2.data.second).obj()
