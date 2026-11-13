@@ -8,6 +8,7 @@ import json as _json
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 import zipfile
@@ -39,6 +40,10 @@ from app.infrastructure.repositories.format_check import SqlAlchemyFormatRuleRep
 from app.domain.presentation_quality import PPT_DEFAULT_RULES
 
 logger = get_logger(__name__)
+
+# 仅用于「官方模板库为空」时的一次性自动 seed：builtin_id 有唯一约束，
+# 并发首个请求若各跑一次 seed 会撞 IntegrityError，故用双检锁收口。
+_AUTO_SEED_LOCK = threading.Lock()
 
 # 大纲流式接口的兜底错误文案（不得回传原始异常文本）
 _OUTLINE_UNEXPECTED_ERROR_MSG = (
@@ -2151,6 +2156,59 @@ class PPTService:
             logger.warning("模板文字精简未完成，保留原文进入排版检查：%s", type(exc).__name__)
             return outline
 
+    def _auto_select_template(self, user: User, topic: str, scene: str) -> Optional[str]:
+        """未显式选模板时，按主题从已发布且含 layout_library 的官方母版里自动挑一套。
+
+        命中即走 designed（克隆填充），比自适应骨架更贴品牌且观感统一；
+        未命中返回 None，回落自适应。只挑已发布模板，不擅自套用他人私有模板。
+        """
+        try:
+            rows = self.templates.list_for_user(user.id, scope="official")
+        except Exception as exc:
+            logger.warning("[PPT] 自动选模板时模板列表读取失败：%s", exc)
+            return None
+        if not rows:
+            # 官方模板一条都没有 = 从未执行 seed / 管理员从未发布，正是「永远
+            # 一样」的最可能根因。空库没有用户定制可覆盖，安全地自动补一次幂等
+            # seed，避免整条 designed 链路永久失效；双检锁防并发重复插入。
+            with _AUTO_SEED_LOCK:
+                try:
+                    rows = self.templates.list_for_user(user.id, scope="official")
+                    if not rows:
+                        self.seed_builtin_templates()
+                        rows = self.templates.list_for_user(user.id, scope="official")
+                        logger.info("[PPT] 官方模板库为空，已自动 seed：%d 套", len(rows))
+                except Exception as exc:
+                    logger.warning("[PPT] 空库自动 seed 失败：%s", exc)
+                    return None
+        # 不能用 template_to_dict()：它对 is_official 实体会用 BUILTIN_TEMPLATES
+        # 常量覆盖 DB 值，而常量里没有 layout_library，seed 分析出的版式库会被丢成
+        # 空列表，pick_library_template 的版式数门槛将把全部模板筛光。这里直接读实体。
+        eligible = [
+            {"id": t.id, "name": t.name, "category": t.category,
+             "layout_library": t.layout_library or [], "use_count": t.use_count or 0}
+            for t in rows if len(t.layout_library or []) >= 8
+        ]
+        if not eligible:
+            logger.warning(
+                "[PPT] 自动选模板未生效：official 模板 %d 套，含 >=8 版式的母版 0 套；"
+                "请确认已执行 POST /ppt/templates/seed 且母版 pptx 随镜像发布。"
+                "本次将回落自适应骨架。", len(rows))
+            return None
+        chosen = ppt_engine.pick_library_template(
+            eligible, topic=topic, style_hint=scene, title="")
+        if not chosen:
+            # 主题无明显场景词时 pick_library_template 会返回 None（原设计是保持
+            # 内置主题稳定）。单位场景要求版式统一优先，兜底取使用最多的一套，
+            # 保证「懒得选模板」也走 designed，不落回自适应骨架。
+            fallback = sorted(eligible,
+                              key=lambda r: (-(r["use_count"] or 0), str(r["name"])))[0]
+            chosen = str(fallback["id"])
+            logger.info("[PPT] 自动选模板兜底（主题未命中）：template_id=%s", chosen)
+        else:
+            logger.info("[PPT] 自动选模板命中：template_id=%s topic=%s", chosen, topic)
+        return chosen
+
     def _do_outline(self, user: User, source_type: str, topic: str, content: str,
                     slide_count: int, audience: str = "", scene: str = "",
                     structure: str = "auto",
@@ -2165,6 +2223,12 @@ class PPTService:
                     fallback_mode: str = "readable",
                     force_template_layout: bool = False,
                     color_override: bool = False) -> dict:
+        # 未显式选模板时按主题自动挑已发布母版，命中即走 designed。
+        # 放在共享漏斗里：主题 / 材料 / 知识库 / 文档四条入口统一生效。
+        if template_id is None:
+            template_id = self._auto_select_template(user, topic or "", scene or "")
+            if template_id and template_mode == "adaptive":
+                template_mode = "designed"
         content, material_names = self._apply_kb_material(
             user, kb_ids, topic, content, material_names)
         kb_empty = bool(kb_ids) and "【知识库检索材料】" not in (content or "")
@@ -2226,6 +2290,7 @@ class PPTService:
 
     def make_outline(self, body, user: User) -> dict:
         explicit_count = "slide_count" in getattr(body, "model_fields_set", set())
+        # 自动选库统一在 _do_outline 完成（主题 / 材料 / 知识库 / 文档四条入口共享）
         mode = (body.template_mode if "template_mode" in getattr(body, "model_fields_set", set())
                 else "designed" if body.template_id else "adaptive")
         return self._do_outline(user, body.source_type, body.topic, body.content,
@@ -2256,8 +2321,15 @@ class PPTService:
         def _sse(obj) -> str:
             return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
 
+        # 未显式选模板：按主题自动挑已发布母版，命中即走 designed
+        auto_template_id = (self._auto_select_template(user, body.topic or "", body.scene or "")
+                           if not body.template_id else None)
         mode = (body.template_mode if "template_mode" in getattr(body, "model_fields_set", set())
-                else "designed" if body.template_id else "adaptive")
+                else "designed" if (body.template_id or auto_template_id) else "adaptive")
+        # 桌面端总会显式带上 template_mode=adaptive（未选模板时的默认值），
+        # 因此自动选库命中后仍需主动升级，否则 designed 不会生效。
+        if auto_template_id and mode == "adaptive":
+            mode = "designed"
 
         yield _sse({"type": "stage", "text": "正在理解材料与任务要求…"})
         kb_ids = getattr(body, "kb_ids", None) or []
@@ -2333,7 +2405,7 @@ class PPTService:
         d = self.documents.add(PPTDocument(
             user_id=user.id, title=outline.get("title", "未命名PPT"),
             subtitle=outline.get("subtitle", ""), source_type=body.source_type,
-            template_id=body.template_id,
+            template_id=body.template_id or auto_template_id,
             source_content=(content or body.topic or "")[:8000],
             theme_id=(body.theme_id if ppt_engine.builtin_template(body.theme_id) else None)
             or base_theme_id,

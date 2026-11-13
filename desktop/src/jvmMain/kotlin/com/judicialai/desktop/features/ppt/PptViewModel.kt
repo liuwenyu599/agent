@@ -24,6 +24,17 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import java.io.File
 import java.time.LocalDate
+import java.util.prefs.Preferences
+
+/** 本地记住上次所选模板：司法局要求单位版式统一，新建时默认沿用而非「按内容自动选择」。 */
+private const val LAST_TEMPLATE_KEY = "last_template_id"
+private fun pptPrefs() = Preferences.userRoot().node("com/judicialai/desktop/ppt")
+private fun readLastTemplateId(): String? =
+    runCatching { pptPrefs().get(LAST_TEMPLATE_KEY, null)?.takeIf { it.isNotBlank() } }
+        .getOrNull()
+private fun rememberTemplateId(id: String) {
+    runCatching { pptPrefs().put(LAST_TEMPLATE_KEY, id) }
+}
 
 /** 工作台步骤：极简入口 → 大纲确认（可编辑） → 三栏工作台 */
 enum class PptStep { ENTRY, OUTLINE, WORKBENCH }
@@ -126,9 +137,10 @@ class PptViewModel(private val repo: PptRepository) {
         private set
     var documents by mutableStateOf(listOf<JsonObject>())
         private set
-    var templateId by mutableStateOf<String?>(null)
+    var templateId by mutableStateOf<String?>(readLastTemplateId())
     var strictTemplate by mutableStateOf(false)
-    var designedTemplate by mutableStateOf(false)
+    // 默认沿用上次模板时必须同时置位，否则 outlineBody 会把 template_mode 发成 adaptive
+    var designedTemplate by mutableStateOf(templateId != null)
     // 模型构图被拒后走哪条兜底链路：readable / learned / none
     var fallbackMode by mutableStateOf("readable")
     // 演示保底：完全不调用模型构图，直接出接入 designed 之前那套模板化版式
@@ -302,8 +314,13 @@ class PptViewModel(private val repo: PptRepository) {
             when (val r = repo.templates()) {
                 is ApiResult.Ok -> {
                     templates = r.data
-                    // 不替用户静默选择“列表第一项”。null 表示未显式选模板，
-                    // 服务端使用自适应版式与政务配色；只有用户点击后才绑定模板。
+                    // 默认沿用上次所选模板；若该模板已下架/对当前用户不可见，
+                    // 回落「按内容自动选择」，由服务端自动选库兜底，不静默绑死无效 id。
+                    val remembered = templateId
+                    if (remembered != null && r.data.none { it["id"].str() == remembered }) {
+                        templateId = null
+                        designedTemplate = false
+                    }
                 }
                 is ApiResult.Err -> status = r.message
             }
@@ -1262,6 +1279,8 @@ class PptViewModel(private val repo: PptRepository) {
     fun switchTemplate(id: String?) {
         if (templateId == id) return
         templateId = id
+        // 只记住真实模板；临时切到「按内容自动选择」不污染单位统一版式的默认值
+        if (id != null) rememberTemplateId(id)
         strictTemplate = false
         designedTemplate = id != null
         loadLayoutOptions(id)
