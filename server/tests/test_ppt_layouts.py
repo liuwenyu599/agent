@@ -593,6 +593,34 @@ class TestRuleLayoutRotation:
                  "layout": "content.compare"}
         assert E.choose_layout(slide, TPL["layouts"]) == "content.compare"
 
+    def test_model_layout_respects_deck_wide_cap(self):
+        """模型给的 layout 用满 2 次后不再无条件采纳，避免非相邻页同版式刷屏。"""
+        slide = {"type": "content", "title": "三项工作",
+                 "points": ["完善制度", "加强培训", "强化监督"],
+                 "design": {}, "layout": "content.three_cards"}
+        assert E.choose_layout(slide, TPL["layouts"]) == "content.three_cards"
+        assert E.choose_layout(slide, TPL["layouts"],
+                               used={"content.three_cards": 1}) == "content.three_cards"
+        assert E.choose_layout(slide, TPL["layouts"],
+                               used={"content.three_cards": 2}) != "content.three_cards"
+
+    def test_locked_layout_bypasses_deck_wide_cap(self):
+        slide = {"type": "content", "title": "三项工作",
+                 "points": ["完善制度", "加强培训", "强化监督"],
+                 "design": {}, "layout": "content.three_cards",
+                 "layout_locked": True}
+        assert E.choose_layout(slide, TPL["layouts"],
+                               used={"content.three_cards": 9}) == "content.three_cards"
+
+    def test_score_fallback_skips_exhausted_layouts(self):
+        """打分兜底不再靠 -0.30*used 的弱惩罚：用满的版式先排除。"""
+        slide = {"type": "content", "title": "三项工作",
+                 "points": ["完善制度", "加强培训", "强化监督"], "design": {}}
+        used = {"content.bullets": 3, "content.three_cards": 3}
+        lid = E.choose_layout(slide, {}, used=used)
+        assert lid in E.layout_ids("content")
+        assert lid not in used
+
 
 class TestOfflineDefaults:
     """政务内网：默认配置里不得预置任何公网端点，误开开关也不能外联。"""

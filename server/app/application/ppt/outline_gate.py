@@ -50,6 +50,11 @@ _SPECIFIC_FACT = re.compile(
 _CHROME_TYPES = {"cover", "toc", "section", "closing"}
 _STRUCTURE_TYPES = {"data", "chart", "timeline", "process", "case"}
 
+# 正文页同一显式 layout 在整稿中最多出现的次数。与 ppt_engine.choose_layout
+# 的 _MODEL_LAYOUT_MAX_PER_DECK 保持一致：规则层先清掉超额页，引擎层再对
+# 未经本闸的路径兜底。用户锁定的版式（layout_locked）不计入、不清除。
+_MAX_IDENTICAL_LAYOUT_PER_DECK = 2
+
 # 与 _OUTLINE_PROMPT「版式选择」契约一致的最低要求；只用于判定显式 layout
 # 是否明显不合法，不参与自动选版。
 _LAYOUT_MIN_POINTS = {
@@ -159,6 +164,9 @@ def audit_outline(outline: Dict[str, Any],
     seen_titles: Dict[str, int] = {}
     placeholder_pages = 0
     unsourced_pages = 0
+    layout_counts: Dict[str, int] = {}
+    kept_layout_counts: Dict[str, int] = {}
+    layout_cleared_pages = 0
     for index, slide in enumerate(slides):
         page = index + 1
         title = re.sub(r"\s+", "", str(slide.get("title") or ""))
@@ -209,6 +217,25 @@ def audit_outline(outline: Dict[str, Any],
             add("unsupported_layout_cleared", page,
                 f"已清除不匹配的版式 {slide.get('layout')}（{reason}），改由系统自动选版")
             slide["layout"] = None
+
+        # 整稿版式频次闸：模型常把同一种版式（bullets / three_cards）洒到多个
+        # 不相邻的正文页上；choose_layout 只查「相邻页重复」，规则层此前也只清
+        # 「与内容形态冲突」的 layout，没有整稿上限，于是提示词里「整篇覆盖 3 种
+        # 以上版式」全靠模型自觉。这里给 content 页的显式 layout 加硬上限，
+        # 超限清空交回 choose_layout 的换族选版（_rule_variant_pool）。
+        key = _layout_key(slide.get("layout"))
+        if (key and str(slide.get("type") or "content") == "content"
+                and not slide.get("layout_locked")):
+            layout_counts[key] = layout_counts.get(key, 0) + 1
+            if layout_counts[key] > _MAX_IDENTICAL_LAYOUT_PER_DECK:
+                layout_cleared_pages += 1
+                add("layout_frequency_cleared", page,
+                    f"版式频次超限：{key} 在整稿正文页中已出现 "
+                    f"{layout_counts[key]} 次（上限 {_MAX_IDENTICAL_LAYOUT_PER_DECK}），"
+                    "已清除并改由系统换族选版")
+                slide["layout"] = None
+            else:
+                kept_layout_counts[key] = layout_counts[key]
 
     # 连续同构页：直接对应「12 页全是标题+3 条要点」导致的版式重复。
     shapes = [_shape(s) for s in slides]
@@ -276,6 +303,10 @@ def audit_outline(outline: Dict[str, Any],
             "material_time_hits": time_hits,
             "placeholder_pages": placeholder_pages,
             "unsourced_pages": unsourced_pages,
+            # 最终保留的最大重复次数（应 <= 上限）与被规则层清掉的页数，
+            # 便于生产日志判断「模型又想刷同一版式」的频率。
+            "max_layout_repeat": max(kept_layout_counts.values(), default=0),
+            "layout_frequency_cleared_pages": layout_cleared_pages,
         },
         "outline": result,
     }
@@ -323,5 +354,6 @@ def summary_for_prompt(report: Dict[str, Any], limit: int = 10) -> str:
         lines.append(f"- 另有 {len(issues) - limit} 条同类问题")
     lines.append(
         "只修正被点名的页，不得新增材料中没有的事实或数据，不得改动其他页；"
-        "「已清除版式」「无封面/结束页」属于已按自由结构处理，无需反向补回。")
+        "「已清除版式」「版式频次超限」「无封面/结束页」属于已按规则层处理，"
+        "不要把被清除的 layout 补回，也不要整篇复用同一种版式。")
     return "\n".join(lines)

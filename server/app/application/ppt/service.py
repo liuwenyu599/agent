@@ -2421,9 +2421,17 @@ class PPTService:
                                structure: str = "auto") -> dict:
         data = await file.read()
         text = self._extract_any(file.filename or "unnamed", data)
-        return self._do_outline(user, "document", topic, text, slide_count, audience, scene,
-                                material_names=[file.filename] if file.filename else None,
-                                structure=structure)
+        # 本方法由同步路由经 asyncio.run 驱动，协程里存在 running loop；而
+        # _do_outline 整条链路用的是同步模型客户端，QwenGateway.complete() 的
+        # 同步桥会拒绝在 event loop 内执行（RuntimeError -> 500）。把同步长链路
+        # 挪到无 loop 的工作线程：既绕过该限制，也不占住这个临时 loop。
+        # asyncio.to_thread 会复制 contextvars，用户身份与 background 优先级
+        # 标记不会丢，模型公平调度仍然生效。
+        return await asyncio.to_thread(
+            lambda: self._do_outline(
+                user, "document", topic, text, slide_count, audience, scene,
+                material_names=[file.filename] if file.filename else None,
+                structure=structure))
 
     # ================= 已有 PPT 导入续改 =================
     async def import_pptx(self, file, user: User) -> dict:

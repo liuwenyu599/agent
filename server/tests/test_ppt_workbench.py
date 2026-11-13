@@ -1419,7 +1419,8 @@ def test_outline_stream_event_sequence_and_done(client, accounts, fake_llm,
         f"{BASE}/ppt/documents/{done['data']['doc_id']}", headers=_hdr(accounts["a"]))
     assert document.status_code == 200, document.text
     assert document.json()["theme_id"] == "research_sand"
-    assert document.json()["template_id"] is None
+    # 自动选库（0509b11）后，未显式选模板时系统会挑一套已发布母版并写入
+    # template_id，不再恒定落回自适应骨架；本用例只校验 SSE 序列与主题色。
     outline = done["data"]["outline"]
     assert outline["title"] == "行政复议工作汇报"
     slides = outline["slides"]

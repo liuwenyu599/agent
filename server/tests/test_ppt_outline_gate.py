@@ -115,6 +115,44 @@ def test_quote_layout_requires_an_actual_quotation() -> None:
     assert report["outline"]["slides"][0]["layout"] is None
 
 
+def test_identical_explicit_layout_capped_across_deck() -> None:
+    """模型把同一版式洒到 6 个不相邻正文页时，整稿最多保留 2 页。"""
+    slides = [_content_page(i, layout="content.three_cards") for i in range(1, 7)]
+    original_points = [s["points"] for s in slides]
+    report = outline_gate.audit_outline({"title": "年度汇报", "slides": slides}, "")
+    kept = [s.get("layout") for s in report["outline"]["slides"]]
+    assert kept[:2] == ["content.three_cards", "content.three_cards"]
+    assert all(value is None for value in kept[2:])
+    assert "layout_frequency_cleared" in _codes(report)
+    assert report["stats"]["max_layout_repeat"] == 2
+    assert report["stats"]["layout_frequency_cleared_pages"] == 4
+    # 规则层只清 layout，不删页、不改写要点。
+    assert [s["points"] for s in report["outline"]["slides"]] == original_points
+
+
+def test_locked_layout_exempt_from_frequency_cap() -> None:
+    """用户在编辑器里锁定的版式不计入整稿频次，也不被清除。"""
+    slides = []
+    for i in range(1, 6):
+        slide = _content_page(i, layout="content.three_cards")
+        if i >= 3:
+            slide["layout_locked"] = True
+        slides.append(slide)
+    report = outline_gate.audit_outline({"title": "年度汇报", "slides": slides}, "")
+    assert all(s.get("layout") == "content.three_cards"
+               for s in report["outline"]["slides"])
+    assert "layout_frequency_cleared" not in _codes(report)
+
+
+def test_frequency_cap_is_idempotent() -> None:
+    """大纲审查会跑两次规则闸；第二次不得继续清除或改变结果。"""
+    slides = [_content_page(i, layout="content.three_cards") for i in range(1, 7)]
+    first = outline_gate.audit_outline({"title": "t", "slides": slides}, "")["outline"]
+    second = outline_gate.audit_outline(first, "")["outline"]
+    assert ([s.get("layout") for s in first["slides"]]
+            == [s.get("layout") for s in second["slides"]])
+
+
 def test_material_numbers_without_data_page_are_flagged() -> None:
     material = ("2026年办结案件 1234 件，同比增长 12%，调解成功率 98.5%，"
                 "覆盖率 90%，办结率 95%。")

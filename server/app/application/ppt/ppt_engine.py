@@ -622,6 +622,10 @@ def _variant_seed(slide: Dict) -> int:
 
     用 ``slide.id`` 而不是页序，保证整篇只出现一次的封面/目录/结束页也会
     随稿件不同而换版式；同时预览单页与整稿渲染的结果一致。
+
+    刻意**不引入进程级随机 nonce**：多实例 / 多副本部署下各进程取值不同，
+    同一份大纲的预览与成稿会落到不同版式。跨稿分化改由规则层频次闸与
+    下方打分兜底的整稿硬上限保证，两者都是内容的确定性函数。
     """
     raw = "|".join([str(slide.get("id") or ""), str(slide.get("title") or ""),
                     "|".join(str(p) for p in (slide.get("points") or [])[:2])])
@@ -695,6 +699,13 @@ def _rule_variant_pool(slide: Dict, relationship: str, stype: str,
             or pick([sp["id"] for sp in specs]))
 
 
+# 模型显式 layout 在整稿中最多被无条件采纳的次数。此前只挡「相邻页重复」，
+# 对非相邻页给同一个 layout 没有整稿上限，6 个不相邻正文页就能 6 页同版式。
+# 与 outline_gate._MAX_IDENTICAL_LAYOUT_PER_DECK 保持一致：规则层清超额页，
+# 这里对未经过规则闸的调用（导入 / 单页刷新 / designed 预览）兜底。
+_MODEL_LAYOUT_MAX_PER_DECK = 2
+
+
 def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                   recent: Optional[List[str]] = None,
                   used: Optional[Dict[str, int]] = None) -> str:
@@ -746,6 +757,19 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
         if want:
             spec = next((sp for sp in specs if sp["id"] == want), None)
             if spec and _layout_usable(spec, slide):
+                # 模型意图降级为「偏好」：前 _MODEL_LAYOUT_MAX_PER_DECK 次照单
+                # 采纳，用满后不再直接 return，改由换族选版或下方打分兜底决定。
+                # 这样模型给的 layout 仍参与决策，但吃整稿次数约束，而不是
+                # 一句「有把握就指定」就锁死全篇。
+                if (from_model and stype == "content"
+                        and not slide.get("layout_locked")
+                        and used.get(want, 0) >= _MODEL_LAYOUT_MAX_PER_DECK):
+                    alt = _rule_variant_pool(
+                        slide, str(design.get("relationship") or ""),
+                        stype, recent, used)
+                    if alt:
+                        return alt
+                    break  # 换族池无可用版式：跳出偏好循环，交给打分兜底
                 if (stype == "content" and want in recent
                         and not slide.get("layout_locked")):
                     continue
@@ -779,10 +803,17 @@ def choose_layout(slide: Dict, template_layouts: Optional[Dict] = None,
                         return pool[_variant_seed(slide) % len(pool)]
                 return want
 
+    usable = [sp for sp in specs if _layout_usable(sp, slide)]
+    # _layout_score 的整篇惩罚只有 -0.30 x 已用次数，而亲和度规则是
+    # ±1.0~1.6：同样「3 条要点」的页，three_cards 要用满 3 次以上才会被
+    # 别的版式超过，前几页必然连续撞同一版式。打分前先加一道硬上限：
+    # 只要还有没用满的版式，就不让已用满的参与竞争；全部用满才退回全集，
+    # 保证任何情况下都有候选。不动 _layout_score 的逐分行为（有冻结测试）。
+    fresh = [sp for sp in usable
+             if used.get(sp["id"], 0) < _MODEL_LAYOUT_MAX_PER_DECK]
+    pool = fresh or usable
     best, best_score = "", float("-inf")
-    for spec in specs:
-        if not _layout_usable(spec, slide):
-            continue
+    for spec in pool:
         score = _layout_score(spec, slide, recent, used)
         if score > best_score:
             best, best_score = spec["id"], score
